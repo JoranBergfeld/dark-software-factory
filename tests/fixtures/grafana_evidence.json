@@ -1,0 +1,35 @@
+[
+  {
+    "source_agent": "grafana",
+    "claim": "Latency p99 on the checkout API spiked to 1.8s (baseline ~220ms) for ~12 minutes starting 14:03 UTC.",
+    "raw_citation": "https://grafana.homelab.lan/d/api-overview/api-overview?viewPanel=7&var-service=checkout",
+    "provenance": {
+      "query_used": "histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{service=\"checkout\"}[5m])) by (le))",
+      "source_kind": "GRAFANA"
+    },
+    "confidence": 0.82,
+    "product_hints": ["homelab-dash", "checkout"]
+  },
+  {
+    "source_agent": "grafana",
+    "claim": "Node memory saturation: working set climbed to 94% on worker-02, triggering frequent OOM-driven pod restarts.",
+    "raw_citation": "https://grafana.homelab.lan/d/node-exporter/nodes?viewPanel=12&var-instance=worker-02",
+    "provenance": {
+      "query_used": "1 - (node_memory_MemAvailable_bytes{instance=\"worker-02\"} / node_memory_MemTotal_bytes{instance=\"worker-02\"})",
+      "source_kind": "GRAFANA"
+    },
+    "confidence": 0.74,
+    "product_hints": ["homelab-dash", "platform"]
+  },
+  {
+    "source_agent": "grafana",
+    "claim": "Loki log pattern: surge of 'connection reset by peer' errors from the orders service correlated with the upstream DB failover.",
+    "raw_citation": "https://grafana.homelab.lan/explore?left=%7B%22datasource%22:%22loki%22%7D&query={app=\"orders\"}|=\"connection reset by peer\"",
+    "provenance": {
+      "query_used": "{app=\"orders\"} |= \"connection reset by peer\" | rate[5m]",
+      "source_kind": "GRAFANA"
+    },
+    "confidence": 0.68,
+    "product_hints": ["homelab-dash", "orders"]
+  }
+]

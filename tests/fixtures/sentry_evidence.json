@@ -1,0 +1,35 @@
+[
+  {
+    "source_agent": "sentry",
+    "claim": "Unhandled TypeError in microbi checkout flow spiked to 1,284 events in the last 24h (up 5x week-over-week), impacting 312 users.",
+    "raw_citation": "https://microbi.sentry.io/issues/4815162342/",
+    "provenance": {
+      "query_used": "is:unresolved is:regression project:microbi-web",
+      "source_kind": "SENTRY"
+    },
+    "confidence": 0.86,
+    "product_hints": ["microbi"]
+  },
+  {
+    "source_agent": "sentry",
+    "claim": "Regression: 'KeyError: tenant_id' reintroduced in release microbi@2.7.0, 478 events across 96 users since deploy.",
+    "raw_citation": "https://microbi.sentry.io/issues/4823390011/events/latest/",
+    "provenance": {
+      "query_used": "is:regression release:microbi@2.7.0 project:microbi-api",
+      "source_kind": "SENTRY"
+    },
+    "confidence": 0.79,
+    "product_hints": ["microbi"]
+  },
+  {
+    "source_agent": "sentry",
+    "claim": "High-frequency timeout 'asyncio.TimeoutError' on report export endpoint: 902 events, 41 impacted users, p95 latency degradation correlated.",
+    "raw_citation": "https://microbi.sentry.io/issues/4801277654/",
+    "provenance": {
+      "query_used": "is:unresolved transaction:/api/reports/export project:microbi-api",
+      "source_kind": "SENTRY"
+    },
+    "confidence": 0.72,
+    "product_hints": ["microbi"]
+  }
+]

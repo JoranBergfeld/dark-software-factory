@@ -1,0 +1,35 @@
+[
+  {
+    "source_agent": "webiq",
+    "claim": "Competitor 'Acme Analytics' shipped an AI-assisted report builder in their March 2026 release, positioning it as a direct answer to microbi's dashboard export workflow.",
+    "raw_citation": "https://www.acme-analytics.com/blog/2026-03-ai-report-builder",
+    "provenance": {
+      "query_used": "microbi competitor feature release industry trend market signal",
+      "source_kind": "WEBIQ"
+    },
+    "confidence": 0.74,
+    "product_hints": ["microbi"]
+  },
+  {
+    "source_agent": "webiq",
+    "claim": "Gartner's 2026 Embedded Analytics market guide highlights surging buyer demand for self-serve tenant-level data isolation, a feature several microbi enterprise prospects have requested.",
+    "raw_citation": "https://www.gartner.com/en/documents/embedded-analytics-market-guide-2026",
+    "provenance": {
+      "query_used": "embedded analytics market trend tenant data isolation 2026",
+      "source_kind": "WEBIQ"
+    },
+    "confidence": 0.68,
+    "product_hints": ["microbi"]
+  },
+  {
+    "source_agent": "webiq",
+    "claim": "A widely-shared Hacker News thread (480+ points) criticizes slow CSV/PDF export performance across BI tools, signaling an industry-wide pain point microbi could differentiate on.",
+    "raw_citation": "https://news.ycombinator.com/item?id=43215098",
+    "provenance": {
+      "query_used": "BI tool report export performance complaints discussion",
+      "source_kind": "WEBIQ"
+    },
+    "confidence": 0.61,
+    "product_hints": ["microbi"]
+  }
+]

@@ -1,0 +1,35 @@
+[
+  {
+    "source_agent": "foundryiq",
+    "claim": "The product roadmap already commits to a unified checkout redesign in Q3, so a new express-checkout proposal fits an existing roadmap initiative rather than opening net-new scope.",
+    "raw_citation": "foundryiq://kb/roadmap/alpha-2026-q3#express-checkout",
+    "provenance": {
+      "query_used": "express checkout roadmap alpha",
+      "source_kind": "FOUNDRYIQ"
+    },
+    "confidence": 0.82,
+    "product_hints": ["alpha"]
+  },
+  {
+    "source_agent": "foundryiq",
+    "claim": "An ADR from last quarter decided the platform standardizes on the shared retry/backoff library, so any fix touching outbound calls must reuse that capability instead of adding bespoke retry logic.",
+    "raw_citation": "foundryiq://kb/decisions/ADR-0142-retry-backoff",
+    "provenance": {
+      "query_used": "retry backoff existing capability platform",
+      "source_kind": "FOUNDRYIQ"
+    },
+    "confidence": 0.74,
+    "product_hints": ["alpha", "platform"]
+  },
+  {
+    "source_agent": "foundryiq",
+    "claim": "Internal data-handling policy DH-07 prohibits storing raw payment identifiers outside the tokenization vault, which constrains how any checkout evidence may be persisted.",
+    "raw_citation": "https://foundryiq.internal/knowledge/policies/DH-07",
+    "provenance": {
+      "query_used": "data handling policy payment identifiers",
+      "source_kind": "FOUNDRYIQ"
+    },
+    "confidence": 0.68,
+    "product_hints": ["alpha"]
+  }
+]
