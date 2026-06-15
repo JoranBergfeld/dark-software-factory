@@ -1,0 +1,56 @@
+"""Tests for the scheduled sweep (plan Task 5.1)."""
+
+from __future__ import annotations
+
+from dsf.config.flags import triggers_paused
+from dsf.container import build_services
+from dsf.contracts.enums import RunStatus, SourceKind, TriggerKind
+from dsf.triggers.scheduler import PAUSED_MESSAGE, run_sweep, sweep
+
+
+async def test_sweep_paused_returns_killed_run() -> None:
+    services = build_services("local")
+    services.config.set_flag("trigger.SCHEDULED.paused", True)
+    assert triggers_paused(services.config, TriggerKind.SCHEDULED) is True
+
+    run = await sweep(services)
+
+    assert run.trigger == TriggerKind.SCHEDULED
+    assert run.status == RunStatus.KILLED
+    messages = " ".join(a.message for a in run.audit)
+    assert PAUSED_MESSAGE in messages
+
+
+async def test_sweep_scopes_to_enabled_source_kinds() -> None:
+    services = build_services("local")
+    # Disable one agent so we prove sweep filters by agent_enabled.
+    services.config.set_flag("agent.TICKETS", False)
+
+    run = await sweep(services)
+
+    assert run.trigger == TriggerKind.SCHEDULED
+    assert run.status == RunStatus.OPEN
+    assert run.source_kinds  # non-empty
+    assert SourceKind.TICKETS not in run.source_kinds
+    assert SourceKind.SENTRY in run.source_kinds
+
+
+async def test_run_sweep_paused_does_not_run_line() -> None:
+    services = build_services("local")
+    services.config.set_flag("trigger.SCHEDULED.paused", True)
+
+    run = await run_sweep(services)
+
+    assert run.status == RunStatus.KILLED
+    assert services.github.calls == []
+
+
+async def test_run_sweep_runs_line_when_enabled() -> None:
+    services = build_services("local")
+
+    run = await run_sweep(services)
+
+    # Scheduled run advanced through the conveyor (terminal, not OPEN).
+    assert run.status != RunStatus.OPEN
+    # Dry-run default everywhere -> GitHub never called.
+    assert services.github.calls == []

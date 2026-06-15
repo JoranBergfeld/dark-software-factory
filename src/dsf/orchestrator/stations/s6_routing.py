@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 from dsf.config.registry import Product, load_registry, route_product
 from dsf.contracts.enums import ProposalKind, RunStatus
 from dsf.contracts.models import RoutedIssue
+from dsf.observability.tracing import span_attrs_for_run
 from dsf.orchestrator.blackboard import Blackboard
 
 if TYPE_CHECKING:
@@ -96,41 +97,45 @@ def _issue_body(proposal: Proposal, run: Run) -> str:
 
 async def run(run: Run, services: Services) -> Run:
     """Route accepted proposals to products and build RoutedIssues."""
-    run.status = RunStatus.ROUTING
+    with services.tracer.span("s6_routing", **span_attrs_for_run(run)):
+        run.status = RunStatus.ROUTING
 
-    blackboard = Blackboard(services.memory)
-    proposals = await blackboard.load_proposals(run.id)
-    registry = load_registry()
+        blackboard = Blackboard(services.memory)
+        proposals = await blackboard.load_proposals(run.id)
+        registry = load_registry()
 
-    issues: list[RoutedIssue] = []
-    for proposal in proposals:
-        hints = [h for h in [proposal.product, *run.scope_product_hints] if h]
-        product = route_product(hints, registry)
-        if product is None:
+        issues: list[RoutedIssue] = []
+        for proposal in proposals:
+            hints = [h for h in [proposal.product, *run.scope_product_hints] if h]
+            product = route_product(hints, registry)
+            if product is None:
+                run.audit.append(
+                    _audit(
+                        f"no product route for proposal {proposal.id} "
+                        f"(hints={hints}) — skipped"
+                    )
+                )
+                continue
+
+            issue = RoutedIssue(
+                proposal_id=proposal.id,
+                product=product.key,
+                repo=product.github_repo,
+                title=proposal.title,
+                body=_issue_body(proposal, run),
+                labels=_labels_for(proposal, product),
+            )
+            issues.append(issue)
             run.audit.append(
-                _audit(f"no product route for proposal {proposal.id} (hints={hints}) — skipped")
+                _audit(
+                    f"routed proposal {proposal.id} -> {product.key} ({product.github_repo}) "
+                    f"labels={issue.labels}"
+                )
             )
-            continue
 
-        issue = RoutedIssue(
-            proposal_id=proposal.id,
-            product=product.key,
-            repo=product.github_repo,
-            title=proposal.title,
-            body=_issue_body(proposal, run),
-            labels=_labels_for(proposal, product),
-        )
-        issues.append(issue)
-        run.audit.append(
-            _audit(
-                f"routed proposal {proposal.id} -> {product.key} ({product.github_repo}) "
-                f"labels={issue.labels}"
-            )
-        )
-
-    await blackboard.save_issues(run.id, issues)
-    run.audit.append(_audit(f"routing: {len(issues)} routed issue(s)"))
-    return run
+        await blackboard.save_issues(run.id, issues)
+        run.audit.append(_audit(f"routing: {len(issues)} routed issue(s)"))
+        return run
 
 
 def _audit(message: str):

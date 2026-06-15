@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Dark Software Factory — Control Center</title>
+  <link rel="stylesheet" href="/static/app.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="dot"></span>
+      <h1>Control Center</h1>
+    </div>
+    <p class="subtitle">The write surface for the intake line. Toggles take effect on the next run.</p>
+  </header>
+
+  <main>
+    <!-- Global dry-run kill switch -->
+    <section class="card kill {% if state.dry_run %}kill-on{% else %}kill-off{% endif %}">
+      <div class="kill-head">
+        <h2>Global DRY-RUN kill switch</h2>
+        <span class="badge {% if state.dry_run %}badge-on{% else %}badge-off{% endif %}">
+          {% if state.dry_run %}DRY-RUN ENGAGED{% else %}LIVE — FILING ENABLED{% endif %}
+        </span>
+      </div>
+      <p class="muted">
+        When engaged, the full line runs but stops short of filing GitHub issues — a safe rehearsal mode.
+      </p>
+      <form method="post" action="/toggle">
+        <input type="hidden" name="flag" value="dry_run" />
+        <input type="hidden" name="value" value="{{ 'false' if state.dry_run else 'true' }}" />
+        <button type="submit" class="btn {% if state.dry_run %}btn-danger{% else %}btn-primary{% endif %}">
+          {% if state.dry_run %}Disengage (go live){% else %}Engage dry-run{% endif %}
+        </button>
+      </form>
+    </section>
+
+    <!-- Critics -->
+    <section class="card">
+      <h2>Critics <span class="count">{{ state.critics | length }}</span></h2>
+      <p class="muted">
+        Council members. Toggle global enable/disable here; per-product overrides are supported by the
+        config store (POST <code>/toggle</code> with a <code>product</code> field) for products:
+        {% for p in state.products %}<code>{{ p }}</code>{% if not loop.last %}, {% endif %}{% endfor %}.
+      </p>
+      <div class="grid">
+        {% for critic in state.critics %}
+        <div class="row">
+          <span class="name">{{ critic.name }}</span>
+          <form method="post" action="/toggle" class="toggle">
+            <input type="hidden" name="flag" value="critic.{{ critic.name }}" />
+            <input type="hidden" name="value" value="{{ 'false' if critic.enabled else 'true' }}" />
+            <button type="submit" class="switch {% if critic.enabled %}on{% else %}off{% endif %}"
+                    aria-pressed="{{ 'true' if critic.enabled else 'false' }}">
+              <span class="knob"></span>
+              <span class="state-label">{{ 'ON' if critic.enabled else 'OFF' }}</span>
+            </button>
+          </form>
+        </div>
+        {% endfor %}
+      </div>
+    </section>
+
+    <!-- Source agents -->
+    <section class="card">
+      <h2>Source agents <span class="count">{{ state.agents | length }}</span></h2>
+      <div class="grid">
+        {% for agent in state.agents %}
+        <div class="row">
+          <span class="name">{{ agent.name }}</span>
+          <form method="post" action="/toggle" class="toggle">
+            <input type="hidden" name="flag" value="agent.{{ agent.name }}" />
+            <input type="hidden" name="value" value="{{ 'false' if agent.enabled else 'true' }}" />
+            <button type="submit" class="switch {% if agent.enabled %}on{% else %}off{% endif %}"
+                    aria-pressed="{{ 'true' if agent.enabled else 'false' }}">
+              <span class="knob"></span>
+              <span class="state-label">{{ 'ON' if agent.enabled else 'OFF' }}</span>
+            </button>
+          </form>
+        </div>
+        {% endfor %}
+      </div>
+    </section>
+
+    <!-- Trigger pauses -->
+    <section class="card">
+      <h2>Trigger pauses <span class="count">{{ state.triggers | length }}</span></h2>
+      <p class="muted">Pause the scheduled sweep or signal interrupts independently.</p>
+      <div class="grid">
+        {% for trigger in state.triggers %}
+        <div class="row">
+          <span class="name">{{ trigger.name }}</span>
+          <form method="post" action="/toggle" class="toggle">
+            <input type="hidden" name="flag" value="trigger.{{ trigger.name }}.paused" />
+            <input type="hidden" name="value" value="{{ 'false' if trigger.paused else 'true' }}" />
+            <button type="submit" class="switch {% if trigger.paused %}paused{% else %}on{% endif %}"
+                    aria-pressed="{{ 'true' if trigger.paused else 'false' }}">
+              <span class="knob"></span>
+              <span class="state-label">{{ 'PAUSED' if trigger.paused else 'RUNNING' }}</span>
+            </button>
+          </form>
+        </div>
+        {% endfor %}
+      </div>
+    </section>
+
+    <!-- Thresholds & weights -->
+    <section class="card">
+      <h2>Thresholds &amp; weights</h2>
+
+      <h3>Confidence thresholds</h3>
+      <form method="post" action="/set-value" class="kv">
+        <label>default_threshold</label>
+        <input type="number" step="0.01" min="0" max="1" name="value" value="{{ '%.2f' | format(state.thresholds.default) }}" />
+        <input type="hidden" name="key" value="default_threshold" />
+        <button type="submit" class="btn btn-small">Save</button>
+      </form>
+      {% for product, value in state.thresholds.products.items() %}
+      <form method="post" action="/set-value" class="kv">
+        <label>threshold.{{ product }}</label>
+        <input type="number" step="0.01" min="0" max="1" name="value" value="{{ '%.2f' | format(value) }}" />
+        <input type="hidden" name="key" value="threshold.{{ product }}" />
+        <button type="submit" class="btn btn-small">Save</button>
+      </form>
+      {% endfor %}
+
+      <h3>Critic weights</h3>
+      {% for critic, weight in state.weights.items() %}
+      <form method="post" action="/set-value" class="kv">
+        <label>weight.{{ critic }}</label>
+        <input type="number" step="0.05" min="0" name="value" value="{{ '%.2f' | format(weight) }}" />
+        <input type="hidden" name="key" value="weight.{{ critic }}" />
+        <button type="submit" class="btn btn-small">Save</button>
+      </form>
+      {% endfor %}
+    </section>
+
+    <!-- Calibration proposals -->
+    <section class="card">
+      <h2>Calibration proposals</h2>
+      {% if state.calibration %}
+      <p class="muted">The learning loop proposes the following weight updates. Accept to apply.</p>
+      {% for critic, proposed in state.calibration.items() %}
+      <form method="post" action="/set-value" class="kv">
+        <label>weight.{{ critic }}</label>
+        <span class="proposed">
+          {{ '%.2f' | format(state.weights.get(critic, 1.0)) }} &rarr;
+          <strong>{{ '%.2f' | format(proposed) }}</strong>
+        </span>
+        <input type="hidden" name="key" value="weight.{{ critic }}" />
+        <input type="hidden" name="value" value="{{ proposed }}" />
+        <button type="submit" class="btn btn-small btn-primary">Accept</button>
+      </form>
+      {% endfor %}
+      {% else %}
+      <p class="muted">No calibration proposals available — showing current weights above.</p>
+      {% endif %}
+    </section>
+  </main>
+
+  <footer>
+    <p class="muted">Dark Software Factory · read state via <a href="/api/state"><code>/api/state</code></a> · Grafana stays read-only.</p>
+  </footer>
+</body>
+</html>

@@ -16,6 +16,7 @@ import httpx
 from dsf.a2a import client as a2a_client
 from dsf.config.flags import agent_enabled
 from dsf.contracts.enums import RunStatus
+from dsf.observability.tracing import span_attrs_for_run
 from dsf.orchestrator.agent_registry import build_agents
 
 if TYPE_CHECKING:
@@ -50,39 +51,40 @@ async def _gather_one(
 
 async def run(run: Run, services: Services) -> Run:
     """Gather evidence from enabled source agents in parallel."""
-    run.status = RunStatus.INVESTIGATING
+    with services.tracer.span("s2_investigation", **span_attrs_for_run(run)):
+        run.status = RunStatus.INVESTIGATING
 
-    requested = list(run.source_kinds)
-    enabled = [k for k in requested if agent_enabled(services.config, k)]
-    skipped = [k for k in requested if k not in enabled]
+        requested = list(run.source_kinds)
+        enabled = [k for k in requested if agent_enabled(services.config, k)]
+        skipped = [k for k in requested if k not in enabled]
 
-    for kind in skipped:
-        run.audit.append(_audit(f"source {kind.value} disabled — skipped"))
+        for kind in skipped:
+            run.audit.append(_audit(f"source {kind.value} disabled — skipped"))
 
-    agents = build_agents(enabled, services.config)
-    scope = _run_scope(run)
+        agents = build_agents(enabled, services.config)
+        scope = _run_scope(run)
 
-    results = await asyncio.gather(
-        *(_gather_one(kind, agents[kind], scope) for kind in enabled if kind in agents)
-    )
-
-    collected = 0
-    for kind, evidence, degraded, error in results:
-        if degraded:
-            run.audit.append(
-                _audit(f"source {kind.value} degraded: {error or 'unknown error'}")
-            )
-        if evidence:
-            run.evidence.extend(evidence)
-            collected += len(evidence)
-
-    run.audit.append(
-        _audit(
-            f"investigation complete: {collected} evidence item(s) "
-            f"from {len(enabled)} enabled source(s)"
+        results = await asyncio.gather(
+            *(_gather_one(kind, agents[kind], scope) for kind in enabled if kind in agents)
         )
-    )
-    return run
+
+        collected = 0
+        for kind, evidence, degraded, error in results:
+            if degraded:
+                run.audit.append(
+                    _audit(f"source {kind.value} degraded: {error or 'unknown error'}")
+                )
+            if evidence:
+                run.evidence.extend(evidence)
+                collected += len(evidence)
+
+        run.audit.append(
+            _audit(
+                f"investigation complete: {collected} evidence item(s) "
+                f"from {len(enabled)} enabled source(s)"
+            )
+        )
+        return run
 
 
 def _audit(message: str):

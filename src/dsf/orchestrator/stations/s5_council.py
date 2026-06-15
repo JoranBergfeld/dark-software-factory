@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 
 from dsf.contracts.enums import RunStatus, Verdict
 from dsf.council.decision import decide
+from dsf.observability.tracing import span_attrs_for_run
 from dsf.orchestrator.blackboard import Blackboard
 
 if TYPE_CHECKING:
@@ -26,39 +27,40 @@ KILL_LOG_KIND = "kill_log"
 
 async def run(run: Run, services: Services) -> Run:
     """Decide each proposal; keep ACCEPTs, log KILLs."""
-    run.status = RunStatus.COUNCIL
+    with services.tracer.span("s5_council", **span_attrs_for_run(run)):
+        run.status = RunStatus.COUNCIL
 
-    blackboard = Blackboard(services.memory)
-    proposals = await blackboard.load_proposals(run.id)
+        blackboard = Blackboard(services.memory)
+        proposals = await blackboard.load_proposals(run.id)
 
-    accepted: list[Proposal] = []
-    verdicts: list[CouncilVerdict] = []
-    for proposal in proposals:
-        verdict = await decide(proposal, run, services)
-        verdicts.append(verdict)
-        if verdict.verdict == Verdict.ACCEPT:
-            accepted.append(proposal)
-        else:
-            run.audit.append(_audit(f"council killed {proposal.id}: {verdict.rationale}"))
-            await services.memory.put_record(
-                {
-                    "kind": KILL_LOG_KIND,
-                    "run_id": run.id,
-                    "proposal_id": proposal.id,
-                    "verdict": verdict.verdict.value,
-                    "weighted_score": verdict.weighted_score,
-                    "threshold": verdict.threshold,
-                    "text": f"{proposal.title} :: {verdict.rationale}",
-                }
-            )
+        accepted: list[Proposal] = []
+        verdicts: list[CouncilVerdict] = []
+        for proposal in proposals:
+            verdict = await decide(proposal, run, services)
+            verdicts.append(verdict)
+            if verdict.verdict == Verdict.ACCEPT:
+                accepted.append(proposal)
+            else:
+                run.audit.append(_audit(f"council killed {proposal.id}: {verdict.rationale}"))
+                await services.memory.put_record(
+                    {
+                        "kind": KILL_LOG_KIND,
+                        "run_id": run.id,
+                        "proposal_id": proposal.id,
+                        "verdict": verdict.verdict.value,
+                        "weighted_score": verdict.weighted_score,
+                        "threshold": verdict.threshold,
+                        "text": f"{proposal.title} :: {verdict.rationale}",
+                    }
+                )
 
-    await blackboard.save_proposals(run.id, accepted)
-    await blackboard.save_verdicts(run.id, verdicts)
-    run.proposals = [p.id for p in accepted]
-    run.audit.append(
-        _audit(f"council: {len(accepted)} accepted, {len(proposals) - len(accepted)} killed")
-    )
-    return run
+        await blackboard.save_proposals(run.id, accepted)
+        await blackboard.save_verdicts(run.id, verdicts)
+        run.proposals = [p.id for p in accepted]
+        run.audit.append(
+            _audit(f"council: {len(accepted)} accepted, {len(proposals) - len(accepted)} killed")
+        )
+        return run
 
 
 def _audit(message: str):

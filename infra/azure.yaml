@@ -1,0 +1,73 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/azure-dev/main/schemas/v1.0/azure.yaml.json
+#
+# azd project manifest for the Dark Software Factory intake line.
+#
+# `azd up` runs `infra/main.bicep` to provision the platform, then builds &
+# deploys each service below as an Azure Container App. Service names match the
+# `azd-service-name` tags emitted by the containerapp.bicep module so azd binds
+# each build to the right app.
+#
+# Build context (`project`) is the REPO ROOT for every service so that
+# `pip install -e .` resolves pyproject.toml + the whole src/dsf package; each
+# service selects its own Dockerfile.
+#
+# NOTE: This authors the deployment. It is intentionally NOT run autonomously —
+# see infra/README.md for the human-gated deploy steps.
+
+name: dark-software-factory
+metadata:
+  template: dark-software-factory@0.1.0
+
+infra:
+  provider: bicep
+  path: .
+  module: main
+
+services:
+  orchestrator:
+    project: ..
+    language: docker
+    host: containerapp
+    docker:
+      path: ./infra/Dockerfile.orchestrator
+      context: .
+
+  control-center:
+    project: ..
+    language: docker
+    host: containerapp
+    docker:
+      path: ./infra/Dockerfile.control-center
+      context: .
+
+  ingestion:
+    project: ..
+    language: docker
+    host: containerapp
+    docker:
+      path: ./infra/Dockerfile.ingestion
+      context: .
+
+  agent-sentry:
+    project: ..
+    language: docker
+    host: containerapp
+    docker:
+      path: ./src/dsf/agents/sentry/Dockerfile
+      context: .
+
+  agent-foundryiq:
+    project: ..
+    language: docker
+    host: containerapp
+    docker:
+      path: ./src/dsf/agents/foundryiq/Dockerfile
+      context: .
+
+  agent-webiq:
+    project: ..
+    language: docker
+    host: containerapp
+    docker:
+      path: ./src/dsf/agents/webiq/Dockerfile
+      context: .

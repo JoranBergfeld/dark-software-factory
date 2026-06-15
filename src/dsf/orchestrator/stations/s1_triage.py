@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 from dsf.config.flags import agent_enabled
 from dsf.contracts.enums import RunStatus, SourceKind
 from dsf.memory.dedup import is_duplicate
+from dsf.observability.tracing import span_attrs_for_run
 
 if TYPE_CHECKING:
     from dsf.container import Services
@@ -72,27 +73,28 @@ def _derive_source_kinds(run: Run, services: Services) -> list[SourceKind]:
 
 async def run(run: Run, services: Services) -> Run:
     """Triage: scope the run, debounce, and advance status."""
-    run.status = RunStatus.INVESTIGATING
+    with services.tracer.span("s1_triage", **span_attrs_for_run(run)):
+        run.status = RunStatus.INVESTIGATING
 
-    if not run.scope_product_hints:
-        run.scope_product_hints = _derive_product_hints(run)
-    if not run.source_kinds:
-        run.source_kinds = _derive_source_kinds(run, services)
+        if not run.scope_product_hints:
+            run.scope_product_hints = _derive_product_hints(run)
+        if not run.source_kinds:
+            run.source_kinds = _derive_source_kinds(run, services)
 
-    hints = ", ".join(run.scope_product_hints) or "(none)"
-    kinds = ", ".join(k.value for k in run.source_kinds) or "(none)"
-    run.audit.append(_audit(f"triaged: products=[{hints}] sources=[{kinds}]"))
+        hints = ", ".join(run.scope_product_hints) or "(none)"
+        kinds = ", ".join(k.value for k in run.source_kinds) or "(none)"
+        run.audit.append(_audit(f"triaged: products=[{hints}] sources=[{kinds}]"))
 
-    text = _signal_text(run)
-    duplicate = await is_duplicate(text, services.memory, kind=SIGNAL_KIND)
-    if duplicate:
-        run.status = RunStatus.KILLED
-        run.audit.append(_audit("duplicate in-flight signal — killing run"))
+        text = _signal_text(run)
+        duplicate = await is_duplicate(text, services.memory, kind=SIGNAL_KIND)
+        if duplicate:
+            run.status = RunStatus.KILLED
+            run.audit.append(_audit("duplicate in-flight signal — killing run"))
+            return run
+
+        # Record this signal in the in-flight debounce window so a repeat is caught.
+        await services.memory.put_record({"kind": SIGNAL_KIND, "text": text, "run_id": run.id})
         return run
-
-    # Record this signal in the in-flight debounce window so a repeat is caught.
-    await services.memory.put_record({"kind": SIGNAL_KIND, "text": text, "run_id": run.id})
-    return run
 
 
 def _audit(message: str):

@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 
 from dsf.contracts.enums import RunStatus
 from dsf.council.synthesizer import synthesize
+from dsf.observability.tracing import span_attrs_for_run
 from dsf.orchestrator.blackboard import Blackboard
 
 if TYPE_CHECKING:
@@ -30,21 +31,22 @@ async def load_proposals(run_id: str, services: Services) -> list[Proposal]:
 
 async def run(run: Run, services: Services) -> Run:
     """Synthesize proposals from evidence and persist them to the blackboard."""
-    run.status = RunStatus.SYNTHESIZING
+    with services.tracer.span("s3_synthesis", **span_attrs_for_run(run)):
+        run.status = RunStatus.SYNTHESIZING
 
-    proposals = await synthesize(run, services)
+        proposals = await synthesize(run, services)
 
-    blackboard = Blackboard(services.memory)
-    await blackboard.save_proposals(run.id, proposals)
-    run.proposals = [p.id for p in proposals]
+        blackboard = Blackboard(services.memory)
+        await blackboard.save_proposals(run.id, proposals)
+        run.proposals = [p.id for p in proposals]
 
-    run.audit.append(
-        _audit(
-            f"synthesized {len(proposals)} proposal(s) "
-            f"from {len(run.evidence)} evidence item(s)"
+        run.audit.append(
+            _audit(
+                f"synthesized {len(proposals)} proposal(s) "
+                f"from {len(run.evidence)} evidence item(s)"
+            )
         )
-    )
-    return run
+        return run
 
 
 def _audit(message: str):

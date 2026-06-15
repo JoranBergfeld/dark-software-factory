@@ -1,0 +1,15 @@
+{
+  "id": "evt_sentry_4815162342",
+  "eventType": "Sentry.Issue.Alert",
+  "source": "sentry",
+  "fingerprint": "checkout-typeerror-id-spike",
+  "product_hints": ["microbi"],
+  "source_kinds": ["SENTRY", "GRAFANA"],
+  "text": "Error spike: TypeError 'cannot read property id of undefined' in checkout flow — 1284 events / 312 users in the last 15 minutes, up 8x over baseline.",
+  "title": "TypeError: cannot read property 'id' of undefined",
+  "level": "error",
+  "project": "microbi-web",
+  "organization": "microbi",
+  "permalink": "https://microbi.sentry.io/issues/4815162342/",
+  "dry_run": true
+}

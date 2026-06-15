@@ -1,0 +1,96 @@
+[
+  {
+    "id": "sentry-microbi-error-spike",
+    "name": "Sentry error spike routes to microbi and files",
+    "signal_payload": {
+      "product_hints": ["microbi"],
+      "source_kinds": ["SENTRY"],
+      "text": "Unhandled TypeError spike in microbi checkout flow"
+    },
+    "expectations": {
+      "expected_product": "microbi",
+      "expect_filed": true,
+      "must_be_grounded": true
+    }
+  },
+  {
+    "id": "grafana-homelab-latency",
+    "name": "Grafana latency/memory signals route to homelab-dash and file",
+    "signal_payload": {
+      "product_hints": ["homelab-dash"],
+      "source_kinds": ["GRAFANA"],
+      "text": "Checkout API p99 latency spike and node memory saturation"
+    },
+    "expectations": {
+      "expected_product": "homelab-dash",
+      "expect_filed": true,
+      "must_be_grounded": true
+    }
+  },
+  {
+    "id": "webiq-microbi-market",
+    "name": "WebIQ market signals route to microbi and file",
+    "signal_payload": {
+      "product_hints": ["microbi"],
+      "source_kinds": ["WEBIQ"],
+      "text": "Competitive and market pressure on microbi report export"
+    },
+    "expectations": {
+      "expected_product": "microbi",
+      "expect_filed": true,
+      "must_be_grounded": true
+    }
+  },
+  {
+    "id": "sentry-grafana-multi-source",
+    "name": "Sentry + Grafana multi-source run reaches FILED with grounded issues",
+    "signal_payload": {
+      "product_hints": ["microbi", "homelab-dash"],
+      "source_kinds": ["SENTRY", "GRAFANA"],
+      "text": "Multi-source incident: microbi errors plus homelab latency"
+    },
+    "expectations": {
+      "expected_product": null,
+      "expect_filed": true,
+      "must_be_grounded": true
+    }
+  },
+  {
+    "id": "microbi-default-sources-filed",
+    "name": "Default-enabled sources reach FILED with grounded routed issues",
+    "signal_payload": {
+      "product_hints": ["microbi"],
+      "source_kinds": ["SENTRY", "WEBIQ"],
+      "text": "Broad microbi intake across default sources"
+    },
+    "expectations": {
+      "expected_product": "microbi",
+      "expect_filed": true,
+      "must_be_grounded": true
+    }
+  },
+  {
+    "id": "all-agents-disabled-killed",
+    "name": "Pre-seeded debounce with all agents disabled -> KILLED, not filed",
+    "signal_payload": {
+      "product_hints": ["microbi"],
+      "source_kinds": ["SENTRY"],
+      "text": "Duplicate in-flight microbi signal that must be debounced"
+    },
+    "config_overrides": {
+      "agent.SENTRY": false,
+      "agent.GRAFANA": false,
+      "agent.FOUNDRYIQ": false,
+      "agent.WEBIQ": false,
+      "agent.TICKETS": false
+    },
+    "setup": {
+      "seed_debounce": true
+    },
+    "expectations": {
+      "expected_product": null,
+      "expect_filed": false,
+      "must_be_grounded": true
+    }
+  }
+]

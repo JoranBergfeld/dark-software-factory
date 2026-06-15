@@ -1,0 +1,415 @@
+{
+  "__comment": "Dark Software Factory — Factory Operations dashboard (read-only). Reads App Insights + blackboard. Datasource uses a generic placeholder variable so it can be bound at import.",
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": false,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": [
+    "dsf",
+    "factory-operations",
+    "read-only"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {},
+        "hide": 0,
+        "includeAll": false,
+        "label": "Data source",
+        "multi": false,
+        "name": "DS",
+        "options": [],
+        "query": "grafana-azure-monitor-datasource",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "type": "datasource"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Factory Operations",
+  "uid": "dsf-factory-ops",
+  "version": 1,
+  "weekStart": "",
+  "panels": [
+    {
+      "id": 1,
+      "title": "Runs in-flight by station",
+      "description": "Active conveyor runs grouped by current station (S1..S7).",
+      "type": "barchart",
+      "datasource": {
+        "type": "datasource",
+        "uid": "${DS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "showValue": "auto",
+        "legend": {
+          "showLegend": true
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "rawQuery": "blackboard: count(active runs) by station"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Throughput (runs / issues filed)",
+      "description": "Runs entering the line and issues filed over time.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "datasource",
+        "uid": "${DS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "rawQuery": "appinsights: customMetrics | where name in ('dsf.runs.started','dsf.issues.filed') | summarize sum(value) by bin(timestamp, 5m), name"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Acceptance rate",
+      "description": "Council ACCEPT verdicts / total verdicts.",
+      "type": "stat",
+      "datasource": {
+        "type": "datasource",
+        "uid": "${DS}"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 0,
+        "y": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.3
+              },
+              {
+                "color": "green",
+                "value": 0.5
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "rawQuery": "appinsights: verdicts | summarize accept=countif(verdict=='ACCEPT'), total=count() | extend rate = todouble(accept)/total"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Cost per issue",
+      "description": "Token/model cost attributed per filed issue.",
+      "type": "stat",
+      "datasource": {
+        "type": "datasource",
+        "uid": "${DS}"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 6,
+        "y": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 4
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "mean"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "rawQuery": "appinsights: sum(gen_ai.cost_usd) / count(dsf.issues.filed)"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Time to issue",
+      "description": "End-to-end latency from signal intake (S1) to filing (S7).",
+      "type": "timeseries",
+      "datasource": {
+        "type": "datasource",
+        "uid": "${DS}"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 12,
+        "y": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "rawQuery": "appinsights: requests | where name=='conveyor.run_line' | summarize percentile(duration,50), percentile(duration,95) by bin(timestamp, 15m)"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Dedup-hit rate",
+      "description": "Fraction of candidates suppressed by dedup at S1/S5/S7.",
+      "type": "gauge",
+      "datasource": {
+        "type": "datasource",
+        "uid": "${DS}"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 18,
+        "y": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.5
+              },
+              {
+                "color": "red",
+                "value": 0.8
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "rawQuery": "appinsights: dedup | summarize hits=countif(duplicate==true), total=count() | extend rate = todouble(hits)/total"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Per-source evidence yield",
+      "description": "Average evidence items contributed by each source agent.",
+      "type": "barchart",
+      "datasource": {
+        "type": "datasource",
+        "uid": "${DS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 14
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "showValue": "auto",
+        "legend": {
+          "showLegend": false
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "rawQuery": "appinsights: evidence | summarize avg(count) by source_agent"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Kill / rejection log",
+      "description": "Recent KILLED runs and council-rejected proposals with rationale.",
+      "type": "table",
+      "datasource": {
+        "type": "datasource",
+        "uid": "${DS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 14
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "timestamp",
+            "desc": true
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": "blackboard: kill_log | project timestamp, run_id, proposal_id, verdict, weighted_score, threshold, rationale | order by timestamp desc | limit 100"
+        }
+      ]
+    }
+  ]
+}
