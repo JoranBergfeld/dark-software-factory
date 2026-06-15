@@ -1,0 +1,77 @@
+{
+  "$defs": {
+    "ProposalKind": {
+      "description": "Whether a proposal is a new feature or a fix.",
+      "enum": [
+        "FEATURE",
+        "FIX"
+      ],
+      "title": "ProposalKind",
+      "type": "string"
+    }
+  },
+  "description": "A candidate proposal synthesized from clustered evidence.",
+  "properties": {
+    "confidence": {
+      "default": 0.0,
+      "title": "Confidence",
+      "type": "number"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "evidence_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Evidence Ids",
+      "type": "array"
+    },
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "kind": {
+      "$ref": "#/$defs/ProposalKind"
+    },
+    "problem": {
+      "title": "Problem",
+      "type": "string"
+    },
+    "product": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Product"
+    },
+    "proposed_change": {
+      "title": "Proposed Change",
+      "type": "string"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "title": {
+      "title": "Title",
+      "type": "string"
+    }
+  },
+  "required": [
+    "run_id",
+    "kind",
+    "title",
+    "problem",
+    "proposed_change"
+  ],
+  "title": "Proposal",
+  "type": "object"
+}

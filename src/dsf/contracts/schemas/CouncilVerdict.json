@@ -1,0 +1,89 @@
+{
+  "$defs": {
+    "CriticScore": {
+      "description": "One critic's score on a proposal.",
+      "properties": {
+        "critic": {
+          "title": "Critic",
+          "type": "string"
+        },
+        "rationale": {
+          "default": "",
+          "title": "Rationale",
+          "type": "string"
+        },
+        "score": {
+          "title": "Score",
+          "type": "number"
+        },
+        "veto": {
+          "default": false,
+          "title": "Veto",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "critic",
+        "score"
+      ],
+      "title": "CriticScore",
+      "type": "object"
+    },
+    "Verdict": {
+      "description": "Council verdict outcome.",
+      "enum": [
+        "ACCEPT",
+        "KILL"
+      ],
+      "title": "Verdict",
+      "type": "string"
+    }
+  },
+  "description": "The council's aggregated decision on a proposal.",
+  "properties": {
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "proposal_id": {
+      "title": "Proposal Id",
+      "type": "string"
+    },
+    "rationale": {
+      "default": "",
+      "title": "Rationale",
+      "type": "string"
+    },
+    "scores": {
+      "items": {
+        "$ref": "#/$defs/CriticScore"
+      },
+      "title": "Scores",
+      "type": "array"
+    },
+    "threshold": {
+      "title": "Threshold",
+      "type": "number"
+    },
+    "verdict": {
+      "$ref": "#/$defs/Verdict"
+    },
+    "weighted_score": {
+      "title": "Weighted Score",
+      "type": "number"
+    }
+  },
+  "required": [
+    "proposal_id",
+    "verdict",
+    "weighted_score",
+    "threshold"
+  ],
+  "title": "CouncilVerdict",
+  "type": "object"
+}

@@ -1,0 +1,37 @@
+{
+  "$defs": {
+    "SourceKind": {
+      "description": "Kind of source backend that produced evidence.",
+      "enum": [
+        "SENTRY",
+        "GRAFANA",
+        "FOUNDRYIQ",
+        "WEBIQ",
+        "TICKETS"
+      ],
+      "title": "SourceKind",
+      "type": "string"
+    }
+  },
+  "description": "Where/when/how an evidence claim was obtained.",
+  "properties": {
+    "query_used": {
+      "title": "Query Used",
+      "type": "string"
+    },
+    "source_kind": {
+      "$ref": "#/$defs/SourceKind"
+    },
+    "timestamp": {
+      "format": "date-time",
+      "title": "Timestamp",
+      "type": "string"
+    }
+  },
+  "required": [
+    "query_used",
+    "source_kind"
+  ],
+  "title": "Provenance",
+  "type": "object"
+}
