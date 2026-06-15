@@ -1,0 +1,30 @@
+{
+  "products": [
+    {
+      "key": "microbi",
+      "github_repo": "joranbergfeld/microbi",
+      "label_taxonomy": {
+        "type": ["feature", "bug", "chore"],
+        "area": ["api", "ingestion", "dashboard"],
+        "severity": ["sev-low", "sev-medium", "sev-high", "sev-critical"]
+      },
+      "foundryiq_scope": "microbi",
+      "sentry_projects": ["microbi-api", "microbi-worker"],
+      "grafana_dashboards": ["microbi-overview", "microbi-latency"],
+      "confidence_threshold": 0.6
+    },
+    {
+      "key": "homelab-dash",
+      "github_repo": "joranbergfeld/homelab-dash",
+      "label_taxonomy": {
+        "type": ["feature", "bug", "chore"],
+        "area": ["ui", "metrics", "proxmox"],
+        "severity": ["sev-low", "sev-medium", "sev-high", "sev-critical"]
+      },
+      "foundryiq_scope": "homelab-dash",
+      "sentry_projects": ["homelab-dash-web"],
+      "grafana_dashboards": ["homelab-overview"],
+      "confidence_threshold": 0.6
+    }
+  ]
+}
