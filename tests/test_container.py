@@ -60,12 +60,23 @@ def test_cli_run_missing_signal_returns_error(capsys):
 
 def test_cli_subcommands_importable():
     parser = build_parser()
-    for cmd in ("run", "sweep", "serve-agent", "control-center"):
+    for cmd in ("run", "sweep", "serve-agent", "serve-orchestrator", "control-center"):
         args = parser.parse_args([cmd])
         assert args.command == cmd
 
 
-def test_cli_sweep_and_serve_and_cc(capsys):
+def test_cli_sweep_runs_line(capsys):
     assert main(["sweep"]) == 0
+    assert "status=" in capsys.readouterr().out
+
+
+def test_cli_serve_agent_unknown_kind_errors():
+    assert main(["serve-agent", "--kind", "nope"]) == 1
+
+
+def test_cli_serve_commands_launch_uvicorn(monkeypatch):
+    launched: list[str] = []
+    monkeypatch.setattr("uvicorn.run", lambda target, **kw: launched.append(target))
     assert main(["serve-agent", "--kind", "sentry"]) == 0
     assert main(["control-center"]) == 0
+    assert launched == ["dsf.agents.sentry.main:app", "dsf.control_center.app:app"]

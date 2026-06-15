@@ -1,12 +1,14 @@
-"""Command-line entrypoint: ``dsf run|sweep|serve-agent|control-center``.
+"""Command-line entrypoint: ``dsf run|sweep|serve-agent|serve-orchestrator|control-center``.
 
-This is a skeleton — full conveyor/agent/UI wiring arrives in later phases.
-It stays importable and never crashes on a well-formed invocation.
+``run`` and ``sweep`` execute the conveyor in-process (local fakes by default, fully
+dry-run safe). ``serve-agent``/``serve-orchestrator``/``control-center`` launch the
+respective ASGI services via uvicorn.
 """
 
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import sys
 from pathlib import Path
@@ -14,41 +16,83 @@ from pathlib import Path
 from dsf.container import build_services
 
 
+def _print_run_summary(run) -> None:
+    """Print a compact summary of a finished run."""
+    print(f"[dsf] run {run.id} -> status={run.status.value} (dry_run={run.dry_run})")
+    print(f"[dsf]   evidence={len(run.evidence)} proposals={len(run.proposals)}")
+    for rec in run.audit:
+        print(f"[dsf]   audit[{rec.station}] {rec.message}")
+
+
 def _cmd_run(args: argparse.Namespace) -> int:
-    """Handle ``dsf run`` (stub)."""
+    """Run the intake line for one signal JSON file."""
+    from dsf.orchestrator.conveyor import run_line
+    from dsf.triggers.ingestion import signal_to_run
+
     services = build_services(args.mode)
-    signal: dict = {}
-    if args.signal:
-        path = Path(args.signal)
-        if not path.exists():
-            print(f"signal file not found: {path}", file=sys.stderr)
-            return 1
-        signal = json.loads(path.read_text(encoding="utf-8"))
-    dry_run = args.dry_run or services.config.is_enabled("dry_run")
-    print(
-        f"[dsf] run (mode={services.mode}, dry_run={dry_run}) "
-        f"loaded signal with {len(signal)} top-level key(s); "
-        "conveyor wiring lands in a later phase."
-    )
+    if not args.signal:
+        print("--signal <path> is required for `run`", file=sys.stderr)
+        return 1
+    path = Path(args.signal)
+    if not path.exists():
+        print(f"signal file not found: {path}", file=sys.stderr)
+        return 1
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    run = signal_to_run(payload)
+    if args.dry_run or services.config.is_enabled("dry_run"):
+        run.dry_run = True
+    final = asyncio.run(run_line(run, services))
+    _print_run_summary(final)
     return 0
 
 
 def _cmd_sweep(args: argparse.Namespace) -> int:
-    """Handle ``dsf sweep`` (stub)."""
+    """Run a scheduled sweep across enabled sources."""
+    from dsf.triggers.scheduler import run_sweep
+
     services = build_services(args.mode)
-    print(f"[dsf] sweep (mode={services.mode}); scheduled sweep wiring is a later phase.")
+    final = asyncio.run(run_sweep(services))
+    _print_run_summary(final)
     return 0
 
 
+def _cmd_serve_orchestrator(args: argparse.Namespace) -> int:
+    """One-shot orchestrator worker (a real deployment would loop on a queue)."""
+    from dsf.triggers.scheduler import run_sweep
+
+    services = build_services(args.mode)
+    final = asyncio.run(run_sweep(services))
+    _print_run_summary(final)
+    return 0
+
+
+_AGENT_MODULES = {
+    "sentry": "dsf.agents.sentry.main:app",
+    "grafana": "dsf.agents.grafana.main:app",
+    "foundryiq": "dsf.agents.foundryiq.main:app",
+    "webiq": "dsf.agents.webiq.main:app",
+    "tickets": "dsf.agents.tickets.main:app",
+}
+
+
 def _cmd_serve_agent(args: argparse.Namespace) -> int:
-    """Handle ``dsf serve-agent`` (stub)."""
-    print(f"[dsf] serve-agent kind={args.kind}; A2A server wiring is a later phase.")
+    """Serve a source agent over A2A via uvicorn."""
+    import uvicorn
+
+    target = _AGENT_MODULES.get(args.kind)
+    if target is None:
+        choices = sorted(_AGENT_MODULES)
+        print(f"unknown agent kind: {args.kind} (choices: {choices})", file=sys.stderr)
+        return 1
+    uvicorn.run(target, host=args.host, port=args.port)
     return 0
 
 
 def _cmd_control_center(args: argparse.Namespace) -> int:
-    """Handle ``dsf control-center`` (stub)."""
-    print("[dsf] control-center; web UI wiring is a later phase.")
+    """Serve the Control Center web UI via uvicorn."""
+    import uvicorn
+
+    uvicorn.run("dsf.control_center.app:app", host=args.host, port=args.port)
     return 0
 
 
@@ -70,11 +114,20 @@ def build_parser() -> argparse.ArgumentParser:
     p_sweep = sub.add_parser("sweep", help="run a scheduled sweep")
     p_sweep.set_defaults(func=_cmd_sweep)
 
+    p_orch = sub.add_parser(
+        "serve-orchestrator", help="run the orchestrator worker (one-shot sweep)"
+    )
+    p_orch.set_defaults(func=_cmd_serve_orchestrator)
+
     p_serve = sub.add_parser("serve-agent", help="serve a source agent over A2A")
     p_serve.add_argument("--kind", default="sentry", help="source agent kind")
+    p_serve.add_argument("--host", default="0.0.0.0", help="bind host")
+    p_serve.add_argument("--port", type=int, default=8080, help="bind port")
     p_serve.set_defaults(func=_cmd_serve_agent)
 
     p_cc = sub.add_parser("control-center", help="serve the control center UI")
+    p_cc.add_argument("--host", default="0.0.0.0", help="bind host")
+    p_cc.add_argument("--port", type=int, default=8081, help="bind port")
     p_cc.set_defaults(func=_cmd_control_center)
 
     return parser

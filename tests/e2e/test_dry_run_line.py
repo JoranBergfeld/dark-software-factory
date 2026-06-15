@@ -1,0 +1,73 @@
+"""End-to-end dry-run: a signal flows through the whole conveyor to a filed
+(but not network-filed) issue, with grounding enforced and no real GitHub call."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from dsf.cli import main
+from dsf.container import build_services
+from dsf.contracts.enums import RunStatus
+from dsf.orchestrator.blackboard import Blackboard
+from dsf.orchestrator.conveyor import run_line
+from dsf.triggers.ingestion import signal_to_run
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+SAMPLE_SIGNAL = REPO_ROOT / "tests" / "fixtures" / "sample_signal.json"
+
+STATION_NAMES = {
+    "S1:triage",
+    "S2:investigation",
+    "S3:synthesis",
+    "S4:grounding",
+    "S5:council",
+    "S6:routing",
+    "S7:filing",
+}
+
+
+@pytest.fixture
+def payload() -> dict:
+    return json.loads(SAMPLE_SIGNAL.read_text(encoding="utf-8"))
+
+
+async def test_dry_run_line_files_grounded_issue_without_network(payload: dict) -> None:
+    services = build_services("local")
+    run = signal_to_run(payload)
+    run.dry_run = True
+
+    final = await run_line(run, services)
+
+    # 1. The line reaches FILED.
+    assert final.status is RunStatus.FILED
+
+    # 2. At least one issue was routed, and grounding was enforced: every routed
+    #    issue's proposal cites only evidence that exists on the run.
+    bb = Blackboard(services.memory)
+    issues = await bb.load_issues(final.id)
+    proposals = {p.id: p for p in await bb.load_proposals(final.id)}
+    assert issues, "expected at least one routed issue"
+    evidence_ids = {e.id for e in final.evidence}
+    for issue in issues:
+        prop = proposals.get(issue.proposal_id)
+        assert prop is not None
+        assert prop.evidence_ids, "filed proposal must be grounded"
+        assert set(prop.evidence_ids) <= evidence_ids
+
+    # 3. Dry-run means NO real issue was filed.
+    assert services.github.calls == []
+    assert all(issue.filed_url is None for issue in issues)
+
+    # 4. Every station left an audit trail.
+    stations_seen = {rec.station for rec in final.audit}
+    assert STATION_NAMES <= stations_seen
+
+
+def test_cli_run_dry_run_exits_zero(capsys) -> None:
+    code = main(["run", "--dry-run", "--signal", str(SAMPLE_SIGNAL)])
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "status=filed" in out.lower()
