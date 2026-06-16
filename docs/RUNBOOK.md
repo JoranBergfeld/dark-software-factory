@@ -76,19 +76,36 @@ the feedback watcher (`dsf.learning.feedback_watcher.handle_pr_event`). It disti
 verdict + proposed-vs-final spec diff into a product-scoped **Lesson** (retrieved by the
 synthesizer/critics on the next run) and accumulates calibration data for council weights.
 
-## Deploying to Azure (do this awake — it costs money)
+## Provisioning Azure + running in the homelab (do this awake — it costs money)
 
-1. `az login` and select the target subscription.
-2. Review `infra/README.md` and `infra/main.bicep`. Set params: `namePrefix`,
-   `location`, and the **existing** Azure OpenAI/Foundry endpoint + deployment
-   (the template references them; it does not create model deployments).
-3. Validate without deploying: `az deployment group create --what-if ...`.
-4. Provision + deploy: `azd up` (provisions Container Apps, Cosmos, App Configuration,
-   Key Vault, App Insights, Event Grid, managed identity + RBAC, and pushes images).
-5. Deploy the homelab Grafana agent: `docker compose -f infra/compose.homelab.yml up -d`
-   after configuring the tunnel (`infra/.env.homelab.example`).
-6. Set `DSF_MODE=azure`. Keep `dry_run` ON in the Control Center until you trust a few
-   real runs, then turn it off to begin live filing.
+The topology (ADR 0002): Azure hosts **backing services only**; the agent/orchestrator
+runtime runs in **your homelab** and reaches Azure **outbound**. No container is deployed
+to Azure.
+
+**1. Provision the Azure backing services** (`infra/README.md` has full detail):
+```bash
+az login && az group create -n rg-dsf-dev -l swedencentral
+az deployment group what-if -g rg-dsf-dev -f infra/main.bicep -p @infra/main.parameters.json
+az deployment group create  -g rg-dsf-dev -f infra/main.bicep -p @infra/main.parameters.json \
+  -p workloadPrincipalId="<homelab-service-principal-object-id>"
+```
+This creates Cosmos, App Configuration, Key Vault, App Insights, and the Event Grid →
+Service Bus ingestion buffer — and grants your homelab SP the data-plane roles.
+
+**2. Wire CI (optional but recommended):** set repo variables `AZURE_CLIENT_ID`,
+`AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_RESOURCE_GROUP` to activate the
+`infra-whatif` pipeline's full preview on every infra change (OIDC, no secrets). The
+`agents-images` pipeline already publishes each agent to `ghcr.io/<owner>/dsf-agent-<kind>`.
+
+**3. Host the runtime in the homelab (your choice of orchestration):** pull the agent
+images from GHCR (or build locally), set `DSF_MODE=azure`, authenticate with the homelab
+service principal, and point config at the Bicep outputs (Cosmos/App Config/Key Vault/
+App Insights endpoints). For real-time interrupts, poll the Service Bus `signals` queue
+outbound; otherwise scheduled sweeps need nothing inbound. `infra/compose.homelab.yml`
+shows the Grafana agent + tunnel as a starting point.
+
+**4. Go live carefully:** keep `dry_run` ON in the Control Center until you trust a few
+real runs, then turn it off to begin live filing.
 
 ## Guardrails before going live
 

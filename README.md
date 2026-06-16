@@ -38,9 +38,11 @@ uv run python -m dsf.cli control-center   # http://localhost:8081
 - **Runnable locally, end-to-end, in dry-run** against in-memory fakes — every component
   built behind a port. The full conveyor drives a signal to a (simulated) filed issue with
   grounding enforced and no network calls. 167 tests pass.
-- **Azure-ready, not deployed.** Bicep/`azd` IaC and Azure backends are authored but
-  require your credentials and explicit `azd up`. No billable resources are provisioned by
-  the local flow.
+- **Azure-ready, not deployed.** Bicep provisions **backing services only** (Cosmos, App
+  Config, Key Vault, App Insights, Event Grid → Service Bus ingestion buffer); the runtime
+  is meant to run in your homelab and reach Azure outbound (ADR 0002). An `infra-whatif`
+  pipeline previews infra changes (OIDC) and an `agents-images` pipeline publishes each
+  agent to GHCR. No billable resources are provisioned by the local flow.
 
 ## Docs
 

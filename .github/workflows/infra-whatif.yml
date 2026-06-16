@@ -1,0 +1,55 @@
+name: infra-whatif
+
+# Validate the Azure backing-services deployment on every change to infra/.
+# `lint` always runs (compiles the Bicep, no Azure auth needed). `what-if` runs a
+# real preview against your resource group via OIDC — it activates automatically
+# once the AZURE_* repo variables are set (see infra/README.md). Nothing deploys.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'infra/**'
+      - '.github/workflows/infra-whatif.yml'
+  pull_request:
+    paths:
+      - 'infra/**'
+      - '.github/workflows/infra-whatif.yml'
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile Bicep (lint)
+        run: az bicep build --file infra/main.bicep
+
+  what-if:
+    needs: lint
+    runs-on: ubuntu-latest
+    # Activates only once OIDC repo variables are configured.
+    if: ${{ vars.AZURE_CLIENT_ID != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: What-if deployment preview
+        uses: azure/cli@v2
+        with:
+          azcliversion: latest
+          inlineScript: |
+            az deployment group what-if \
+              --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+              --template-file infra/main.bicep \
+              --parameters @infra/main.parameters.json

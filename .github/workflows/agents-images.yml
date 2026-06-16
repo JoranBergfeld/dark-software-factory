@@ -1,0 +1,137 @@
+name: agents-images
+
+# Build each source agent as its own container image and push to the GitHub
+# Container Registry (GHCR). Change-detection: an agent rebuilds only when its
+# own code/config changes; a change to shared core (contracts/ports/a2a/base/
+# container or pyproject) rebuilds ALL agents. Images are pushed on main; pull
+# requests build only (validation, no push). Hosting/deployment is out of scope.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/dsf/agents/**'
+      - 'src/dsf/contracts/**'
+      - 'src/dsf/ports/**'
+      - 'src/dsf/a2a/**'
+      - 'src/dsf/container.py'
+      - 'pyproject.toml'
+      - '.github/workflows/agents-images.yml'
+  pull_request:
+    paths:
+      - 'src/dsf/agents/**'
+      - 'src/dsf/contracts/**'
+      - 'src/dsf/ports/**'
+      - 'src/dsf/a2a/**'
+      - 'src/dsf/container.py'
+      - 'pyproject.toml'
+      - '.github/workflows/agents-images.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set.outputs.matrix }}
+      any: ${{ steps.set.outputs.any }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            core:
+              - 'pyproject.toml'
+              - 'src/dsf/contracts/**'
+              - 'src/dsf/ports/**'
+              - 'src/dsf/a2a/**'
+              - 'src/dsf/agents/base.py'
+              - 'src/dsf/container.py'
+            sentry:
+              - 'src/dsf/agents/sentry/**'
+            grafana:
+              - 'src/dsf/agents/grafana/**'
+            foundryiq:
+              - 'src/dsf/agents/foundryiq/**'
+            webiq:
+              - 'src/dsf/agents/webiq/**'
+            tickets:
+              - 'src/dsf/agents/tickets/**'
+
+      - id: set
+        env:
+          CORE: ${{ steps.filter.outputs.core }}
+          SENTRY: ${{ steps.filter.outputs.sentry }}
+          GRAFANA: ${{ steps.filter.outputs.grafana }}
+          FOUNDRYIQ: ${{ steps.filter.outputs.foundryiq }}
+          WEBIQ: ${{ steps.filter.outputs.webiq }}
+          TICKETS: ${{ steps.filter.outputs.tickets }}
+          DISPATCH: ${{ github.event_name == 'workflow_dispatch' }}
+        run: |
+          set -euo pipefail
+          agents=()
+          if [ "$CORE" = "true" ] || [ "$DISPATCH" = "true" ]; then
+            agents=(sentry grafana foundryiq webiq tickets)
+          else
+            [ "$SENTRY" = "true" ] && agents+=(sentry) || true
+            [ "$GRAFANA" = "true" ] && agents+=(grafana) || true
+            [ "$FOUNDRYIQ" = "true" ] && agents+=(foundryiq) || true
+            [ "$WEBIQ" = "true" ] && agents+=(webiq) || true
+            [ "$TICKETS" = "true" ] && agents+=(tickets) || true
+          fi
+          if [ ${#agents[@]} -eq 0 ]; then
+            echo "matrix=[]" >> "$GITHUB_OUTPUT"
+            echo "any=false" >> "$GITHUB_OUTPUT"
+          else
+            json=$(printf '%s\n' "${agents[@]}" | jq -R . | jq -cs .)
+            echo "matrix=$json" >> "$GITHUB_OUTPUT"
+            echo "any=true" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Selected agents: ${agents[*]:-none}"
+
+  build:
+    needs: detect
+    if: needs.detect.outputs.any == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        agent: ${{ fromJSON(needs.detect.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/dsf-agent-${{ matrix.agent }}
+          tags: |
+            type=sha,format=long
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=pr
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: src/dsf/agents/${{ matrix.agent }}/Dockerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

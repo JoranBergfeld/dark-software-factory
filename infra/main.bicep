@@ -1,20 +1,22 @@
 // main.bicep
-// Dark Software Factory — cloud control plane (design §8 "Infrastructure & deployment").
+// Dark Software Factory — Azure BACKING SERVICES we rely on (design §8).
 //
-// Provisions the intake-line platform: Log Analytics + App Insights, a
-// user-assigned managed identity, Key Vault (RBAC), App Configuration with
-// seeded feature flags, Cosmos DB (NoSQL + vector) for unified memory, a
-// Container Apps environment, the six cloud Container Apps (orchestrator,
-// control-center, ingestion, agent-sentry, agent-foundryiq, agent-webiq), and
-// an Event Grid topic for signal ingestion.
+// This template provisions ONLY the services the intake line depends on. It does
+// NOT host or deploy any container/compute: the agent + orchestrator runtime is
+// hosted by the user (e.g. a Proxmox homelab) and reaches these services purely
+// OUTBOUND over HTTPS — no VNet peering, no inbound to the homelab. See ADR 0002.
 //
-// NOT created here: the Azure OpenAI / Foundry model deployment. The endpoint
-// and deployment name are accepted as parameters and injected as env vars; the
-// existing model resource is referenced, never provisioned (design §8: Foundry
-// is the brain-services backbone reached outbound).
+// Provisions: Log Analytics + Application Insights, Key Vault (RBAC), App
+// Configuration with seeded feature flags, Cosmos DB (NoSQL + vector) for unified
+// memory, and a signal-ingestion buffer (Event Grid custom topic → Service Bus
+// queue) that the homelab orchestrator polls outbound.
 //
-// Deploy: az deployment group create  OR  azd up  (see infra/README.md).
-// This template is authored for review and NOT auto-deployed.
+// Data-plane access is granted to a caller-supplied homelab workload principal
+// (an Entra service principal object id). Managed Identity is not used because
+// there is no Azure compute here. Azure OpenAI / Foundry is referenced by the
+// homelab runtime, not provisioned here.
+//
+// Validate (no deploy):  az deployment group what-if -g <rg> -f infra/main.bicep -p @infra/main.parameters.json
 
 targetScope = 'resourceGroup'
 
@@ -33,24 +35,11 @@ param location string = resourceGroup().location
 @description('Environment moniker (dev/test/prod), tagged on resources and used in names.')
 param environmentName string = 'dev'
 
-@description('Existing Azure OpenAI / Foundry endpoint URL. NOT provisioned here. e.g. https://my-aoai.openai.azure.com/')
-param openAiEndpoint string = ''
+@description('Object ID of the homelab workload service principal granted data-plane access (Cosmos/App Config/Key Vault/Service Bus). Empty = skip role assignments (provision-only).')
+param workloadPrincipalId string = ''
 
-@description('Existing Azure OpenAI chat/model deployment name (e.g. gpt-4o). NOT provisioned here.')
-param openAiDeployment string = 'gpt-4o'
-
-@description('Object ID of a user/group to grant Key Vault + App Config data access for local dev (optional).')
+@description('Object ID of a human user/group granted App Configuration Data Owner (to edit flags via the Control Center during dev). Optional.')
 param adminPrincipalId string = ''
-
-@description('Container image references per service. Defaults are placeholders; azd overrides at deploy.')
-param images object = {
-  orchestrator: 'mcr.microsoft.com/k8se/quickstart:latest'
-  controlCenter: 'mcr.microsoft.com/k8se/quickstart:latest'
-  ingestion: 'mcr.microsoft.com/k8se/quickstart:latest'
-  agentSentry: 'mcr.microsoft.com/k8se/quickstart:latest'
-  agentFoundryiq: 'mcr.microsoft.com/k8se/quickstart:latest'
-  agentWebiq: 'mcr.microsoft.com/k8se/quickstart:latest'
-}
 
 // ---------------------------------------------------------------------------
 // Variables
@@ -60,23 +49,13 @@ var suffix = uniqueString(resourceGroup().id, namePrefix, environmentName)
 var tags = {
   'azd-env-name': environmentName
   project: 'dark-software-factory'
-  component: 'intake-line'
+  component: 'backing-services'
 }
 
 // Built-in role definition IDs.
 var keyVaultSecretsUserRoleId = '4633458b-17de-408a-b874-0445c86b69e6' // Key Vault Secrets User
 var appConfigDataReaderRoleId = '516239f1-63e1-4d78-a4de-a74fb236a071' // App Configuration Data Reader
 var appConfigDataOwnerRoleId = '5ae67dd6-50cb-40e7-96ff-dc2bfa4b606b' // App Configuration Data Owner
-
-// ---------------------------------------------------------------------------
-// Identity
-// ---------------------------------------------------------------------------
-
-resource identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
-  name: '${namePrefix}-id-${suffix}'
-  location: location
-  tags: tags
-}
 
 // ---------------------------------------------------------------------------
 // Observability: Log Analytics + Application Insights
@@ -106,7 +85,7 @@ resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
 }
 
 // ---------------------------------------------------------------------------
-// Key Vault (RBAC auth, soft-delete) + role assignment to the identity
+// Key Vault (RBAC auth, soft-delete) + data-plane role to the homelab workload
 // ---------------------------------------------------------------------------
 
 resource keyVault 'Microsoft.KeyVault/vaults@2024-04-01-preview' = {
@@ -127,11 +106,11 @@ resource keyVault 'Microsoft.KeyVault/vaults@2024-04-01-preview' = {
   }
 }
 
-resource kvSecretsUserAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(keyVault.id, identity.id, keyVaultSecretsUserRoleId)
+resource kvSecretsUserAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(workloadPrincipalId)) {
+  name: guid(keyVault.id, workloadPrincipalId, keyVaultSecretsUserRoleId)
   scope: keyVault
   properties: {
-    principalId: identity.properties.principalId
+    principalId: workloadPrincipalId
     principalType: 'ServicePrincipal'
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', keyVaultSecretsUserRoleId)
   }
@@ -153,11 +132,11 @@ resource appConfig 'Microsoft.AppConfiguration/configurationStores@2024-05-01' =
   }
 }
 
-resource appConfigDataReaderAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(appConfig.id, identity.id, appConfigDataReaderRoleId)
+resource appConfigDataReaderAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(workloadPrincipalId)) {
+  name: guid(appConfig.id, workloadPrincipalId, appConfigDataReaderRoleId)
   scope: appConfig
   properties: {
-    principalId: identity.properties.principalId
+    principalId: workloadPrincipalId
     principalType: 'ServicePrincipal'
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', appConfigDataReaderRoleId)
   }
@@ -221,209 +200,31 @@ module cosmos 'modules/cosmos.bicep' = {
     accountName: '${namePrefix}cos${suffix}'
     location: location
     tags: tags
-    // Grant the identity Cosmos data-plane access (account-scoped SQL role).
-    dataPlanePrincipalId: identity.properties.principalId
+    // Grant the homelab workload Cosmos data-plane access (account-scoped SQL role).
+    dataPlanePrincipalId: workloadPrincipalId
   }
 }
 
 // ---------------------------------------------------------------------------
-// Event Grid topic for signal ingestion (design §8: alert → webhook → Event Grid → ingestion)
+// Signal ingestion buffer: Event Grid custom topic -> Service Bus queue
+// (homelab orchestrator polls the queue OUTBOUND; nothing pushes into homelab)
 // ---------------------------------------------------------------------------
 
-resource ingestionTopic 'Microsoft.EventGrid/topics@2024-06-01-preview' = {
-  name: '${namePrefix}-egt-${suffix}'
-  location: location
-  tags: tags
-  properties: {
-    inputSchema: 'EventGridSchema'
-    publicNetworkAccess: 'Enabled'
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Container Apps managed environment (wired to Log Analytics)
-// ---------------------------------------------------------------------------
-
-resource containerEnv 'Microsoft.App/managedEnvironments@2024-03-01' = {
-  name: '${namePrefix}-cae-${suffix}'
-  location: location
-  tags: tags
-  properties: {
-    appLogsConfiguration: {
-      destination: 'log-analytics'
-      logAnalyticsConfiguration: {
-        customerId: logAnalytics.properties.customerId
-        sharedKey: logAnalytics.listKeys().primarySharedKey
-      }
-    }
-  }
-}
-
-// Common env vars injected into every app (design §8: DSF_MODE=azure, identity-driven).
-var commonEnv = [
-  {
-    name: 'DSF_MODE'
-    value: 'azure'
-  }
-  {
-    name: 'AZURE_CLIENT_ID'
-    value: identity.properties.clientId
-  }
-  {
-    name: 'AZURE_COSMOS_ENDPOINT'
-    value: cosmos.outputs.endpoint
-  }
-  {
-    name: 'AZURE_APPCONFIG_ENDPOINT'
-    value: appConfig.properties.endpoint
-  }
-  {
-    name: 'AZURE_KEYVAULT_URI'
-    value: keyVault.properties.vaultUri
-  }
-  {
-    name: 'AZURE_OPENAI_ENDPOINT'
-    value: openAiEndpoint
-  }
-  {
-    name: 'AZURE_OPENAI_DEPLOYMENT'
-    value: openAiDeployment
-  }
-  {
-    name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
-    value: appInsights.properties.ConnectionString
-  }
-  {
-    name: 'EVENTGRID_TOPIC_ENDPOINT'
-    value: ingestionTopic.properties.endpoint
-  }
-]
-
-// ---------------------------------------------------------------------------
-// Container Apps (via reusable module)
-// ---------------------------------------------------------------------------
-
-// Control Center — external ingress (the human write surface).
-module controlCenter 'modules/containerapp.bicep' = {
-  name: 'control-center'
-  params: {
-    name: '${namePrefix}-control-center'
-    serviceName: 'control-center'
-    location: location
-    environmentId: containerEnv.id
-    identityId: identity.id
-    image: images.controlCenter
-    ingressEnabled: true
-    externalIngress: true
-    targetPort: 8080
-    env: commonEnv
-    minReplicas: 1
-    maxReplicas: 2
-    tags: tags
-  }
-}
-
-// Ingestion endpoint — external ingress (receives Event Grid / webhook POSTs).
-module ingestion 'modules/containerapp.bicep' = {
+module ingestion 'modules/ingestion.bicep' = {
   name: 'ingestion'
   params: {
-    name: '${namePrefix}-ingestion'
-    serviceName: 'ingestion'
+    namePrefix: namePrefix
+    suffix: suffix
     location: location
-    environmentId: containerEnv.id
-    identityId: identity.id
-    image: images.ingestion
-    ingressEnabled: true
-    externalIngress: true
-    targetPort: 8080
-    env: commonEnv
-    minReplicas: 1
-    maxReplicas: 3
     tags: tags
-  }
-}
-
-// Orchestrator — internal ingress only (driven by triggers / ingestion).
-module orchestrator 'modules/containerapp.bicep' = {
-  name: 'orchestrator'
-  params: {
-    name: '${namePrefix}-orchestrator'
-    serviceName: 'orchestrator'
-    location: location
-    environmentId: containerEnv.id
-    identityId: identity.id
-    image: images.orchestrator
-    ingressEnabled: true
-    externalIngress: false
-    targetPort: 8080
-    env: commonEnv
-    minReplicas: 1
-    maxReplicas: 2
-    tags: tags
-  }
-}
-
-// Source agents — internal ingress (A2A reachable only inside the environment).
-module agentSentry 'modules/containerapp.bicep' = {
-  name: 'agent-sentry'
-  params: {
-    name: '${namePrefix}-agent-sentry'
-    serviceName: 'agent-sentry'
-    location: location
-    environmentId: containerEnv.id
-    identityId: identity.id
-    image: images.agentSentry
-    ingressEnabled: true
-    externalIngress: false
-    targetPort: 8080
-    env: commonEnv
-    tags: tags
-  }
-}
-
-module agentFoundryiq 'modules/containerapp.bicep' = {
-  name: 'agent-foundryiq'
-  params: {
-    name: '${namePrefix}-agent-foundryiq'
-    serviceName: 'agent-foundryiq'
-    location: location
-    environmentId: containerEnv.id
-    identityId: identity.id
-    image: images.agentFoundryiq
-    ingressEnabled: true
-    externalIngress: false
-    targetPort: 8080
-    env: commonEnv
-    tags: tags
-  }
-}
-
-module agentWebiq 'modules/containerapp.bicep' = {
-  name: 'agent-webiq'
-  params: {
-    name: '${namePrefix}-agent-webiq'
-    serviceName: 'agent-webiq'
-    location: location
-    environmentId: containerEnv.id
-    identityId: identity.id
-    image: images.agentWebiq
-    ingressEnabled: true
-    externalIngress: false
-    targetPort: 8080
-    env: commonEnv
-    tags: tags
+    // Grant the homelab workload Service Bus Data Receiver on the queue.
+    receiverPrincipalId: workloadPrincipalId
   }
 }
 
 // ---------------------------------------------------------------------------
-// Outputs
+// Outputs (consumed by the homelab runtime's azure-mode configuration)
 // ---------------------------------------------------------------------------
-
-@description('Public URL of the Control Center web UI.')
-output controlCenterUrl string = 'https://${controlCenter.outputs.fqdn}'
-
-@description('Public URL of the signal-ingestion endpoint.')
-output ingestionUrl string = 'https://${ingestion.outputs.fqdn}'
 
 @description('Cosmos DB document endpoint.')
 output cosmosEndpoint string = cosmos.outputs.endpoint
@@ -434,11 +235,14 @@ output appConfigEndpoint string = appConfig.properties.endpoint
 @description('Key Vault URI.')
 output keyVaultUri string = keyVault.properties.vaultUri
 
-@description('Event Grid ingestion topic endpoint.')
-output eventGridTopicEndpoint string = ingestionTopic.properties.endpoint
-
-@description('Client ID of the user-assigned managed identity (for AZURE_CLIENT_ID).')
-output identityClientId string = identity.properties.clientId
-
 @description('Application Insights connection string.')
 output appInsightsConnectionString string = appInsights.properties.ConnectionString
+
+@description('Event Grid ingestion topic endpoint (where external signal sources publish).')
+output eventGridTopicEndpoint string = ingestion.outputs.topicEndpoint
+
+@description('Service Bus namespace hostname (the orchestrator polls the signals queue here).')
+output serviceBusNamespace string = ingestion.outputs.namespaceHostname
+
+@description('Service Bus signals queue name.')
+output signalsQueueName string = ingestion.outputs.queueName
