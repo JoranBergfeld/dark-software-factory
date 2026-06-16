@@ -40,8 +40,13 @@ switch ON), `triggers_scheduled_paused`, `triggers_signal_paused`, plus
 - `modules/cosmos.bicep` — Cosmos account + db + vector/TTL container + the
   conditional data-plane SQL role assignment.
 - `modules/ingestion.bicep` — Service Bus namespace + `signals` queue + Event Grid
-  custom topic (system-assigned identity) + identity-based event subscription that
-  delivers topic events into the queue, plus the conditional receiver role.
+  custom topic (system-assigned identity) + the topic's Service Bus Data Sender
+  role + the conditional receiver role.
+- `ingestion-subscription.bicep` — **phase 2**, applied *after* `main.bicep`: the
+  Event Grid → queue event subscription (identity-based delivery). Split out because
+  Event Grid validates managed-identity delivery synchronously at creation, racing
+  RBAC propagation of the sender role (aka.ms/egmsivalidation). Run it once the main
+  deploy finishes and the role has propagated.
 
 ### Outputs
 `cosmosEndpoint`, `appConfigEndpoint`, `keyVaultUri`,
@@ -85,16 +90,30 @@ az deployment group what-if -g <rg> -f infra/main.bicep -p @infra/main.parameter
 
 ```bash
 az login
-az group create -n rg-dsf-dev -l swedencentral
-# Preview first:
-az deployment group what-if -g rg-dsf-dev -f infra/main.bicep -p @infra/main.parameters.json
-# Then apply (set workloadPrincipalId to your homelab SP object id):
-az deployment group create -g rg-dsf-dev -f infra/main.bicep \
-  -p @infra/main.parameters.json -p workloadPrincipalId="<homelab-sp-object-id>"
+# Pick a region with Cosmos capacity (West Europe is frequently constrained for
+# zone-redundant Cosmos; Sweden Central worked at time of writing):
+az group create -n rg-dsf -l swedencentral
+
+# 1) Preview, then provision the backing services. For a throwaway dev deploy pass
+#    enablePurgeProtection=false so a deleted Key Vault name can be reused (the
+#    default true reserves the vault name for 90 days). Set workloadPrincipalId to
+#    your homelab SP object id to also create the data-plane role assignments.
+az deployment group what-if -g rg-dsf -f infra/main.bicep -p @infra/main.parameters.json
+az deployment group create  -g rg-dsf -f infra/main.bicep -p @infra/main.parameters.json \
+  -p enablePurgeProtection=false -p workloadPrincipalId="<homelab-sp-object-id>"
+
+# 2) Phase 2 — wire Event Grid -> the Service Bus queue (after step 1 completes;
+#    use the resource name suffix from step 1's outputs):
+az deployment group create -g rg-dsf -f infra/ingestion-subscription.bicep \
+  -p topicName=<dsf-egt-...> namespaceName=<dsf-sb-...>
 ```
 
+> The `az eventgrid` CLI extension is currently broken on Windows
+> (`_validate_subscription_id_matches_default_subscription_id` → `NoneType`), so
+> create/list the subscription via the **ARM template above**, not `az eventgrid`.
+
 `azd provision` works too (`azure.yaml` is infra-only — there is no `azd up`
-service deployment, by design). Tear down: `az group delete -n rg-dsf-dev`.
+service deployment, by design). Tear down: `az group delete -n rg-dsf`.
 
 ## Homelab runtime (your choice of host)
 

@@ -41,6 +41,14 @@ param workloadPrincipalId string = ''
 @description('Object ID of a human user/group granted App Configuration Data Owner (to edit flags via the Control Center during dev). Optional.')
 param adminPrincipalId string = ''
 
+@description('Enable Key Vault purge protection. Keep true for prod (a deleted vault name is reserved 90 days); set false for dev/throwaway so redeploys can reuse names.')
+param enablePurgeProtection bool = true
+
+@description('Key Vault soft-delete retention in days (7-90).')
+@minValue(7)
+@maxValue(90)
+param softDeleteRetentionInDays int = 90
+
 // ---------------------------------------------------------------------------
 // Variables
 // ---------------------------------------------------------------------------
@@ -100,8 +108,9 @@ resource keyVault 'Microsoft.KeyVault/vaults@2024-04-01-preview' = {
     tenantId: subscription().tenantId
     enableRbacAuthorization: true
     enableSoftDelete: true
-    softDeleteRetentionInDays: 90
-    enablePurgeProtection: true
+    softDeleteRetentionInDays: softDeleteRetentionInDays
+    // Purge protection cannot be explicitly false (only true or omitted).
+    enablePurgeProtection: enablePurgeProtection ? true : null
     publicNetworkAccess: 'Enabled'
   }
 }

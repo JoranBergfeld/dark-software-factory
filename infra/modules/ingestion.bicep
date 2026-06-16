@@ -77,32 +77,16 @@ resource topicSenderAssignment 'Microsoft.Authorization/roleAssignments@2022-04-
   }
 }
 
-// Deliver topic events into the queue using the topic's resource identity.
-resource subscription 'Microsoft.EventGrid/topics/eventSubscriptions@2024-06-01-preview' = {
-  parent: topic
-  name: 'to-signals-queue'
-  properties: {
-    deliveryWithResourceIdentity: {
-      identity: {
-        type: 'SystemAssigned'
-      }
-      destination: {
-        endpointType: 'ServiceBusQueue'
-        properties: {
-          resourceId: queue.id
-        }
-      }
-    }
-    eventDeliverySchema: 'EventGridSchema'
-    retryPolicy: {
-      maxDeliveryAttempts: 30
-      eventTimeToLiveInMinutes: 1440
-    }
-  }
-  dependsOn: [
-    topicSenderAssignment
-  ]
-}
+// NOTE: the Event Grid event subscription that delivers topic events into the
+// Service Bus queue (identity-based) is created POST-DEPLOY via the Azure CLI, not
+// here. Event Grid validates managed-identity delivery synchronously at creation,
+// which races RBAC propagation of `topicSenderAssignment` above and fails an
+// in-template subscription (aka.ms/egmsivalidation). Create it once the role has
+// propagated (see infra/README.md):
+//   az eventgrid event-subscription create \
+//     --name to-signals-queue --source-resource-id <topicId> \
+//     --delivery-identity systemassigned \
+//     --endpoint-type servicebusqueue --endpoint <queueId>
 
 // The homelab workload may receive (dequeue) from the namespace.
 resource receiverAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(receiverPrincipalId)) {
