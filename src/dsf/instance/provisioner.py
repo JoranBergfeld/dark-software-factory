@@ -13,6 +13,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from dsf.instance.runtime_render import render_runtime_bundle
 from dsf.instance.spec import (
     AzureProvisionResult,
     InstanceManifest,
@@ -108,9 +109,8 @@ class InstanceProvisioner:
             ProvisionStep(
                 name="deploy_council",
                 description=(
-                    f"Deploy feature-council runtime scoped to {s.product} (deferred to SP3)"
+                    f"Render + bring up the feature-council runtime scoped to {s.product}"
                 ),
-                deferred=True,
             ),
             ProvisionStep(
                 name="deploy_sre",
@@ -146,6 +146,29 @@ class InstanceProvisioner:
                     continue  # finalized after the manifest is built
                 if step.deferred:
                     step.result = "deferred"
+                elif step.name == "deploy_council":
+                    provisional = InstanceManifest(
+                        spec=self.spec, plan=plan, executed=executed, azure=azure_result
+                    )
+                    bundle = render_runtime_bundle(provisional, repo_root=self._repo_root)
+                    if not execute:
+                        step.result = "rendered (dry-run)"
+                    elif self.spec.runtime_target == "homelab":
+                        self._run(
+                            [
+                                "docker", "compose",
+                                "-f", str(bundle.compose_path),
+                                "--env-file", str(bundle.env_path),
+                                "up", "-d",
+                            ],
+                            check=True,
+                        )
+                        step.executed, step.result = True, "deployed"
+                    else:
+                        raise NotImplementedError(
+                            f"runtime_target {self.spec.runtime_target!r} bring-up is "
+                            "not yet implemented (homelab only in SP3)."
+                        )
                 elif not execute:
                     step.result = "dry-run"
                 elif not step.command:

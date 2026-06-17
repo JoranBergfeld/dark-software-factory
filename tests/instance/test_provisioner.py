@@ -33,7 +33,7 @@ def test_plan_step_order_and_names():
 def test_plan_deferred_flags():
     plan = InstanceProvisioner(_spec()).plan()
     deferred = {s.name for s in plan.steps if s.deferred}
-    assert deferred == {"deploy_council", "deploy_sre"}
+    assert deferred == {"deploy_sre"}
 
 
 def test_plan_create_resource_group_command():
@@ -91,7 +91,7 @@ def test_apply_dry_run_writes_manifest_and_runs_nothing(tmp_path):
     results = {s.name: s.result for s in manifest.plan.steps}
     assert results["create_repo"] == "dry-run"
     assert results["provision_azure"] == "dry-run"
-    assert results["deploy_council"] == "deferred"
+    assert results["deploy_council"] == "rendered (dry-run)"
     assert results["write_config"].endswith("demo.json")
     assert (tmp_path / "config" / "instances" / "demo.json").exists()
 
@@ -120,7 +120,7 @@ def test_apply_execute_runs_real_steps_and_stubs_deferred(tmp_path):
     assert manifest.executed is True
     results = {s.name: s.result for s in manifest.plan.steps}
     assert results["create_repo"] == "executed"
-    assert results["deploy_council"] == "deferred"
+    assert results["deploy_council"] == "deployed"
 
 
 def test_apply_execute_skips_clone_when_repo_and_local_dir_exist(tmp_path, monkeypatch):
@@ -240,3 +240,37 @@ def test_apply_dry_run_preserves_prior_azure_outputs(tmp_path):
     assert manifest.azure is not None
     assert manifest.azure.outputs["kv"] == "https://v.vault.azure.net"
     assert manifest.executed is True
+
+
+def test_apply_execute_homelab_brings_up_runtime(tmp_path):
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        returncode = 1 if cmd[:3] == ["gh", "repo", "view"] else 0
+        return MagicMock(returncode=returncode, stdout="{}")
+
+    spec = InstanceSpec(product="demo", owner="acme")  # runtime_target defaults to homelab
+    prov = InstanceProvisioner(spec, run=fake_run, repo_root=tmp_path)
+    manifest = prov.apply(execute=True)
+
+    compose = tmp_path / "config" / "instances" / "demo.runtime" / "compose.orchestrator.yml"
+    env = tmp_path / "config" / "instances" / "demo.runtime" / ".env.orchestrator"
+    up = next(c for c in calls if c[:3] == ["docker", "compose", "-f"])
+    assert str(compose) in up
+    assert "--env-file" in up and str(env) in up
+    assert up[-2:] == ["up", "-d"]
+    assert {s.name: s.result for s in manifest.plan.steps}["deploy_council"] == "deployed"
+
+
+def test_apply_execute_aca_target_raises(tmp_path):
+    def fake_run(cmd, **kwargs):
+        returncode = 1 if cmd[:3] == ["gh", "repo", "view"] else 0
+        return MagicMock(returncode=returncode, stdout="{}")
+
+    spec = InstanceSpec(product="demo", owner="acme", runtime_target="aca")
+    prov = InstanceProvisioner(spec, run=fake_run, repo_root=tmp_path)
+    with pytest.raises(NotImplementedError, match="aca"):
+        prov.apply(execute=True)
+    # manifest is still persisted (try/finally) so the prefix survives:
+    assert (tmp_path / "config" / "instances" / "demo.json").exists()
