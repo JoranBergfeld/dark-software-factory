@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
+
+from pydantic import BaseModel
 
 from dsf.fakes import (
     FakeConfigStore,
@@ -20,6 +23,42 @@ from dsf.ports import (
 )
 
 
+class AzureRuntimeSettings(BaseModel):
+    """Runtime configuration for ``azure`` mode, resolved from the environment.
+
+    Only ``product`` (``DSF_PRODUCT``) is required — it scopes the factory to a
+    single product. The endpoints are optional: they are carried for the real
+    service adapters (Cosmos/App Config/App Insights) that land in SP3b, and are
+    rendered into the per-product runtime bundle today.
+    """
+
+    product: str
+    appconfig_endpoint: str = ""
+    keyvault_uri: str = ""
+    appinsights_connection_string: str = ""
+    cosmos_endpoint: str = ""
+
+    @classmethod
+    def from_env(cls, env: Mapping[str, str]) -> AzureRuntimeSettings:
+        """Resolve settings from ``env``. Raises ``ValueError`` if ``DSF_PRODUCT``
+        is missing or blank — azure mode is meaningless without a product scope."""
+        product = (env.get("DSF_PRODUCT") or "").strip()
+        if not product:
+            raise ValueError(
+                "azure mode requires DSF_PRODUCT to scope the factory runtime "
+                "(set DSF_PRODUCT=<product>)."
+            )
+        return cls(
+            product=product,
+            appconfig_endpoint=(env.get("AZURE_APPCONFIG_ENDPOINT") or "").strip(),
+            keyvault_uri=(env.get("AZURE_KEYVAULT_URI") or "").strip(),
+            appinsights_connection_string=(
+                env.get("APPLICATIONINSIGHTS_CONNECTION_STRING") or ""
+            ).strip(),
+            cosmos_endpoint=(env.get("AZURE_COSMOS_ENDPOINT") or "").strip(),
+        )
+
+
 @dataclass
 class Services:
     """Bundle of every port instance, selected per mode."""
@@ -30,6 +69,8 @@ class Services:
     config: ConfigStore
     github: GitHubClient
     tracer: Tracer
+    product: str | None = None
+    azure: AzureRuntimeSettings | None = None
 
 
 def build_services(mode: str = "local") -> Services:

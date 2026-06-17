@@ -7,7 +7,7 @@ import json
 import pytest
 
 from dsf.cli import build_parser, main
-from dsf.container import Services, build_services
+from dsf.container import AzureRuntimeSettings, Services, build_services
 from dsf.fakes import (
     FakeConfigStore,
     FakeGitHubClient,
@@ -37,6 +37,43 @@ def test_build_services_satisfy_protocols():
     assert isinstance(services.config, ConfigStore)
     assert isinstance(services.github, GitHubClient)
     assert isinstance(services.tracer, Tracer)
+
+
+def test_azure_runtime_settings_from_env_requires_product():
+    with pytest.raises(ValueError):
+        AzureRuntimeSettings.from_env({})
+    with pytest.raises(ValueError):
+        AzureRuntimeSettings.from_env({"DSF_PRODUCT": "   "})
+
+
+def test_azure_runtime_settings_from_env_reads_endpoints():
+    settings = AzureRuntimeSettings.from_env(
+        {
+            "DSF_PRODUCT": "microbi",
+            "AZURE_APPCONFIG_ENDPOINT": "https://ac.example",
+            "AZURE_KEYVAULT_URI": "https://kv.example",
+            "APPLICATIONINSIGHTS_CONNECTION_STRING": "InstrumentationKey=abc",
+            "AZURE_COSMOS_ENDPOINT": "https://cosmos.example",
+        }
+    )
+    assert settings.product == "microbi"
+    assert settings.appconfig_endpoint == "https://ac.example"
+    assert settings.keyvault_uri == "https://kv.example"
+    assert settings.appinsights_connection_string == "InstrumentationKey=abc"
+    assert settings.cosmos_endpoint == "https://cosmos.example"
+
+
+def test_azure_runtime_settings_endpoints_optional():
+    settings = AzureRuntimeSettings.from_env({"DSF_PRODUCT": "microbi"})
+    assert settings.product == "microbi"
+    assert settings.appconfig_endpoint == ""
+    assert settings.cosmos_endpoint == ""
+
+
+def test_services_has_product_and_azure_defaults_none():
+    services = build_services("local")
+    assert services.product is None
+    assert services.azure is None
 
 
 def test_build_services_gh_mode_uses_real_github_client():
