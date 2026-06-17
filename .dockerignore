@@ -1,0 +1,15 @@
+# Keep agent images lean. NOTE: tests/ is intentionally NOT ignored — the fake
+# source backends load fixtures from tests/fixtures/ in local mode.
+.git
+.github
+.venv
+**/__pycache__
+.pytest_cache
+.ruff_cache
+docs
+infra
+node_modules
+dist
+local_state
+*.egg-info
+.env
