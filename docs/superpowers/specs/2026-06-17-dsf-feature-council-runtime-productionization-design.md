@@ -58,17 +58,18 @@ runs the full conveyor — a real, demoable deployment milestone.
 **Decision A — Depth of `build_services('azure')` is deliberately thin.**
 SP3 implements the azure **mode, settings resolution, scoping, and deployment**,
 but **defers the heavy real-SDK service adapters** (Cosmos for memory, App
-Configuration for config, App Insights for tracing, an LLM client for the model)
-to a named follow-up (**SP3b**). Reasons: (a) the owner's north star is the
-template+CLI that stamps out instances — deployment+scoping advances it directly,
-real adapters are orthogonal runtime-fidelity work; (b) it keeps SP3 fully
-**offline-testable** and pulls in **no new heavy cloud SDK dependencies**, whose
-selection benefits from owner input; (c) it is a coherent, shippable increment.
-In `azure` mode SP3 wires `github → RealGitHubClient` and keeps
-`model/memory/config/tracer` on the existing fakes **behind a clear seam**, with
-the resolved Azure settings carried on the bundle so the real adapters drop in
-later. **First recommended follow-up adapter: App Insights tracer** (single dep,
-high observability value).
+Configuration for config, an LLM client for the model) to a named follow-up
+(**SP3b**). Reasons: (a) the owner's north star is the template+CLI that stamps
+out instances — deployment+scoping advances it directly, real adapters are
+orthogonal runtime-fidelity work; (b) it keeps SP3 fully **offline-testable** and
+pulls in **no new heavy cloud SDK dependencies**, whose selection benefits from
+owner input; (c) it is a coherent, shippable increment. In `azure` mode SP3 wires
+`github → RealGitHubClient` and `tracer → build_tracer("azure")` (the **existing**
+`OtelTracer`, which already degrades gracefully to `FakeTracer` when OpenTelemetry
+isn't installed — real-when-available observability at zero new-dependency cost),
+and keeps `model/memory/config` on the existing fakes **behind a clear seam**,
+with the resolved Azure settings carried on the bundle so the real adapters drop
+in later. **First recommended follow-up adapter: App Configuration for config.**
 
 **Decision B — Homelab is the implemented runtime target; ACA is a seam.**
 Per ADR 0002 and the existing compose pattern (and `InstanceSpec.runtime_target`
@@ -104,9 +105,11 @@ provisioning logic is piled into `src/dsf/cli.py` beyond minimal flag wiring.
 - `Services` gains `product: str | None = None` and
   `azure: AzureRuntimeSettings | None = None` (both `None` for local/gh).
 - `build_services('azure', *, env=os.environ)` builds `AzureRuntimeSettings`,
-  wires `github → RealGitHubClient`, keeps the other four ports on fakes (the
-  deferred-adapter seam), and sets `product`/`azure` on the bundle. It no longer
-  raises.
+  wires `github → RealGitHubClient` and `tracer → build_tracer("azure")`
+  (existing `OtelTracer` with graceful fallback), keeps `model/memory/config` on
+  fakes (the deferred-adapter seam), and sets `product`/`azure` on the bundle. It
+  no longer raises. The `NotImplementedError` text for genuinely unknown modes
+  updates to list `azure` among the available modes.
 
 ### 4.2 Single-product scoping (runtime)
 
@@ -168,7 +171,8 @@ All offline, following existing patterns (injected `run`/`env`, fakes):
 - `AzureRuntimeSettings.from_env`: valid env → populated; missing required →
   `ValueError` naming the gaps.
 - `build_services('azure', env=…)`: returns a bundle with `RealGitHubClient`,
-  `product` set, `azure` populated; does not raise; other ports are fakes.
+  `product` set, `azure` populated, and a `tracer` from `build_tracer("azure")`;
+  does not raise; `model/memory/config` are fakes.
 - Scoping: `sweep` with `services.product='P'` → `run.product == 'P'`; with
   `None` → unchanged.
 - `render_runtime_bundle`: writes both files; compose references `DSF_PRODUCT`
@@ -186,8 +190,9 @@ All offline, following existing patterns (injected `run`/`env`, fakes):
 ## 8. Out of scope (deferred)
 
 - **SP3b**: real Azure service adapters — Cosmos (memory), App Configuration
-  (config), App Insights (tracer), LLM (model) — each behind the seam established
-  here. App Insights tracer recommended first.
+  (config), LLM (model) — each behind the seam established here. App
+  Configuration recommended first. (The App Insights/OTel tracer is **already
+  wired in SP3** via `build_tracer("azure")`.)
 - **ACA runtime target** rendering/deploy (seam present; raises until a later SP).
 - **SRE agent** (`deploy_sre` stays deferred — SP5).
 - Real homelab role-assignment/secret population and tunnel provisioning
