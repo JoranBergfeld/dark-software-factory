@@ -118,8 +118,17 @@ def _print_plan(plan, *, execute: bool = False) -> None:
 
 def _cmd_new(args: argparse.Namespace) -> int:
     """Create (or preview) a new isolated product factory instance."""
+    from dsf.instance.naming import make_name_prefix
     from dsf.instance.provisioner import InstanceProvisioner
-    from dsf.instance.spec import InstanceSpec
+    from dsf.instance.spec import InstanceSpec, manifest_path, read_manifest
+
+    root = Path(args.config_root) if args.config_root else None
+    # Idempotent effective prefix: reuse the persisted one if the instance exists,
+    # otherwise derive a fresh randomized prefix from the supplied base.
+    if manifest_path(args.product, root).exists():
+        name_prefix = read_manifest(args.product, repo_root=root).spec.name_prefix
+    else:
+        name_prefix = make_name_prefix(args.name_prefix)
 
     spec = InstanceSpec(
         product=args.product,
@@ -127,8 +136,11 @@ def _cmd_new(args: argparse.Namespace) -> int:
         repo=args.repo or "",
         visibility=args.visibility,
         runtime_target=args.runtime_target,
+        name_prefix=name_prefix,
+        environment=args.environment,
+        location=args.location,
+        workload_principal_id=args.workload_principal_id,
     )
-    root = Path(args.config_root) if args.config_root else None
     prov = InstanceProvisioner(spec, repo_root=root)
     if args.execute:
         plan = prov.apply(execute=True).plan
@@ -190,8 +202,24 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["homelab", "aca"], help="where the factory runtime is hosted",
     )
     p_new.add_argument(
+        "--name-prefix", required=True,
+        help="base Azure resource name prefix (sanitized + randomized to <=12 lowercase chars)",
+    )
+    p_new.add_argument(
+        "--environment", default="dev",
+        help="Azure environment moniker (Bicep environmentName)",
+    )
+    p_new.add_argument(
+        "--location", default="swedencentral",
+        help="Azure region for the resource group and resources",
+    )
+    p_new.add_argument(
+        "--workload-principal-id", default="",
+        help="object id granted data-plane roles (empty = provision-only)",
+    )
+    p_new.add_argument(
         "--execute", action="store_true",
-        help="run executable steps (gh/squad); Azure/council/SRE remain deferred",
+        help="run executable steps (gh/squad/az); council/SRE remain deferred",
     )
     p_new.add_argument(
         "--write-plan", action="store_true",
