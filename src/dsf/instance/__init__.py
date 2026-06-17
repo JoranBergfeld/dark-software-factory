@@ -1,5 +1,6 @@
 """Instance provisioning — turn an InstanceSpec into a product factory instance."""
 
+from dsf.instance.naming import make_name_prefix
 from dsf.instance.provisioner import InstanceProvisioner
 from dsf.instance.spec import (
     InstanceManifest,
@@ -21,6 +22,7 @@ __all__ = [
     "ProvisionStep",
     "default_label_taxonomy",
     "instances_dir",
+    "make_name_prefix",
     "manifest_path",
     "read_manifest",
     "write_manifest",
