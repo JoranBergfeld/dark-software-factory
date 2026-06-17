@@ -90,3 +90,35 @@ async def test_error_in_station_yields_error_status() -> None:
     assert result.status == RunStatus.ERROR
     messages = " ".join(a.message for a in result.audit)
     assert "station error" in messages.lower()
+
+
+async def test_killed_run_does_not_resume_past_s1() -> None:
+    """Regression: a KILLED run re-driven through run_line must stay KILLED.
+
+    Before the fix, on resume the loop skipped S1 (already checkpointed) and
+    bypassed the KILLED early-return, letting S2..S7 execute and file an issue.
+    """
+    services = build_services("local")
+    text = "checkout error spike"
+
+    # Pre-seed duplicate signal so S1 debounce fires and kills the run.
+    await services.memory.put_record({"kind": SIGNAL_KIND, "text": text, "run_id": "prior"})
+
+    run = Run(
+        trigger=TriggerKind.SIGNAL,
+        signal_payload={"product_hints": ["microbi"], "text": text},
+    )
+    killed = await run_line(run, services)
+    assert killed.status == RunStatus.KILLED
+
+    # Simulate a retry/resume: re-drive the same run object through run_line.
+    resumed = await run_line(killed, services)
+
+    assert resumed.status == RunStatus.KILLED, (
+        f"expected KILLED after resume, got {resumed.status}"
+    )
+    # No issues should have been routed or filed.
+    issues = await Blackboard(services.memory).load_issues(killed.id)
+    assert len(issues) == 0, f"expected no issues after resume, got {len(issues)}"
+    # GitHub create_issue was never called.
+    assert services.github.calls == []
