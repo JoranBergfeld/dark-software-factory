@@ -33,9 +33,11 @@ with Azure endpoints wired in — but only for the Grafana *source agent*; there
 no orchestrator/council runtime image or compose yet. Dockerfiles exist only for
 the five source agents.
 
-`Run.product: str | None`, `Proposal.product`, and every config-flag accessor
-(`critic_enabled`, `threshold`, …) already take an optional `product`, so
-per-product scoping is a matter of *setting* `run.product`, not re-plumbing.
+`Run.scope_product_hints: list[str]`, `Proposal.product`, and every config-flag
+accessor (`critic_enabled`, `threshold`, …) already carry product scope, and the
+existing pipeline (triage → investigation → synthesis → routing → consolidation)
+already threads `scope_product_hints` end-to-end, so per-product scoping is a
+matter of *setting* `run.scope_product_hints`, not re-plumbing.
 
 ## 2. Goal
 
@@ -114,9 +116,10 @@ provisioning logic is piled into `src/dsf/cli.py` beyond minimal flag wiring.
 ### 4.2 Single-product scoping (runtime)
 
 - `triggers.scheduler.sweep`/`run_sweep`: when `services.product` is set, the
-  built `Run` gets `product=services.product`, so synthesis routing, critic
+  built `Run` gets `scope_product_hints=[services.product]`, so triage keeps that
+  scope (it only derives hints when empty) and synthesis routing, critic
   enablement, and the threshold all resolve to that product. When `None`,
-  behavior is unchanged (multi-product, backward-compatible).
+  behavior is unchanged (`scope_product_hints=[]`, multi-product, backward-compatible).
 - `dsf --mode azure serve-orchestrator` therefore runs a product-pinned sweep
   with zero extra flags (product comes from `DSF_PRODUCT`).
 
@@ -173,7 +176,8 @@ All offline, following existing patterns (injected `run`/`env`, fakes):
 - `build_services('azure', env=…)`: returns a bundle with `RealGitHubClient`,
   `product` set, `azure` populated, and a `tracer` from `build_tracer("azure")`;
   does not raise; `model/memory/config` are fakes.
-- Scoping: `sweep` with `services.product='P'` → `run.product == 'P'`; with
+- Scoping: `sweep` with `services.product='P'` → `run.scope_product_hints == ['P']`;
+  with
   `None` → unchanged.
 - `render_runtime_bundle`: writes both files; compose references `DSF_PRODUCT`
   and each Azure endpoint; env file carries the captured output values; no secret

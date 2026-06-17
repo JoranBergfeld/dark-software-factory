@@ -50,7 +50,12 @@ async def sweep(services: Services) -> Run:
         return _paused_run()
 
     source_kinds = _enabled_source_kinds(services)
-    run = Run(trigger=TriggerKind.SCHEDULED, source_kinds=source_kinds)
+    scope = [services.product] if services.product else []
+    run = Run(
+        trigger=TriggerKind.SCHEDULED,
+        source_kinds=source_kinds,
+        scope_product_hints=scope,
+    )
     kinds = ", ".join(k.value for k in source_kinds) or "(none)"
     run.audit.append(AuditRecord(station=STATION, message=f"scheduled sweep: sources=[{kinds}]"))
     return run

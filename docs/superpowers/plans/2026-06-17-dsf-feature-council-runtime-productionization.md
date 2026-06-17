@@ -11,7 +11,8 @@ image, render a per-product runtime bundle, and un-defer `deploy_council` so
 from the environment (only `DSF_PRODUCT` required), wires the real GitHub client +
 the existing OTel tracer, and carries `product`/`azure` on the `Services` bundle
 (model/memory/config stay on fakes behind a clear seam — real Azure adapters are
-SP3b). The scheduler stamps `Run.product` from the bundle. `dsf new` renders a
+SP3b). The scheduler scopes each sweep via `Run.scope_product_hints` from the
+bundle's product. `dsf new` renders a
 `compose.orchestrator.yml` + `.env.orchestrator` from the Azure deployment outputs
 and, on `--execute` with `runtime_target=homelab`, runs `docker compose up -d`
 through the injectable runner (aca raises a clear deferral). All tests stay
@@ -44,7 +45,7 @@ injectable `subprocess.run`/`MagicMock` runner pattern, Docker (rendered compose
 | `src/dsf/container.py` | `AzureRuntimeSettings`, `Services.product/azure`, `build_services('azure')` | Modify |
 | `tests/test_container.py` | container/CLI tests; update 2 azure-assuming tests + add azure tests | Modify |
 | `src/dsf/cli.py` | `_get_services` also exits cleanly on `ValueError` (azure missing `DSF_PRODUCT`) | Modify |
-| `src/dsf/triggers/scheduler.py` | stamp `Run.product` from `services.product` | Modify |
+| `src/dsf/triggers/scheduler.py` | scope `Run.scope_product_hints` to `services.product` | Modify |
 | `tests/triggers/test_scheduler.py` | add scoping tests | Modify |
 | `src/dsf/runtime/__init__.py` | new package marker/docstring for the orchestrator runtime image | Create |
 | `src/dsf/runtime/Dockerfile` | two-stage, non-root orchestrator image; `CMD` runs azure-mode sweep worker | Create |
@@ -418,7 +419,7 @@ async def test_sweep_scopes_run_to_services_product():
     services = build_services("local")
     services.product = "microbi"
     run = await sweep(services)
-    assert run.product == "microbi"
+    assert run.scope_product_hints == ["microbi"]
 
 
 async def test_sweep_unscoped_when_no_product():
@@ -427,30 +428,35 @@ async def test_sweep_unscoped_when_no_product():
 
     services = build_services("local")
     run = await sweep(services)
-    assert run.product is None
+    assert run.scope_product_hints == []
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/triggers/test_scheduler.py -k "scopes_run_to_services_product or unscoped_when_no_product" -q`
-Expected: FAIL — `run.product` is `None` even when `services.product` is set.
+Expected: FAIL — `run.scope_product_hints` is `[]` even when `services.product` is set.
 
-- [ ] **Step 3: Stamp `Run.product` from the bundle**
+- [ ] **Step 3: Scope the run via `scope_product_hints`**
 
+`Run` has no single `product` field — the existing, pipeline-wide scoping vector
+is `Run.scope_product_hints: list[str]` (`src/dsf/contracts/models.py:81`), which
+triage/investigation/synthesis/routing/consolidation already thread end-to-end.
 In `src/dsf/triggers/scheduler.py`, replace the `run = Run(...)` construction
 inside `sweep` (currently line 53) with a product-scoped one:
 
 ```python
     source_kinds = _enabled_source_kinds(services)
+    scope = [services.product] if services.product else []
     run = Run(
         trigger=TriggerKind.SCHEDULED,
         source_kinds=source_kinds,
-        product=services.product,
+        scope_product_hints=scope,
     )
 ```
 
-`Run.product` defaults to `None` (`src/dsf/contracts/models.py:100`), so when
-`services.product` is `None` (local/gh) the run is unscoped exactly as before.
+`s1_triage` only derives product hints when the list is empty, so a single-product
+scope is preserved. When `services.product` is `None` (local/gh) the run is
+unscoped (`scope_product_hints=[]`) exactly as before.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
@@ -1119,7 +1125,7 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
 - `build_services('azure', env={'DSF_PRODUCT': ...})` returns a bundle with the real
   GitHub client, the OTel tracer, and `product`/`azure` populated; missing
   `DSF_PRODUCT` exits the CLI cleanly.
-- A scheduled sweep stamps `Run.product` from `services.product`.
+- A scheduled sweep scopes `Run.scope_product_hints` to `[services.product]`.
 - `src/dsf/runtime/Dockerfile` exists (two-stage, non-root, pinned) and its CMD is
   `["python","-m","dsf.cli","--mode","azure","serve-orchestrator"]`.
 - `render_runtime_bundle` writes a product-scoped `compose.orchestrator.yml` +

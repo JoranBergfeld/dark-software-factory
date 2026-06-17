@@ -54,3 +54,16 @@ async def test_run_sweep_runs_line_when_enabled() -> None:
     assert run.status != RunStatus.OPEN
     # Dry-run default everywhere -> GitHub never called.
     assert services.github.calls == []
+
+
+async def test_sweep_scopes_run_to_services_product() -> None:
+    services = build_services("local")
+    services.product = "microbi"
+    run = await sweep(services)
+    assert run.scope_product_hints == ["microbi"]
+
+
+async def test_sweep_unscoped_when_no_product() -> None:
+    services = build_services("local")
+    run = await sweep(services)
+    assert run.scope_product_hints == []
