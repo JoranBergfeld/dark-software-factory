@@ -10,3 +10,5 @@ node_modules/
 dist/
 .azure/
 local_state/
+
+config/instances/*.runtime/
