@@ -18,7 +18,7 @@ COPY --from=builder /install /usr/local
 
 USER appuser
 
-# Per-product feature-council orchestrator. Scope is supplied at runtime via
-# DSF_PRODUCT (see .env.orchestrator). The global --mode flag MUST precede the
-# subcommand.
-CMD ["python", "-m", "dsf.cli", "--mode", "azure", "serve-orchestrator"]
+# Per-product feature-council orchestrator (the dsfctl instance-control CLI).
+# Scope is supplied at runtime via DSF_PRODUCT (see .env.orchestrator). The
+# global --mode flag MUST precede the subcommand.
+CMD ["dsfctl", "--mode", "azure", "serve-orchestrator"]

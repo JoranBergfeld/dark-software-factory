@@ -24,7 +24,4 @@ def test_runtime_dockerfile_is_two_stage_nonroot_pinned():
 def test_runtime_dockerfile_cmd_runs_azure_sweep_worker():
     text = DOCKERFILE.read_text(encoding="utf-8")
     # the global --mode flag MUST precede the subcommand:
-    assert (
-        'CMD ["python", "-m", "dsf.cli", "--mode", "azure", "serve-orchestrator"]'
-        in text
-    )
+    assert 'CMD ["dsfctl", "--mode", "azure", "serve-orchestrator"]' in text

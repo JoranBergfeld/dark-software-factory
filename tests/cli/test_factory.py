@@ -1,10 +1,10 @@
-"""Tests for the `dsf new` CLI subcommand."""
+"""Tests for the `dsf` factory CLI (`dsf new`)."""
 
 from __future__ import annotations
 
 import pytest
 
-from dsf.cli import build_parser, main
+from dsf.cli.factory import build_parser, main
 from dsf.instance.spec import read_manifest
 
 
@@ -62,3 +62,9 @@ def test_new_effective_prefix_is_stable_across_runs(tmp_path):
     assert first == second  # reused, not regenerated
     assert first.startswith("acmebase")
     assert len(first) == 12
+
+
+def test_factory_parser_rejects_runtime_command():
+    # the factory CLI must NOT expose runtime ops — those live in dsfctl
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["run"])

@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from dsf.cli import main
+from dsf.cli.control import main
 from dsf.container import build_services
 from dsf.contracts.enums import RunStatus
 from dsf.orchestrator.blackboard import Blackboard
