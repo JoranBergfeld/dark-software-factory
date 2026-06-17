@@ -32,6 +32,7 @@ class PrOutcome(BaseModel):
 
     id: str
     product: str
+    proposal_id: str | None = None
     issue_url: str | None = None
     proposal_title: str
     verdict: Verdict
@@ -150,6 +151,7 @@ def parse_pr_event(event: dict) -> PrOutcome:
     return PrOutcome(
         id=pr_id,
         product=product,
+        proposal_id=proposal_id,
         issue_url=str(issue_url) if issue_url else None,
         proposal_title=title,
         verdict=verdict,
@@ -172,11 +174,20 @@ async def record_outcome(outcome: PrOutcome, services: Services) -> None:
 
     Persists a durable long-term record (for calibration/retrieval) AND a
     product-scoped Lesson (retrievable via ``MemoryStore.get_lessons``).
+    Joins stored per-critic scores (written by S5 on accept) so the record
+    carries ``critic_scores`` for downstream calibration.
     """
-    record = {
+    critic_scores: dict | None = None
+    if outcome.proposal_id:
+        stored = await services.memory.get_working(f"critic_scores:{outcome.proposal_id}")
+        if isinstance(stored, dict):
+            critic_scores = stored
+
+    record: dict = {
         "kind": "pr_outcome",
         "pr_id": outcome.id,
         "product": outcome.product,
+        "proposal_id": outcome.proposal_id,
         "issue_url": outcome.issue_url,
         "verdict": outcome.verdict,
         "proposal_title": outcome.proposal_title,
@@ -188,6 +199,8 @@ async def record_outcome(outcome: PrOutcome, services: Services) -> None:
             f"{outcome.proposal_title} {outcome.rationale}"
         ),
     }
+    if critic_scores is not None:
+        record["critic_scores"] = critic_scores
     await services.memory.put_record(record)
 
     lesson = outcome_to_lesson(outcome)

@@ -40,6 +40,18 @@ async def run(run: Run, services: Services) -> Run:
             verdicts.append(verdict)
             if verdict.verdict == Verdict.ACCEPT:
                 accepted.append(proposal)
+                # #3: index this proposal so future runs can detect duplicates
+                await services.memory.put_record({
+                    "kind": "proposal",
+                    "text": f"{proposal.title} {proposal.problem}",
+                    "proposal_id": proposal.id,
+                    "run_id": run.id,
+                })
+                # #4: persist per-critic scores for later calibration join
+                await services.memory.put_working(
+                    f"critic_scores:{proposal.id}",
+                    {s.critic: s.score for s in verdict.scores},
+                )
             else:
                 run.audit.append(_audit(f"council killed {proposal.id}: {verdict.rationale}"))
                 await services.memory.put_record(

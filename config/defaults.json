@@ -2,23 +2,67 @@
   "dry_run": true,
   "default_threshold": 0.6,
   "critics": {
-    "grounding": { "enabled": true, "weight": 1.0 },
-    "value": { "enabled": true, "weight": 1.0 },
-    "duplication": { "enabled": true, "weight": 1.0 },
-    "feasibility": { "enabled": true, "weight": 1.0 },
-    "strategic_fit": { "enabled": true, "weight": 1.0 },
-    "cost": { "enabled": true, "weight": 1.0 },
-    "security": { "enabled": true, "weight": 1.0 }
+    "grounding": {
+      "enabled": true,
+      "weight": 1.0
+    },
+    "value": {
+      "enabled": true,
+      "weight": 1.0
+    },
+    "duplication": {
+      "enabled": true,
+      "weight": 1.0
+    },
+    "feasibility": {
+      "enabled": true,
+      "weight": 1.0
+    },
+    "strategic_fit": {
+      "enabled": true,
+      "weight": 1.0
+    },
+    "cost": {
+      "enabled": true,
+      "weight": 1.0
+    },
+    "security": {
+      "enabled": true,
+      "weight": 1.0
+    }
   },
   "agents": {
-    "SENTRY": { "enabled": true },
-    "GRAFANA": { "enabled": true },
-    "FOUNDRYIQ": { "enabled": true },
-    "WEBIQ": { "enabled": true },
-    "TICKETS": { "enabled": true }
+    "SENTRY": {
+      "enabled": true
+    },
+    "GRAFANA": {
+      "enabled": true
+    },
+    "FOUNDRYIQ": {
+      "enabled": true
+    },
+    "WEBIQ": {
+      "enabled": true
+    },
+    "TICKETS": {
+      "enabled": true
+    }
   },
   "triggers": {
-    "SCHEDULED": { "paused": false },
-    "SIGNAL": { "paused": false }
+    "SCHEDULED": {
+      "paused": false
+    },
+    "SIGNAL": {
+      "paused": false
+    }
+  },
+  "weight": {
+    "grounding": 1.0,
+    "value": 1.0,
+    "duplication": 1.0,
+    "feasibility": 1.0,
+    "strategic_fit": 1.0,
+    "cost": 1.0,
+    "security": 1.0
   }
 }
