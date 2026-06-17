@@ -55,7 +55,7 @@ resource account 'Microsoft.DocumentDB/databaseAccounts@2024-11-15' = {
     ]
     // Cheapest footprint for an authored-but-not-yet-scaled deployment.
     enableFreeTier: false
-    disableLocalAuth: false
+    disableLocalAuth: true
   }
 }
 
