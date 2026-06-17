@@ -104,3 +104,47 @@ def test_build_agent_live_requires_a_source(monkeypatch):
     monkeypatch.delenv("SENTRY_AUTH_TOKEN", raising=False)
     with pytest.raises(RuntimeError):
         build_agent(mode="live")
+
+
+async def test_default_tool_caller_does_not_leak_url(monkeypatch):
+    """_default_tool_caller must NOT embed SENTRY_MCP_URL in the raised error (issue #12)."""
+    from contextlib import asynccontextmanager
+
+    import mcp.client.streamable_http as _sthttp
+
+    @asynccontextmanager
+    async def _exploding(*args, **kwargs):
+        raise ConnectionError("connection refused")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(_sthttp, "streamablehttp_client", _exploding)
+    monkeypatch.setenv("SENTRY_MCP_URL", "http://secret.internal:8403/mcp")
+
+    from dsf.agents.sentry.mcp_client import _default_tool_caller
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await _default_tool_caller("search_issues", {})
+
+    error_text = str(exc_info.value)
+    assert "secret.internal" not in error_text, f"URL leaked into error: {error_text!r}"
+    assert "search_issues" in error_text  # stable error code identifies the tool
+
+
+async def test_keyboard_interrupt_propagates_through_default_tool_caller(monkeypatch):
+    """KeyboardInterrupt (BaseException, not Exception) must NOT be caught (issue #12)."""
+    from contextlib import asynccontextmanager
+
+    import mcp.client.streamable_http as _sthttp
+
+    @asynccontextmanager
+    async def _ki_client(*args, **kwargs):
+        raise KeyboardInterrupt
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(_sthttp, "streamablehttp_client", _ki_client)
+    monkeypatch.setenv("SENTRY_MCP_URL", "http://mcp.internal/mcp")
+
+    from dsf.agents.sentry.mcp_client import _default_tool_caller
+
+    with pytest.raises(KeyboardInterrupt):
+        await _default_tool_caller("search_issues", {})

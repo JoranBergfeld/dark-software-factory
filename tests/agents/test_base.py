@@ -58,7 +58,7 @@ async def test_backend_exception_degrades():
     resp = await agent.gather({})
     assert resp.degraded is True
     assert resp.evidence == []
-    assert "nope" in (resp.error or "")
+    assert resp.error == "source SENTRY gather failed"
 
 
 def test_card_reflects_enabled_flag():
@@ -68,3 +68,38 @@ def test_card_reflects_enabled_flag():
     cfg.set_flag("agent.WEBIQ", False)
     assert agent.card().enabled is False
     assert agent.card().kind == SourceKind.WEBIQ
+
+
+async def test_backend_exception_does_not_leak_sensitive_info():
+    """Error details (e.g. URLs) must NOT reach the A2AResponse.error field."""
+    class _BoomWithURL:
+        async def gather(self, run_scope: dict):
+            raise RuntimeError("MCP call via http://secret.internal:8403/mcp failed: boom")
+
+    agent = SourceAgent(
+        kind=SourceKind.SENTRY,
+        backend=_BoomWithURL(),
+        config=FakeConfigStore.from_defaults(),
+    )
+    resp = await agent.gather({})
+    assert resp.degraded is True
+    assert resp.evidence == []
+    # The raw exception message must not appear in the audit-facing error string
+    assert "http://secret.internal" not in (resp.error or "")
+    assert resp.error == "source SENTRY gather failed"
+
+
+async def test_keyboard_interrupt_propagates_through_gather():
+    """KeyboardInterrupt is NOT an Exception; it must bypass the degrade handler."""
+    class _KI:
+        async def gather(self, run_scope: dict):
+            raise KeyboardInterrupt
+
+    agent = SourceAgent(
+        kind=SourceKind.SENTRY,
+        backend=_KI(),
+        config=FakeConfigStore.from_defaults(),
+    )
+    import pytest
+    with pytest.raises(KeyboardInterrupt):
+        await agent.gather({})

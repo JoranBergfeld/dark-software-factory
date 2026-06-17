@@ -91,3 +91,44 @@ async def test_sentry_mcp_maps_issues_to_evidence():
     assert first.provenance.source_kind == SourceKind.SENTRY
     assert first.provenance.query_used == "is:unresolved is:regression"
     assert first.product_hints == ["microbi"]
+
+
+async def test_sentry_mcp_skips_items_without_permalink():
+    """A single malformed item (blank permalink) must be dropped individually,
+    leaving the good items intact (issue #17)."""
+
+    async def fake_mcp_call(tool_name: str, **kwargs):
+        return [
+            {
+                "title": "Good issue A",
+                "count": 100,
+                "user_count": 10,
+                "permalink": "https://microbi.sentry.io/issues/111/",
+                "confidence": 0.9,
+            },
+            {
+                "title": "Bad issue — no permalink",
+                "count": 50,
+                "user_count": 5,
+                "permalink": "",  # blank -> EvidenceItem validator raises -> skip
+                "confidence": 0.8,
+            },
+            {
+                "title": "Good issue B",
+                "count": 200,
+                "user_count": 20,
+                "permalink": "https://microbi.sentry.io/issues/222/",
+                "confidence": 0.7,
+            },
+        ]
+
+    backend = SentryMcpBackend(mcp_call=fake_mcp_call)
+    out = await backend.gather({"product_hints": ["microbi"], "organization": "microbi"})
+
+    # Only the two valid items should be returned
+    assert len(out) == 2
+    citations = {item.raw_citation for item in out}
+    assert "https://microbi.sentry.io/issues/111/" in citations
+    assert "https://microbi.sentry.io/issues/222/" in citations
+    # Degraded source: no evidence (this should NOT happen — we get partial evidence)
+    assert all(item.source_agent == "sentry" for item in out)
