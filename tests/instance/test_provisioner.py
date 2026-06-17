@@ -19,6 +19,7 @@ def test_plan_step_order_and_names():
         "create_repo",
         "squad_init",
         "squad_copilot",
+        "create_resource_group",
         "provision_azure",
         "deploy_council",
         "deploy_sre",
@@ -29,7 +30,31 @@ def test_plan_step_order_and_names():
 def test_plan_deferred_flags():
     plan = InstanceProvisioner(_spec()).plan()
     deferred = {s.name for s in plan.steps if s.deferred}
-    assert deferred == {"provision_azure", "deploy_council", "deploy_sre"}
+    assert deferred == {"deploy_council", "deploy_sre"}
+
+
+def test_plan_create_resource_group_command():
+    plan = InstanceProvisioner(_spec()).plan()
+    rg = next(s for s in plan.steps if s.name == "create_resource_group")
+    assert rg.command == [
+        "az", "group", "create",
+        "--name", "rg-dsf-demo", "--location", "swedencentral",
+    ]
+
+
+def test_plan_provision_azure_command_shape():
+    plan = InstanceProvisioner(_spec()).plan()
+    az = next(s for s in plan.steps if s.name == "provision_azure")
+    assert az.command[:4] == ["az", "deployment", "group", "create"]
+    assert az.command[az.command.index("-g") + 1] == "rg-dsf-demo"
+    assert az.command[az.command.index("-n") + 1] == "dsf-demo"
+    assert az.command[az.command.index("-f") + 1].endswith("infra/main.bicep")
+    assert "namePrefix=dsf" in az.command
+    assert "environmentName=dev" in az.command
+    assert "location=swedencentral" in az.command
+    assert "workloadPrincipalId=" in az.command
+    assert az.command[az.command.index("--query") + 1] == "properties.outputs"
+    assert az.command[-2:] == ["-o", "json"]
 
 
 def test_plan_create_repo_command():
@@ -62,7 +87,8 @@ def test_apply_dry_run_writes_manifest_and_runs_nothing(tmp_path):
     assert manifest.executed is False
     results = {s.name: s.result for s in manifest.plan.steps}
     assert results["create_repo"] == "dry-run"
-    assert results["provision_azure"] == "deferred"
+    assert results["provision_azure"] == "dry-run"
+    assert results["deploy_council"] == "deferred"
     assert results["write_config"].endswith("demo.json")
     assert (tmp_path / "config" / "instances" / "demo.json").exists()
 
@@ -83,8 +109,11 @@ def test_apply_execute_runs_real_steps_and_stubs_deferred(tmp_path):
     assert ["gh", "repo", "create", "acme/demo", "--private", "--clone"] in executed
     squad_init = next((cmd, cwd) for cmd, cwd in calls if cmd[:2] == ["squad", "init"])
     assert squad_init[1] == "demo"
-    # deferred subsystems are never invoked in SP1:
-    assert not any(cmd[0] == "az" for cmd, _ in calls)
+    # azure now provisions for real (RG + Bicep deployment):
+    assert [
+        "az", "group", "create", "--name", "rg-dsf-demo", "--location", "swedencentral",
+    ] in executed
+    assert any(cmd[:4] == ["az", "deployment", "group", "create"] for cmd in executed)
     assert manifest.executed is True
     results = {s.name: s.result for s in manifest.plan.steps}
     assert results["create_repo"] == "executed"

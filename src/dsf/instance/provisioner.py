@@ -17,6 +17,7 @@ from dsf.instance.spec import (
     InstancePlan,
     InstanceSpec,
     ProvisionStep,
+    _default_repo_root,
     manifest_path,
     write_manifest,
 )
@@ -52,6 +53,7 @@ class InstanceProvisioner:
         """Return the ordered provisioning plan (pure — no side effects)."""
         s = self.spec
         repo_dir = s.resolved_repo()
+        bicep = str((self._repo_root or _default_repo_root()) / "infra" / "main.bicep")
         steps = [
             ProvisionStep(
                 name="create_repo",
@@ -74,17 +76,31 @@ class InstanceProvisioner:
                 cwd=repo_dir,
             ),
             ProvisionStep(
-                name="provision_azure",
-                description=(
-                    f"Provision dedicated Azure resource group {s.resource_group()} "
-                    "(deferred to SP2)"
-                ),
+                name="create_resource_group",
+                description=f"Create dedicated Azure resource group {s.resource_group()}",
                 command=[
                     "az", "group", "create",
                     "--name", s.resource_group(),
-                    "--location", "swedencentral",
+                    "--location", s.location,
                 ],
-                deferred=True,
+            ),
+            ProvisionStep(
+                name="provision_azure",
+                description=(
+                    f"Deploy backing services into {s.resource_group()} from infra/main.bicep"
+                ),
+                command=[
+                    "az", "deployment", "group", "create",
+                    "-g", s.resource_group(),
+                    "-n", s.deployment_name(),
+                    "-f", bicep,
+                    "-p",
+                    f"namePrefix={s.name_prefix}",
+                    f"environmentName={s.environment}",
+                    f"location={s.location}",
+                    f"workloadPrincipalId={s.workload_principal_id}",
+                    "--query", "properties.outputs", "-o", "json",
+                ],
             ),
             ProvisionStep(
                 name="deploy_council",
