@@ -20,4 +20,4 @@ evals:
 	uv run python -m dsf.evals.runner --gate
 
 new-demo:
-	uv run python -m dsf.cli new --product demo --owner your-org
+	uv run python -m dsf.cli new --product demo --owner your-org --name-prefix demo

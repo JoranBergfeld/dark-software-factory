@@ -55,21 +55,23 @@ uv run python -m dsf.cli control-center --port 8081
 uv run uvicorn dsf.triggers.app:app --port 8082
 ```
 
-## Creating a product instance (SP1)
+## Creating a product instance (SP1 + SP2)
 
-`dsf new` scaffolds an isolated product factory. Greenfield walking skeleton:
-repo creation + Coding Squad init are real (under `--execute`); Azure, feature
-council, and SRE deployment are **deferred** stub steps (SP2/SP3/SP5).
+`dsf new` scaffolds an isolated product factory. `--name-prefix` is **required**;
+it is sanitized and randomized into a <=12-char Azure resource prefix (persisted in
+the manifest and reused on re-runs). Under `--execute`, repo creation + Coding Squad
+init **and the dedicated Azure resource group + Bicep deployment** are real; feature
+council and SRE deployment remain **deferred** stub steps (SP3/SP5).
 
 ```bash
 # Preview the plan (no side effects):
-uv run python -m dsf.cli new --product microbi --owner your-org
+uv run python -m dsf.cli new --product microbi --owner your-org --name-prefix microbi
 
 # Preview AND write the instance manifest to config/instances/microbi.json:
-uv run python -m dsf.cli new --product microbi --owner your-org --write-plan
+uv run python -m dsf.cli new --product microbi --owner your-org --name-prefix microbi --write-plan
 
-# Execute: create the GitHub repo + initialize Squad (needs gh + @bradygaster/squad-cli):
-uv run python -m dsf.cli new --product microbi --owner your-org --execute
+# Execute: create repo + init Squad + provision Azure (needs gh, @bradygaster/squad-cli, az):
+uv run python -m dsf.cli new --product microbi --owner your-org --name-prefix microbi --execute
 ```
 
 ## The Control Center
