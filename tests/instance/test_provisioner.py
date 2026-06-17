@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import subprocess
 from unittest.mock import MagicMock
 
+import pytest
+
 from dsf.instance.provisioner import InstanceProvisioner
-from dsf.instance.spec import InstanceSpec
+from dsf.instance.spec import InstanceSpec, read_manifest
 
 
 def _spec() -> InstanceSpec:
@@ -197,3 +200,43 @@ def test_apply_dry_run_leaves_azure_unset(tmp_path):
     results = {s.name: s.result for s in manifest.plan.steps}
     assert results["create_resource_group"] == "dry-run"
     assert results["provision_azure"] == "dry-run"
+
+
+def test_apply_execute_persists_manifest_even_when_azure_deployment_fails(tmp_path):
+    def fake_run(cmd, **kwargs):
+        if cmd[:3] == ["gh", "repo", "view"]:
+            return MagicMock(returncode=1)
+        if cmd[:4] == ["az", "deployment", "group", "create"]:
+            raise subprocess.CalledProcessError(1, cmd)
+        return MagicMock(returncode=0, stdout="")
+
+    spec = InstanceSpec(product="demo", owner="acme", name_prefix="demox123")
+    prov = InstanceProvisioner(spec, run=fake_run, repo_root=tmp_path)
+    with pytest.raises(subprocess.CalledProcessError):
+        prov.apply(execute=True)
+
+    # The randomized prefix must survive a failed deployment so a retry reuses the
+    # same (globally-unique) resource names instead of orphaning the first attempt.
+    manifest = read_manifest("demo", repo_root=tmp_path)
+    assert manifest.spec.name_prefix == "demox123"
+
+
+def test_apply_dry_run_preserves_prior_azure_outputs(tmp_path):
+    outputs_json = '{"kv": {"type": "String", "value": "https://v.vault.azure.net"}}'
+
+    def exec_run(cmd, **kwargs):
+        if cmd[:3] == ["gh", "repo", "view"]:
+            return MagicMock(returncode=1)
+        if cmd[:4] == ["az", "deployment", "group", "create"]:
+            return MagicMock(returncode=0, stdout=outputs_json)
+        return MagicMock(returncode=0, stdout="")
+
+    InstanceProvisioner(_spec(), run=exec_run, repo_root=tmp_path).apply(execute=True)
+
+    # A later pure preview / --write-plan must not blank recorded deployment state.
+    InstanceProvisioner(_spec(), run=exec_run, repo_root=tmp_path).apply(execute=False)
+
+    manifest = read_manifest("demo", repo_root=tmp_path)
+    assert manifest.azure is not None
+    assert manifest.azure.outputs["kv"] == "https://v.vault.azure.net"
+    assert manifest.executed is True

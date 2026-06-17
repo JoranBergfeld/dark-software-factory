@@ -21,6 +21,7 @@ from dsf.instance.spec import (
     ProvisionStep,
     _default_repo_root,
     manifest_path,
+    read_manifest,
     write_manifest,
 )
 
@@ -127,49 +128,69 @@ class InstanceProvisioner:
         """Apply the plan. ``execute=False`` is a side-effect-free dry-run that
         still writes the manifest; ``execute=True`` runs the non-deferred,
         commanded steps via the injected runner.
+
+        The manifest is always persisted — even if a step raises — so the
+        randomized ``name_prefix`` survives a failed Azure deployment and a retry
+        reuses the same resource names instead of orphaning the first attempt.
+        Non-executing runs carry prior provisioning state forward so a preview or
+        ``--write-plan`` never blanks recorded Azure outputs.
         """
         plan = self.plan()
-        azure_result: AzureProvisionResult | None = None
-        for step in plan.steps:
-            if step.name == "write_config":
-                continue  # finalized after the manifest is built
-            if step.deferred:
-                step.result = "deferred"
-            elif not execute:
-                step.result = "dry-run"
-            elif not step.command:
-                step.result = "noop"
-            elif step.name == "create_repo" and self._repo_exists():
-                step.executed = True
-                repo_dir = self.spec.resolved_repo()
-                if Path(repo_dir).is_dir():
-                    step.result = "exists"
-                else:
-                    # Repo exists remotely but isn't cloned here; the squad
-                    # steps need a local working copy, so clone it.
-                    self._run(
-                        ["gh", "repo", "clone", self.spec.github_repo(), repo_dir],
-                        check=True,
-                    )
-                    step.result = "cloned"
-            elif step.name == "provision_azure":
-                proc = self._run(step.command, check=True, capture_output=True, text=True)
-                azure_result = self._azure_result(proc)
-                step.executed, step.result = True, "executed"
-            else:
-                kwargs = {"cwd": step.cwd} if step.cwd else {}
-                self._run(step.command, check=True, **kwargs)
-                step.executed, step.result = True, "executed"
-
-        manifest = InstanceManifest(
-            spec=self.spec, plan=plan, executed=execute, azure=azure_result
-        )
         path = manifest_path(self.spec.product, self._repo_root)
-        for step in plan.steps:
-            if step.name == "write_config":
-                step.executed, step.result = True, str(path)
-        write_manifest(manifest, self._repo_root)
+        prior = self._existing_manifest()
+        azure_result = prior.azure if (prior and not execute) else None
+        executed = execute or bool(prior and prior.executed)
+        try:
+            for step in plan.steps:
+                if step.name == "write_config":
+                    continue  # finalized after the manifest is built
+                if step.deferred:
+                    step.result = "deferred"
+                elif not execute:
+                    step.result = "dry-run"
+                elif not step.command:
+                    step.result = "noop"
+                elif step.name == "create_repo" and self._repo_exists():
+                    step.executed = True
+                    repo_dir = self.spec.resolved_repo()
+                    if Path(repo_dir).is_dir():
+                        step.result = "exists"
+                    else:
+                        # Repo exists remotely but isn't cloned here; the squad
+                        # steps need a local working copy, so clone it.
+                        self._run(
+                            ["gh", "repo", "clone", self.spec.github_repo(), repo_dir],
+                            check=True,
+                        )
+                        step.result = "cloned"
+                elif step.name == "provision_azure":
+                    proc = self._run(
+                        step.command, check=True, capture_output=True, text=True
+                    )
+                    azure_result = self._azure_result(proc)
+                    step.executed, step.result = True, "executed"
+                else:
+                    kwargs = {"cwd": step.cwd} if step.cwd else {}
+                    self._run(step.command, check=True, **kwargs)
+                    step.executed, step.result = True, "executed"
+        finally:
+            for step in plan.steps:
+                if step.name == "write_config":
+                    step.executed, step.result = True, str(path)
+            manifest = InstanceManifest(
+                spec=self.spec, plan=plan, executed=executed, azure=azure_result
+            )
+            write_manifest(manifest, self._repo_root)
         return manifest
+
+    def _existing_manifest(self) -> InstanceManifest | None:
+        """Return the persisted manifest for this product, or ``None`` if absent."""
+        if not manifest_path(self.spec.product, self._repo_root).exists():
+            return None
+        try:
+            return read_manifest(self.spec.product, self._repo_root)
+        except (OSError, ValueError):
+            return None
 
     def _repo_exists(self) -> bool:
         """Return True if the product repo already exists (``gh repo view``)."""
