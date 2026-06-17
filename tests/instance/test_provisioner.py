@@ -157,3 +157,43 @@ def test_apply_execute_clones_when_repo_exists_but_not_local(tmp_path, monkeypat
     create = next(s for s in manifest.plan.steps if s.name == "create_repo")
     assert create.result == "cloned"
     assert create.executed is True
+
+
+def test_apply_execute_captures_azure_outputs(tmp_path):
+    outputs_json = (
+        '{"cosmosEndpoint": {"type": "String", "value": "https://demo.documents.azure.com"},'
+        ' "keyVaultUri": {"type": "String", "value": "https://demovault.vault.azure.net"}}'
+    )
+
+    def fake_run(cmd, **kwargs):
+        if cmd[:3] == ["gh", "repo", "view"]:
+            return MagicMock(returncode=1)
+        if cmd[:4] == ["az", "deployment", "group", "create"]:
+            return MagicMock(returncode=0, stdout=outputs_json)
+        return MagicMock(returncode=0, stdout="")
+
+    prov = InstanceProvisioner(_spec(), run=fake_run, repo_root=tmp_path)
+    manifest = prov.apply(execute=True)
+
+    assert manifest.azure is not None
+    assert manifest.azure.resource_group == "rg-dsf-demo"
+    assert manifest.azure.deployment_name == "dsf-demo"
+    assert manifest.azure.location == "swedencentral"
+    assert manifest.azure.outputs["cosmosEndpoint"] == "https://demo.documents.azure.com"
+    assert manifest.azure.outputs["keyVaultUri"] == "https://demovault.vault.azure.net"
+    results = {s.name: s.result for s in manifest.plan.steps}
+    assert results["create_resource_group"] == "executed"
+    assert results["provision_azure"] == "executed"
+
+
+def test_apply_dry_run_leaves_azure_unset(tmp_path):
+    def fake_run(cmd, **kwargs):
+        return MagicMock(returncode=0)
+
+    prov = InstanceProvisioner(_spec(), run=fake_run, repo_root=tmp_path)
+    manifest = prov.apply(execute=False)
+
+    assert manifest.azure is None
+    results = {s.name: s.result for s in manifest.plan.steps}
+    assert results["create_resource_group"] == "dry-run"
+    assert results["provision_azure"] == "dry-run"

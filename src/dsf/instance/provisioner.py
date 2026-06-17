@@ -7,12 +7,14 @@ mirroring :class:`dsf.github_client.RealGitHubClient`.
 
 from __future__ import annotations
 
+import json
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from dsf.instance.spec import (
+    AzureProvisionResult,
     InstanceManifest,
     InstancePlan,
     InstanceSpec,
@@ -127,6 +129,7 @@ class InstanceProvisioner:
         commanded steps via the injected runner.
         """
         plan = self.plan()
+        azure_result: AzureProvisionResult | None = None
         for step in plan.steps:
             if step.name == "write_config":
                 continue  # finalized after the manifest is built
@@ -149,12 +152,18 @@ class InstanceProvisioner:
                         check=True,
                     )
                     step.result = "cloned"
+            elif step.name == "provision_azure":
+                proc = self._run(step.command, check=True, capture_output=True, text=True)
+                azure_result = self._azure_result(proc)
+                step.executed, step.result = True, "executed"
             else:
                 kwargs = {"cwd": step.cwd} if step.cwd else {}
                 self._run(step.command, check=True, **kwargs)
                 step.executed, step.result = True, "executed"
 
-        manifest = InstanceManifest(spec=self.spec, plan=plan, executed=execute)
+        manifest = InstanceManifest(
+            spec=self.spec, plan=plan, executed=execute, azure=azure_result
+        )
         path = manifest_path(self.spec.product, self._repo_root)
         for step in plan.steps:
             if step.name == "write_config":
@@ -171,3 +180,19 @@ class InstanceProvisioner:
             check=False,
         )
         return getattr(result, "returncode", 1) == 0
+
+    def _azure_result(self, proc: Any) -> AzureProvisionResult:
+        """Parse ``az deployment group create --query properties.outputs`` JSON."""
+        raw = getattr(proc, "stdout", None)
+        parsed = json.loads(raw) if isinstance(raw, str) and raw.strip() else {}
+        if not isinstance(parsed, dict):
+            parsed = {}
+        outputs = {
+            k: (v.get("value") if isinstance(v, dict) else v) for k, v in parsed.items()
+        }
+        return AzureProvisionResult(
+            resource_group=self.spec.resource_group(),
+            deployment_name=self.spec.deployment_name(),
+            location=self.spec.location,
+            outputs={k: str(val) for k, val in outputs.items() if val is not None},
+        )
