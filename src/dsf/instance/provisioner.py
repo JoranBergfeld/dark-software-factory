@@ -121,7 +121,18 @@ class InstanceProvisioner:
             elif not step.command:
                 step.result = "noop"
             elif step.name == "create_repo" and self._repo_exists():
-                step.executed, step.result = True, "exists"
+                step.executed = True
+                repo_dir = self.spec.resolved_repo()
+                if Path(repo_dir).is_dir():
+                    step.result = "exists"
+                else:
+                    # Repo exists remotely but isn't cloned here; the squad
+                    # steps need a local working copy, so clone it.
+                    self._run(
+                        ["gh", "repo", "clone", self.spec.github_repo(), repo_dir],
+                        check=True,
+                    )
+                    step.result = "cloned"
             else:
                 kwargs = {"cwd": step.cwd} if step.cwd else {}
                 self._run(step.command, check=True, **kwargs)

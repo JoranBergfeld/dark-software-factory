@@ -15,13 +15,13 @@ def test_new_parser_wiring():
 
 
 def test_new_dry_run_prints_plan_without_side_effects(capsys, tmp_path):
-    rc = main(["new", "--product", "demo", "--owner", "acme"])
+    rc = main(["new", "--product", "demo", "--owner", "acme", "--config-root", str(tmp_path)])
     out = capsys.readouterr().out
     assert rc == 0
     assert "create_repo" in out
     assert "squad_init" in out
     assert "deferred" in out
-    # pure preview: no manifest written anywhere under tmp_path
+    # pure preview: no manifest written even though a config root was provided
     assert not (tmp_path / "config" / "instances" / "demo.json").exists()
 
 

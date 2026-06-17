@@ -91,19 +91,40 @@ def test_apply_execute_runs_real_steps_and_stubs_deferred(tmp_path):
     assert results["deploy_council"] == "deferred"
 
 
-def test_apply_execute_is_idempotent_when_repo_exists(tmp_path):
+def test_apply_execute_skips_clone_when_repo_and_local_dir_exist(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "demo").mkdir()  # local clone already present
     calls = []
 
     def fake_run(cmd, **kwargs):
         calls.append(cmd)
-        returncode = 0 if cmd[:3] == ["gh", "repo", "view"] else 0
-        return MagicMock(returncode=returncode)
+        return MagicMock(returncode=0)  # gh repo view -> exists
 
     prov = InstanceProvisioner(_spec(), run=fake_run, repo_root=tmp_path)
     manifest = prov.apply(execute=True)
 
-    # repo already exists -> create is skipped:
+    # repo already exists and is cloned -> neither create nor clone runs:
     assert ["gh", "repo", "create", "acme/demo", "--private", "--clone"] not in calls
+    assert not any(cmd[:3] == ["gh", "repo", "clone"] for cmd in calls)
     create = next(s for s in manifest.plan.steps if s.name == "create_repo")
     assert create.result == "exists"
+    assert create.executed is True
+
+
+def test_apply_execute_clones_when_repo_exists_but_not_local(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)  # empty cwd: no local clone of the repo
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return MagicMock(returncode=0)  # gh repo view -> exists
+
+    prov = InstanceProvisioner(_spec(), run=fake_run, repo_root=tmp_path)
+    manifest = prov.apply(execute=True)
+
+    # repo exists remotely but isn't cloned here -> clone so squad steps have a cwd:
+    assert ["gh", "repo", "create", "acme/demo", "--private", "--clone"] not in calls
+    assert ["gh", "repo", "clone", "acme/demo", "demo"] in calls
+    create = next(s for s in manifest.plan.steps if s.name == "create_repo")
+    assert create.result == "cloned"
     assert create.executed is True
