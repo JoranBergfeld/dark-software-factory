@@ -2,7 +2,17 @@
 
 from __future__ import annotations
 
-from dsf.instance.spec import InstanceSpec, default_label_taxonomy
+from dsf.instance.spec import (
+    InstanceManifest,
+    InstancePlan,
+    InstanceSpec,
+    ProvisionStep,
+    default_label_taxonomy,
+    instances_dir,
+    manifest_path,
+    read_manifest,
+    write_manifest,
+)
 
 
 def test_default_label_taxonomy_shape():
@@ -31,3 +41,32 @@ def test_instance_spec_explicit_repo_override():
     spec = InstanceSpec(product="demo", owner="acme", repo="demo-app")
     assert spec.resolved_repo() == "demo-app"
     assert spec.github_repo() == "acme/demo-app"
+
+
+def test_provision_step_defaults():
+    step = ProvisionStep(name="x", description="does x")
+    assert step.command == []
+    assert step.cwd == ""
+    assert step.deferred is False
+    assert step.executed is False
+    assert step.result == ""
+
+
+def test_manifest_round_trip(tmp_path):
+    spec = InstanceSpec(product="demo", owner="acme")
+    plan = InstancePlan(
+        product="demo",
+        steps=[ProvisionStep(name="write_config", description="write manifest")],
+    )
+    manifest = InstanceManifest(spec=spec, plan=plan, executed=False)
+
+    path = write_manifest(manifest, repo_root=tmp_path)
+
+    assert path == manifest_path("demo", repo_root=tmp_path)
+    assert path == instances_dir(tmp_path) / "demo.json"
+    assert path.exists()
+
+    loaded = read_manifest("demo", repo_root=tmp_path)
+    assert loaded.spec.product == "demo"
+    assert loaded.spec.github_repo() == "acme/demo"
+    assert loaded.plan.steps[0].name == "write_config"
