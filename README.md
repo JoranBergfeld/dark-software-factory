@@ -57,4 +57,6 @@ uv run python -m dsf.cli control-center   # http://localhost:8081
 registry) · `memory` (tiers, dedup, consolidation) · `a2a` · `agents/<source>` ·
 `council` (synthesizer + critics + decision) · `orchestrator` (conveyor + stations) ·
 `triggers` · `learning` · `evals` · `observability` · `control_center`.
+`instance/` — instance spec + provisioner powering the `dsf new` CLI (greenfield
+product-factory scaffolding; Azure/council/SRE steps deferred to later sub-projects).
 `infra/` — Bicep/azd + homelab compose.

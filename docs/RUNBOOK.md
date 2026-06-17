@@ -55,6 +55,23 @@ uv run python -m dsf.cli control-center --port 8081
 uv run uvicorn dsf.triggers.app:app --port 8082
 ```
 
+## Creating a product instance (SP1)
+
+`dsf new` scaffolds an isolated product factory. Greenfield walking skeleton:
+repo creation + Coding Squad init are real (under `--execute`); Azure, feature
+council, and SRE deployment are **deferred** stub steps (SP2/SP3/SP5).
+
+```bash
+# Preview the plan (no side effects):
+uv run python -m dsf.cli new --product microbi --owner your-org
+
+# Preview AND write the instance manifest to config/instances/microbi.json:
+uv run python -m dsf.cli new --product microbi --owner your-org --write-plan
+
+# Execute: create the GitHub repo + initialize Squad (needs gh + @bradygaster/squad-cli):
+uv run python -m dsf.cli new --product microbi --owner your-org --execute
+```
+
 ## The Control Center
 
 The Control Center (`dsf.control_center.app`) is the **write** surface for runtime

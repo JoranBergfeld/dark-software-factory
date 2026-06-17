@@ -1,4 +1,4 @@
-.PHONY: install test lint fmt dryrun evals
+.PHONY: install test lint fmt dryrun evals new-demo
 
 install:
 	uv venv --python 3.12
@@ -18,3 +18,6 @@ dryrun:
 
 evals:
 	uv run python -m dsf.evals.runner --gate
+
+new-demo:
+	uv run python -m dsf.cli new --product demo --owner your-org
