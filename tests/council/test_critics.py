@@ -108,6 +108,10 @@ async def test_feasibility_penalizes_risky_scope():
 
 
 async def test_strategic_fit_default_and_supportive():
+    from dsf.contracts.enums import Verdict
+    from dsf.contracts.models import CouncilVerdict
+    from dsf.memory.consolidation import consolidate_run
+
     services = build_services("local")
     run = make_run([make_evidence("feature ask")])
     prop = make_proposal(run, product="alpha")
@@ -115,9 +119,15 @@ async def test_strategic_fit_default_and_supportive():
     assert base.veto is False
     assert base.score == strategic_fit.DEFAULT_SCORE
 
-    await services.memory.put_lesson(
-        {"product": "alpha", "text": "this is on the roadmap and strategic"}
+    # Use the real writer path (consolidate_run) so the lesson carries a "text" field.
+    verdict = CouncilVerdict(
+        proposal_id=prop.id,
+        verdict=Verdict.ACCEPT,
+        weighted_score=0.8,
+        threshold=0.6,
+        rationale="aligned with roadmap and strategic priority",
     )
+    await consolidate_run(run, verdict, services.memory)
     boosted = await strategic_fit.evaluate(prop, run, services)
     assert boosted.score > base.score
 

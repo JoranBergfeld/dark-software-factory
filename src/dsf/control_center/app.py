@@ -1,32 +1,61 @@
-"""Control Center web UI (Phase 7) — the WRITE surface for runtime toggles.
+"""Control Center web UI (Phase 7) -- the WRITE surface for runtime toggles.
 
 The Grafana dashboard stays read-only; this FastAPI app is where an operator
 flips feature flags, pauses triggers, throws the global dry-run kill switch, and
-accepts calibration proposals — all of which land in the
+accepts calibration proposals -- all of which land in the
 :class:`~dsf.ports.ConfigStore` and take effect on the next run (no redeploy).
+
+Authentication
+--------------
+All write routes (``POST /toggle`` and ``POST /set-value``) require a bearer
+token via an ``Authorization: Bearer <token>`` header.  Set the
+``CC_BEARER_TOKEN`` environment variable to enable enforcement.  In local mode
+(``DSF_MODE=local`` or unset) an empty ``CC_BEARER_TOKEN`` leaves the write
+surface open -- intentional for local development and tests.  In any other mode
+an empty token raises at startup (fail CLOSED).
+
+CSRF protection
+---------------
+The ``Authorization: Bearer`` header requirement is the primary CSRF defence:
+browsers cannot include custom request headers in cross-site form submissions,
+so any cross-origin ``POST /toggle`` or ``POST /set-value`` is rejected with
+``401`` before reaching application logic.  As a second layer, every ``GET /``
+response also sets a ``cc_csrf`` cookie (``SameSite=Strict``) whose value must
+appear as a hidden ``csrf_token`` field in every write form.  Missing or
+mismatched tokens return ``403``.
+
+Audit log
+---------
+Every successful flag change emits a structured ``INFO`` line to the
+``dsf.control_center`` logger so operators can track who changed what.
 
 Templates and static assets live alongside this module so the package is
 self-contained:
 
 * ``templates/index.html`` rendered via :class:`~fastapi.templating.Jinja2Templates`
   pointed at ``Path(__file__).parent / "templates"``.
-* ``static/app.css`` served from ``Path(__file__).parent / "static"`` — no CDN,
+* ``static/app.css`` served from ``Path(__file__).parent / "static"`` -- no CDN,
   works fully offline.
 """
 
 from __future__ import annotations
 
 import asyncio
+import hmac
+import logging
+import os
+import secrets
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
 
+from dsf.a2a.auth import build_bearer_dependency
 from dsf.config import flags
 from dsf.container import build_services
 from dsf.contracts.enums import SourceKind, TriggerKind
@@ -34,7 +63,15 @@ from dsf.contracts.enums import SourceKind, TriggerKind
 if TYPE_CHECKING:
     from dsf.container import Services
 
-#: The seven council critics (design §5.2 / §7.1).
+_logger = logging.getLogger("dsf.control_center")
+
+#: Env var for the Control Center bearer token.
+CC_BEARER_TOKEN_ENV = "CC_BEARER_TOKEN"
+
+#: Cookie name for the CSRF double-submit token.
+_CSRF_COOKIE = "cc_csrf"
+
+#: The seven council critics (design SS5.2 / SS7.1).
 CRITICS: tuple[str, ...] = (
     "grounding",
     "value",
@@ -72,6 +109,24 @@ async def _form(request: Request) -> dict[str, str]:
     body = (await request.body()).decode("utf-8")
     parsed = parse_qs(body, keep_blank_values=True)
     return {key: values[-1] for key, values in parsed.items()}
+
+
+def _check_csrf(request: Request, form_data: dict[str, str], *, enforce: bool) -> None:
+    """Validate the CSRF double-submit cookie against the form field.
+
+    When *enforce* is ``False`` (local/open mode) this is a no-op.  When
+    ``True``, both the ``cc_csrf`` cookie and the ``csrf_token`` form field
+    must be present and equal (constant-time comparison).
+    """
+    if not enforce:
+        return
+    cookie_token = request.cookies.get(_CSRF_COOKIE, "")
+    form_token = form_data.get("csrf_token", "")
+    if not cookie_token or not form_token or not hmac.compare_digest(cookie_token, form_token):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Invalid or missing CSRF token",
+        )
 
 
 def _load_calibration(
@@ -175,14 +230,34 @@ def _state(services: Services) -> dict[str, Any]:
     }
 
 
-def create_app(services: Services | None = None) -> FastAPI:
+def create_app(services: Services | None = None, *, token: str | None = None) -> FastAPI:
     """Build the Control Center :class:`FastAPI` app.
 
-    ``services`` defaults to :func:`dsf.container.build_services` in ``local``
-    mode. Pass an explicit instance (and hold a reference) to assert against the
-    same :class:`~dsf.ports.ConfigStore` after a toggle.
+    Parameters
+    ----------
+    services:
+        Defaults to :func:`dsf.container.build_services` in ``local`` mode.
+        Pass an explicit instance (and hold a reference) to assert against the
+        same :class:`~dsf.ports.ConfigStore` after a toggle.
+    token:
+        Bearer token for write-route authentication.  ``None`` reads
+        ``CC_BEARER_TOKEN`` from the environment.  ``""`` disables enforcement
+        (local/test mode only -- raises in non-local mode).  A non-empty string
+        always enforces.
     """
     svc = services if services is not None else build_services("local")
+
+    # Resolve the effective mode directly from the environment (avoids a
+    # circular import through dsf.agents).
+    effective_mode = (os.environ.get("DSF_MODE") or "local").strip().lower()
+    _raw_token = token if token is not None else os.environ.get(CC_BEARER_TOKEN_ENV, "")
+    expected_token = (_raw_token or "").strip()
+
+    # build_bearer_dependency raises immediately if token is empty outside local
+    # mode -- fail CLOSED at startup.
+    auth_dep = build_bearer_dependency(expected_token, mode=effective_mode)
+    csrf_required = bool(expected_token)
+
     app = FastAPI(title="dsf-control-center")
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
     if STATIC_DIR.is_dir():
@@ -190,27 +265,59 @@ def create_app(services: Services | None = None) -> FastAPI:
 
     @app.get("/", response_class=HTMLResponse)
     def index(request: Request) -> HTMLResponse:
-        return templates.TemplateResponse(
+        # Reuse existing CSRF cookie or issue a fresh one.
+        csrf_token = request.cookies.get(_CSRF_COOKIE) if csrf_required else ""
+        if csrf_required and not csrf_token:
+            csrf_token = secrets.token_hex(32)
+        response = templates.TemplateResponse(
             request,
             "index.html",
-            {"state": _state(svc)},
+            {"state": _state(svc), "csrf_token": csrf_token},
         )
+        if csrf_required and csrf_token:
+            response.set_cookie(
+                _CSRF_COOKIE,
+                csrf_token,
+                httponly=True,
+                samesite="strict",
+                secure=False,  # operator tool; set secure=True behind TLS
+            )
+        return response
 
     @app.get("/api/state")
     def api_state() -> JSONResponse:
         return JSONResponse(_state(svc))
 
-    @app.post("/toggle")
+    @app.post("/toggle", dependencies=[Depends(auth_dep)])
     async def toggle(request: Request) -> RedirectResponse:
         form = await _form(request)
+        _check_csrf(request, form, enforce=csrf_required)
+        flag = form["flag"]
+        value = _truthy(form["value"])
         prod = form.get("product") or None
-        svc.config.set_flag(form["flag"], _truthy(form["value"]), product=prod)
+        svc.config.set_flag(flag, value, product=prod)
+        _logger.info(
+            "toggle flag=%r value=%r product=%r remote=%s",
+            flag,
+            value,
+            prod,
+            request.client.host if request.client else "unknown",
+        )
         return RedirectResponse(url="/", status_code=303)
 
-    @app.post("/set-value")
+    @app.post("/set-value", dependencies=[Depends(auth_dep)])
     async def set_value(request: Request) -> RedirectResponse:
         form = await _form(request)
-        _set_value(svc, form["key"], float(form["value"]))
+        _check_csrf(request, form, enforce=csrf_required)
+        key = form["key"]
+        value = float(form["value"])
+        _set_value(svc, key, value)
+        _logger.info(
+            "set-value key=%r value=%r remote=%s",
+            key,
+            value,
+            request.client.host if request.client else "unknown",
+        )
         return RedirectResponse(url="/", status_code=303)
 
     return app
@@ -220,4 +327,4 @@ def create_app(services: Services | None = None) -> FastAPI:
 app = create_app()
 
 
-__all__ = ["AGENTS", "CRITICS", "TRIGGERS", "app", "create_app"]
+__all__ = ["AGENTS", "CC_BEARER_TOKEN_ENV", "CRITICS", "TRIGGERS", "app", "create_app"]

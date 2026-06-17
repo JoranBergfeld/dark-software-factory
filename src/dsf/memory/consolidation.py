@@ -24,6 +24,7 @@ class Lesson(TypedDict):
     signal: str
     outcome: str
     rationale: str
+    text: str
 
 
 def _summary_text(run: Run, verdict: CouncilVerdict) -> str:
@@ -64,6 +65,7 @@ async def consolidate_run(run: Run, verdict: CouncilVerdict, store: MemoryStore)
         "signal": run.trigger.value,
         "outcome": outcome,
         "rationale": verdict.rationale,
+        "text": f"{outcome} {run.trigger.value} {verdict.rationale}",
     }
     await store.put_lesson(dict(lesson))
     return lesson

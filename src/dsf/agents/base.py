@@ -8,6 +8,7 @@ backend failure degrades gracefully instead of fabricating coverage.
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 from dsf.a2a.card import AgentCard
@@ -20,6 +21,8 @@ if TYPE_CHECKING:
 
     from dsf.contracts.enums import SourceKind
     from dsf.ports import ConfigStore, SourceBackend
+
+_logger = logging.getLogger(__name__)
 
 
 class SourceAgent:
@@ -63,8 +66,11 @@ class SourceAgent:
             return A2AResponse(evidence=[], degraded=True, error="agent disabled")
         try:
             evidence = await self.backend.gather(dict(scope))
-        except Exception as exc:  # noqa: BLE001 - degrade, never propagate
-            return A2AResponse(evidence=[], degraded=True, error=str(exc))
+        except Exception:  # noqa: BLE001 - degrade, never propagate
+            _logger.error("source agent %s gather failed", self.kind.value, exc_info=True)
+            return A2AResponse(
+                evidence=[], degraded=True, error=f"source {self.kind.value} gather failed"
+            )
         return A2AResponse(evidence=list(evidence), degraded=False, error=None)
 
     def make_app(self, token: str | None = None) -> FastAPI:

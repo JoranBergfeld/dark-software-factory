@@ -42,6 +42,10 @@ STATIONS: list[tuple[str, StationFn]] = [
 ]
 
 
+#: Terminal statuses -- a run in any of these states must not be re-driven.
+_TERMINAL: frozenset[RunStatus] = frozenset({RunStatus.KILLED, RunStatus.FILED, RunStatus.ERROR})
+
+
 async def run_line(run: Run, services: Services) -> Run:
     """Run the full conveyor over ``run`` and return the final run.
 
@@ -49,6 +53,9 @@ async def run_line(run: Run, services: Services) -> Run:
     audits the exception, saves, and stops. A KILLED status (S1 debounce) stops
     the line early without erroring.
     """
+    if run.status in _TERMINAL:
+        return run
+
     blackboard = Blackboard(services.memory)
     await blackboard.save(run)
 

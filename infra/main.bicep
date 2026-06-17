@@ -49,6 +49,9 @@ param enablePurgeProtection bool = true
 @maxValue(90)
 param softDeleteRetentionInDays int = 90
 
+@description('Gate public network access to backing services. Defaults to false (off). Enable only for dev environments lacking private endpoint connectivity.')
+param allowPublicNetworkAccess bool = false
+
 // ---------------------------------------------------------------------------
 // Variables
 // ---------------------------------------------------------------------------
@@ -111,7 +114,13 @@ resource keyVault 'Microsoft.KeyVault/vaults@2024-04-01-preview' = {
     softDeleteRetentionInDays: softDeleteRetentionInDays
     // Purge protection cannot be explicitly false (only true or omitted).
     enablePurgeProtection: enablePurgeProtection ? true : null
-    publicNetworkAccess: 'Enabled'
+    publicNetworkAccess: allowPublicNetworkAccess ? 'Enabled' : 'Disabled'
+    networkAcls: {
+      defaultAction: allowPublicNetworkAccess ? 'Allow' : 'Deny'
+      bypass: 'AzureServices'
+      ipRules: []
+      virtualNetworkRules: []
+    }
   }
 }
 
@@ -137,7 +146,7 @@ resource appConfig 'Microsoft.AppConfiguration/configurationStores@2024-05-01' =
     name: 'standard'
   }
   properties: {
-    disableLocalAuth: false
+    disableLocalAuth: true
   }
 }
 
@@ -228,6 +237,7 @@ module ingestion 'modules/ingestion.bicep' = {
     tags: tags
     // Grant the homelab workload Service Bus Data Receiver on the queue.
     receiverPrincipalId: workloadPrincipalId
+    allowPublicNetworkAccess: allowPublicNetworkAccess
   }
 }
 

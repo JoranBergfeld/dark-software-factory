@@ -30,7 +30,6 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
   detect:
@@ -39,12 +38,12 @@ jobs:
       matrix: ${{ steps.set.outputs.matrix }}
       any: ${{ steps.set.outputs.any }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
 
       - id: filter
-        uses: dorny/paths-filter@v3
+        uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590 # v3
         with:
           filters: |
             core:
@@ -100,19 +99,22 @@ jobs:
     needs: detect
     if: needs.detect.outputs.any == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     strategy:
       fail-fast: false
       matrix:
         agent: ${{ fromJSON(needs.detect.outputs.matrix) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Set up Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Log in to GHCR
         if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -120,7 +122,7 @@ jobs:
 
       - name: Image metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
         with:
           images: ghcr.io/${{ github.repository_owner }}/dsf-agent-${{ matrix.agent }}
           tags: |
@@ -128,8 +130,28 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
             type=ref,event=pr
 
+      - name: Build (load for scanning)
+        id: build-scan
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: src/dsf/agents/${{ matrix.agent }}/Dockerfile
+          load: true
+          tags: dsf-agent-${{ matrix.agent }}:scan
+          cache-from: type=gha
+
+      - name: Scan image with Trivy
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: dsf-agent-${{ matrix.agent }}:scan
+          format: table
+          exit-code: '0'
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+
       - name: Build and push
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: src/dsf/agents/${{ matrix.agent }}/Dockerfile

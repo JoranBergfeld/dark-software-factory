@@ -7,6 +7,7 @@ product and later route a surviving proposal to a repo + label taxonomy.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from pydantic import BaseModel, Field
@@ -45,11 +46,26 @@ def load_registry(path: str | Path | None = None) -> dict[str, Product]:
     return registry
 
 
+# Minimum key length for word-boundary fallback matching.
+# Keys shorter than this (e.g. 3-char "api") are skipped to prevent mis-routing.
+_MIN_KEY_LEN: int = 4
+
+
 def route_product(hints: list[str], registry: dict[str, Product]) -> Product | None:
     """Match product ``hints`` to a registered product (case-insensitive).
 
-    A hint matches a product when the product key is a substring of the hint
-    (or vice versa). Returns the first match, or ``None`` if no hint matches.
+    Matching is attempted in two passes for each hint, in order:
+
+    1. **Exact match** (after strip + lowercase normalisation).
+    2. **Word-boundary match**: the product key must appear as a complete token
+       inside the hint.  Keys shorter than ``_MIN_KEY_LEN`` are skipped in this
+       pass to prevent spurious matches from short or generic abbreviations.
+
+    When multiple products match a single hint via word-boundary search the
+    product whose key is longest (most specific) is returned; ties are broken
+    by registry insertion order.
+
+    Returns the first hint that produces any match, or ``None``.
     """
     for hint in hints:
         if not hint:
@@ -57,11 +73,28 @@ def route_product(hints: list[str], registry: dict[str, Product]) -> Product | N
         h = hint.strip().lower()
         if not h:
             continue
+
+        # Pass 1 - exact match.
+        for key, product in registry.items():
+            if key.lower() == h:
+                return product
+
+        # Pass 2 - word-boundary match (minimum key length enforced).
+        matches: list[tuple[int, Product]] = []
         for key, product in registry.items():
             k = key.lower()
-            if k == h or k in h or h in k:
-                return product
+            if len(k) < _MIN_KEY_LEN:
+                continue
+            if re.search(r"\b" + re.escape(k) + r"\b", h):
+                matches.append((len(k), product))
+
+        if matches:
+            # Longest key wins (most specific match); insertion order breaks ties.
+            matches.sort(key=lambda x: x[0], reverse=True)
+            return matches[0][1]
+
     return None
+
 
 
 __all__ = ["Product", "load_registry", "route_product"]

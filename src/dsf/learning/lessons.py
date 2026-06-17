@@ -67,6 +67,7 @@ def outcome_to_lesson(outcome: PrOutcome) -> Lesson:
         "signal": f"pr:{outcome.verdict}",
         "outcome": verdict_outcome,
         "rationale": rationale,
+        "text": rationale,
     }
     return lesson
 

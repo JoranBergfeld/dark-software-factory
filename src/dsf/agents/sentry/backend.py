@@ -34,6 +34,7 @@ Azure-mode contract (documented; not invoked here):
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -42,6 +43,8 @@ from dsf.contracts.models import EvidenceItem, Provenance
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
+
+_logger = logging.getLogger(__name__)
 
 # tests/fixtures/sentry_evidence.json relative to repo root.
 # backend.py -> sentry -> agents -> dsf -> src -> <repo root>.
@@ -143,16 +146,22 @@ class SentryMcpBackend:
             if stats:
                 claim = f"{title} ({', '.join(stats)})"
 
-            evidence.append(
-                EvidenceItem(
-                    source_agent="sentry",
-                    claim=claim,
-                    raw_citation=permalink,
-                    provenance=Provenance(query_used=query, source_kind=SourceKind.SENTRY),
-                    confidence=float(issue.get("confidence", 0.7)),
-                    product_hints=product_hints,
+            try:
+                evidence.append(
+                    EvidenceItem(
+                        source_agent="sentry",
+                        claim=claim,
+                        raw_citation=permalink,
+                        provenance=Provenance(query_used=query, source_kind=SourceKind.SENTRY),
+                        confidence=float(issue.get("confidence", 0.7)),
+                        product_hints=product_hints,
+                    )
                 )
-            )
+            except ValueError:
+                _logger.warning(
+                    "Sentry: skipping issue %r -- missing or blank citation", title
+                )
+                continue
         return evidence
 
 

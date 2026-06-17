@@ -46,8 +46,8 @@ class MemoryStore(Protocol):
         """Read a value from the working tier (None if missing/expired)."""
         ...
 
-    async def put_record(self, record: dict) -> None:
-        """Persist a durable long-term record."""
+    async def put_record(self, record: dict, ttl: float | None = None) -> None:
+        """Persist a durable long-term record, optionally expiring after ``ttl`` seconds."""
         ...
 
     async def query_similar(self, text: str, kind: str, k: int = 5) -> list[dict]:

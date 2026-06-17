@@ -20,12 +20,15 @@ Env (used when ``tool_caller`` is not injected):
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 from collections.abc import Awaitable, Callable
 from typing import Any
 
 from dsf.agents.mode import env_required
+
+_logger = logging.getLogger(__name__)
 
 #: A tool caller: given an MCP tool name + arguments, return the tool's text.
 ToolCaller = Callable[[str, dict], Awaitable[str]]
@@ -90,13 +93,16 @@ async def _default_tool_caller(tool_name: str, arguments: dict) -> str:
                 return "\n".join(
                     c.text for c in result.content if getattr(c, "text", None)
                 )
-    except BaseException as exc:  # noqa: BLE001 - surface a clear root cause
+    except Exception as exc:
         # MCP transport errors arrive wrapped in an anyio ExceptionGroup; unwrap
-        # the first leaf so the agent's degraded message is actionable.
+        # the first leaf so the developer log is actionable.
         cause = exc
         while isinstance(cause, BaseExceptionGroup) and cause.exceptions:
             cause = cause.exceptions[0]
-        raise RuntimeError(f"Sentry MCP call {tool_name!r} via {url} failed: {cause!r}") from exc
+        _logger.error(
+            "Sentry MCP call %r via %s failed: %r", tool_name, url, cause, exc_info=True
+        )
+        raise RuntimeError(f"sentry-mcp:{tool_name}:failed") from exc
 
 
 def build_sentry_mcp_call_from_env(

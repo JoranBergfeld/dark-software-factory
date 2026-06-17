@@ -28,6 +28,7 @@
         When engaged, the full line runs but stops short of filing GitHub issues — a safe rehearsal mode.
       </p>
       <form method="post" action="/toggle">
+        {%- if csrf_token -%}<input type="hidden" name="csrf_token" value="{{ csrf_token }}" />{%- endif -%}
         <input type="hidden" name="flag" value="dry_run" />
         <input type="hidden" name="value" value="{{ 'false' if state.dry_run else 'true' }}" />
         <button type="submit" class="btn {% if state.dry_run %}btn-danger{% else %}btn-primary{% endif %}">
@@ -49,6 +50,7 @@
         <div class="row">
           <span class="name">{{ critic.name }}</span>
           <form method="post" action="/toggle" class="toggle">
+        {%- if csrf_token -%}<input type="hidden" name="csrf_token" value="{{ csrf_token }}" />{%- endif -%}
             <input type="hidden" name="flag" value="critic.{{ critic.name }}" />
             <input type="hidden" name="value" value="{{ 'false' if critic.enabled else 'true' }}" />
             <button type="submit" class="switch {% if critic.enabled %}on{% else %}off{% endif %}"
@@ -70,6 +72,7 @@
         <div class="row">
           <span class="name">{{ agent.name }}</span>
           <form method="post" action="/toggle" class="toggle">
+        {%- if csrf_token -%}<input type="hidden" name="csrf_token" value="{{ csrf_token }}" />{%- endif -%}
             <input type="hidden" name="flag" value="agent.{{ agent.name }}" />
             <input type="hidden" name="value" value="{{ 'false' if agent.enabled else 'true' }}" />
             <button type="submit" class="switch {% if agent.enabled %}on{% else %}off{% endif %}"
@@ -92,6 +95,7 @@
         <div class="row">
           <span class="name">{{ trigger.name }}</span>
           <form method="post" action="/toggle" class="toggle">
+        {%- if csrf_token -%}<input type="hidden" name="csrf_token" value="{{ csrf_token }}" />{%- endif -%}
             <input type="hidden" name="flag" value="trigger.{{ trigger.name }}.paused" />
             <input type="hidden" name="value" value="{{ 'false' if trigger.paused else 'true' }}" />
             <button type="submit" class="switch {% if trigger.paused %}paused{% else %}on{% endif %}"
@@ -111,6 +115,7 @@
 
       <h3>Confidence thresholds</h3>
       <form method="post" action="/set-value" class="kv">
+        {%- if csrf_token -%}<input type="hidden" name="csrf_token" value="{{ csrf_token }}" />{%- endif -%}
         <label>default_threshold</label>
         <input type="number" step="0.01" min="0" max="1" name="value" value="{{ '%.2f' | format(state.thresholds.default) }}" />
         <input type="hidden" name="key" value="default_threshold" />
@@ -118,6 +123,7 @@
       </form>
       {% for product, value in state.thresholds.products.items() %}
       <form method="post" action="/set-value" class="kv">
+        {%- if csrf_token -%}<input type="hidden" name="csrf_token" value="{{ csrf_token }}" />{%- endif -%}
         <label>threshold.{{ product }}</label>
         <input type="number" step="0.01" min="0" max="1" name="value" value="{{ '%.2f' | format(value) }}" />
         <input type="hidden" name="key" value="threshold.{{ product }}" />
@@ -128,6 +134,7 @@
       <h3>Critic weights</h3>
       {% for critic, weight in state.weights.items() %}
       <form method="post" action="/set-value" class="kv">
+        {%- if csrf_token -%}<input type="hidden" name="csrf_token" value="{{ csrf_token }}" />{%- endif -%}
         <label>weight.{{ critic }}</label>
         <input type="number" step="0.05" min="0" name="value" value="{{ '%.2f' | format(weight) }}" />
         <input type="hidden" name="key" value="weight.{{ critic }}" />
@@ -143,6 +150,7 @@
       <p class="muted">The learning loop proposes the following weight updates. Accept to apply.</p>
       {% for critic, proposed in state.calibration.items() %}
       <form method="post" action="/set-value" class="kv">
+        {%- if csrf_token -%}<input type="hidden" name="csrf_token" value="{{ csrf_token }}" />{%- endif -%}
         <label>weight.{{ critic }}</label>
         <span class="proposed">
           {{ '%.2f' | format(state.weights.get(critic, 1.0)) }} &rarr;

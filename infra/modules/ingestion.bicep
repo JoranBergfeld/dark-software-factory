@@ -24,6 +24,9 @@ param tags object = {}
 @description('Object ID of the homelab workload SP granted Service Bus Data Receiver. Empty = skip.')
 param receiverPrincipalId string = ''
 
+@description('Gate public network access to the Event Grid topic. Defaults to false. Enable only when private endpoint connectivity is unavailable.')
+param allowPublicNetworkAccess bool = false
+
 @description('Name of the signals queue.')
 param queueName string = 'signals'
 
@@ -62,7 +65,7 @@ resource topic 'Microsoft.EventGrid/topics@2024-06-01-preview' = {
   }
   properties: {
     inputSchema: 'EventGridSchema'
-    publicNetworkAccess: 'Enabled'
+    publicNetworkAccess: allowPublicNetworkAccess ? 'Enabled' : 'Disabled'
   }
 }
 

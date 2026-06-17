@@ -24,12 +24,21 @@ def _print_run_summary(run) -> None:
         print(f"[dsf]   audit[{rec.station}] {rec.message}")
 
 
+def _get_services(mode: str):
+    """Build a services bundle or exit cleanly on unsupported modes."""
+    try:
+        return build_services(mode)
+    except NotImplementedError as exc:
+        print(f"[dsf] error: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+
 def _cmd_run(args: argparse.Namespace) -> int:
     """Run the intake line for one signal JSON file."""
     from dsf.orchestrator.conveyor import run_line
     from dsf.triggers.ingestion import signal_to_run
 
-    services = build_services(args.mode)
+    services = _get_services(args.mode)
     if not args.signal:
         print("--signal <path> is required for `run`", file=sys.stderr)
         return 1
@@ -50,7 +59,7 @@ def _cmd_sweep(args: argparse.Namespace) -> int:
     """Run a scheduled sweep across enabled sources."""
     from dsf.triggers.scheduler import run_sweep
 
-    services = build_services(args.mode)
+    services = _get_services(args.mode)
     final = asyncio.run(run_sweep(services))
     _print_run_summary(final)
     return 0
@@ -60,7 +69,7 @@ def _cmd_serve_orchestrator(args: argparse.Namespace) -> int:
     """One-shot orchestrator worker (a real deployment would loop on a queue)."""
     from dsf.triggers.scheduler import run_sweep
 
-    services = build_services(args.mode)
+    services = _get_services(args.mode)
     final = asyncio.run(run_sweep(services))
     _print_run_summary(final)
     return 0
@@ -102,7 +111,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--mode",
         default="local",
-        help="service mode: local (fakes) or azure (default: local)",
+        help=(
+            "service mode: 'local' (in-memory fakes, default) or 'gh' "
+            "(real GitHub client via gh CLI). Other modes are not yet supported."
+        ),
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -126,7 +138,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_serve.set_defaults(func=_cmd_serve_agent)
 
     p_cc = sub.add_parser("control-center", help="serve the control center UI")
-    p_cc.add_argument("--host", default="0.0.0.0", help="bind host")
+    p_cc.add_argument("--host", default="127.0.0.1", help="bind host (localhost-only by default)")
     p_cc.add_argument("--port", type=int, default=8081, help="bind port")
     p_cc.set_defaults(func=_cmd_control_center)
 

@@ -70,7 +70,7 @@ async def test_gather_against_raising_backend_degrades_not_raises():
     resp = await a2a_client.gather(endpoint=None, scope={}, transport=_transport(agent))
     assert resp.degraded is True
     assert resp.evidence == []
-    assert "backend exploded" in (resp.error or "")
+    assert resp.error == "source SENTRY gather failed"
 
 
 async def test_client_timeout_returns_degraded():

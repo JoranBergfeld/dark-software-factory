@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dsf.evals.evaluators import groundedness, routing_accuracy, verdict_match
+from dsf.evals.evaluators import groundedness, routing_accuracy, verdict_match, veto_accuracy
 from dsf.evals.runner import (
     GATE_THRESHOLDS,
     METRIC_KEYS,
@@ -14,8 +14,8 @@ from dsf.evals.runner import (
 )
 
 
-async def test_run_suite_returns_metrics_dict_with_three_keys() -> None:
-    """run_suite over the golden set yields the aggregate metrics dict."""
+async def test_run_suite_returns_metrics_dict() -> None:
+    """run_suite over the golden set yields the aggregate metrics dict with all four keys."""
     result = await run_suite()
 
     assert set(result["metrics"]) == set(METRIC_KEYS)
@@ -60,11 +60,12 @@ def test_gate_returns_nonzero_on_injected_regression() -> None:
             "groundedness": 0.10,
             "routing_accuracy": 0.20,
             "verdict_match": 0.30,
+            "veto_accuracy": 0.40,
         },
     }
     assert gate(bad_result) != 0
-    # All three metrics are below threshold -> three failures.
-    assert gate(bad_result) == 3
+    # All four metrics are below threshold -> four failures.
+    assert gate(bad_result) == 4
 
 
 def test_gate_returns_zero_on_passing_metrics() -> None:
@@ -172,6 +173,78 @@ def test_gate_thresholds_match_spec() -> None:
     """Gate thresholds are the spec values."""
     assert GATE_THRESHOLDS == {
         "groundedness": 0.99,
-        "routing_accuracy": 0.8,
-        "verdict_match": 0.8,
+        "routing_accuracy": 0.95,
+        "verdict_match": 0.85,
+        "veto_accuracy": 0.95,
     }
+
+
+def test_veto_accuracy_evaluator_units() -> None:
+    """veto_accuracy: correct behavior in all four combinations."""
+    from dsf.contracts.enums import Verdict
+    from dsf.contracts.models import CouncilVerdict, CriticScore
+
+    # Build a KILL verdict (from_scores with no scores -> weighted_score 0.0 < 0.6)
+    kill_v = CouncilVerdict.from_scores("p1", [], threshold=0.6)
+    assert kill_v.verdict == Verdict.KILL
+
+    # Build an ACCEPT verdict (high score clears threshold)
+    high_score = CriticScore(critic="value", score=1.0)
+    accept_v = CouncilVerdict.from_scores("p2", [high_score], threshold=0.6)
+    assert accept_v.verdict == Verdict.ACCEPT
+
+    # must_veto=False -> always 1.0
+    assert veto_accuracy([], must_veto=False) == 1.0
+    assert veto_accuracy([accept_v], must_veto=False) == 1.0
+
+    # must_veto=True, no verdicts -> 0.0
+    assert veto_accuracy([], must_veto=True) == 0.0
+    # must_veto=True, only ACCEPT -> 0.0 (no veto fired)
+    assert veto_accuracy([accept_v], must_veto=True) == 0.0
+    # must_veto=True, at least one KILL -> 1.0
+    assert veto_accuracy([kill_v], must_veto=True) == 1.0
+    assert veto_accuracy([accept_v, kill_v], must_veto=True) == 1.0
+
+
+async def test_adversarial_cases_exist_in_golden_set() -> None:
+    """All four adversarial cases are present in the golden set."""
+    adversarial_ids = {
+        "adversarial-debounce-burst",
+        "adversarial-ungrounded-proposal",
+        "adversarial-routing-word-boundary",
+        "adversarial-duplicate-veto",
+    }
+    case_ids = {c["id"] for c in load_cases()}
+    assert adversarial_ids <= case_ids
+
+
+async def test_adversarial_debounce_burst_is_killed() -> None:
+    """Debounce burst case terminates KILLED (not FILED)."""
+    cases = {c["id"]: c for c in load_cases()}
+    result = await run_case(cases["adversarial-debounce-burst"])
+    assert result["status"] == "KILLED"
+    assert result["metrics"]["verdict_match"] == 1.0
+
+
+async def test_adversarial_ungrounded_proposal_is_grounded() -> None:
+    """Ungrounded-proposal case: S4 kills the fake proposal -> groundedness 1.0."""
+    cases = {c["id"]: c for c in load_cases()}
+    result = await run_case(cases["adversarial-ungrounded-proposal"])
+    assert result["status"] == "FILED"
+    assert result["metrics"]["groundedness"] == 1.0
+
+
+async def test_adversarial_routing_word_boundary_routes_correctly() -> None:
+    """Word-boundary routing case: compound hint routes to expected product."""
+    cases = {c["id"]: c for c in load_cases()}
+    result = await run_case(cases["adversarial-routing-word-boundary"])
+    assert result["status"] == "FILED"
+    assert result["metrics"]["routing_accuracy"] == 1.0
+
+
+async def test_adversarial_duplicate_veto_vetoes_proposal() -> None:
+    """Duplicate veto case: council vetoes the proposal -> veto_accuracy 1.0."""
+    cases = {c["id"]: c for c in load_cases()}
+    result = await run_case(cases["adversarial-duplicate-veto"])
+    assert result["status"] == "FILED"
+    assert result["metrics"]["veto_accuracy"] == 1.0

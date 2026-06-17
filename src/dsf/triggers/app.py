@@ -1,11 +1,17 @@
-"""Signal-ingestion HTTP endpoint — ``POST /ingest``.
+"""Signal-ingestion HTTP endpoint — ``POST /ingest`` and ``POST /file``.
 
-A webhook / Azure Event Grid-shaped signal arrives as a JSON body. The handler:
+``POST /ingest`` is the inbound webhook / Azure Event Grid handler:
 
-1. honors the SIGNAL trigger pause flag -> ``{"status": "paused"}``;
-2. debounces repeat signals within the window -> ``{"status": "suppressed"}``;
+1. honours the SIGNAL trigger pause flag -> ``{"status": "paused"}``;
+2. debounces repeat signals within the TTL window -> ``{"status": "suppressed"}``;
 3. otherwise maps the payload to a :class:`Run` and drives it through the
-   conveyor in dry-run -> ``{"run_id", "status"}`` from the final run.
+   conveyor **always in dry-run** -> ``{"run_id", "status"}``.
+
+``POST /file`` is the deliberate filing path for human or scheduled invocation.
+It does **not** debounce and does **not** hard-code ``dry_run=True``, so when the
+:class:`~dsf.container.Services` bundle is wired with a real
+:class:`~dsf.github_client.RealGitHubClient` (e.g. ``--mode gh``) and the
+global ``dry_run`` config flag is off, the run will actually file a GitHub issue.
 
 The app builds a module-level local :class:`~dsf.container.Services` at import
 time. Tests can override it via FastAPI's dependency system
@@ -61,7 +67,7 @@ async def ingest(
     payload: dict[str, Any] = _BODY,
     services: Services = _SERVICES,
 ) -> dict[str, Any]:
-    """Ingest a webhook signal and (unless paused/suppressed) run a dry-run line."""
+    """Ingest a webhook signal; always runs the line in dry-run (no filing)."""
     if triggers_paused(services.config, TriggerKind.SIGNAL):
         return {"status": "paused"}
 
@@ -77,4 +83,29 @@ async def ingest(
     return {"run_id": result.id, "status": result.status.value}
 
 
-__all__ = ["app", "get_services", "ingest"]
+@app.post("/file")
+async def file_signal(
+    payload: dict[str, Any] = _BODY,
+    services: Services = _SERVICES,
+) -> dict[str, Any]:
+    """Deliberately run the pipeline with filing enabled.
+
+    Unlike ``/ingest`` this endpoint does **not** hard-code ``dry_run=True`` and
+    does **not** apply debounce suppression — it is an explicit, intentional
+    invocation.  Filing a real GitHub issue additionally requires:
+
+    * The services bundle to carry a real :class:`~dsf.github_client.RealGitHubClient`
+      (use ``--mode gh`` or override ``get_services``).
+    * The global ``dry_run`` config flag to be off (it defaults to ``True`` for
+      safety in local/fake mode).
+    """
+    if triggers_paused(services.config, TriggerKind.SIGNAL):
+        return {"status": "paused"}
+
+    run = signal_to_run(payload)
+    run.dry_run = False  # caller has explicitly chosen to file.
+    result = await run_line(run, services)
+    return {"run_id": result.id, "status": result.status.value}
+
+
+__all__ = ["app", "file_signal", "get_services", "ingest"]

@@ -8,16 +8,17 @@ they stay free of I/O and trivially unit-testable.
 * :func:`groundedness`     — are routed issues backed only by real evidence?
 * :func:`routing_accuracy` — did issues route to the expected product?
 * :func:`verdict_match`    — did the run's filed/not-filed outcome match?
+* :func:`veto_accuracy`    — did council correctly veto when it should have?
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from dsf.contracts.enums import RunStatus
+from dsf.contracts.enums import RunStatus, Verdict
 
 if TYPE_CHECKING:
-    from dsf.contracts.models import Proposal, RoutedIssue, Run
+    from dsf.contracts.models import CouncilVerdict, Proposal, RoutedIssue, Run
 
 
 def groundedness(
@@ -89,4 +90,18 @@ def verdict_match(run: Run, expect_filed: bool) -> float:
     return 1.0 if filed == expect_filed else 0.0
 
 
-__all__ = ["groundedness", "routing_accuracy", "verdict_match"]
+def veto_accuracy(
+    verdicts: list[CouncilVerdict],
+    must_veto: bool,
+) -> float:
+    """1.0 when the veto expectation is satisfied, else 0.0.
+
+    If ``must_veto`` is ``False``: no expectation -- trivially satisfied (1.0).
+    If ``must_veto`` is ``True``: 1.0 when at least one verdict is KILL,
+    else 0.0 -- the council failed to veto a proposal it should have rejected.
+    """
+    if not must_veto:
+        return 1.0
+    return 1.0 if any(v.verdict == Verdict.KILL for v in verdicts) else 0.0
+
+__all__ = ["groundedness", "routing_accuracy", "verdict_match", "veto_accuracy"]
