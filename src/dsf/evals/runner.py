@@ -16,7 +16,9 @@ Golden case shape (``golden/cases.json``)::
       "name": str,
       "signal_payload": {"product_hints": [...], "source_kinds": [...], "text": ...},
       "config_overrides": {"<flag>": bool, ...},   # optional, applied via set_flag
-      "setup": {"seed_debounce": bool},            # optional test scaffolding
+      "setup": {"seed_debounce": bool,              # optional test scaffolding
+              "seed_ungrounded_proposal": bool, # skip S3, inject fake-evidence proposal
+              "seed_duplicate_proposal": bool}, # pre-seed proposal texts for veto test
       "expectations": {
         "expected_product": str | null,
         "expect_filed": bool,
@@ -38,7 +40,7 @@ from typing import TYPE_CHECKING, Any
 from dsf.container import build_services
 from dsf.contracts.enums import TriggerKind
 from dsf.contracts.models import Run
-from dsf.evals.evaluators import groundedness, routing_accuracy, verdict_match
+from dsf.evals.evaluators import groundedness, routing_accuracy, verdict_match, veto_accuracy
 from dsf.orchestrator.blackboard import Blackboard
 from dsf.orchestrator.conveyor import run_line
 from dsf.orchestrator.stations.s1_triage import SIGNAL_KIND
@@ -49,14 +51,15 @@ if TYPE_CHECKING:
 #: Default golden set location, alongside this module.
 GOLDEN_PATH = Path(__file__).resolve().parent / "golden" / "cases.json"
 
-#: The three metric keys produced for every case and aggregated for the gate.
-METRIC_KEYS = ("groundedness", "routing_accuracy", "verdict_match")
+#: The four metric keys produced for every case and aggregated for the gate.
+METRIC_KEYS = ("groundedness", "routing_accuracy", "verdict_match", "veto_accuracy")
 
 #: Minimum aggregate score per metric for the gate to pass.
 GATE_THRESHOLDS: dict[str, float] = {
     "groundedness": 0.99,
-    "routing_accuracy": 0.8,
-    "verdict_match": 0.8,
+    "routing_accuracy": 0.95,  # adversarial case requires word-boundary routing
+    "verdict_match": 0.85,    # adversarial debounce burst + existing case
+    "veto_accuracy": 0.95,    # adversarial duplicate veto case
 }
 
 ServicesFactory = Callable[[str], "Services"]
@@ -92,7 +95,12 @@ def _apply_config_overrides(services: Services, case: dict[str, Any]) -> None:
         services.config.set_flag(flag, bool(value))
 
 
-async def _apply_setup(services: Services, case: dict[str, Any], run: Run) -> None:
+async def _apply_setup(
+    services: Services,
+    case: dict[str, Any],
+    run: Run,
+    services_factory: ServicesFactory = build_services,
+) -> None:
     """Apply optional test scaffolding declared on the case.
 
     ``seed_debounce`` pre-seeds an in-flight signal record matching this run's
@@ -106,6 +114,78 @@ async def _apply_setup(services: Services, case: dict[str, Any], run: Run) -> No
             await services.memory.put_record(
                 {"kind": SIGNAL_KIND, "text": text, "run_id": "eval-seed"}
             )
+    if setup.get("seed_ungrounded_proposal"):
+        await _seed_ungrounded_proposal(services, run)
+    if setup.get("seed_duplicate_proposal"):
+        await _seed_duplicate_proposal(services, case, run, services_factory)
+
+
+
+async def _seed_ungrounded_proposal(services: Services, run: Run) -> None:
+    """Inject an adversarial proposal with a fake evidence id, skipping S3.
+
+    Marks the S3 synthesis checkpoint as complete so the conveyor skips that
+    station, then plants a single :class:`~dsf.contracts.models.Proposal` whose
+    only ``evidence_id`` is a sentinel string that can never appear in
+    ``run.evidence``. S4 should strip the fake id and kill the proposal;
+    if S4 is broken the proposal survives, routes, and the groundedness
+    evaluator catches the ungrounded evidence.
+    """
+    from dsf.contracts.enums import ProposalKind
+    from dsf.contracts.models import Proposal
+    from dsf.orchestrator.blackboard import Blackboard
+    from dsf.orchestrator.stations import s3_synthesis
+
+    bb = Blackboard(services.memory)
+    # Skip S3 so it cannot overwrite this pre-seeded proposal.
+    await bb.checkpoint(run.id, s3_synthesis.STATION)
+    hint = (run.scope_product_hints or ["microbi"])[0]
+    fake = Proposal(
+        run_id=run.id,
+        kind=ProposalKind.FIX,
+        title="Fix: adversarial ungrounded evidence test",
+        problem="Eval harness: proposal carrying a sentinel fake evidence id.",
+        proposed_change="No real change -- eval harness adversarial case only.",
+        product=hint,
+        evidence_ids=["adversarial-fake-evidence-id-000"],
+        confidence=0.8,
+    )
+    await bb.save_proposals(run.id, [fake])
+
+
+async def _seed_duplicate_proposal(
+    services: Services,
+    case: dict[str, Any],
+    run: Run,
+    services_factory: ServicesFactory,
+) -> None:
+    """Pre-seed proposal texts so the council duplication critic vetoes them.
+
+    Runs a mini S1+S2+S3 pipeline on a fresh services instance to discover the
+    exact proposal texts this run will produce, then records them as
+    ``proposal`` kind records in the main services memory.  When the real run
+    reaches the council, the duplication critic finds near-identical records
+    (token overlap 1.0) and issues a hard veto.
+    """
+    from dsf.contracts.enums import RunStatus
+    from dsf.council.critics.duplication import RECORD_KIND as _PROPOSAL_KIND
+    from dsf.orchestrator.blackboard import Blackboard
+    from dsf.orchestrator.stations import s1_triage, s2_investigation, s3_synthesis
+
+    mini_services = services_factory("local")
+    _apply_config_overrides(mini_services, case)
+    mini_run = _build_run(case)
+    mini_run = await s1_triage.run(mini_run, mini_services)
+    if mini_run.status == RunStatus.KILLED:
+        return  # debounce fired on the mini run -- nothing to seed
+    mini_run = await s2_investigation.run(mini_run, mini_services)
+    mini_run = await s3_synthesis.run(mini_run, mini_services)
+    mini_bb = Blackboard(mini_services.memory)
+    mini_proposals = await mini_bb.load_proposals(mini_run.id)
+    for p in mini_proposals:
+        await services.memory.put_record(
+            {"kind": _PROPOSAL_KIND, "text": f"{p.title} {p.problem}"}
+        )
 
 
 async def run_case(
@@ -120,13 +200,14 @@ async def run_case(
     _apply_config_overrides(services, case)
 
     run = _build_run(case)
-    await _apply_setup(services, case, run)
+    await _apply_setup(services, case, run, services_factory)
 
     result = await run_line(run, services)
 
     blackboard = Blackboard(services.memory)
     issues = await blackboard.load_issues(result.id)
     proposals = await blackboard.load_proposals(result.id)
+    verdicts = await blackboard.load_verdicts(result.id)
 
     expectations = case.get("expectations", {})
     metrics = {
@@ -136,6 +217,9 @@ async def run_case(
         ),
         "verdict_match": verdict_match(
             result, bool(expectations.get("expect_filed", True))
+        ),
+        "veto_accuracy": veto_accuracy(
+            verdicts, bool(expectations.get("must_veto", False))
         ),
     }
 
@@ -180,7 +264,8 @@ def _format_summary(result: dict[str, Any], failures: list[str]) -> str:
             f"  - {case['id']} [{case['status']}]: "
             f"groundedness={m['groundedness']:.3f} "
             f"routing_accuracy={m['routing_accuracy']:.3f} "
-            f"verdict_match={m['verdict_match']:.3f}"
+            f"verdict_match={m['verdict_match']:.3f} "
+            f"veto_accuracy={m.get('veto_accuracy', 1.0):.3f}"
         )
     lines.append("")
     lines.append("Aggregate metrics (threshold):")

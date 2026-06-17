@@ -3,8 +3,12 @@
     "id": "sentry-microbi-error-spike",
     "name": "Sentry error spike routes to microbi and files",
     "signal_payload": {
-      "product_hints": ["microbi"],
-      "source_kinds": ["SENTRY"],
+      "product_hints": [
+        "microbi"
+      ],
+      "source_kinds": [
+        "SENTRY"
+      ],
       "text": "Unhandled TypeError spike in microbi checkout flow"
     },
     "expectations": {
@@ -17,8 +21,12 @@
     "id": "grafana-homelab-latency",
     "name": "Grafana latency/memory signals route to homelab-dash and file",
     "signal_payload": {
-      "product_hints": ["homelab-dash"],
-      "source_kinds": ["GRAFANA"],
+      "product_hints": [
+        "homelab-dash"
+      ],
+      "source_kinds": [
+        "GRAFANA"
+      ],
       "text": "Checkout API p99 latency spike and node memory saturation"
     },
     "expectations": {
@@ -31,8 +39,12 @@
     "id": "webiq-microbi-market",
     "name": "WebIQ market signals route to microbi and file",
     "signal_payload": {
-      "product_hints": ["microbi"],
-      "source_kinds": ["WEBIQ"],
+      "product_hints": [
+        "microbi"
+      ],
+      "source_kinds": [
+        "WEBIQ"
+      ],
       "text": "Competitive and market pressure on microbi report export"
     },
     "expectations": {
@@ -45,8 +57,14 @@
     "id": "sentry-grafana-multi-source",
     "name": "Sentry + Grafana multi-source run reaches FILED with grounded issues",
     "signal_payload": {
-      "product_hints": ["microbi", "homelab-dash"],
-      "source_kinds": ["SENTRY", "GRAFANA"],
+      "product_hints": [
+        "microbi",
+        "homelab-dash"
+      ],
+      "source_kinds": [
+        "SENTRY",
+        "GRAFANA"
+      ],
       "text": "Multi-source incident: microbi errors plus homelab latency"
     },
     "expectations": {
@@ -59,8 +77,13 @@
     "id": "microbi-default-sources-filed",
     "name": "Default-enabled sources reach FILED with grounded routed issues",
     "signal_payload": {
-      "product_hints": ["microbi"],
-      "source_kinds": ["SENTRY", "WEBIQ"],
+      "product_hints": [
+        "microbi"
+      ],
+      "source_kinds": [
+        "SENTRY",
+        "WEBIQ"
+      ],
       "text": "Broad microbi intake across default sources"
     },
     "expectations": {
@@ -73,8 +96,12 @@
     "id": "all-agents-disabled-killed",
     "name": "Pre-seeded debounce with all agents disabled -> KILLED, not filed",
     "signal_payload": {
-      "product_hints": ["microbi"],
-      "source_kinds": ["SENTRY"],
+      "product_hints": [
+        "microbi"
+      ],
+      "source_kinds": [
+        "SENTRY"
+      ],
       "text": "Duplicate in-flight microbi signal that must be debounced"
     },
     "config_overrides": {
@@ -91,6 +118,99 @@
       "expected_product": null,
       "expect_filed": false,
       "must_be_grounded": true
+    }
+  },
+  {
+    "id": "adversarial-debounce-burst",
+    "name": "Debounce burst: in-flight duplicate signal (agents enabled) must be KILLED",
+    "signal_payload": {
+      "product_hints": [
+        "microbi"
+      ],
+      "source_kinds": [
+        "SENTRY"
+      ],
+      "text": "Microbi checkout TypeError duplicate burst signal"
+    },
+    "setup": {
+      "seed_debounce": true
+    },
+    "expectations": {
+      "expected_product": null,
+      "expect_filed": false,
+      "must_be_grounded": true,
+      "must_veto": false
+    }
+  },
+  {
+    "id": "adversarial-ungrounded-proposal",
+    "name": "Ungrounded proposal must be stripped and killed by S4 grounding gate",
+    "signal_payload": {
+      "product_hints": [
+        "microbi"
+      ],
+      "source_kinds": [
+        "SENTRY"
+      ],
+      "text": "Adversarial: proposal with fake evidence id must be stripped by grounding gate"
+    },
+    "config_overrides": {
+      "agent.SENTRY": false,
+      "agent.GRAFANA": false,
+      "agent.FOUNDRYIQ": false,
+      "agent.WEBIQ": false,
+      "agent.TICKETS": false,
+      "critic.grounding": false
+    },
+    "setup": {
+      "seed_ungrounded_proposal": true
+    },
+    "expectations": {
+      "expected_product": null,
+      "expect_filed": true,
+      "must_be_grounded": true,
+      "must_veto": false
+    }
+  },
+  {
+    "id": "adversarial-routing-word-boundary",
+    "name": "Word-boundary routing: compound hint microbi-dashboard must route to microbi",
+    "signal_payload": {
+      "product_hints": [
+        "microbi-dashboard"
+      ],
+      "source_kinds": [
+        "FOUNDRYIQ"
+      ],
+      "text": "FoundryIQ signals scoped to microbi-dashboard requiring word-boundary routing"
+    },
+    "expectations": {
+      "expected_product": "microbi",
+      "expect_filed": true,
+      "must_be_grounded": true,
+      "must_veto": false
+    }
+  },
+  {
+    "id": "adversarial-duplicate-veto",
+    "name": "Council must veto a proposal that duplicates an already-seen one",
+    "signal_payload": {
+      "product_hints": [
+        "microbi"
+      ],
+      "source_kinds": [
+        "SENTRY"
+      ],
+      "text": "Microbi checkout TypeError regression signal for duplicate veto test"
+    },
+    "setup": {
+      "seed_duplicate_proposal": true
+    },
+    "expectations": {
+      "expected_product": null,
+      "expect_filed": true,
+      "must_be_grounded": true,
+      "must_veto": true
     }
   }
 ]
