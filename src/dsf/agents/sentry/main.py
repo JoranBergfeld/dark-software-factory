@@ -8,6 +8,8 @@ injected.
 
 from __future__ import annotations
 
+import os
+
 from dsf.agents.base import SourceAgent
 from dsf.agents.mode import is_live, resolve_mode
 from dsf.agents.sentry.backend import SentryFakeBackend, SentryMcpBackend
@@ -19,14 +21,29 @@ def build_agent(config: object | None = None, mode: str | None = None) -> Source
     """Build the Sentry :class:`SourceAgent`, selecting the backend by mode.
 
     In live mode (``DSF_MODE`` set to anything but ``local``, or ``mode``
-    explicitly live) the real MCP backend is wired to the Sentry HTTP client
-    built from env vars. Otherwise the deterministic fixture-backed fake is used.
+    explicitly live) the real backend is wired:
+
+    * ``SENTRY_MCP_URL`` set -> speak MCP to that Sentry MCP server (preferred);
+    * else ``SENTRY_AUTH_TOKEN`` set -> call the Sentry REST API directly;
+    * else raise (live mode must not silently fabricate coverage).
+
+    Otherwise the deterministic fixture-backed fake is used.
     """
     cfg = config if config is not None else FakeConfigStore.from_defaults()
     if is_live(resolve_mode(mode)):
-        from dsf.agents.sentry.client import build_sentry_client_from_env
+        if os.environ.get("SENTRY_MCP_URL"):
+            from dsf.agents.sentry.mcp_client import build_sentry_mcp_call_from_env
 
-        backend = SentryMcpBackend(mcp_call=build_sentry_client_from_env())
+            backend = SentryMcpBackend(mcp_call=build_sentry_mcp_call_from_env())
+        elif os.environ.get("SENTRY_AUTH_TOKEN"):
+            from dsf.agents.sentry.client import build_sentry_client_from_env
+
+            backend = SentryMcpBackend(mcp_call=build_sentry_client_from_env())
+        else:
+            raise RuntimeError(
+                "live mode requires SENTRY_MCP_URL (MCP server) or "
+                "SENTRY_AUTH_TOKEN (Sentry REST API)"
+            )
     else:
         backend = SentryFakeBackend()
     return SourceAgent(
