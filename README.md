@@ -38,14 +38,19 @@ make evals     # golden-set eval gate
 Then explore the Control Center:
 
 ```bash
-uv run python -m dsf.cli control-center   # http://localhost:8081
+uv run dsfctl control-center   # http://localhost:8081
 ```
 
 Or stamp out a product factory (dry-run by default; `--execute` is destructive):
 
 ```bash
-uv run python -m dsf.cli new microbi --name-prefix microbi   # preview the 8-step plan
+uv run dsf new --product microbi --owner your-org --name-prefix microbi   # preview the 8-step plan
 ```
+
+Two CLIs ship from the single `dsf` package: **`dsf`** creates/manages product
+instances from the template (`dsf new`), and **`dsfctl`** operates a running
+instance's feature-council runtime (`dsfctl run|sweep|serve-orchestrator|serve-agent|
+control-center`).
 
 `dsf new` creates the product GitHub repo + Coding Squad, provisions a dedicated Azure
 resource group from `infra/main.bicep`, and renders + brings up the product's council

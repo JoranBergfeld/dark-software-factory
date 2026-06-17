@@ -41,16 +41,16 @@ deployment outputs (SP3). Both require your subscription, credentials, and expli
 
 ```bash
 # Run the line for one signal file (dry-run):
-uv run python -m dsf.cli run --dry-run --signal tests/fixtures/sample_signal.json
+uv run dsfctl run --dry-run --signal tests/fixtures/sample_signal.json
 
 # Scheduled sweep across enabled sources:
-uv run python -m dsf.cli sweep
+uv run dsfctl sweep
 
 # Serve a source agent over A2A (FastAPI):
-uv run python -m dsf.cli serve-agent --kind sentry --port 8080
+uv run dsfctl serve-agent --kind sentry --port 8080
 
 # Serve the Control Center UI (toggles, thresholds, dry-run kill switch):
-uv run python -m dsf.cli control-center --port 8081
+uv run dsfctl control-center --port 8081
 # then open http://localhost:8081
 
 # Serve the signal-ingestion endpoint (POST /ingest):
@@ -68,14 +68,14 @@ only SRE-agent deployment remains a **deferred** stub step (SP5).
 
 ```bash
 # Preview the plan (no side effects):
-uv run python -m dsf.cli new --product microbi --owner your-org --name-prefix microbi
+uv run dsf new --product microbi --owner your-org --name-prefix microbi
 
 # Preview AND write the instance manifest to config/instances/microbi.json:
-uv run python -m dsf.cli new --product microbi --owner your-org --name-prefix microbi --write-plan
+uv run dsf new --product microbi --owner your-org --name-prefix microbi --write-plan
 
 # Execute: create repo + init Squad + provision Azure + render/bring up council
 # (needs gh, @bradygaster/squad-cli, az, and docker compose for the homelab council):
-uv run python -m dsf.cli new --product microbi --owner your-org --name-prefix microbi --execute
+uv run dsf new --product microbi --owner your-org --name-prefix microbi --execute
 ```
 
 ### The rendered per-product council runtime
@@ -96,7 +96,7 @@ degrades to a no-op fake if OpenTelemetry isn't importable). To run it by hand:
 
 ```bash
 # global --mode MUST precede the subcommand:
-DSF_PRODUCT=microbi uv run python -m dsf.cli --mode azure serve-orchestrator
+DSF_PRODUCT=microbi uv run dsfctl --mode azure serve-orchestrator
 ```
 
 ## The Control Center

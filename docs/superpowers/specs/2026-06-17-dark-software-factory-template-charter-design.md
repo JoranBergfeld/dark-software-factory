@@ -129,7 +129,7 @@ Each is its own spec → plan → implementation cycle.
 | SP6 | Brownfield onboarding | `dsf onboard <existing-repo>`. |
 | SP7 | Instance lifecycle & ops | `status`/`upgrade`/`destroy`; runbook; begin evolution toward declarative manifest (approach B). |
 | — | Naming refresh *(cross-cutting)* | Rename "feature council" and related terms. |
-| — | CLI / runtime split *(cross-cutting)* | Separate the `dsf new` instance-provisioning CLI from the feature-council runtime source so the two concerns are not conflated. |
+| — ✅ | CLI / runtime split *(cross-cutting, done)* | `dsf` (factory CLI, `dsf.cli.factory`) creates instances; `dsfctl` (instance control, `dsf.cli.control`) operates the feature-council runtime. Two console scripts in one package (ADR 0003). |
 
 ## 7. First sub-project (SP1)
 
