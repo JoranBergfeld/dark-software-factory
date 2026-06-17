@@ -60,7 +60,7 @@ def test_render_compose_scopes_container_and_references_env_file(tmp_path):
 def test_render_does_not_inline_secrets(tmp_path):
     bundle = render_runtime_bundle(_manifest(tmp_path), repo_root=tmp_path)
     env = bundle.env_path.read_text(encoding="utf-8")
-    # bearer/GitHub tokens are runtime-injected (Key Vault / managed identity),
+    # bearer/GitHub tokens are runtime-injected (Key Vault via the homelab SP, ADR 0002),
     # never rendered into the bundle:
     assert "A2A_BEARER_TOKEN" not in env
     assert "GITHUB_TOKEN" not in env

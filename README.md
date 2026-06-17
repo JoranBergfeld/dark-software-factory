@@ -1,10 +1,18 @@
-# Dark Software Factory — Intake Line
+# Dark Software Factory
 
 Inspired by manufacturing "dark factories," this repo automates the hardest part of the
 SDLC: **deciding what to build.** It's a mostly-autonomous, multi-product pipeline that
 listens to operational and market signals, investigates them with rigorous grounding,
-runs proposals past an adversarial critic council, and files labeled GitHub issues (dry-run by default; real filing via ``--mode gh``) with a
-full evidence trail. The only human gate is downstream, approving the spec PR.
+runs proposals past an adversarial critic council, and files labeled GitHub issues (dry-run
+by default; real filing via ``--mode gh`` or ``--mode azure``) with a full evidence trail.
+The only human gate is downstream, approving the spec PR.
+
+This repo is also a **template + CLI**: `dsf new <product>` stamps out an *isolated*
+software factory for one product — its own GitHub repo + Coding Squad, a feature council
+scoped to that product, a dedicated Azure resource group, and the council runtime brought
+up in your homelab. See the
+[charter](docs/superpowers/specs/2026-06-17-dark-software-factory-template-charter-design.md)
+for the north-star and roadmap (SP1–SP3 implemented; SRE agent + lifecycle next).
 
 ```
  signals ──▶ [S1 Triage] ─▶ [S2 Investigation] ─▶ [S3 Synthesis] ─▶ [S4 Grounding gate]
@@ -33,6 +41,16 @@ Then explore the Control Center:
 uv run python -m dsf.cli control-center   # http://localhost:8081
 ```
 
+Or stamp out a product factory (dry-run by default; `--execute` is destructive):
+
+```bash
+uv run python -m dsf.cli new microbi --name-prefix microbi   # preview the 8-step plan
+```
+
+`dsf new` creates the product GitHub repo + Coding Squad, provisions a dedicated Azure
+resource group from `infra/main.bicep`, and renders + brings up the product's council
+runtime as a homelab compose bundle (see RUNBOOK). The SRE agent is the next sub-project.
+
 ## Status
 
 - **Runnable locally, end-to-end, in dry-run** against in-memory fakes — every component
@@ -43,13 +61,20 @@ uv run python -m dsf.cli control-center   # http://localhost:8081
   is meant to run in your homelab and reach Azure outbound (ADR 0002). An `infra-whatif`
   pipeline previews infra changes (OIDC) and an `agents-images` pipeline publishes each
   agent to GHCR. No billable resources are provisioned by the local flow.
+- **Per-product factories.** `dsf new <product>` provisions an isolated Azure RG per
+  product and renders that product's council runtime to a homelab compose bundle under
+  `config/instances/<product>.runtime/`. In `--mode azure` the orchestrator reads endpoints
+  from the product's deployment outputs and emits traces to Application Insights. Real
+  Cosmos/App Config/LLM adapters land in SP3b; the Azure Container Apps target is a seam.
 
 ## Docs
 
 - Design spec: `docs/superpowers/specs/2026-06-15-dark-software-factory-intake-design.md`
 - Implementation plan: `docs/superpowers/plans/2026-06-15-dark-software-factory-intake.md`
+- **Template + CLI charter: `docs/superpowers/specs/2026-06-17-dark-software-factory-template-charter-design.md`**
 - **Runbook (how to run & deploy): `docs/RUNBOOK.md`**
-- Architecture decisions: `docs/adr/0001-architecture-decisions.md`
+- Architecture decisions: `docs/adr/0001-architecture-decisions.md` ·
+  `docs/adr/0002-homelab-runtime-azure-backing-only.md`
 
 ## Layout
 
@@ -58,7 +83,9 @@ registry) · `memory` (tiers, dedup, consolidation) · `a2a` · `agents/<source>
 `council` (synthesizer + critics + decision) · `orchestrator` (conveyor + stations) ·
 `triggers` · `learning` · `evals` · `observability` · `control_center`.
 `instance/` — instance spec + provisioner powering the `dsf new` CLI (greenfield
-product-factory scaffolding; creates the product repo + Coding Squad and provisions
-a dedicated per-product Azure resource group from `infra/main.bicep`; council/SRE
-deployment deferred to later sub-projects).
+product-factory scaffolding; creates the product repo + Coding Squad, provisions a
+dedicated per-product Azure resource group from `infra/main.bicep`, and renders + brings
+up the product's council runtime as a homelab compose bundle; only SRE-agent deployment is
+deferred to a later sub-project).
+`runtime/` — the orchestrator runtime image (`Dockerfile`) the rendered council bundle runs.
 `infra/` — Bicep/azd + homelab compose.

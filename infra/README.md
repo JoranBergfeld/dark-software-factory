@@ -125,6 +125,17 @@ an outbound tunnel sidecar; extend it for the other agents as you see fit. Signa
 interrupts are consumed by **polling the Service Bus `signals` queue outbound** —
 nothing is pushed into the homelab.
 
+### Per-product council runtime (rendered by `dsf new`)
+
+`dsf new <product>` provisions a *dedicated* RG per product and then renders that
+product's council runtime to `config/instances/<product>.runtime/` — a generated
+`compose.orchestrator.yml` running `src/dsf/runtime/Dockerfile` plus an
+`.env.orchestrator` whose endpoints come straight from that deployment's Bicep
+outputs (App Config, Key Vault URI, App Insights, Cosmos). **Only endpoints are
+rendered; secrets stay in Key Vault** and are fetched at runtime via the homelab
+service principal. Under `--execute` (homelab target) `dsf new` brings the bundle up
+with `docker compose ... up -d`. See `docs/RUNBOOK.md` → *Creating a product instance*.
+
 ## Notes
 - `enablePurgeProtection: true` on Key Vault is intentional; the vault cannot be
   hard-deleted for 90 days after a soft delete.

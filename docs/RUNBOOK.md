@@ -22,8 +22,10 @@ council → routing → filing — executes deterministically with **no LLM and 
 `DSF_DRY_RUN=true` (default) means the filing station records the issue it *would*
 file but never calls GitHub.
 
-Azure implementations and IaC are authored but **not invoked** by the local flow.
-They require your subscription, credentials, and explicit `azd up`.
+Azure implementations and IaC are authored but **not invoked** by the *local* flow.
+The Azure paths are reached deliberately: `dsf new <product> --execute` provisions a
+per-product RG (SP2) and `--mode azure` runs the orchestrator against that product's
+deployment outputs (SP3). Both require your subscription, credentials, and explicit opt-in.
 
 | Capability | Local (now) | Azure (when you deploy) |
 |---|---|---|
@@ -55,13 +57,14 @@ uv run python -m dsf.cli control-center --port 8081
 uv run uvicorn dsf.triggers.app:app --port 8082
 ```
 
-## Creating a product instance (SP1 + SP2)
+## Creating a product instance (SP1–SP3)
 
 `dsf new` scaffolds an isolated product factory. `--name-prefix` is **required**;
 it is sanitized and randomized into a <=12-char Azure resource prefix (persisted in
 the manifest and reused on re-runs). Under `--execute`, repo creation + Coding Squad
-init **and the dedicated Azure resource group + Bicep deployment** are real; feature
-council and SRE deployment remain **deferred** stub steps (SP3/SP5).
+init, **the dedicated Azure resource group + Bicep deployment**, and **rendering +
+bringing up the product's feature-council runtime** (homelab compose) are all real;
+only SRE-agent deployment remains a **deferred** stub step (SP5).
 
 ```bash
 # Preview the plan (no side effects):
@@ -70,8 +73,30 @@ uv run python -m dsf.cli new --product microbi --owner your-org --name-prefix mi
 # Preview AND write the instance manifest to config/instances/microbi.json:
 uv run python -m dsf.cli new --product microbi --owner your-org --name-prefix microbi --write-plan
 
-# Execute: create repo + init Squad + provision Azure (needs gh, @bradygaster/squad-cli, az):
+# Execute: create repo + init Squad + provision Azure + render/bring up council
+# (needs gh, @bradygaster/squad-cli, az, and docker compose for the homelab council):
 uv run python -m dsf.cli new --product microbi --owner your-org --name-prefix microbi --execute
+```
+
+### The rendered per-product council runtime
+
+`deploy_council` renders a homelab compose bundle to
+`config/instances/<product>.runtime/` (a `compose.orchestrator.yml` plus an
+`.env.orchestrator` populated from the product's Azure deployment outputs — endpoints
+only; **secrets stay in Key Vault**, fetched at runtime via the homelab service
+principal, ADR 0002). Under `--execute` against the `homelab` target, `dsf new` also runs
+`docker compose -f config/instances/<product>.runtime/compose.orchestrator.yml up -d` to
+start that product's council. The `aca` (Azure Container Apps) target is an explicit
+unimplemented seam.
+
+The runtime image is `src/dsf/runtime/Dockerfile`; its entrypoint is the orchestrator in
+**azure mode**, which reads endpoints from the rendered env and emits traces to
+Application Insights (the OTel tracer is wired automatically when `DSF_MODE=azure`; it
+degrades to a no-op fake if OpenTelemetry isn't importable). To run it by hand:
+
+```bash
+# global --mode MUST precede the subcommand:
+DSF_PRODUCT=microbi uv run python -m dsf.cli --mode azure serve-orchestrator
 ```
 
 ## The Control Center

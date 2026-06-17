@@ -43,3 +43,10 @@ Key Vault), reached outbound.
   Service Bus queue. Scheduled sweeps need none of this.
 - If the user later wants Azure-hosted compute after all, re-introducing Container
   Apps is additive and does not change the contracts or the agent images.
+- **SP3 (per-product council runtime):** `dsf new` renders each product's orchestrator
+  as a homelab compose bundle (`config/instances/<product>.runtime/`) running
+  `src/dsf/runtime/Dockerfile` — consistent with decision #2, **no Bicep compute** is
+  added. Its `.env.orchestrator` carries deployment **endpoints only**; secrets remain in
+  Key Vault and are fetched at runtime via the homelab service principal (decision #4), so
+  "managed identity" is never the homelab auth path. The Azure Container Apps (`aca`)
+  deploy target is left as an explicit unimplemented seam, honoring this ADR by default.
