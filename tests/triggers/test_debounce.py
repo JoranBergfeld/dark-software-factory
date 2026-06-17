@@ -2,8 +2,15 @@
 
 from __future__ import annotations
 
+import time
+
 from dsf.container import build_services
-from dsf.triggers.debounce import record_signal, should_suppress, signal_text
+from dsf.triggers.debounce import (
+    DEFAULT_DEBOUNCE_TTL,
+    record_signal,
+    should_suppress,
+    signal_text,
+)
 
 
 async def test_first_signal_not_suppressed_then_duplicate_suppressed() -> None:
@@ -37,3 +44,21 @@ def test_signal_text_prefers_fingerprint() -> None:
     assert signal_text({"fingerprint": "abc", "text": "xyz"}) == "abc"
     assert signal_text({"text": "xyz"}) == "xyz"
     assert signal_text({"product_hints": ["microbi"]}) == "signal for microbi"
+
+
+async def test_debounce_ttl_expiry_allows_signal_again() -> None:
+    """After the TTL window closes the same signal must be accepted again."""
+    services = build_services("local")
+    payload = {"text": "checkout regression spike"}
+
+    # Record with a very short TTL.
+    await record_signal(payload, services, ttl=0.01)
+    assert await should_suppress(payload, services) is True
+
+    # After expiry the signal is no longer suppressed.
+    time.sleep(0.02)
+    assert await should_suppress(payload, services) is False
+
+
+def test_default_debounce_ttl_is_positive() -> None:
+    assert DEFAULT_DEBOUNCE_TTL > 0

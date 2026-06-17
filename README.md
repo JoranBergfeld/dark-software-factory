@@ -3,7 +3,7 @@
 Inspired by manufacturing "dark factories," this repo automates the hardest part of the
 SDLC: **deciding what to build.** It's a mostly-autonomous, multi-product pipeline that
 listens to operational and market signals, investigates them with rigorous grounding,
-runs proposals past an adversarial critic council, and files labeled GitHub issues with a
+runs proposals past an adversarial critic council, and files labeled GitHub issues (dry-run by default; real filing via ``--mode gh``) with a
 full evidence trail. The only human gate is downstream, approving the spec PR.
 
 ```
@@ -37,7 +37,7 @@ uv run python -m dsf.cli control-center   # http://localhost:8081
 
 - **Runnable locally, end-to-end, in dry-run** against in-memory fakes — every component
   built behind a port. The full conveyor drives a signal to a (simulated) filed issue with
-  grounding enforced and no network calls. 167 tests pass.
+  grounding enforced and no network calls. All tests pass (run ``make test`` for the current count).
 - **Azure-ready, not deployed.** Bicep provisions **backing services only** (Cosmos, App
   Config, Key Vault, App Insights, Event Grid → Service Bus ingestion buffer); the runtime
   is meant to run in your homelab and reach Azure outbound (ADR 0002). An `infra-whatif`

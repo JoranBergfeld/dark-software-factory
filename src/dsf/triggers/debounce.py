@@ -1,15 +1,14 @@
-"""Signal debounce — suppress repeat signals within a short window.
+"""Signal debounce — suppress repeat signals within a configurable TTL window.
 
 A burst of identical alerts (e.g. Sentry firing the same regression every few
 seconds) should produce one run, not many. :func:`should_suppress` builds a
 stable text key for the signal and asks the memory store whether a matching
 record already exists via :func:`dsf.memory.dedup.is_duplicate`.
 
-Locally the :class:`~dsf.fakes.memory.FakeMemoryStore` *is* the debounce window
-store: records put under ``window_kind`` accumulate in-process and
-``query_similar`` ranks them by token overlap, so a repeat of an already-seen
-signal scores >= threshold and is suppressed. (In Azure the same role is played
-by the Cosmos working tier with a TTL; the contract is identical.)
+Records are stored with a TTL (default :data:`DEFAULT_DEBOUNCE_TTL` seconds)
+so the suppression window expires and the same signal is accepted again after
+the window closes. The :class:`~dsf.fakes.memory.FakeMemoryStore` honours the
+TTL; a real backing store should use its native TTL mechanism.
 
 The caller is responsible for recording the signal after it decides to *accept*
 it (see :func:`record_signal`), so the very next duplicate is suppressed.
@@ -26,6 +25,10 @@ if TYPE_CHECKING:
 
 #: Default memory record-kind used as the debounce window.
 DEFAULT_WINDOW_KIND = "signal_debounce"
+
+#: Default TTL (seconds) for debounce records.  After this window the same
+#: signal is no longer suppressed and may trigger a new run.
+DEFAULT_DEBOUNCE_TTL: float = 300.0
 
 
 def signal_text(payload: dict) -> str:
@@ -68,13 +71,19 @@ async def record_signal(
     payload: dict,
     services: Services,
     window_kind: str = DEFAULT_WINDOW_KIND,
+    ttl: float = DEFAULT_DEBOUNCE_TTL,
 ) -> None:
-    """Record a signal in the debounce window so its next repeat is suppressed."""
+    """Record a signal in the debounce window so its next repeat is suppressed.
+
+    The record expires after ``ttl`` seconds so the same signal may be accepted
+    again once the window closes.
+    """
     text = signal_text(payload)
-    await services.memory.put_record({"kind": window_kind, "text": text})
+    await services.memory.put_record({"kind": window_kind, "text": text}, ttl=ttl)
 
 
 __all__ = [
+    "DEFAULT_DEBOUNCE_TTL",
     "DEFAULT_WINDOW_KIND",
     "record_signal",
     "should_suppress",

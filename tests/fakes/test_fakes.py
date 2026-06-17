@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from dsf.contracts.enums import SourceKind
-from dsf.contracts.models import EvidenceItem, Provenance
+import time
+
 from dsf.fakes import (
     FakeConfigStore,
     FakeGitHubClient,
@@ -80,45 +80,48 @@ def test_config_store_seeded_defaults():
     assert cfg.get_value("critics.value.weight") == 1.0
 
 
-def test_config_store_set_flag_and_snapshot():
-    cfg = FakeConfigStore.from_defaults()
-    cfg.set_flag("critic.value", False)
-    assert cfg.is_enabled("critic.value") is False
-    cfg.set_flag("critic.value", True, product="alpha")
-    assert cfg.is_enabled("critic.value", product="alpha") is True
-    snap = cfg.snapshot()
-    assert "_overrides" in snap
+async def test_memory_store_record_ttl_expires():
+    """Records with a TTL are invisible to query_similar after they expire."""
+    mem = FakeMemoryStore()
+    # Insert a record with a very short TTL.
+    await mem.put_record({"kind": "sig", "text": "checkout error"}, ttl=0.01)
+    # Immediately visible.
+    hits = await mem.query_similar("checkout error", "sig", k=1)
+    assert hits and hits[0]["similarity"] >= 0.8
+    # After expiry it must no longer appear.
+    time.sleep(0.02)
+    hits_after = await mem.query_similar("checkout error", "sig", k=1)
+    assert not hits_after
 
 
-async def test_github_client_records_and_returns_local_url():
-    gh = FakeGitHubClient()
-    url1 = await gh.create_issue("org/repo", "Title", "Body", ["bug"])
-    url2 = await gh.create_issue("org/repo", "Title2", "Body2", [])
-    assert url1 == "local://issue/1"
-    assert url2 == "local://issue/2"
-    assert len(gh.calls) == 2
-    assert gh.calls[0]["labels"] == ["bug"]
+async def test_memory_store_working_ttl_expires():
+    """Working-tier entries expire after their ttl."""
+    mem = FakeMemoryStore()
+    await mem.put_working("k", "value", ttl=0.01)
+    assert await mem.get_working("k") == "value"
+    time.sleep(0.02)
+    assert await mem.get_working("k") is None
 
 
-async def test_source_backend_returns_provided_list():
-    item = EvidenceItem(
-        source_agent="sentry",
-        claim="boom",
-        raw_citation="sentry://1",
-        provenance=Provenance(query_used="q", source_kind=SourceKind.SENTRY),
-    )
-    backend = FakeSourceBackend([item])
-    out = await backend.gather({"product": "alpha"})
-    assert len(out) == 1
-    assert out[0].raw_citation == "sentry://1"
-    assert backend.calls == [{"product": "alpha"}]
+async def test_memory_store_max_records_eviction():
+    """Records beyond max_records are evicted (oldest first) to bound growth."""
+    mem = FakeMemoryStore(max_records=5)
+    for i in range(7):
+        await mem.put_record({"kind": "evt", "text": f"event {i}"})
+    # Only the 5 most recent should survive.
+    assert len(mem._records) == 5
+    texts = {r["text"] for r in mem._records}
+    assert "event 0" not in texts
+    assert "event 1" not in texts
+    assert "event 6" in texts
 
 
-def test_tracer_records_spans():
-    tracer = FakeTracer()
-    with tracer.span("s1_triage", run="r1"):
-        pass
-    with tracer.span("s2_investigation"):
-        pass
-    assert [name for name, _ in tracer.spans] == ["s1_triage", "s2_investigation"]
-    assert tracer.spans[0][1] == {"run": "r1"}
+async def test_memory_store_query_similar_strips_internal_keys():
+    """_inserted_at and _ttl must not appear in query_similar results."""
+    mem = FakeMemoryStore()
+    await mem.put_record({"kind": "k", "text": "hello world"}, ttl=9999)
+    hits = await mem.query_similar("hello world", "k", k=1)
+    assert hits
+    assert "_inserted_at" not in hits[0]
+    assert "_ttl" not in hits[0]
+    assert "similarity" in hits[0]

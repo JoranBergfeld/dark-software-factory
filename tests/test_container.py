@@ -15,6 +15,7 @@ from dsf.fakes import (
     FakeModelClient,
     FakeTracer,
 )
+from dsf.github_client import RealGitHubClient
 from dsf.ports import ConfigStore, GitHubClient, MemoryStore, ModelClient, Tracer
 
 
@@ -36,6 +37,15 @@ def test_build_services_satisfy_protocols():
     assert isinstance(services.config, ConfigStore)
     assert isinstance(services.github, GitHubClient)
     assert isinstance(services.tracer, Tracer)
+
+
+def test_build_services_gh_mode_uses_real_github_client():
+    services = build_services("gh")
+    assert isinstance(services, Services)
+    assert services.mode == "gh"
+    assert isinstance(services.github, RealGitHubClient)
+    # Satisfies the port protocol.
+    assert isinstance(services.github, GitHubClient)
 
 
 def test_build_services_unknown_mode_raises():
@@ -80,3 +90,14 @@ def test_cli_serve_commands_launch_uvicorn(monkeypatch):
     assert main(["serve-agent", "--kind", "sentry"]) == 0
     assert main(["control-center"]) == 0
     assert launched == ["dsf.agents.sentry.main:app", "dsf.control_center.app:app"]
+
+
+def test_cli_unsupported_mode_exits_cleanly(capsys):
+    """--mode azure must exit non-zero with a clear message, no traceback."""
+    # _get_services calls sys.exit(1) for NotImplementedError; catch SystemExit here.
+    with pytest.raises(SystemExit) as exc_info:
+        main(["--mode", "azure", "sweep"])
+    assert exc_info.value.code == 1
+    err = capsys.readouterr().err
+    assert "not yet supported" in err
+    assert "azure" in err

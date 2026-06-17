@@ -73,3 +73,34 @@ def test_ingest_duplicate_signal_suppressed(client: TestClient, services: Servic
 
 def test_app_importable() -> None:
     assert app is not None
+
+
+def test_file_endpoint_runs_without_dry_run(client: TestClient, services: Services) -> None:
+    """/file runs the pipeline with dry_run=False (S7 still dry-runs due to config flag)."""
+    payload = json.loads(_FIXTURE.read_text(encoding="utf-8"))
+    resp = client.post("/file", json=payload)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["run_id"]
+    assert body["status"] in {
+        RunStatus.FILED.value,
+        RunStatus.KILLED.value,
+        RunStatus.ERROR.value,
+    }
+
+
+def test_file_endpoint_paused_returns_paused(client: TestClient, services: Services) -> None:
+    services.config.set_flag("trigger.SIGNAL.paused", True)
+    resp = client.post("/file", json={"text": "boom"})
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "paused"}
+
+
+def test_file_endpoint_does_not_debounce(client: TestClient, services: Services) -> None:
+    """/file can be called multiple times for the same payload without suppression."""
+    payload = {"text": "deliberate filing request", "product_hints": ["alpha"]}
+    r1 = client.post("/file", json=payload)
+    r2 = client.post("/file", json=payload)
+    # Neither should return "suppressed"
+    assert r1.json().get("status") != "suppressed"
+    assert r2.json().get("status") != "suppressed"

@@ -2,9 +2,9 @@
 
 Normalize the trigger into a scoped run: set status INVESTIGATING, populate
 ``scope_product_hints`` / ``source_kinds`` from the signal payload (or sensible
-defaults), and debounce the signal against in-flight runs via working memory. A
-duplicate in-flight signal kills the run (status KILLED) so the conveyor stops
-early before any investigation happens.
+defaults). Deduplication is delegated to the shared debounce module
+(:mod:`dsf.triggers.debounce`), which maintains a TTL-bounded window so the
+same signal cannot trigger more than one run within the window.
 """
 
 from __future__ import annotations
@@ -13,8 +13,8 @@ from typing import TYPE_CHECKING
 
 from dsf.config.flags import agent_enabled
 from dsf.contracts.enums import RunStatus, SourceKind
-from dsf.memory.dedup import is_duplicate
 from dsf.observability.tracing import span_attrs_for_run
+from dsf.triggers.debounce import DEFAULT_DEBOUNCE_TTL, record_signal, should_suppress
 
 if TYPE_CHECKING:
     from dsf.container import Services
@@ -22,20 +22,9 @@ if TYPE_CHECKING:
 
 STATION = "S1:triage"
 
-#: Memory record-kind used to debounce in-flight signals.
+#: Memory record-kind used to debounce signals in the orchestrator layer.
+#: Kept as a named constant so the eval harness can seed the same kind.
 SIGNAL_KIND = "signal"
-
-
-def _signal_text(run: Run) -> str:
-    """Best-effort human-readable text for a run's signal (for debounce)."""
-    payload = run.signal_payload or {}
-    for key in ("text", "message", "title", "summary"):
-        value = payload.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    # Fall back to product hints joined with the trigger kind.
-    hints = ", ".join(run.scope_product_hints) or "unknown"
-    return f"{run.trigger.value} signal for {hints}"
 
 
 def _derive_product_hints(run: Run) -> list[str]:
@@ -85,15 +74,15 @@ async def run(run: Run, services: Services) -> Run:
         kinds = ", ".join(k.value for k in run.source_kinds) or "(none)"
         run.audit.append(_audit(f"triaged: products=[{hints}] sources=[{kinds}]"))
 
-        text = _signal_text(run)
-        duplicate = await is_duplicate(text, services.memory, kind=SIGNAL_KIND)
+        payload = run.signal_payload or {}
+        duplicate = await should_suppress(payload, services, window_kind=SIGNAL_KIND)
         if duplicate:
             run.status = RunStatus.KILLED
-            run.audit.append(_audit("duplicate in-flight signal — killing run"))
+            run.audit.append(_audit("duplicate signal within debounce window — killing run"))
             return run
 
-        # Record this signal in the in-flight debounce window so a repeat is caught.
-        await services.memory.put_record({"kind": SIGNAL_KIND, "text": text, "run_id": run.id})
+        # Record this signal so a repeat within the TTL window is suppressed.
+        await record_signal(payload, services, window_kind=SIGNAL_KIND, ttl=DEFAULT_DEBOUNCE_TTL)
         return run
 
 
