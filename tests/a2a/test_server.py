@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
 
+from dsf.a2a.auth import build_bearer_dependency
 from dsf.agents.base import SourceAgent
 from dsf.contracts.enums import SourceKind
 from dsf.contracts.models import EvidenceItem, Provenance
@@ -72,3 +74,46 @@ def test_wrong_bearer_is_401_correct_bearer_passes():
     assert client.get("/card", headers={"Authorization": "Bearer nope"}).status_code == 401
     ok = client.get("/card", headers={"Authorization": "Bearer s3cret"})
     assert ok.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Issue #8 -- fail-CLOSED in live mode, constant-time comparison
+# ---------------------------------------------------------------------------
+
+
+def test_build_bearer_dependency_raises_at_startup_when_live_and_no_token():
+    """Empty token outside local mode must raise immediately (fail CLOSED)."""
+    with pytest.raises(RuntimeError, match="A2A_BEARER_TOKEN"):
+        build_bearer_dependency("", mode="live")
+
+
+def test_build_bearer_dependency_raises_for_any_non_local_mode():
+    for bad_mode in ("gh", "azure", "prod", "staging"):
+        with pytest.raises(RuntimeError):
+            build_bearer_dependency(None, mode=bad_mode)
+
+
+def test_build_bearer_dependency_open_in_local_mode():
+    """Empty token in local mode is fine -- open endpoint."""
+    dep = build_bearer_dependency("", mode="local")
+    # Dependency must be a no-op (returns None without raising).
+    assert dep(None) is None
+
+
+def test_build_bearer_dependency_constant_time_comparison():
+    """Wrong token must be rejected; the correct one must pass.
+
+    The dependency receives the full ``Authorization`` header value
+    (e.g. ``"Bearer <token>"``), not a bare token string.
+    """
+    dep = build_bearer_dependency("supersecret", mode="local")
+    from fastapi import HTTPException
+
+    # Prefix-sharing wrong token must be rejected.
+    with pytest.raises(HTTPException) as exc_info:
+        dep("Bearer supersecrX")
+    assert exc_info.value.status_code == 401
+
+    # Exact match passes (returns None, not raises).
+    result = dep("Bearer supersecret")
+    assert result is None

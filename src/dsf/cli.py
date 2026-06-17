@@ -138,7 +138,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_serve.set_defaults(func=_cmd_serve_agent)
 
     p_cc = sub.add_parser("control-center", help="serve the control center UI")
-    p_cc.add_argument("--host", default="0.0.0.0", help="bind host")
+    p_cc.add_argument("--host", default="127.0.0.1", help="bind host (localhost-only by default)")
     p_cc.add_argument("--port", type=int, default=8081, help="bind port")
     p_cc.set_defaults(func=_cmd_control_center)
 
