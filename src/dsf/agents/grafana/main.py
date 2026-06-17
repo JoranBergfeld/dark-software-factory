@@ -12,17 +12,29 @@ affect the code here.
 from __future__ import annotations
 
 from dsf.agents.base import SourceAgent
-from dsf.agents.grafana.backend import GrafanaFakeBackend
+from dsf.agents.grafana.backend import GrafanaFakeBackend, GrafanaMcpBackend
+from dsf.agents.mode import is_live, resolve_mode
 from dsf.contracts.enums import SourceKind
 from dsf.fakes import FakeConfigStore
 
 
-def build_agent(config: object | None = None) -> SourceAgent:
-    """Build the Grafana :class:`SourceAgent` over the fake backend."""
+def build_agent(config: object | None = None, mode: str | None = None) -> SourceAgent:
+    """Build the Grafana :class:`SourceAgent`, selecting the backend by mode.
+
+    In live mode (``DSF_MODE`` set to anything but ``local``, or ``mode``
+    explicitly live) the real MCP backend is wired to the Grafana HTTP client
+    built from env vars. Otherwise the deterministic fixture-backed fake is used.
+    """
     cfg = config if config is not None else FakeConfigStore.from_defaults()
+    if is_live(resolve_mode(mode)):
+        from dsf.agents.grafana.client import build_grafana_client_from_env
+
+        backend = GrafanaMcpBackend(mcp_call=build_grafana_client_from_env())
+    else:
+        backend = GrafanaFakeBackend()
     return SourceAgent(
         kind=SourceKind.GRAFANA,
-        backend=GrafanaFakeBackend(),
+        backend=backend,
         config=cfg,  # type: ignore[arg-type]
         capabilities=["gather"],
     )
