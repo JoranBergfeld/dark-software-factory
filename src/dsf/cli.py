@@ -105,6 +105,41 @@ def _cmd_control_center(args: argparse.Namespace) -> int:
     return 0
 
 
+def _print_plan(plan, *, execute: bool = False) -> None:
+    """Print an instance provisioning plan in a compact, readable form."""
+    mode = "EXECUTE" if execute else "DRY-RUN"
+    print(f"[dsf] instance plan for product={plan.product} ({mode})")
+    for i, step in enumerate(plan.steps, 1):
+        status = step.result or ("deferred" if step.deferred else "planned")
+        print(f"[dsf]  {i}. {step.name:14s} [{status}] {step.description}")
+        if step.command:
+            print(f"[dsf]       $ {' '.join(step.command)}")
+
+
+def _cmd_new(args: argparse.Namespace) -> int:
+    """Create (or preview) a new isolated product factory instance."""
+    from dsf.instance.provisioner import InstanceProvisioner
+    from dsf.instance.spec import InstanceSpec
+
+    spec = InstanceSpec(
+        product=args.product,
+        owner=args.owner,
+        repo=args.repo or "",
+        visibility=args.visibility,
+        runtime_target=args.runtime_target,
+    )
+    root = Path(args.config_root) if args.config_root else None
+    prov = InstanceProvisioner(spec, repo_root=root)
+    if args.execute:
+        plan = prov.apply(execute=True).plan
+    elif args.write_plan:
+        plan = prov.apply(execute=False).plan
+    else:
+        plan = prov.plan()
+    _print_plan(plan, execute=args.execute)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the argparse parser with all subcommands."""
     parser = argparse.ArgumentParser(prog="dsf", description="Dark Software Factory CLI")
@@ -141,6 +176,32 @@ def build_parser() -> argparse.ArgumentParser:
     p_cc.add_argument("--host", default="127.0.0.1", help="bind host (localhost-only by default)")
     p_cc.add_argument("--port", type=int, default=8081, help="bind port")
     p_cc.set_defaults(func=_cmd_control_center)
+
+    p_new = sub.add_parser("new", help="create a new isolated product factory instance")
+    p_new.add_argument("--product", required=True, help="product key (e.g. 'microbi')")
+    p_new.add_argument("--owner", required=True, help="GitHub owner/org for the product repo")
+    p_new.add_argument("--repo", default="", help="repo name (defaults to product key)")
+    p_new.add_argument(
+        "--visibility", default="private",
+        choices=["private", "public", "internal"], help="product repo visibility",
+    )
+    p_new.add_argument(
+        "--runtime-target", default="homelab",
+        choices=["homelab", "aca"], help="where the factory runtime is hosted",
+    )
+    p_new.add_argument(
+        "--execute", action="store_true",
+        help="run executable steps (gh/squad); Azure/council/SRE remain deferred",
+    )
+    p_new.add_argument(
+        "--write-plan", action="store_true",
+        help="dry-run, but write the instance manifest to config/instances/",
+    )
+    p_new.add_argument(
+        "--config-root", default=None,
+        help="override repo root where config/instances/ is written (tests/CI)",
+    )
+    p_new.set_defaults(func=_cmd_new)
 
     return parser
 
