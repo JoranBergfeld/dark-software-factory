@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 
@@ -73,7 +74,9 @@ class Services:
     azure: AzureRuntimeSettings | None = None
 
 
-def build_services(mode: str = "local") -> Services:
+def build_services(
+    mode: str = "local", *, env: Mapping[str, str] | None = None
+) -> Services:
     """Build a wired :class:`Services` bundle.
 
     Supported modes
@@ -85,6 +88,14 @@ def build_services(mode: str = "local") -> Services:
         Same fakes for model/memory/config/tracer, but with a real
         :class:`~dsf.github_client.RealGitHubClient` that calls the ``gh`` CLI.
         Requires ``gh`` to be authenticated in the environment.
+    ``azure``
+        Per-product runtime mode. Resolves :class:`AzureRuntimeSettings` from
+        ``env`` (defaults to ``os.environ``; only ``DSF_PRODUCT`` is required),
+        wires the real GitHub client and the OpenTelemetry tracer
+        (:func:`dsf.observability.tracing.build_tracer`, which degrades to the
+        fake tracer when OpenTelemetry is not installed), and keeps
+        model/memory/config on fakes behind the deferred-adapter seam (SP3b).
+        The resolved ``product``/``azure`` settings are carried on the bundle.
     """
     if mode == "local":
         return Services(
@@ -106,6 +117,21 @@ def build_services(mode: str = "local") -> Services:
             github=RealGitHubClient(),
             tracer=FakeTracer(),
         )
+    if mode == "azure":
+        from dsf.github_client import RealGitHubClient
+        from dsf.observability.tracing import build_tracer
+
+        settings = AzureRuntimeSettings.from_env(env if env is not None else os.environ)
+        return Services(
+            mode=mode,
+            model=FakeModelClient(),
+            memory=FakeMemoryStore(),
+            config=FakeConfigStore.from_defaults(),
+            github=RealGitHubClient(),
+            tracer=build_tracer("azure"),
+            product=settings.product,
+            azure=settings,
+        )
     raise NotImplementedError(
-        f"mode {mode!r} is not yet supported (available: 'local', 'gh')."
+        f"mode {mode!r} is not yet supported (available: 'local', 'gh', 'azure')."
     )

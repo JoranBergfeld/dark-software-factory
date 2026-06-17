@@ -87,7 +87,37 @@ def test_build_services_gh_mode_uses_real_github_client():
 
 def test_build_services_unknown_mode_raises():
     with pytest.raises(NotImplementedError):
-        build_services("azure")
+        build_services("gcp")
+
+
+def test_build_services_azure_wires_real_github_and_settings():
+    from dsf.github_client import RealGitHubClient
+
+    services = build_services("azure", env={"DSF_PRODUCT": "microbi"})
+    assert services.mode == "azure"
+    assert isinstance(services.github, RealGitHubClient)
+    assert services.product == "microbi"
+    assert services.azure is not None
+    assert services.azure.product == "microbi"
+    # model/memory/config remain fakes (the deferred-adapter seam):
+    assert isinstance(services.model, FakeModelClient)
+    assert isinstance(services.memory, FakeMemoryStore)
+    assert isinstance(services.config, FakeConfigStore)
+    # tracer comes from build_tracer("azure") and still satisfies the port:
+    assert isinstance(services.tracer, Tracer)
+
+
+def test_build_services_azure_missing_product_raises_value_error():
+    with pytest.raises(ValueError):
+        build_services("azure", env={})
+
+
+def test_cli_azure_mode_without_product_exits_cleanly(capsys, monkeypatch):
+    monkeypatch.delenv("DSF_PRODUCT", raising=False)
+    with pytest.raises(SystemExit) as exc_info:
+        main(["--mode", "azure", "sweep"])
+    assert exc_info.value.code == 1
+    assert "DSF_PRODUCT" in capsys.readouterr().err
 
 
 def test_cli_run_dry_run_with_signal(tmp_path, capsys):
@@ -130,11 +160,10 @@ def test_cli_serve_commands_launch_uvicorn(monkeypatch):
 
 
 def test_cli_unsupported_mode_exits_cleanly(capsys):
-    """--mode azure must exit non-zero with a clear message, no traceback."""
-    # _get_services calls sys.exit(1) for NotImplementedError; catch SystemExit here.
+    """An unsupported --mode must exit non-zero with a clear message, no traceback."""
     with pytest.raises(SystemExit) as exc_info:
-        main(["--mode", "azure", "sweep"])
+        main(["--mode", "gcp", "sweep"])
     assert exc_info.value.code == 1
     err = capsys.readouterr().err
     assert "not yet supported" in err
-    assert "azure" in err
+    assert "gcp" in err

@@ -25,10 +25,10 @@ def _print_run_summary(run) -> None:
 
 
 def _get_services(mode: str):
-    """Build a services bundle or exit cleanly on unsupported modes."""
+    """Build a services bundle or exit cleanly on unsupported/misconfigured modes."""
     try:
         return build_services(mode)
-    except NotImplementedError as exc:
+    except (NotImplementedError, ValueError) as exc:
         print(f"[dsf] error: {exc}", file=sys.stderr)
         sys.exit(1)
 
@@ -159,8 +159,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--mode",
         default="local",
         help=(
-            "service mode: 'local' (in-memory fakes, default) or 'gh' "
-            "(real GitHub client via gh CLI). Other modes are not yet supported."
+            "service mode: 'local' (in-memory fakes, default), 'gh' (real GitHub "
+            "client via gh CLI), or 'azure' (per-product runtime; requires "
+            "DSF_PRODUCT). Other modes are not yet supported."
         ),
     )
     sub = parser.add_subparsers(dest="command", required=True)
