@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import pytest
+from pydantic import ValidationError
+
 from dsf.instance.spec import (
+    AzureProvisionResult,
     InstanceManifest,
     InstancePlan,
     InstanceSpec,
@@ -70,3 +74,35 @@ def test_manifest_round_trip(tmp_path):
     assert loaded.spec.product == "demo"
     assert loaded.spec.github_repo() == "acme/demo"
     assert loaded.plan.steps[0].name == "write_config"
+
+
+def test_instance_spec_azure_defaults():
+    spec = InstanceSpec(product="demo", owner="acme")
+    assert spec.name_prefix == "dsf"
+    assert spec.environment == "dev"
+    assert spec.location == "swedencentral"
+    assert spec.workload_principal_id == ""
+    assert spec.deployment_name() == "dsf-demo"
+
+
+def test_instance_spec_rejects_bad_name_prefix():
+    with pytest.raises(ValidationError):
+        InstanceSpec(product="demo", owner="acme", name_prefix="1bad")
+
+
+def test_azure_provision_result_round_trips_in_manifest(tmp_path):
+    spec = InstanceSpec(product="demo", owner="acme")
+    plan = InstancePlan(product="demo", steps=[])
+    azure = AzureProvisionResult(
+        resource_group="rg-dsf-demo",
+        deployment_name="dsf-demo",
+        location="swedencentral",
+        outputs={"cosmosEndpoint": "https://x"},
+    )
+    manifest = InstanceManifest(spec=spec, plan=plan, executed=True, azure=azure)
+    write_manifest(manifest, repo_root=tmp_path)
+
+    loaded = read_manifest("demo", repo_root=tmp_path)
+    assert loaded.azure is not None
+    assert loaded.azure.outputs["cosmosEndpoint"] == "https://x"
+    assert loaded.azure.deployment_name == "dsf-demo"

@@ -8,9 +8,12 @@ factory. A :class:`ProvisionStep` is a single ordered action; an
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+_NAME_PREFIX_RE = re.compile(r"^[a-z][a-z0-9]{2,11}$")
 
 
 def default_label_taxonomy() -> dict[str, list[str]]:
@@ -31,7 +34,20 @@ class InstanceSpec(BaseModel):
     visibility: str = "private"
     runtime_target: str = "homelab"
     confidence_threshold: float = 0.6
+    name_prefix: str = "dsf"
+    environment: str = "dev"
+    location: str = "swedencentral"
+    workload_principal_id: str = ""
     label_taxonomy: dict[str, list[str]] = Field(default_factory=default_label_taxonomy)
+
+    @field_validator("name_prefix")
+    @classmethod
+    def _validate_name_prefix(cls, value: str) -> str:
+        if not _NAME_PREFIX_RE.match(value):
+            raise ValueError(
+                f"name_prefix must be 3-12 chars, lowercase alnum, start with a letter: {value!r}"
+            )
+        return value
 
     def resolved_repo(self) -> str:
         """Repository name (defaults to the product key)."""
@@ -44,6 +60,10 @@ class InstanceSpec(BaseModel):
     def resource_group(self) -> str:
         """Dedicated Azure resource-group name for this instance."""
         return f"rg-dsf-{self.product}"
+
+    def deployment_name(self) -> str:
+        """ARM deployment name for this instance's Azure provisioning."""
+        return f"dsf-{self.product}"
 
 
 class ProvisionStep(BaseModel):
@@ -65,12 +85,22 @@ class InstancePlan(BaseModel):
     steps: list[ProvisionStep]
 
 
+class AzureProvisionResult(BaseModel):
+    """Captured outcome of the Azure deployment for one instance."""
+
+    resource_group: str
+    deployment_name: str
+    location: str
+    outputs: dict[str, str] = Field(default_factory=dict)
+
+
 class InstanceManifest(BaseModel):
     """Persisted record of an instance: spec + plan + execution status."""
 
     spec: InstanceSpec
     plan: InstancePlan
     executed: bool = False
+    azure: AzureProvisionResult | None = None
 
 
 def _default_repo_root() -> Path:
