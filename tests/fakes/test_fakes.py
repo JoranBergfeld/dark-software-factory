@@ -6,14 +6,12 @@ import time
 
 from dsf.fakes import (
     FakeConfigStore,
-    FakeGitHubClient,
     FakeMemoryStore,
     FakeModelClient,
     FakeSourceBackend,
 )
 from dsf.ports import (
     ConfigStore,
-    GitHubClient,
     MemoryStore,
     ModelClient,
     SourceBackend,
@@ -24,7 +22,6 @@ def test_fakes_satisfy_protocols():
     assert isinstance(FakeModelClient(), ModelClient)
     assert isinstance(FakeMemoryStore(), MemoryStore)
     assert isinstance(FakeConfigStore.from_defaults(), ConfigStore)
-    assert isinstance(FakeGitHubClient(), GitHubClient)
     assert isinstance(FakeSourceBackend(), SourceBackend)
 
 

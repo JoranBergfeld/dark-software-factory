@@ -10,10 +10,10 @@ from pydantic import BaseModel
 
 from dsf.fakes import (
     FakeConfigStore,
-    FakeGitHubClient,
     FakeMemoryStore,
     FakeModelClient,
 )
+from dsf.github_client import RecordingGitHubClient
 from dsf.observability.tracing import NoOpTracer
 from dsf.ports import (
     ConfigStore,
@@ -103,7 +103,7 @@ def build_services(
             model=FakeModelClient(),
             memory=FakeMemoryStore(),
             config=FakeConfigStore.from_defaults(),
-            github=FakeGitHubClient(),
+            github=RecordingGitHubClient(),
             tracer=NoOpTracer(),
         )
     if mode == "gh":

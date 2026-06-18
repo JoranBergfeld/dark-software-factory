@@ -7,11 +7,10 @@ import pytest
 from dsf.container import AzureRuntimeSettings, Services, build_services
 from dsf.fakes import (
     FakeConfigStore,
-    FakeGitHubClient,
     FakeMemoryStore,
     FakeModelClient,
 )
-from dsf.github_client import RealGitHubClient
+from dsf.github_client import RealGitHubClient, RecordingGitHubClient
 from dsf.observability.tracing import NoOpTracer
 from dsf.ports import ConfigStore, GitHubClient, MemoryStore, ModelClient, Tracer
 
@@ -23,7 +22,7 @@ def test_build_services_local_wires_fakes():
     assert isinstance(services.model, FakeModelClient)
     assert isinstance(services.memory, FakeMemoryStore)
     assert isinstance(services.config, FakeConfigStore)
-    assert isinstance(services.github, FakeGitHubClient)
+    assert isinstance(services.github, RecordingGitHubClient)
     assert isinstance(services.tracer, NoOpTracer)
 
 
