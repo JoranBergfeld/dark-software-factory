@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from dsf.agents.base import SourceAgent
+from dsf.config.store import InMemoryConfigStore
 from dsf.contracts.enums import SourceKind
 from dsf.contracts.models import EvidenceItem, Provenance
-from dsf.fakes import FakeConfigStore, FakeSourceBackend
+from tests.support.source_double import RecordingSourceBackend
 
 
 def _evidence() -> EvidenceItem:
@@ -18,11 +19,11 @@ def _evidence() -> EvidenceItem:
 
 
 async def test_enabled_agent_delegates_to_backend():
-    backend = FakeSourceBackend([_evidence()])
+    backend = RecordingSourceBackend([_evidence()])
     agent = SourceAgent(
         kind=SourceKind.GRAFANA,
         backend=backend,
-        config=FakeConfigStore.from_defaults(),
+        config=InMemoryConfigStore.from_defaults(),
     )
     resp = await agent.gather({"product_hints": ["beta"]})
     assert resp.degraded is False
@@ -32,9 +33,9 @@ async def test_enabled_agent_delegates_to_backend():
 
 
 async def test_disabled_agent_returns_degraded_empty():
-    cfg = FakeConfigStore.from_defaults()
+    cfg = InMemoryConfigStore.from_defaults()
     cfg.set_flag("agent.GRAFANA", False)
-    backend = FakeSourceBackend([_evidence()])
+    backend = RecordingSourceBackend([_evidence()])
     agent = SourceAgent(kind=SourceKind.GRAFANA, backend=backend, config=cfg)
 
     resp = await agent.gather({})
@@ -53,7 +54,7 @@ async def test_backend_exception_degrades():
     agent = SourceAgent(
         kind=SourceKind.SENTRY,
         backend=_Boom(),
-        config=FakeConfigStore.from_defaults(),
+        config=InMemoryConfigStore.from_defaults(),
     )
     resp = await agent.gather({})
     assert resp.degraded is True
@@ -62,8 +63,8 @@ async def test_backend_exception_degrades():
 
 
 def test_card_reflects_enabled_flag():
-    cfg = FakeConfigStore.from_defaults()
-    agent = SourceAgent(kind=SourceKind.WEBIQ, backend=FakeSourceBackend(), config=cfg)
+    cfg = InMemoryConfigStore.from_defaults()
+    agent = SourceAgent(kind=SourceKind.WEBIQ, backend=RecordingSourceBackend(), config=cfg)
     assert agent.card().enabled is True
     cfg.set_flag("agent.WEBIQ", False)
     assert agent.card().enabled is False
@@ -79,7 +80,7 @@ async def test_backend_exception_does_not_leak_sensitive_info():
     agent = SourceAgent(
         kind=SourceKind.SENTRY,
         backend=_BoomWithURL(),
-        config=FakeConfigStore.from_defaults(),
+        config=InMemoryConfigStore.from_defaults(),
     )
     resp = await agent.gather({})
     assert resp.degraded is True
@@ -98,7 +99,7 @@ async def test_keyboard_interrupt_propagates_through_gather():
     agent = SourceAgent(
         kind=SourceKind.SENTRY,
         backend=_KI(),
-        config=FakeConfigStore.from_defaults(),
+        config=InMemoryConfigStore.from_defaults(),
     )
     import pytest
     with pytest.raises(KeyboardInterrupt):

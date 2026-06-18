@@ -6,11 +6,11 @@ import json
 from pathlib import Path
 
 from dsf.config.flags import weights
+from dsf.config.store import InMemoryConfigStore
 from dsf.container import build_services
 from dsf.contracts.enums import Verdict
 from dsf.contracts.models import CouncilVerdict, CriticScore
 from dsf.council.critics import strategic_fit
-from dsf.fakes import FakeConfigStore
 from dsf.learning.calibration import proposed_weight_update
 from dsf.learning.feedback_watcher import PrOutcome, record_outcome
 from dsf.memory.consolidation import consolidate_run
@@ -159,12 +159,12 @@ def test_seeded_weight_from_config_changes_weighted_score():
     ]
 
     # Equal weights: (1*0.9 + 1*0.3) / 2 = 0.6
-    cfg_equal = FakeConfigStore({"weight": {"grounding": 1.0, "value": 1.0}})
+    cfg_equal = InMemoryConfigStore({"weight": {"grounding": 1.0, "value": 1.0}})
     w_equal = weights(cfg_equal, ["grounding", "value"])
     v_equal = CouncilVerdict.from_scores("p1", scores, 0.9, w_equal)
 
     # Boosted grounding: (2*0.9 + 1*0.3) / 3 = 0.7
-    cfg_boosted = FakeConfigStore({"weight": {"grounding": 2.0, "value": 1.0}})
+    cfg_boosted = InMemoryConfigStore({"weight": {"grounding": 2.0, "value": 1.0}})
     w_boosted = weights(cfg_boosted, ["grounding", "value"])
     v_boosted = CouncilVerdict.from_scores("p1", scores, 0.9, w_boosted)
 
@@ -175,8 +175,8 @@ def test_seeded_weight_from_config_changes_weighted_score():
 
 
 def test_defaults_json_weight_block_is_readable():
-    """defaults.json has a top-level weight block; FakeConfigStore reads it correctly."""
-    cfg = FakeConfigStore.from_defaults()
+    """defaults.json has a top-level weight block; InMemoryConfigStore reads it correctly."""
+    cfg = InMemoryConfigStore.from_defaults()
     result = weights(cfg, ["grounding", "value", "strategic_fit", "cost"])
     for name, w in result.items():
         assert w == 1.0, f"Expected weight 1.0 for {name}, got {w}"

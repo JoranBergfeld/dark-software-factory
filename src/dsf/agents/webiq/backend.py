@@ -3,7 +3,7 @@
 Two interchangeable implementations of :class:`dsf.ports.SourceBackend` for the
 external/industry web-research source:
 
-* :class:`WebIqFakeBackend` — local/dry-run. Loads canned, EvidenceItem-shaped
+* :class:`WebIqFixtureBackend` — local/dry-run. Loads canned, EvidenceItem-shaped
   records from ``tests/fixtures/webiq_evidence.json`` and never touches the
   network. Used by default in :mod:`dsf.agents.webiq.main`.
 * :class:`WebIqMcpBackend` — azure mode. Derives industry/competitive research
@@ -47,12 +47,12 @@ _FIXTURE_PATH = (
 )
 
 
-class WebIqFakeBackend:
+class WebIqFixtureBackend:
     """Local/dry-run WebIQ backend — loads canned evidence from a fixture.
 
-    Shaped like :class:`dsf.fakes.source.FakeSourceBackend`: records each call
-    on ``.calls`` and satisfies the :class:`~dsf.ports.SourceBackend` protocol.
-    Never performs any network/web I/O.
+    Records each call on ``.calls`` and satisfies the
+    :class:`~dsf.ports.SourceBackend` protocol. Never performs any network/web
+    I/O.
     """
 
     def __init__(self, fixture_path: Path | None = None) -> None:
@@ -113,7 +113,7 @@ class WebIqMcpBackend:
         """Run industry web research via the injected client and map findings.
 
         For each derived query, ``search`` is invoked (in azure mode this is the
-        web search/fetch tool; in tests a tiny fake returning canned result
+        web search/fetch tool; in tests a tiny injected client returning canned result
         dicts). Each result is mapped to one EvidenceItem whose ``raw_citation``
         is the external source URL and whose provenance records the exact query
         used.
@@ -148,4 +148,4 @@ class WebIqMcpBackend:
         return evidence
 
 
-__all__ = ["WebIqFakeBackend", "WebIqMcpBackend"]
+__all__ = ["WebIqFixtureBackend", "WebIqMcpBackend"]

@@ -5,13 +5,13 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from dsf.agents.sentry.backend import SentryFakeBackend, SentryMcpBackend
+from dsf.agents.sentry.backend import SentryFixtureBackend, SentryMcpBackend
 from dsf.agents.sentry.main import app, build_agent
 from dsf.contracts.enums import SourceKind
 
 
 async def test_sentry_fake_returns_grounded_evidence():
-    backend = SentryFakeBackend()
+    backend = SentryFixtureBackend()
     out = await backend.gather({"product_hints": ["microbi"]})
 
     assert len(out) >= 1

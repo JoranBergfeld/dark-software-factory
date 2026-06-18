@@ -9,7 +9,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from dsf.agents.sentry.backend import SentryFakeBackend, SentryMcpBackend
+from dsf.agents.sentry.backend import SentryFixtureBackend, SentryMcpBackend
 from dsf.agents.sentry.client import build_sentry_client_from_env
 from dsf.agents.sentry.main import build_agent
 
@@ -84,12 +84,12 @@ def _token(monkeypatch):
 
 def test_build_agent_local_uses_fake(monkeypatch):
     monkeypatch.delenv("DSF_MODE", raising=False)
-    assert isinstance(build_agent(mode="local").backend, SentryFakeBackend)
+    assert isinstance(build_agent(mode="local").backend, SentryFixtureBackend)
 
 
 def test_build_agent_default_unset_mode_is_fake(monkeypatch):
     monkeypatch.delenv("DSF_MODE", raising=False)
-    assert isinstance(build_agent().backend, SentryFakeBackend)
+    assert isinstance(build_agent().backend, SentryFixtureBackend)
 
 
 def test_build_agent_live_uses_mcp(monkeypatch):

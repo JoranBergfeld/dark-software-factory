@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import pytest
 
-from dsf.agents.tickets.backend import TicketsFakeBackend, TicketsMcpBackend
+from dsf.agents.tickets.backend import TicketsFixtureBackend, TicketsMcpBackend
 from dsf.agents.tickets.main import app, build_agent
 from dsf.contracts.enums import SourceKind
 
 
 async def test_tickets_fake_returns_empty():
-    backend = TicketsFakeBackend()
+    backend = TicketsFixtureBackend()
     out = await backend.gather({"product_hints": ["alpha"]})
     assert out == []
     assert backend.calls == [{"product_hints": ["alpha"]}]

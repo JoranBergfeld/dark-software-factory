@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 from dsf.config.registry import Product, load_registry, route_product
 from dsf.contracts.enums import ProposalKind, RunStatus
+from dsf.contracts.handoff import HANDOFF_LABEL
 from dsf.contracts.models import RoutedIssue
 from dsf.observability.tracing import span_attrs_for_run
 from dsf.orchestrator.blackboard import Blackboard
@@ -59,6 +60,9 @@ def _labels_for(proposal: Proposal, product: Product) -> list[str]:
     sev = _severity_label(proposal, taxonomy.get("severity", []))
     if sev:
         labels.append(sev)
+
+    # The universal council->squad handoff signal: squad triage keys on this.
+    labels.append(HANDOFF_LABEL)
 
     return labels
 

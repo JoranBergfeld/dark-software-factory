@@ -22,8 +22,10 @@ council → routing → filing — executes deterministically with **no LLM and 
 `DSF_DRY_RUN=true` (default) means the filing station records the issue it *would*
 file but never calls GitHub.
 
-Azure implementations and IaC are authored but **not invoked** by the local flow.
-They require your subscription, credentials, and explicit `azd up`.
+Azure implementations and IaC are authored but **not invoked** by the *local* flow.
+The Azure paths are reached deliberately: `dsf new <product> --execute` provisions a
+per-product RG (SP2) and `--mode azure` runs the orchestrator against that product's
+deployment outputs (SP3). Both require your subscription, credentials, and explicit opt-in.
 
 | Capability | Local (now) | Azure (when you deploy) |
 |---|---|---|
@@ -39,20 +41,61 @@ They require your subscription, credentials, and explicit `azd up`.
 
 ```bash
 # Run the line for one signal file (dry-run):
-uv run python -m dsf.cli run --dry-run --signal tests/fixtures/sample_signal.json
+uv run dsfctl run --dry-run --signal tests/fixtures/sample_signal.json
 
 # Scheduled sweep across enabled sources:
-uv run python -m dsf.cli sweep
+uv run dsfctl sweep
 
 # Serve a source agent over A2A (FastAPI):
-uv run python -m dsf.cli serve-agent --kind sentry --port 8080
+uv run dsfctl serve-agent --kind sentry --port 8080
 
 # Serve the Control Center UI (toggles, thresholds, dry-run kill switch):
-uv run python -m dsf.cli control-center --port 8081
+uv run dsfctl control-center --port 8081
 # then open http://localhost:8081
 
 # Serve the signal-ingestion endpoint (POST /ingest):
 uv run uvicorn dsf.triggers.app:app --port 8082
+```
+
+## Creating a product instance (SP1–SP5)
+
+`dsf new` scaffolds an isolated product factory. `--name-prefix` is **required**;
+it is sanitized and randomized into a <=12-char Azure resource prefix (persisted in
+the manifest and reused on re-runs). Under `--execute`, repo creation + Coding Squad
+init, **the dedicated Azure resource group + Bicep deployment**, **rendering +
+deploying the product's feature-council runtime**, and **rendering + deploying the
+product's SRE agent runtime** (both Azure Container Apps) are all real.
+
+```bash
+# Preview the plan (no side effects):
+uv run dsf new --product microbi --owner your-org --name-prefix microbi
+
+# Preview AND write the instance manifest to config/instances/microbi.json:
+uv run dsf new --product microbi --owner your-org --name-prefix microbi --write-plan
+
+# Execute: create repo + init Squad + provision Azure + render/deploy council
+# (needs gh, @bradygaster/squad-cli, and az for the Container App council):
+uv run dsf new --product microbi --owner your-org --name-prefix microbi --execute
+```
+
+### The rendered per-product council runtime
+
+`deploy_council` renders an Azure Container Apps descriptor to
+`config/instances/<product>.runtime/` (a `containerapp.yaml` plus a resolved
+`.env.orchestrator` populated from the product's Azure deployment outputs — endpoints
+only; **secrets stay in Key Vault**, fetched at runtime via the user-assigned managed
+identity, ADR 0004). The orchestrator Container App itself is created by `main.bicep`;
+under `--execute`, `dsf new` rolls its image with
+`az containerapp update --name dsf-orchestrator-<product> --image <runtimeImage>`.
+
+The runtime image is `src/dsf/runtime/Dockerfile`; its entrypoint is the orchestrator in
+**azure mode**, which reads endpoints from the rendered env and emits traces to
+Application Insights (the OTel tracer is wired automatically when `DSF_MODE=azure`; it
+degrades to a no-op fake if OpenTelemetry isn't importable). To run it by hand:
+
+```bash
+# global --mode MUST precede the subcommand:
+DSF_PRODUCT=microbi uv run dsfctl --mode azure serve-orchestrator
 ```
 
 ## The Control Center
@@ -69,6 +112,54 @@ behavior — it flips feature flags that take effect on the next run with no red
 The Grafana dashboard (`src/dsf/observability/grafana/dashboard.json`) is the
 read-only observability surface; import it into Grafana once App Insights is wired.
 
+## Council → Squad handoff
+
+The council files issues into the product repo; the coding squad triages and
+implements them. The contract is one system-level label —
+`dsf.contracts.handoff.HANDOFF_LABEL` (`squad:ready`) — that S6 stamps on **every**
+routed issue and that `squad triage` filters on (ADR 0007).
+
+Provisioning wires this end to end: `create_labels` idempotently creates the
+product's taxonomy labels + `squad:ready` in the repo (so filing never fails on a
+missing label), and `squad triage --execute --label squad:ready` dispatches the
+Copilot coding agent against council-filed issues. The full closed loop:
+
+```
+council files issue (squad:ready) → squad triage → Copilot agent → PR →
+human review → council feedback-watcher → Lesson → next council run
+```
+
+## SRE agent (fix-forward)
+
+The SRE agent (`dsf.sre`) is the production-watching corner of the factory. One
+sweep runs `observe → detect → fix_forward → reflect`:
+
+- **observe** — gathers `EvidenceItem`s from the same Sentry/Grafana backends the
+  council uses (offline fixture backends by default), degrading past any backend
+  that is disabled or fails.
+- **detect** — keeps evidence above a confidence threshold, groups it by product,
+  and assigns a severity + a stable fingerprint.
+- **fix_forward** — routes each incident to its product repo and files a GitHub
+  issue labelled `sre`, a severity, **and `squad:ready`** — so the *same*
+  `squad triage --execute` picks it up. Repeated incidents dedup by fingerprint;
+  a `--dry-run` files nothing and indexes nothing (a true preview).
+- **reflect** — records the incident and a product-scoped lesson for the loop.
+
+```
+prod telemetry → SRE observe → detect → fix_forward → issue (sre + squad:ready)
+→ squad triage → Copilot agent → PR        ↘ reflect → Lesson → next sweep/run
+```
+
+Run one sweep in-process (fully offline in local mode):
+
+```bash
+uv run dsfctl sre-sweep --dry-run --product microbi   # preview, files nothing
+uv run dsfctl sre-sweep --product microbi             # file-forward for real (gh/azure mode)
+```
+
+In azure mode the provisioned `dsf-sre-<product>` Container App runs the sweep on
+a schedule (ADR 0008).
+
 ## The learning loop
 
 When a downstream spec PR is approved/rejected/edited, post the GitHub PR webhook to
@@ -76,33 +167,38 @@ the feedback watcher (`dsf.learning.feedback_watcher.handle_pr_event`). It disti
 verdict + proposed-vs-final spec diff into a product-scoped **Lesson** (retrieved by the
 synthesizer/critics on the next run) and accumulates calibration data for council weights.
 
-## Provisioning Azure + running in the homelab (do this awake — it costs money)
+## Provisioning Azure + running the runtime (do this awake — it costs money)
 
-The topology (ADR 0002): Azure hosts **backing services only**; the agent/orchestrator
-runtime runs in **your homelab** and reaches Azure **outbound**. No container is deployed
-to Azure.
+The topology (ADR 0004): Azure hosts the **backing services** and the **runtime** — the
+orchestrator runs as an Azure Container App in the same resource group, authenticating
+with a user-assigned managed identity and reaching its sources over their authenticated
+endpoints. No inbound ingress.
 
-**1. Provision the Azure backing services** (`infra/README.md` has full detail):
+**1. Provision the backing services + runtime** (`infra/README.md` has full detail):
 ```bash
 az login && az group create -n rg-dsf-dev -l swedencentral
 az deployment group what-if -g rg-dsf-dev -f infra/main.bicep -p @infra/main.parameters.json
 az deployment group create  -g rg-dsf-dev -f infra/main.bicep -p @infra/main.parameters.json \
-  -p workloadPrincipalId="<homelab-service-principal-object-id>"
+  -p product=microbi -p runtimeImage="ghcr.io/<owner>/dsf-runtime:latest"
 ```
-This creates Cosmos, App Configuration, Key Vault, App Insights, and the Event Grid →
-Service Bus ingestion buffer — and grants your homelab SP the data-plane roles.
+This creates Cosmos, App Configuration, Key Vault, App Insights, the Event Grid →
+Service Bus ingestion buffer, the **user-assigned identity** (granted the data-plane
+roles), and the **Container Apps environment + `dsf-orchestrator-microbi` app**.
 
 **2. Wire CI (optional but recommended):** set repo variables `AZURE_CLIENT_ID`,
 `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_RESOURCE_GROUP` to activate the
 `infra-whatif` pipeline's full preview on every infra change (OIDC, no secrets). The
 `agents-images` pipeline already publishes each agent to `ghcr.io/<owner>/dsf-agent-<kind>`.
 
-**3. Host the runtime in the homelab (your choice of orchestration):** pull the agent
-images from GHCR (or build locally), set `DSF_MODE=azure`, authenticate with the homelab
-service principal, and point config at the Bicep outputs (Cosmos/App Config/Key Vault/
-App Insights endpoints). For real-time interrupts, poll the Service Bus `signals` queue
-outbound; otherwise scheduled sweeps need nothing inbound. `infra/compose.homelab.yml`
-shows the Grafana agent + tunnel as a starting point.
+**3. Roll the orchestrator image:** publish the runtime image (`src/dsf/runtime/Dockerfile`)
+to GHCR, then update the Container App in place:
+```bash
+az containerapp update -g rg-dsf-dev -n dsf-orchestrator-microbi \
+  --image ghcr.io/<owner>/dsf-runtime:latest
+```
+The app runs in **azure mode** with `DSF_MODE=azure` and `AZURE_CLIENT_ID` set to the
+identity, reading endpoints from its env and polling the Service Bus `signals` queue
+outbound for real-time interrupts; scheduled sweeps need nothing inbound.
 
 **4. Go live carefully:** keep `dry_run` ON in the Control Center until you trust a few
 real runs, then turn it off to begin live filing.

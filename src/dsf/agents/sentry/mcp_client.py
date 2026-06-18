@@ -1,8 +1,8 @@
 """Sentry MCP-server backend client.
 
 Lets the Sentry agent gather evidence by speaking the **Model Context Protocol**
-to a Sentry MCP server (e.g. one running in a homelab over Streamable HTTP),
-rather than calling the Sentry REST API directly. This feeds the existing
+to a Sentry MCP server (e.g. one reachable over Streamable HTTP), rather than
+calling the Sentry REST API directly. This feeds the existing
 :class:`dsf.agents.sentry.backend.SentryMcpBackend` — it supplies the injected
 ``mcp_call`` it expects.
 
@@ -77,7 +77,7 @@ def parse_search_issues(text: str) -> list[dict[str, Any]]:
 async def _default_tool_caller(tool_name: str, arguments: dict) -> str:
     """Open a Streamable-HTTP MCP session, call ``tool_name``, return its text."""
     # Imported lazily so importing this module never requires the mcp SDK at
-    # collection time and the fake/REST paths stay dependency-light.
+    # collection time and the offline/REST paths stay dependency-light.
     from mcp import ClientSession
     from mcp.client.streamable_http import streamablehttp_client
 

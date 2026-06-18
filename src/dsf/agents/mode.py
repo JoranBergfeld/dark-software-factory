@@ -2,7 +2,7 @@
 
 Each source agent's ``build_agent()`` selects its backend by mode:
 
-* ``local`` (default) -> the deterministic fixture-backed fake backend.
+* ``local`` (default) -> the deterministic fixture-backed backend.
 * anything else (e.g. ``live`` / ``azure``) -> the real source backend, with a
   client constructed from environment variables.
 

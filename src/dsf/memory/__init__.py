@@ -2,6 +2,6 @@
 
 from dsf.memory.consolidation import Lesson, consolidate_run
 from dsf.memory.dedup import is_duplicate
-from dsf.memory.store import Memory
+from dsf.memory.store import InMemoryMemoryStore, Memory
 
-__all__ = ["Lesson", "Memory", "consolidate_run", "is_duplicate"]
+__all__ = ["InMemoryMemoryStore", "Lesson", "Memory", "consolidate_run", "is_duplicate"]

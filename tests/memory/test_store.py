@@ -1,0 +1,85 @@
+"""InMemoryMemoryStore behavior — tiers, TTL, eviction, and key hygiene."""
+
+from __future__ import annotations
+
+import time
+
+from dsf.memory import InMemoryMemoryStore
+from dsf.ports import MemoryStore
+
+
+def test_inmemory_store_satisfies_protocol():
+    assert isinstance(InMemoryMemoryStore(), MemoryStore)
+
+
+async def test_memory_store_working_and_records():
+    mem = InMemoryMemoryStore()
+    await mem.put_working("k", {"x": 1})
+    assert await mem.get_working("k") == {"x": 1}
+    assert await mem.get_working("missing") is None
+
+    await mem.put_record({"kind": "proposal", "text": "add retry logic to client"})
+    await mem.put_record({"kind": "proposal", "text": "fix unrelated typo"})
+    await mem.put_record({"kind": "other", "text": "add retry logic to client"})
+
+    hits = await mem.query_similar("add retry logic to the http client", "proposal", k=5)
+    assert hits  # only 'proposal' kind, ranked by overlap
+    assert all(h["kind"] == "proposal" for h in hits)
+    assert hits[0]["similarity"] >= hits[-1]["similarity"]
+    assert "retry" in hits[0]["text"]
+
+
+async def test_memory_store_lessons():
+    mem = InMemoryMemoryStore()
+    await mem.put_lesson({"product": "alpha", "text": "lesson one"})
+    await mem.put_lesson({"product": "beta", "text": "other"})
+    lessons = await mem.get_lessons("alpha")
+    assert len(lessons) == 1
+    assert lessons[0]["text"] == "lesson one"
+
+
+async def test_memory_store_record_ttl_expires():
+    """Records with a TTL are invisible to query_similar after they expire."""
+    mem = InMemoryMemoryStore()
+    # Insert a record with a very short TTL.
+    await mem.put_record({"kind": "sig", "text": "checkout error"}, ttl=0.01)
+    # Immediately visible.
+    hits = await mem.query_similar("checkout error", "sig", k=1)
+    assert hits and hits[0]["similarity"] >= 0.8
+    # After expiry it must no longer appear.
+    time.sleep(0.02)
+    hits_after = await mem.query_similar("checkout error", "sig", k=1)
+    assert not hits_after
+
+
+async def test_memory_store_working_ttl_expires():
+    """Working-tier entries expire after their ttl."""
+    mem = InMemoryMemoryStore()
+    await mem.put_working("k", "value", ttl=0.01)
+    assert await mem.get_working("k") == "value"
+    time.sleep(0.02)
+    assert await mem.get_working("k") is None
+
+
+async def test_memory_store_max_records_eviction():
+    """Records beyond max_records are evicted (oldest first) to bound growth."""
+    mem = InMemoryMemoryStore(max_records=5)
+    for i in range(7):
+        await mem.put_record({"kind": "evt", "text": f"event {i}"})
+    # Only the 5 most recent should survive.
+    assert len(mem._records) == 5
+    texts = {r["text"] for r in mem._records}
+    assert "event 0" not in texts
+    assert "event 1" not in texts
+    assert "event 6" in texts
+
+
+async def test_memory_store_query_similar_strips_internal_keys():
+    """_inserted_at and _ttl must not appear in query_similar results."""
+    mem = InMemoryMemoryStore()
+    await mem.put_record({"kind": "k", "text": "hello world"}, ttl=9999)
+    hits = await mem.query_similar("hello world", "k", k=1)
+    assert hits
+    assert "_inserted_at" not in hits[0]
+    assert "_ttl" not in hits[0]
+    assert "similarity" in hits[0]

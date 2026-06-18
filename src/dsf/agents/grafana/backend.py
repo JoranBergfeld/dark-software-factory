@@ -4,13 +4,13 @@ The Grafana source surfaces metric/log anomalies (latency p99 spikes,
 saturation, error-rate jumps, log patterns) as grounded
 :class:`~dsf.contracts.models.EvidenceItem` objects.
 
-Deployment note: in production this agent runs inside a homelab behind NAT
-(per the design); it dials *out* to the orchestrator rather than being reached
-inbound. That is an operational detail only — it does not change any code here.
+Deployment note: in production this agent runs as an Azure Container App alongside
+the orchestrator (ADR 0004). That is an operational detail only — it does not change
+any code here.
 
 Two backends mirror the project's local/azure split:
 
-* :class:`GrafanaFakeBackend` — deterministic, loads a JSON fixture; used in
+* :class:`GrafanaFixtureBackend` — deterministic, loads a JSON fixture; used in
   local/dry-run mode and tests. Never touches the network.
 * :class:`GrafanaMcpBackend` — azure mode; calls Grafana via an injected
   ``mcp_call`` client and maps the results onto evidence. Never touches the
@@ -39,7 +39,7 @@ def _fixture_path() -> Path:
     return here.parents[4] / "tests" / "fixtures" / "grafana_evidence.json"
 
 
-class GrafanaFakeBackend:
+class GrafanaFixtureBackend:
     """Local/dry-run Grafana backend — replays a JSON fixture.
 
     Satisfies the :class:`~dsf.ports.SourceBackend` protocol. Records each call
@@ -129,4 +129,4 @@ class GrafanaMcpBackend:
         return evidence
 
 
-__all__ = ["GrafanaFakeBackend", "GrafanaMcpBackend"]
+__all__ = ["GrafanaFixtureBackend", "GrafanaMcpBackend"]

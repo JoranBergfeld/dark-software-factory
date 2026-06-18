@@ -9,7 +9,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from dsf.agents.webiq.backend import WebIqFakeBackend, WebIqMcpBackend
+from dsf.agents.webiq.backend import WebIqFixtureBackend, WebIqMcpBackend
 from dsf.agents.webiq.client import build_webiq_client_from_env
 from dsf.agents.webiq.main import build_agent
 
@@ -58,12 +58,12 @@ async def test_search_maps_results_and_hits_tavily():
 
 def test_build_agent_local_uses_fake(monkeypatch):
     monkeypatch.delenv("DSF_MODE", raising=False)
-    assert isinstance(build_agent(mode="local").backend, WebIqFakeBackend)
+    assert isinstance(build_agent(mode="local").backend, WebIqFixtureBackend)
 
 
 def test_build_agent_default_unset_mode_is_fake(monkeypatch):
     monkeypatch.delenv("DSF_MODE", raising=False)
-    assert isinstance(build_agent().backend, WebIqFakeBackend)
+    assert isinstance(build_agent().backend, WebIqFixtureBackend)
 
 
 def test_build_agent_live_uses_mcp(monkeypatch):

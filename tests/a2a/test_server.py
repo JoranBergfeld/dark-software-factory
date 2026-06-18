@@ -7,9 +7,10 @@ from fastapi.testclient import TestClient
 
 from dsf.a2a.auth import build_bearer_dependency
 from dsf.agents.base import SourceAgent
+from dsf.config.store import InMemoryConfigStore
 from dsf.contracts.enums import SourceKind
 from dsf.contracts.models import EvidenceItem, Provenance
-from dsf.fakes import FakeConfigStore, FakeSourceBackend
+from tests.support.source_double import RecordingSourceBackend
 
 
 def _seeded_evidence() -> EvidenceItem:
@@ -23,17 +24,17 @@ def _seeded_evidence() -> EvidenceItem:
     )
 
 
-def _agent(backend: FakeSourceBackend, cfg: FakeConfigStore | None = None) -> SourceAgent:
+def _agent(backend: RecordingSourceBackend, cfg: InMemoryConfigStore | None = None) -> SourceAgent:
     return SourceAgent(
         kind=SourceKind.SENTRY,
         backend=backend,
-        config=cfg or FakeConfigStore.from_defaults(),
+        config=cfg or InMemoryConfigStore.from_defaults(),
         endpoint="http://sentry-agent",
     )
 
 
 def test_card_endpoint_returns_card():
-    agent = _agent(FakeSourceBackend())
+    agent = _agent(RecordingSourceBackend())
     client = TestClient(agent.make_app(token=""))
     resp = client.get("/card")
     assert resp.status_code == 200
@@ -45,7 +46,7 @@ def test_card_endpoint_returns_card():
 
 
 def test_gather_endpoint_returns_evidence():
-    backend = FakeSourceBackend([_seeded_evidence()])
+    backend = RecordingSourceBackend([_seeded_evidence()])
     client = TestClient(_agent(backend).make_app(token=""))
     resp = client.post("/gather", json={"run_scope": {"product_hints": ["alpha"]}})
     assert resp.status_code == 200
@@ -58,19 +59,19 @@ def test_gather_endpoint_returns_evidence():
 
 
 def test_missing_bearer_is_401_when_token_configured():
-    client = TestClient(_agent(FakeSourceBackend()).make_app(token="s3cret"))
+    client = TestClient(_agent(RecordingSourceBackend()).make_app(token="s3cret"))
     assert client.get("/card").status_code == 401
     assert client.post("/gather", json={"run_scope": {}}).status_code == 401
 
 
 def test_blank_bearer_is_401_when_token_configured():
-    client = TestClient(_agent(FakeSourceBackend()).make_app(token="s3cret"))
+    client = TestClient(_agent(RecordingSourceBackend()).make_app(token="s3cret"))
     resp = client.get("/card", headers={"Authorization": "Bearer "})
     assert resp.status_code == 401
 
 
 def test_wrong_bearer_is_401_correct_bearer_passes():
-    client = TestClient(_agent(FakeSourceBackend()).make_app(token="s3cret"))
+    client = TestClient(_agent(RecordingSourceBackend()).make_app(token="s3cret"))
     assert client.get("/card", headers={"Authorization": "Bearer nope"}).status_code == 401
     ok = client.get("/card", headers={"Authorization": "Bearer s3cret"})
     assert ok.status_code == 200

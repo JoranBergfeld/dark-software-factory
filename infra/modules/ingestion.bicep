@@ -1,12 +1,12 @@
 // ingestion.bicep
 // Signal-ingestion buffer: an Event Grid custom topic where external signal
 // sources (Sentry/GitHub/etc. via a relay) publish, delivered into a Service Bus
-// queue that the homelab orchestrator polls OUTBOUND. Nothing is ever pushed into
-// the homelab — this is the egress-only ingestion path (design §8, ADR 0002).
+// queue that the orchestrator polls. Nothing is ever pushed into the runtime —
+// this is the pull-based ingestion path (design §8, ADR 0004).
 //
 // Delivery uses the topic's system-assigned identity (no SAS keys): the topic is
 // granted Azure Service Bus Data Sender on the queue, and the event subscription
-// delivers with that resource identity. The homelab workload is granted Data
+// delivers with that resource identity. The runtime identity is granted Data
 // Receiver so it can dequeue.
 
 @description('Short name prefix.')
@@ -21,7 +21,7 @@ param location string
 @description('Tags applied to resources.')
 param tags object = {}
 
-@description('Object ID of the homelab workload SP granted Service Bus Data Receiver. Empty = skip.')
+@description('Object ID of the runtime identity granted Service Bus Data Receiver. Empty = skip.')
 param receiverPrincipalId string = ''
 
 @description('Gate public network access to the Event Grid topic. Defaults to false. Enable only when private endpoint connectivity is unavailable.')
@@ -91,7 +91,7 @@ resource topicSenderAssignment 'Microsoft.Authorization/roleAssignments@2022-04-
 //     --delivery-identity systemassigned \
 //     --endpoint-type servicebusqueue --endpoint <queueId>
 
-// The homelab workload may receive (dequeue) from the namespace.
+// The runtime identity may receive (dequeue) from the namespace.
 resource receiverAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(receiverPrincipalId)) {
   name: guid(serviceBus.id, receiverPrincipalId, sbDataReceiverRoleId)
   scope: serviceBus

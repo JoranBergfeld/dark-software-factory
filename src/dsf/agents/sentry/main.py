@@ -1,6 +1,6 @@
 """Sentry agent entrypoint (plan Task 2.2).
 
-Builds the A2A app over the fake Sentry backend (canned fixture evidence). Run
+Builds the A2A app over the fixture-backed Sentry backend (canned evidence). Run
 with ``uvicorn dsf.agents.sentry.main:app``. The azure-mode MCP backend lives in
 :mod:`dsf.agents.sentry.backend` and is selected only when an MCP client is
 injected.
@@ -12,9 +12,9 @@ import os
 
 from dsf.agents.base import SourceAgent
 from dsf.agents.mode import is_live, resolve_mode
-from dsf.agents.sentry.backend import SentryFakeBackend, SentryMcpBackend
+from dsf.agents.sentry.backend import SentryFixtureBackend, SentryMcpBackend
+from dsf.config.store import InMemoryConfigStore
 from dsf.contracts.enums import SourceKind
-from dsf.fakes import FakeConfigStore
 
 
 def build_agent(config: object | None = None, mode: str | None = None) -> SourceAgent:
@@ -27,9 +27,9 @@ def build_agent(config: object | None = None, mode: str | None = None) -> Source
     * else ``SENTRY_AUTH_TOKEN`` set -> call the Sentry REST API directly;
     * else raise (live mode must not silently fabricate coverage).
 
-    Otherwise the deterministic fixture-backed fake is used.
+    Otherwise the deterministic fixture-backed backend is used.
     """
-    cfg = config if config is not None else FakeConfigStore.from_defaults()
+    cfg = config if config is not None else InMemoryConfigStore.from_defaults()
     if is_live(resolve_mode(mode)):
         if os.environ.get("SENTRY_MCP_URL"):
             from dsf.agents.sentry.mcp_client import build_sentry_mcp_call_from_env
@@ -45,7 +45,7 @@ def build_agent(config: object | None = None, mode: str | None = None) -> Source
                 "SENTRY_AUTH_TOKEN (Sentry REST API)"
             )
     else:
-        backend = SentryFakeBackend()
+        backend = SentryFixtureBackend()
     return SourceAgent(
         kind=SourceKind.SENTRY,
         backend=backend,

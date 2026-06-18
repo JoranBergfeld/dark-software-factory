@@ -13,11 +13,21 @@ dependencies = [
     "mcp>=1.2",
 ]
 
+[project.scripts]
+dsf = "dsf.cli.factory:main"
+dsfctl = "dsf.cli.control:main"
+
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "ruff>=0.4",
+]
+azure = [
+    "azure-appconfiguration>=1.5",
+    "azure-cosmos>=4.5",
+    "azure-identity>=1.15",
+    "openai>=1.30",
 ]
 
 [build-system]

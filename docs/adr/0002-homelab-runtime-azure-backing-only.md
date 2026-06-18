@@ -1,6 +1,11 @@
 # ADR 0002 — Homelab runtime, Azure backing services only
 
-Status: Accepted · Date: 2026-06-16 · Supersedes the Container Apps hosting in ADR 0001 §1's deployment assumption
+> **Status: Superseded by [ADR 0004](0004-azure-container-apps-runtime.md) (2026-06-18).**
+> The homelab runtime described below has been retired; the factory runtime now runs
+> on Azure Container Apps with a user-assigned managed identity. This record is kept
+> for history.
+
+Status: Superseded · Date: 2026-06-16 · Supersedes the Container Apps hosting in ADR 0001 §1's deployment assumption
 
 ## Context
 
@@ -43,3 +48,10 @@ Key Vault), reached outbound.
   Service Bus queue. Scheduled sweeps need none of this.
 - If the user later wants Azure-hosted compute after all, re-introducing Container
   Apps is additive and does not change the contracts or the agent images.
+- **SP3 (per-product council runtime):** `dsf new` renders each product's orchestrator
+  as a homelab compose bundle (`config/instances/<product>.runtime/`) running
+  `src/dsf/runtime/Dockerfile` — consistent with decision #2, **no Bicep compute** is
+  added. Its `.env.orchestrator` carries deployment **endpoints only**; secrets remain in
+  Key Vault and are fetched at runtime via the homelab service principal (decision #4), so
+  "managed identity" is never the homelab auth path. The Azure Container Apps (`aca`)
+  deploy target is left as an explicit unimplemented seam, honoring this ADR by default.

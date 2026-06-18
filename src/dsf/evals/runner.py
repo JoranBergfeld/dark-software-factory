@@ -17,7 +17,7 @@ Golden case shape (``golden/cases.json``)::
       "signal_payload": {"product_hints": [...], "source_kinds": [...], "text": ...},
       "config_overrides": {"<flag>": bool, ...},   # optional, applied via set_flag
       "setup": {"seed_debounce": bool,              # optional test scaffolding
-              "seed_ungrounded_proposal": bool, # skip S3, inject fake-evidence proposal
+              "seed_ungrounded_proposal": bool, # skip S3, inject synthetic-evidence proposal
               "seed_duplicate_proposal": bool}, # pre-seed proposal texts for veto test
       "expectations": {
         "expected_product": str | null,
@@ -122,12 +122,12 @@ async def _apply_setup(
 
 
 async def _seed_ungrounded_proposal(services: Services, run: Run) -> None:
-    """Inject an adversarial proposal with a fake evidence id, skipping S3.
+    """Inject an adversarial proposal with a synthetic evidence id, skipping S3.
 
     Marks the S3 synthesis checkpoint as complete so the conveyor skips that
     station, then plants a single :class:`~dsf.contracts.models.Proposal` whose
     only ``evidence_id`` is a sentinel string that can never appear in
-    ``run.evidence``. S4 should strip the fake id and kill the proposal;
+    ``run.evidence``. S4 should strip the synthetic id and kill the proposal;
     if S4 is broken the proposal survives, routes, and the groundedness
     evaluator catches the ungrounded evidence.
     """
@@ -140,17 +140,17 @@ async def _seed_ungrounded_proposal(services: Services, run: Run) -> None:
     # Skip S3 so it cannot overwrite this pre-seeded proposal.
     await bb.checkpoint(run.id, s3_synthesis.STATION)
     hint = (run.scope_product_hints or ["microbi"])[0]
-    fake = Proposal(
+    synthetic = Proposal(
         run_id=run.id,
         kind=ProposalKind.FIX,
         title="Fix: adversarial ungrounded evidence test",
-        problem="Eval harness: proposal carrying a sentinel fake evidence id.",
+        problem="Eval harness: proposal carrying a sentinel synthetic evidence id.",
         proposed_change="No real change -- eval harness adversarial case only.",
         product=hint,
-        evidence_ids=["adversarial-fake-evidence-id-000"],
+        evidence_ids=["adversarial-synthetic-evidence-id-000"],
         confidence=0.8,
     )
-    await bb.save_proposals(run.id, [fake])
+    await bb.save_proposals(run.id, [synthetic])
 
 
 async def _seed_duplicate_proposal(

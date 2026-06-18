@@ -9,7 +9,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from dsf.agents.grafana.backend import GrafanaFakeBackend, GrafanaMcpBackend
+from dsf.agents.grafana.backend import GrafanaFixtureBackend, GrafanaMcpBackend
 from dsf.agents.grafana.client import build_grafana_client_from_env
 from dsf.agents.grafana.main import build_agent
 
@@ -17,7 +17,7 @@ _CANNED_ALERTS = [
     {
         "labels": {"alertname": "HighErrorRate", "severity": "critical"},
         "annotations": {"summary": "Error rate above 5% on api gateway"},
-        "generatorURL": "https://grafana.homelab.lan/d/gw/gateway?viewPanel=3",
+        "generatorURL": "https://grafana.example.com/d/gw/gateway?viewPanel=3",
     },
     {
         "labels": {"alertname": "LatencyP99"},
@@ -46,7 +46,7 @@ _CANNED_VECTOR = {
 
 @pytest.fixture(autouse=True)
 def _env(monkeypatch):
-    monkeypatch.setenv("GRAFANA_URL", "https://grafana.homelab.lan")
+    monkeypatch.setenv("GRAFANA_URL", "https://grafana.example.com")
     monkeypatch.setenv("GRAFANA_TOKEN", "tok")
 
 
@@ -61,7 +61,7 @@ async def test_alerts_maps_and_hits_alertmanager_path():
     mock = httpx.MockTransport(handler)
     client = httpx.AsyncClient(
         transport=mock,
-        base_url="https://grafana.homelab.lan",
+        base_url="https://grafana.example.com",
         headers={"Authorization": "Bearer tok"},
     )
     mcp_call = build_grafana_client_from_env(client=client)
@@ -76,7 +76,7 @@ async def test_alerts_maps_and_hits_alertmanager_path():
     assert first["query"] == "HighErrorRate"
     assert (
         first["panel_url"]
-        == "https://grafana.homelab.lan/d/gw/gateway?viewPanel=3"
+        == "https://grafana.example.com/d/gw/gateway?viewPanel=3"
     )
     assert first["confidence"] == 0.75
     # Falls back to description when summary is absent.
@@ -92,7 +92,7 @@ async def test_empty_spec_defaults_to_alerts():
     mock = httpx.MockTransport(handler)
     client = httpx.AsyncClient(
         transport=mock,
-        base_url="https://grafana.homelab.lan",
+        base_url="https://grafana.example.com",
         headers={"Authorization": "Bearer tok"},
     )
     mcp_call = build_grafana_client_from_env(client=client)
@@ -112,7 +112,7 @@ async def test_promql_query_maps_and_hits_proxy_path():
     mock = httpx.MockTransport(handler)
     client = httpx.AsyncClient(
         transport=mock,
-        base_url="https://grafana.homelab.lan",
+        base_url="https://grafana.example.com",
         headers={"Authorization": "Bearer tok"},
     )
     mcp_call = build_grafana_client_from_env(client=client)
@@ -135,16 +135,16 @@ async def test_promql_query_maps_and_hits_proxy_path():
 
 def test_build_agent_local_uses_fake(monkeypatch):
     monkeypatch.delenv("DSF_MODE", raising=False)
-    assert isinstance(build_agent(mode="local").backend, GrafanaFakeBackend)
+    assert isinstance(build_agent(mode="local").backend, GrafanaFixtureBackend)
 
 
 def test_build_agent_default_unset_mode_is_fake(monkeypatch):
     monkeypatch.delenv("DSF_MODE", raising=False)
-    assert isinstance(build_agent().backend, GrafanaFakeBackend)
+    assert isinstance(build_agent().backend, GrafanaFixtureBackend)
 
 
 def test_build_agent_live_uses_mcp(monkeypatch):
-    monkeypatch.setenv("GRAFANA_URL", "https://grafana.homelab.lan")
+    monkeypatch.setenv("GRAFANA_URL", "https://grafana.example.com")
     monkeypatch.setenv("GRAFANA_TOKEN", "live-token")
     assert isinstance(build_agent(mode="live").backend, GrafanaMcpBackend)
 

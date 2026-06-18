@@ -1,7 +1,7 @@
 """Tickets backends — STUB.
 
 This module is intentionally a stub: the support-ticket source is contract-only
-for now (design §5.1, "Tickets ... stubbed"). The fake yields no evidence so the
+for now (design §5.1, "Tickets ... stubbed"). The backend yields no evidence so the
 conveyor runs end-to-end without it; the MCP backend is a deliberate
 ``NotImplementedError`` placeholder selected only in azure mode.
 """
@@ -11,11 +11,11 @@ from __future__ import annotations
 from dsf.contracts.models import EvidenceItem
 
 
-class TicketsFakeBackend:
+class TicketsFixtureBackend:
     """Local/dry-run tickets backend — returns no evidence.
 
-    Shaped like :class:`dsf.fakes.source.FakeSourceBackend`: records each call
-    and satisfies the :class:`~dsf.ports.SourceBackend` protocol.
+    Records each call and satisfies the :class:`~dsf.ports.SourceBackend`
+    protocol.
     """
 
     def __init__(self) -> None:
@@ -39,4 +39,4 @@ class TicketsMcpBackend:
         raise NotImplementedError("tickets source not yet integrated")
 
 
-__all__ = ["TicketsFakeBackend", "TicketsMcpBackend"]
+__all__ = ["TicketsFixtureBackend", "TicketsMcpBackend"]
