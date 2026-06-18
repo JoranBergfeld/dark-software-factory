@@ -62,7 +62,8 @@ SreAgent.sweep(scope):
   before (`MemoryStore` dedup, kind `sre_incident`). Otherwise file an issue via
   the `GitHubClient` port with labels `[severity, SRE_LABEL, HANDOFF_LABEL]` so the
   squad triages it exactly like a council issue; under `dry_run` record the intent
-  and file nothing. Always index the fingerprint so repeat sweeps don't re-file.
+  and file nothing. The fingerprint is indexed only when an issue is actually
+  filed, so a dry-run preview never suppresses a later real sweep.
 - **`reflect(incident, action)`**: write a durable `sre_incident` record and a
   product-scoped Lesson (`MemoryStore.put_lesson`) capturing what was observed and
   whether it was filed/duplicate/dry-run — the SRE's self-reflection store.
@@ -115,7 +116,9 @@ as the council: rendering is pure; the deploy is gated behind `--execute`.
   skipped, not fatal.
 - **fix_forward:** files via a `RecordingGitHubClient` with `HANDOFF_LABEL` +
   `SRE_LABEL` + severity; dedup skips a repeat fingerprint; `dry_run=True` files
-  nothing but still indexes + records intent; product→repo routing via registry.
+  nothing and records intent without indexing the fingerprint, so a later real
+  sweep still files it (dry-run never suppresses real filing); product→repo
+  routing via registry.
 - **reflect:** a lesson is retrievable via `MemoryStore.get_lessons(product)`.
 - **sweep:** end-to-end on fixtures yields ≥1 filed incident + lessons; a second
   sweep files nothing (dedup).
