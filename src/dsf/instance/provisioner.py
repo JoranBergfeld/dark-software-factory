@@ -18,7 +18,7 @@ from dsf.contracts.handoff import (
     HANDOFF_LABEL_COLOR,
     HANDOFF_LABEL_DESCRIPTION,
 )
-from dsf.instance.runtime_render import render_runtime_bundle, render_sre_bundle
+from dsf.instance.runtime_render import render_runtime_bundle, render_sre_onboarding
 from dsf.instance.spec import (
     AzureProvisionResult,
     InstanceManifest,
@@ -160,8 +160,10 @@ class InstanceProvisioner:
                 ),
             ),
             ProvisionStep(
-                name="deploy_sre",
-                description=f"Render + bring up the SRE agent runtime scoped to {s.product}",
+                name="onboard_sre_agent",
+                description=(
+                    f"Render the Azure SRE Agent onboarding runbook for {s.product}"
+                ),
             ),
             ProvisionStep(
                 name="write_config",
@@ -210,24 +212,17 @@ class InstanceProvisioner:
                             check=True,
                         )
                         step.executed, step.result = True, "deployed"
-                elif step.name == "deploy_sre":
+                elif step.name == "onboard_sre_agent":
                     provisional = InstanceManifest(
                         spec=self.spec, plan=plan, executed=executed, azure=azure_result
                     )
-                    render_sre_bundle(provisional, repo_root=self._repo_root)
+                    render_sre_onboarding(provisional, repo_root=self._repo_root)
                     if not execute:
                         step.result = "rendered (dry-run)"
                     else:
-                        self._run(
-                            [
-                                "az", "containerapp", "update",
-                                "--resource-group", self.spec.resource_group(),
-                                "--name", f"dsf-sre-{self.spec.product}",
-                                "--image", self.spec.runtime_image,
-                            ],
-                            check=True,
-                        )
-                        step.executed, step.result = True, "deployed"
+                        # The Azure SRE Agent is onboarded interactively (wizard +
+                        # OAuth, ADR 0009); there is no Container App to deploy.
+                        step.result = "onboarding ready"
                 elif not execute:
                     step.result = "dry-run"
                 elif step.commands:

@@ -100,7 +100,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_new.add_argument(
         "--execute",
         action="store_true",
-        help="run executable steps (gh/squad/az + council & SRE bring-up)",
+        help="run executable steps (gh/squad/az + council bring-up & SRE onboarding)",
     )
     p_new.add_argument(
         "--write-plan",
