@@ -38,7 +38,7 @@ make evals     # golden-set eval gate
 Then explore the Control Center:
 
 ```bash
-uv run dsfctl control-center   # http://localhost:8081
+uv run dsf-control-center   # http://localhost:8081
 ```
 
 Or stamp out a product factory (dry-run by default; `--execute` is destructive):
@@ -47,10 +47,10 @@ Or stamp out a product factory (dry-run by default; `--execute` is destructive):
 uv run dsf new --product microbi --owner your-org --name-prefix microbi   # preview the 8-step plan
 ```
 
-Two CLIs ship from the single `dsf` package: **`dsf`** creates/manages product
-instances from the template (`dsf new`), and **`dsfctl`** operates a running
-instance's feature-council runtime (`dsfctl run|sweep|serve-orchestrator|serve-agent|
-control-center`).
+Three console scripts ship from the workspace members: **`dsf`** creates/manages
+product instances from the template (`dsf new`), **`dsfctl`** operates a running
+instance's feature-council runtime (`dsfctl run|sweep|serve-orchestrator|serve-agent`),
+and **`dsf-control-center`** serves the Control Center web UI.
 
 `dsf new` creates the product GitHub repo + Coding Squad, provisions a dedicated Azure
 resource group from `infra/main.bicep`, and renders + deploys the product's council

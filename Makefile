@@ -1,4 +1,4 @@
-.PHONY: install test lint fmt dryrun evals new-demo
+.PHONY: install test lint lint-imports fmt dryrun evals new-demo
 
 install:
 	uv sync --all-packages
@@ -8,6 +8,9 @@ test:
 
 lint:
 	uv run ruff check .
+
+lint-imports:
+	uv run lint-imports
 
 fmt:
 	uv run ruff check --fix .

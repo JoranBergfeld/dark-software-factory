@@ -1,23 +1,12 @@
-[project]
-name = "dsf"
-version = "0.1.0"
-description = "Dark Software Factory — legacy umbrella (control_center; being split into workspace members under #26)"
-requires-python = ">=3.12"
-dependencies = [
-    "dsf-core",
-    "fastapi>=0.110",
-    "jinja2>=3.1",
-]
-
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-
-[tool.hatch.build.targets.wheel]
-packages = ["src/dsf"]
+# Dark Software Factory — virtual workspace root.
+#
+# This file defines the uv workspace and shared tooling config only; it ships no
+# package of its own. Every runtime lives in a self-contained member under
+# core/, feature-council/, cli/, and control-center/ (all sharing the one
+# PEP 420 ``dsf`` namespace). Install everything with ``uv sync --all-packages``.
 
 [tool.uv.workspace]
-members = ["core", "feature-council", "cli"]
+members = ["core", "feature-council", "cli", "control-center"]
 
 [tool.uv.sources]
 dsf-core = { workspace = true }
@@ -27,6 +16,7 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "ruff>=0.4",
+    "import-linter>=2.0",
 ]
 
 [tool.ruff]
@@ -42,4 +32,92 @@ known-first-party = ["dsf"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-pythonpath = ["src"]
+
+# Architectural boundaries between workspace members (enforced in CI via
+# `uv run lint-imports`). All members share the one `dsf` namespace, so the
+# contracts are expressed over top-level `dsf.*` subpackages:
+#   - core (a2a, config, container, contracts, github_client, learning, memory,
+#     model, observability, ports) is the shared base and must not import any
+#     application member.
+#   - the three application members (cli, feature-council, control-center) may
+#     import core but must not import each other.
+[tool.importlinter]
+root_package = "dsf"
+
+[[tool.importlinter.contracts]]
+name = "core must not import application members"
+type = "forbidden"
+source_modules = [
+    "dsf.a2a",
+    "dsf.config",
+    "dsf.container",
+    "dsf.contracts",
+    "dsf.github_client",
+    "dsf.learning",
+    "dsf.memory",
+    "dsf.model",
+    "dsf.observability",
+    "dsf.ports",
+]
+forbidden_modules = [
+    "dsf.agents",
+    "dsf.council",
+    "dsf.orchestrator",
+    "dsf.triggers",
+    "dsf.evals",
+    "dsf.runtime",
+    "dsf.cli",
+    "dsf.instance",
+    "dsf.control_center",
+]
+
+[[tool.importlinter.contracts]]
+name = "cli must not import other application members"
+type = "forbidden"
+source_modules = [
+    "dsf.cli",
+    "dsf.instance",
+]
+forbidden_modules = [
+    "dsf.agents",
+    "dsf.council",
+    "dsf.orchestrator",
+    "dsf.triggers",
+    "dsf.evals",
+    "dsf.runtime",
+    "dsf.control_center",
+]
+
+[[tool.importlinter.contracts]]
+name = "feature-council must not import other application members"
+type = "forbidden"
+source_modules = [
+    "dsf.agents",
+    "dsf.council",
+    "dsf.orchestrator",
+    "dsf.triggers",
+    "dsf.evals",
+    "dsf.runtime",
+]
+forbidden_modules = [
+    "dsf.cli",
+    "dsf.instance",
+    "dsf.control_center",
+]
+
+[[tool.importlinter.contracts]]
+name = "control-center must not import other application members"
+type = "forbidden"
+source_modules = [
+    "dsf.control_center",
+]
+forbidden_modules = [
+    "dsf.agents",
+    "dsf.council",
+    "dsf.orchestrator",
+    "dsf.triggers",
+    "dsf.evals",
+    "dsf.runtime",
+    "dsf.cli",
+    "dsf.instance",
+]

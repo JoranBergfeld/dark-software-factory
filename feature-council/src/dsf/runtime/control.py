@@ -1,9 +1,11 @@
 """``dsfctl`` — operate a running instance's feature-council runtime.
 
 ``run``/``sweep`` execute the conveyor in-process (local in-memory implementations by default, fully
-dry-run safe). ``serve-agent``/``serve-orchestrator``/``control-center`` launch the
-respective ASGI services via uvicorn. The global ``--mode`` flag selects the service
-bundle (``local``/``gh``/``azure``).
+dry-run safe). ``serve-agent``/``serve-orchestrator`` launch the respective ASGI services via
+uvicorn. The global ``--mode`` flag selects the service bundle (``local``/``gh``/``azure``).
+
+The Control Center web UI ships as its own ``dsf-control-center`` console script
+(the ``dsf-control-center`` package), not as a ``dsfctl`` subcommand.
 """
 
 from __future__ import annotations
@@ -91,28 +93,6 @@ def _cmd_serve_agent(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_control_center(args: argparse.Namespace) -> int:
-    """Serve the Control Center web UI via uvicorn."""
-    import importlib.util
-
-    import uvicorn
-
-    # dsf.control_center ships with the root workspace, not the feature-council
-    # runtime image (which installs only core + feature-council). Fail with an
-    # actionable message instead of an opaque uvicorn import error. The #26
-    # Phase 4 split gives the Control Center its own member and entrypoint.
-    if importlib.util.find_spec("dsf.control_center") is None:
-        print(
-            "control-center is unavailable here: dsf.control_center is not "
-            "installed in the feature-council runtime image. Run it from the dev "
-            "workspace via `uv run dsfctl control-center`.",
-            file=sys.stderr,
-        )
-        return 1
-    uvicorn.run("dsf.control_center.app:app", host=args.host, port=args.port)
-    return 0
-
-
 def build_parser() -> argparse.ArgumentParser:
     """Build the ``dsfctl`` parser with all runtime subcommands."""
     parser = argparse.ArgumentParser(
@@ -149,11 +129,6 @@ def build_parser() -> argparse.ArgumentParser:
     p_serve.add_argument("--host", default="0.0.0.0", help="bind host")
     p_serve.add_argument("--port", type=int, default=8080, help="bind port")
     p_serve.set_defaults(func=_cmd_serve_agent)
-
-    p_cc = sub.add_parser("control-center", help="serve the control center UI")
-    p_cc.add_argument("--host", default="127.0.0.1", help="bind host (localhost-only by default)")
-    p_cc.add_argument("--port", type=int, default=8081, help="bind port")
-    p_cc.set_defaults(func=_cmd_control_center)
 
     return parser
 

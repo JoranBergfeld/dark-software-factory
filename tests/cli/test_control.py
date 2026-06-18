@@ -34,7 +34,7 @@ def test_cli_run_missing_signal_returns_error(capsys):
 
 def test_cli_subcommands_importable():
     parser = build_parser()
-    for cmd in ("run", "sweep", "serve-agent", "serve-orchestrator", "control-center"):
+    for cmd in ("run", "sweep", "serve-agent", "serve-orchestrator"):
         args = parser.parse_args([cmd])
         assert args.command == cmd
 
@@ -71,8 +71,13 @@ def test_cli_serve_commands_launch_uvicorn(monkeypatch):
     launched: list[str] = []
     monkeypatch.setattr("uvicorn.run", lambda target, **kw: launched.append(target))
     assert main(["serve-agent", "--kind", "sentry"]) == 0
-    assert main(["control-center"]) == 0
-    assert launched == ["dsf.agents.sentry.main:app", "dsf.control_center.app:app"]
+    assert launched == ["dsf.agents.sentry.main:app"]
+
+
+def test_cli_control_center_subcommand_removed():
+    parser = build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["control-center"])
 
 
 def test_cli_unsupported_mode_exits_cleanly(capsys):
