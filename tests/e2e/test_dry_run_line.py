@@ -66,6 +66,32 @@ async def test_dry_run_line_files_grounded_issue_without_network(payload: dict) 
     assert STATION_NAMES <= stations_seen
 
 
+async def test_line_files_real_issue_when_dry_run_off(payload: dict) -> None:
+    """With both dry-run switches off, the wired line actually files via the
+    GitHub port — regression for #13 (no code path could file a real issue)."""
+    services = build_services("local")  # github = RecordingGitHubClient
+    services.config.set_flag("dry_run", False)  # off the global kill switch
+
+    run = signal_to_run(payload)
+    run.dry_run = False  # caller deliberately chose to file
+
+    final = await run_line(run, services)
+    assert final.status is RunStatus.FILED
+
+    bb = Blackboard(services.memory)
+    issues = await bb.load_issues(final.id)
+    assert issues, "expected at least one routed issue"
+
+    # The real filing path was taken: create_issue was called once per routed
+    # issue, each issue carries the returned URL, and the recorded call matches.
+    assert len(services.github.calls) == len(issues)
+    for issue in issues:
+        assert issue.filed_url is not None
+        assert issue.filed_url.startswith("local://issue/")
+    filed = {(c["repo"], c["title"]) for c in services.github.calls}
+    assert filed == {(issue.repo, issue.title) for issue in issues}
+
+
 def test_cli_run_dry_run_exits_zero(capsys) -> None:
     code = main(["run", "--dry-run", "--signal", str(SAMPLE_SIGNAL)])
     out = capsys.readouterr().out
