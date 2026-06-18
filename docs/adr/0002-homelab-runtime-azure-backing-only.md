@@ -1,6 +1,11 @@
 # ADR 0002 — Homelab runtime, Azure backing services only
 
-Status: Accepted · Date: 2026-06-16 · Supersedes the Container Apps hosting in ADR 0001 §1's deployment assumption
+> **Status: Superseded by [ADR 0004](0004-azure-container-apps-runtime.md) (2026-06-18).**
+> The homelab runtime described below has been retired; the factory runtime now runs
+> on Azure Container Apps with a user-assigned managed identity. This record is kept
+> for history.
+
+Status: Superseded · Date: 2026-06-16 · Supersedes the Container Apps hosting in ADR 0001 §1's deployment assumption
 
 ## Context
 

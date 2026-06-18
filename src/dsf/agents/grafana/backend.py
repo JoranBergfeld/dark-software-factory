@@ -4,9 +4,9 @@ The Grafana source surfaces metric/log anomalies (latency p99 spikes,
 saturation, error-rate jumps, log patterns) as grounded
 :class:`~dsf.contracts.models.EvidenceItem` objects.
 
-Deployment note: in production this agent runs inside a homelab behind NAT
-(per the design); it dials *out* to the orchestrator rather than being reached
-inbound. That is an operational detail only — it does not change any code here.
+Deployment note: in production this agent runs as an Azure Container App alongside
+the orchestrator (ADR 0004). That is an operational detail only — it does not change
+any code here.
 
 Two backends mirror the project's local/azure split:
 

@@ -1,18 +1,20 @@
 # Infrastructure (`infra/`)
 
 Infrastructure-as-code for the Azure **backing services** the Dark Software Factory
-relies on. The agent + orchestrator **runtime is hosted by you** (e.g. a Proxmox
-homelab) and reaches these services **outbound** — no VNet peering, no inbound to
-the homelab. This template provisions **no container/compute** (see ADR 0002).
+relies on **and** the runtime that consumes them. The feature-council orchestrator
+runs as an **Azure Container App** in the same resource group, authenticating to the
+data services with a **user-assigned managed identity** (see ADR 0004). No inbound
+exposure — it is a worker that reaches its sources over their authenticated endpoints.
 
 **These files are authored for review and are NOT deployed automatically.**
 
 > **COST WARNING.** Provisioning creates **billable** Azure resources: Cosmos DB
 > (NoSQL + vector, autoscale to 1000 RU/s), App Configuration (Standard), Key
 > Vault, Log Analytics, Application Insights, a Service Bus namespace (Standard),
-> and an Event Grid topic. Cosmos + Log Analytics ingestion dominate ongoing cost.
-> Azure OpenAI / Foundry is **referenced by your homelab runtime, not created
-> here.** Tear down with `az group delete` when done.
+> an Event Grid topic, and a **Container Apps environment + orchestrator app**.
+> Cosmos + Log Analytics ingestion dominate ongoing cost. Azure OpenAI / Foundry is
+> **referenced by the runtime, not created here.** Tear down with `az group delete`
+> when done.
 
 ## What gets provisioned (`main.bicep`)
 
@@ -20,17 +22,22 @@ the homelab. This template provisions **no container/compute** (see ADR 0002).
 |---|---|
 | Log Analytics workspace | Backing store for Application Insights |
 | Application Insights | OpenTelemetry GenAI traces / metrics (design §6.1) |
-| Key Vault (RBAC, soft-delete + purge protection) | Secrets; homelab SP gets **Key Vault Secrets User** |
+| Key Vault (RBAC, soft-delete + purge protection) | Secrets; the runtime identity gets **Key Vault Secrets User** |
 | App Configuration (Standard) | Control Center backend; seeded feature flags |
 | Cosmos DB (NoSQL + `EnableNoSQLVectorSearch`) | Unified memory; `dsf` db + TTL `memory` container w/ vector index |
-| Service Bus (Standard) + `signals` queue | Ingestion buffer the homelab orchestrator polls **outbound** |
+| Service Bus (Standard) + `signals` queue | Ingestion buffer the orchestrator polls **outbound** |
 | Event Grid custom topic | Where external signal sources publish; delivered into the queue via the topic's identity |
+| User-assigned managed identity | The runtime's identity; holds all data-plane roles below |
+| Container Apps environment + `dsf-orchestrator-<product>` app | The feature-council orchestrator worker (no ingress) |
 
-**No compute.** There are no Container Apps, no managed environment. Data-plane
-access is granted to a **homelab workload service principal** you supply via
-`workloadPrincipalId` (its Entra object id): Cosmos Data Contributor, App Config
-Data Reader, Key Vault Secrets User, Service Bus Data Receiver. Leave it empty to
-provision the resources without role assignments and add them later.
+**Runtime identity & roles.** A **user-assigned managed identity** is created and
+attached to the orchestrator Container App; it holds the data-plane roles: Cosmos
+Data Contributor, App Configuration Data Reader, Key Vault Secrets User, Service Bus
+Data Receiver. (A user-assigned — not system-assigned — identity has a stable
+principalId known before the app, avoiding a dependency cycle between the app's env
+and the resources it references; see ADR 0004.) `DefaultAzureCredential` selects it
+via the `AZURE_CLIENT_ID` env the Bicep wires in. The `product` and `runtimeImage`
+params name the app (`dsf-orchestrator-<product>`) and choose its image.
 
 **Seeded feature flags** (App Configuration): `dry_run` (enabled = global kill
 switch ON), `triggers_scheduled_paused`, `triggers_signal_paused`, plus
@@ -51,7 +58,9 @@ switch ON), `triggers_scheduled_paused`, `triggers_signal_paused`, plus
 ### Outputs
 `cosmosEndpoint`, `appConfigEndpoint`, `keyVaultUri`,
 `appInsightsConnectionString`, `eventGridTopicEndpoint`, `serviceBusNamespace`,
-`signalsQueueName` — these feed your homelab runtime's `azure`-mode config.
+`signalsQueueName` — these feed the runtime's `azure`-mode config — plus
+`runtimePrincipalId` (the managed identity) and `orchestratorAppName`
+(`dsf-orchestrator-<product>`, used for `az containerapp` image rolls).
 
 ## CI pipelines
 
@@ -94,13 +103,14 @@ az login
 # zone-redundant Cosmos; Sweden Central worked at time of writing):
 az group create -n rg-dsf -l swedencentral
 
-# 1) Preview, then provision the backing services. For a throwaway dev deploy pass
+# 1) Preview, then provision the backing services, the runtime identity, and the
+#    orchestrator Container App. For a throwaway dev deploy pass
 #    enablePurgeProtection=false so a deleted Key Vault name can be reused (the
-#    default true reserves the vault name for 90 days). Set workloadPrincipalId to
-#    your homelab SP object id to also create the data-plane role assignments.
+#    default true reserves the vault name for 90 days). Pass the product slug and
+#    runtime image (the managed identity + its data-plane roles are created here).
 az deployment group what-if -g rg-dsf -f infra/main.bicep -p @infra/main.parameters.json
 az deployment group create  -g rg-dsf -f infra/main.bicep -p @infra/main.parameters.json \
-  -p enablePurgeProtection=false -p workloadPrincipalId="<homelab-sp-object-id>"
+  -p enablePurgeProtection=false -p product=<product> -p runtimeImage=<ghcr.io/...>
 
 # 2) Phase 2 — wire Event Grid -> the Service Bus queue (after step 1 completes;
 #    use the resource name suffix from step 1's outputs):
@@ -115,26 +125,25 @@ az deployment group create -g rg-dsf -f infra/ingestion-subscription.bicep \
 `azd provision` works too (`azure.yaml` is infra-only — there is no `azd up`
 service deployment, by design). Tear down: `az group delete -n rg-dsf`.
 
-## Homelab runtime (your choice of host)
+## Runtime (Azure Container Apps)
 
-The agents/orchestrator/control-center run as containers in your homelab. Pull the
-agent images from GHCR (or build locally), set `DSF_MODE=azure`, authenticate with
-the homelab **service principal** (it has the data-plane roles above), and point
-config at the template outputs. `compose.homelab.yml` shows the Grafana agent with
-an outbound tunnel sidecar; extend it for the other agents as you see fit. Signal
-interrupts are consumed by **polling the Service Bus `signals` queue outbound** —
-nothing is pushed into the homelab.
+The orchestrator runs as the `dsf-orchestrator-<product>` Container App created by
+`main.bicep`, with the user-assigned identity attached and `DSF_MODE=azure`. It reads
+its endpoints from the template outputs (wired into the app's env) and consumes signal
+interrupts by **polling the Service Bus `signals` queue outbound** — there is no
+ingress. The agent images are published to GHCR by the `agents-images` pipeline.
 
 ### Per-product council runtime (rendered by `dsf new`)
 
-`dsf new <product>` provisions a *dedicated* RG per product and then renders that
-product's council runtime to `config/instances/<product>.runtime/` — a generated
-`compose.orchestrator.yml` running `src/dsf/runtime/Dockerfile` plus an
-`.env.orchestrator` whose endpoints come straight from that deployment's Bicep
-outputs (App Config, Key Vault URI, App Insights, Cosmos). **Only endpoints are
-rendered; secrets stay in Key Vault** and are fetched at runtime via the homelab
-service principal. Under `--execute` (homelab target) `dsf new` brings the bundle up
-with `docker compose ... up -d`. See `docs/RUNBOOK.md` → *Creating a product instance*.
+`dsf new <product>` provisions a *dedicated* RG per product (including the runtime
+identity + orchestrator Container App) and renders that product's runtime descriptor
+to `config/instances/<product>.runtime/` — a generated `containerapp.yaml` for
+`src/dsf/runtime/Dockerfile` plus a resolved `.env.orchestrator` whose endpoints come
+straight from that deployment's Bicep outputs (App Config, Key Vault URI, App
+Insights, Cosmos). **Only endpoints are rendered; secrets stay in Key Vault** and are
+fetched at runtime via the managed identity. Under `--execute` `dsf new` rolls the app
+image with `az containerapp update`. See `docs/RUNBOOK.md` → *Creating a product
+instance*.
 
 ## Notes
 - `enablePurgeProtection: true` on Key Vault is intentional; the vault cannot be

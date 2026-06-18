@@ -1,8 +1,8 @@
 """Sentry MCP-server backend client.
 
 Lets the Sentry agent gather evidence by speaking the **Model Context Protocol**
-to a Sentry MCP server (e.g. one running in a homelab over Streamable HTTP),
-rather than calling the Sentry REST API directly. This feeds the existing
+to a Sentry MCP server (e.g. one reachable over Streamable HTTP), rather than
+calling the Sentry REST API directly. This feeds the existing
 :class:`dsf.agents.sentry.backend.SentryMcpBackend` — it supplies the injected
 ``mcp_call`` it expects.
 

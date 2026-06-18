@@ -63,7 +63,7 @@ uv run uvicorn dsf.triggers.app:app --port 8082
 it is sanitized and randomized into a <=12-char Azure resource prefix (persisted in
 the manifest and reused on re-runs). Under `--execute`, repo creation + Coding Squad
 init, **the dedicated Azure resource group + Bicep deployment**, and **rendering +
-bringing up the product's feature-council runtime** (homelab compose) are all real;
+deploying the product's feature-council runtime** (Azure Container App) are all real;
 only SRE-agent deployment remains a **deferred** stub step (SP5).
 
 ```bash
@@ -73,21 +73,20 @@ uv run dsf new --product microbi --owner your-org --name-prefix microbi
 # Preview AND write the instance manifest to config/instances/microbi.json:
 uv run dsf new --product microbi --owner your-org --name-prefix microbi --write-plan
 
-# Execute: create repo + init Squad + provision Azure + render/bring up council
-# (needs gh, @bradygaster/squad-cli, az, and docker compose for the homelab council):
+# Execute: create repo + init Squad + provision Azure + render/deploy council
+# (needs gh, @bradygaster/squad-cli, and az for the Container App council):
 uv run dsf new --product microbi --owner your-org --name-prefix microbi --execute
 ```
 
 ### The rendered per-product council runtime
 
-`deploy_council` renders a homelab compose bundle to
-`config/instances/<product>.runtime/` (a `compose.orchestrator.yml` plus an
+`deploy_council` renders an Azure Container Apps descriptor to
+`config/instances/<product>.runtime/` (a `containerapp.yaml` plus a resolved
 `.env.orchestrator` populated from the product's Azure deployment outputs — endpoints
-only; **secrets stay in Key Vault**, fetched at runtime via the homelab service
-principal, ADR 0002). Under `--execute` against the `homelab` target, `dsf new` also runs
-`docker compose -f config/instances/<product>.runtime/compose.orchestrator.yml up -d` to
-start that product's council. The `aca` (Azure Container Apps) target is an explicit
-unimplemented seam.
+only; **secrets stay in Key Vault**, fetched at runtime via the user-assigned managed
+identity, ADR 0004). The orchestrator Container App itself is created by `main.bicep`;
+under `--execute`, `dsf new` rolls its image with
+`az containerapp update --name dsf-orchestrator-<product> --image <runtimeImage>`.
 
 The runtime image is `src/dsf/runtime/Dockerfile`; its entrypoint is the orchestrator in
 **azure mode**, which reads endpoints from the rendered env and emits traces to
@@ -120,33 +119,38 @@ the feedback watcher (`dsf.learning.feedback_watcher.handle_pr_event`). It disti
 verdict + proposed-vs-final spec diff into a product-scoped **Lesson** (retrieved by the
 synthesizer/critics on the next run) and accumulates calibration data for council weights.
 
-## Provisioning Azure + running in the homelab (do this awake — it costs money)
+## Provisioning Azure + running the runtime (do this awake — it costs money)
 
-The topology (ADR 0002): Azure hosts **backing services only**; the agent/orchestrator
-runtime runs in **your homelab** and reaches Azure **outbound**. No container is deployed
-to Azure.
+The topology (ADR 0004): Azure hosts the **backing services** and the **runtime** — the
+orchestrator runs as an Azure Container App in the same resource group, authenticating
+with a user-assigned managed identity and reaching its sources over their authenticated
+endpoints. No inbound ingress.
 
-**1. Provision the Azure backing services** (`infra/README.md` has full detail):
+**1. Provision the backing services + runtime** (`infra/README.md` has full detail):
 ```bash
 az login && az group create -n rg-dsf-dev -l swedencentral
 az deployment group what-if -g rg-dsf-dev -f infra/main.bicep -p @infra/main.parameters.json
 az deployment group create  -g rg-dsf-dev -f infra/main.bicep -p @infra/main.parameters.json \
-  -p workloadPrincipalId="<homelab-service-principal-object-id>"
+  -p product=microbi -p runtimeImage="ghcr.io/<owner>/dsf-runtime:latest"
 ```
-This creates Cosmos, App Configuration, Key Vault, App Insights, and the Event Grid →
-Service Bus ingestion buffer — and grants your homelab SP the data-plane roles.
+This creates Cosmos, App Configuration, Key Vault, App Insights, the Event Grid →
+Service Bus ingestion buffer, the **user-assigned identity** (granted the data-plane
+roles), and the **Container Apps environment + `dsf-orchestrator-microbi` app**.
 
 **2. Wire CI (optional but recommended):** set repo variables `AZURE_CLIENT_ID`,
 `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_RESOURCE_GROUP` to activate the
 `infra-whatif` pipeline's full preview on every infra change (OIDC, no secrets). The
 `agents-images` pipeline already publishes each agent to `ghcr.io/<owner>/dsf-agent-<kind>`.
 
-**3. Host the runtime in the homelab (your choice of orchestration):** pull the agent
-images from GHCR (or build locally), set `DSF_MODE=azure`, authenticate with the homelab
-service principal, and point config at the Bicep outputs (Cosmos/App Config/Key Vault/
-App Insights endpoints). For real-time interrupts, poll the Service Bus `signals` queue
-outbound; otherwise scheduled sweeps need nothing inbound. `infra/compose.homelab.yml`
-shows the Grafana agent + tunnel as a starting point.
+**3. Roll the orchestrator image:** publish the runtime image (`src/dsf/runtime/Dockerfile`)
+to GHCR, then update the Container App in place:
+```bash
+az containerapp update -g rg-dsf-dev -n dsf-orchestrator-microbi \
+  --image ghcr.io/<owner>/dsf-runtime:latest
+```
+The app runs in **azure mode** with `DSF_MODE=azure` and `AZURE_CLIENT_ID` set to the
+identity, reading endpoints from its env and polling the Service Bus `signals` queue
+outbound for real-time interrupts; scheduled sweeps need nothing inbound.
 
 **4. Go live carefully:** keep `dry_run` ON in the Control Center until you trust a few
 real runs, then turn it off to begin live filing.

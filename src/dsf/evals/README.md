@@ -28,7 +28,7 @@ case's `expected_product`:
 | -------------- | ------------------------------- | --------------- |
 | `SENTRY`       | `microbi`                       | `microbi`       |
 | `WEBIQ`        | `microbi`                       | `microbi`       |
-| `GRAFANA`      | `homelab-dash`                  | `homelab-dash`  |
+| `GRAFANA`      | `microbi`                       | `microbi`       |
 
 With default fakes the dry-run line gathers fixture evidence, synthesizes a
 grounded proposal per product cluster, passes the council, routes to a product,

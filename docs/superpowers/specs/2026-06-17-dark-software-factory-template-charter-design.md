@@ -47,7 +47,7 @@ Every product gets its **own** copy of this loop. No signals, memory, or context
 | Instance composition | New **product repo** (Squad-initialized) + dedicated **factory runtime** (council + SRE) deployed *outside* the repo + dedicated **Azure RG**, all wired |
 | Instantiation approach | **A — CLI-as-orchestrator** over `gh` + `squad` + `az`, idempotent + `--dry-run`; **evolve toward B** (declarative manifest + reconciler) as instances multiply |
 | Onboarding modes | **Greenfield first** (`dsf new`), **brownfield** (`dsf onboard <existing-repo>`) as a fast follow |
-| Runtime hosting | Container runtime the CLI can target at **homelab (default, ADR 0002) or Azure Container Apps** — not hard-picked (see Open Decisions) |
+| Runtime hosting | The council runtime runs as an **Azure Container App** on a user-assigned managed identity in the product's RG (ADR 0004, supersedes ADR 0002) |
 
 ## 3. Vocabulary
 
@@ -122,7 +122,7 @@ Each is its own spec → plan → implementation cycle.
 |---|---|---|
 | **SP1 ✅** | **`dsf new` greenfield walking skeleton** *(done)* | Instance contract/manifest; create product repo + `squad init` + per-product factory config; **dry-run stubs** for Azure/council/SRE wiring. A real, demoable instance shell end-to-end. |
 | SP2 ✅ | Per-product Azure provisioning *(done)* | Parameterize Bicep; CLI provisions a dedicated RG and captures outputs into instance config. |
-| SP3 ✅ | Feature council productionization *(done)* | `build_services('azure')` (real GitHub client + App Insights tracer; model/memory/config on fakes behind a seam); single-product scoping via `Run.scope_product_hints`; orchestrator runtime image + per-product council rendered as a homelab compose bundle and brought up on `--execute`. |
+| SP3 ✅ | Feature council productionization *(done)* | `build_services('azure')` (real GitHub client + App Insights tracer; model/memory/config on fakes behind a seam); single-product scoping via `Run.scope_product_hints`; orchestrator runtime image + per-product council rendered as an Azure Container Apps descriptor and deployed on `--execute`. |
 | SP3b | Real Azure data adapters | Replace the fakes behind the azure seam with real App Configuration, Cosmos, and LLM adapters (App Configuration first). |
 | SP4 | Coding-squad handoff hardening | Align label taxonomy/triage; `squad triage --execute`; Copilot coding agent; verify knowledge loop. |
 | SP5 | SRE agent | Observe prod (reuse Sentry/Grafana backends) → fix-forward to Squad → (later) signals to council → self-reflection. |
@@ -137,7 +137,7 @@ Each is its own spec → plan → implementation cycle.
 
 ## 8. Open decisions (recommendations noted; revisit per sub-project)
 
-1. **Runtime hosting per instance.** *(Resolved in SP3.)* The council runtime is rendered as a per-product compose bundle targeting **homelab (default, ADR 0002)** — brought up by `dsf new --execute`. An **Azure Container Apps** target is kept as an explicit, unimplemented seam so the choice stays open without hard-picking now.
+1. **Runtime hosting per instance.** *(Resolved: ADR 0004.)* The council runtime runs as an **Azure Container App** on a user-assigned managed identity in the product's RG, created by `main.bicep` and image-rolled by `dsf new --execute`. (The earlier homelab target, ADR 0002, has been retired.)
 2. **SRE agent tech.** Start **dsf-native** (reuse Sentry/Grafana A2A backends + a reflection store); consider an "SRE Squad" later. Resolve in SP5.
 3. **Naming.** "Feature council" and related terms to be renamed; treat as a parallel cross-cutting task.
 4. **Brownfield depth.** Greenfield first (SP1); decide brownfield's exact scope (Squad-into-existing-repo, history-aware council priming) when brownfield onboarding is picked up ([#23](https://github.com/JoranBergfeld/dark-software-factory/issues/23)).
@@ -145,5 +145,5 @@ Each is its own spec → plan → implementation cycle.
 ## 9. Constraints carried forward (from existing ADRs)
 
 - **ADR 0001:** single `dsf` package, ports + in-memory fakes for every external dependency, hybrid deterministic/agentic conveyor.
-- **ADR 0002:** runtime runs outside Azure (homelab default) reaching Azure outbound; Azure hosts backing services only. The per-instance isolation model must respect this (or explicitly revisit it in SP3 via Open Decision #1).
+- **ADR 0002 → superseded by ADR 0004:** the runtime now runs *inside* Azure as a Container App on a user-assigned managed identity (the homelab target is retired); Azure hosts both the backing services and the runtime.
 - **Dry-run-first:** the template and CLI must be exercisable end-to-end with no billable resources (`--dry-run`), mirroring the intake line's no-cloud/no-LLM test posture.

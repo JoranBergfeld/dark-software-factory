@@ -9,8 +9,8 @@ The only human gate is downstream, approving the spec PR.
 
 This repo is also a **template + CLI**: `dsf new <product>` stamps out an *isolated*
 software factory for one product — its own GitHub repo + Coding Squad, a feature council
-scoped to that product, a dedicated Azure resource group, and the council runtime brought
-up in your homelab. See the
+scoped to that product, a dedicated Azure resource group, and the council runtime
+deployed as an Azure Container App. See the
 [charter](docs/superpowers/specs/2026-06-17-dark-software-factory-template-charter-design.md)
 for the north-star and roadmap (SP1–SP3 implemented; SRE agent + lifecycle next).
 
@@ -53,24 +53,25 @@ instance's feature-council runtime (`dsfctl run|sweep|serve-orchestrator|serve-a
 control-center`).
 
 `dsf new` creates the product GitHub repo + Coding Squad, provisions a dedicated Azure
-resource group from `infra/main.bicep`, and renders + brings up the product's council
-runtime as a homelab compose bundle (see RUNBOOK). The SRE agent is the next sub-project.
+resource group from `infra/main.bicep`, and renders + deploys the product's council
+runtime as an Azure Container App (see RUNBOOK). The SRE agent is the next sub-project.
 
 ## Status
 
 - **Runnable locally, end-to-end, in dry-run** against in-memory fakes — every component
   built behind a port. The full conveyor drives a signal to a (simulated) filed issue with
   grounding enforced and no network calls. All tests pass (run ``make test`` for the current count).
-- **Azure-ready, not deployed.** Bicep provisions **backing services only** (Cosmos, App
-  Config, Key Vault, App Insights, Event Grid → Service Bus ingestion buffer); the runtime
-  is meant to run in your homelab and reach Azure outbound (ADR 0002). An `infra-whatif`
-  pipeline previews infra changes (OIDC) and an `agents-images` pipeline publishes each
-  agent to GHCR. No billable resources are provisioned by the local flow.
+- **Azure-ready, not deployed.** Bicep provisions the **backing services** (Cosmos, App
+  Config, Key Vault, App Insights, Event Grid → Service Bus ingestion buffer) **and the
+  runtime** — a Container Apps environment + orchestrator app on a user-assigned managed
+  identity (ADR 0004). An `infra-whatif` pipeline previews infra changes (OIDC) and an
+  `agents-images` pipeline publishes each agent to GHCR. No billable resources are
+  provisioned by the local flow.
 - **Per-product factories.** `dsf new <product>` provisions an isolated Azure RG per
-  product and renders that product's council runtime to a homelab compose bundle under
-  `config/instances/<product>.runtime/`. In `--mode azure` the orchestrator reads endpoints
-  from the product's deployment outputs and emits traces to Application Insights. Real
-  Cosmos/App Config/LLM adapters land in SP3b; the Azure Container Apps target is a seam.
+  product (backing services + runtime identity + orchestrator Container App) and renders
+  that product's runtime descriptor to `config/instances/<product>.runtime/`. In `--mode
+  azure` the orchestrator reads endpoints from the product's deployment outputs and emits
+  traces to Application Insights. Real Cosmos/App Config/LLM adapters land in SP3b.
 
 ## Docs
 
@@ -79,7 +80,8 @@ runtime as a homelab compose bundle (see RUNBOOK). The SRE agent is the next sub
 - **Template + CLI charter: `docs/superpowers/specs/2026-06-17-dark-software-factory-template-charter-design.md`**
 - **Runbook (how to run & deploy): `docs/RUNBOOK.md`**
 - Architecture decisions: `docs/adr/0001-architecture-decisions.md` ·
-  `docs/adr/0002-homelab-runtime-azure-backing-only.md`
+  `docs/adr/0002-homelab-runtime-azure-backing-only.md` (superseded) ·
+  `docs/adr/0004-azure-container-apps-runtime.md`
 
 ## Layout
 
@@ -89,8 +91,8 @@ registry) · `memory` (tiers, dedup, consolidation) · `a2a` · `agents/<source>
 `triggers` · `learning` · `evals` · `observability` · `control_center`.
 `instance/` — instance spec + provisioner powering the `dsf new` CLI (greenfield
 product-factory scaffolding; creates the product repo + Coding Squad, provisions a
-dedicated per-product Azure resource group from `infra/main.bicep`, and renders + brings
-up the product's council runtime as a homelab compose bundle; only SRE-agent deployment is
+dedicated per-product Azure resource group from `infra/main.bicep`, and renders + deploys
+the product's council runtime as an Azure Container App; only SRE-agent deployment is
 deferred to a later sub-project).
-`runtime/` — the orchestrator runtime image (`Dockerfile`) the rendered council bundle runs.
-`infra/` — Bicep/azd + homelab compose.
+`runtime/` — the orchestrator runtime image (`Dockerfile`) the rendered Container App runs.
+`infra/` — Bicep/azd (backing services + ACA runtime).

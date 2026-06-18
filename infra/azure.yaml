@@ -2,10 +2,10 @@
 #
 # azd project manifest for the Dark Software Factory.
 #
-# This provisions ONLY the Azure backing services (infra/main.bicep). It does NOT
-# build or deploy any container/compute — the agent + orchestrator runtime is
-# hosted by the user (e.g. a Proxmox homelab) and reaches these services outbound.
-# There is intentionally no `services:` block. Use `azd provision` (not `azd up`).
+# This provisions the Azure backing services AND the runtime (infra/main.bicep) —
+# a Container Apps environment + orchestrator app on a user-assigned managed identity.
+# There is intentionally no `services:` block: the Container App is authored directly
+# in Bicep, so use `azd provision` (not `azd up`). See ADR 0004.
 #
 # NOTE: This authors the infrastructure. It is NOT run autonomously — see
 # infra/README.md for the human-gated provisioning steps.

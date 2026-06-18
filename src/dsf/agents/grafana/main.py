@@ -4,9 +4,8 @@ Builds the A2A app over the fake (fixture-backed) Grafana backend. Run with
 ``uvicorn dsf.agents.grafana.main:app``. The MCP backend is selected only in
 azure mode; see :mod:`dsf.agents.grafana.backend`.
 
-Deployment note: this agent is designed to run inside a homelab behind NAT, so
-it reaches the orchestrator outbound. That is operational only and does not
-affect the code here.
+Deployment note: this agent runs as an Azure Container App alongside the
+orchestrator (ADR 0004). That is operational only and does not affect the code here.
 """
 
 from __future__ import annotations
