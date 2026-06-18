@@ -28,15 +28,19 @@ Increment order (each its own commit, TDD, verified green before the next):
 Every adapter:
 
 - Implements the existing `typing.Protocol` port unchanged.
-- Takes the **SDK client as an injected constructor parameter** (`client=None`).
-  When `None`, it lazily builds a real SDK client from an endpoint +
-  `DefaultAzureCredential`. **Tests inject an in-memory SDK double → 100%
-  offline**, exactly like `RealGitHubClient(_run=...)`.
-- **Lazy-imports its Azure SDK inside the builder**, never at module top level —
-  mirroring `dsf.observability.tracing.build_tracer`, which degrades to the
-  `NoOpTracer` when OpenTelemetry is absent. So importing `dsf.config.azure_store`
-  does **not** require `azure-appconfiguration` to be installed; only *building a
-  real client* does. Missing-SDK raises a clear `RuntimeError` naming the extra.
+- Talks to a **narrow gateway** seam — a tiny `typing.Protocol` (1-3 methods)
+  injected at construction — rather than the raw SDK. A `from_endpoint(...)`
+  factory builds the default gateway, which lazily wraps the SDK using an
+  endpoint + `DefaultAzureCredential`. **Tests inject a dict-backed in-memory
+  gateway → 100% offline**, the same seam idea as `RealGitHubClient(_run=...)`.
+  The gateway contains all SDK-specific quirks (object types, not-found
+  exceptions), keeping the adapter logic clean and SDK-free.
+- **Lazy-imports its Azure SDK inside the gateway builder**, never at module top
+  level — mirroring `dsf.observability.tracing.build_tracer`, which degrades to
+  the `NoOpTracer` when OpenTelemetry is absent. So importing
+  `dsf.config.azure_store` does **not** require `azure-appconfiguration`; only
+  *building a real gateway* does. A missing SDK raises a clear `RuntimeError`
+  naming the extra.
 
 ### Module placement (domain-co-located, per ADR 0005)
 
@@ -98,10 +102,11 @@ unlabelled one.
   `_overrides` view of labelled settings (parity with the in-memory snapshot
   shape).
 
-**Test double:** `InMemoryAppConfigClient` (in `tests/support/azure_doubles.py`)
-holds `{(key, label): value}` and implements only
-`get_configuration_setting` / `set_configuration_setting` /
-`list_configuration_settings`.
+**Gateway:** `ConfigGateway` (`get`/`set`/`list` of JSON-string values keyed by
+`(key, label)`). Real `_SdkConfigGateway` wraps `azure-appconfiguration`
+(`ConfigurationSetting` objects, `ResourceNotFoundError` → `None`). **Test
+double:** `InMemoryConfigGateway` (in `tests/support/azure_doubles.py`) holds
+`{(key, label): value}`.
 
 ## 4. Adapter 2 — `CosmosMemoryStore` (Azure Cosmos DB)
 
@@ -110,7 +115,7 @@ One database per product; three containers:
 
 | Tier | Container | Partition key | Notes |
 |---|---|---|---|
-| working | `working` | `/key` | per-item Cosmos **TTL** (`ttl` seconds); `get_working` reads by id, expired items auto-removed server-side |
+| working | `working` | `/key` | per-item Cosmos **TTL** (`ttl` seconds); `get_working` queries by `key` (== item id), expired items auto-removed server-side |
 | records | `records` | `/kind` | `query_similar` runs `SELECT * FROM c WHERE c.kind=@kind`, then ranks client-side by **token-overlap** (reuse `_tokens`/`_overlap` from `dsf.memory.store`), returns top `k`; per-item TTL honored |
 | lessons | `lessons` | `/product` | `get_lessons` queries `product=@product`, newest first, top `k` |
 
@@ -122,11 +127,12 @@ later). The adapter's job here is the port translation, not new ranking.
 enforcement is Cosmos's responsibility (tests assert the adapter *sets* `ttl`,
 not that items expire).
 
-**Test double:** `InMemoryCosmosClient` (in `tests/support/azure_doubles.py`)
-exposing the narrow async surface used: `get_database_client(db)
-.get_container_client(name)` → `upsert_item` / `read_item` /
-`query_items` (async-iterable), backed by dicts; implements only the `=`-filter
-query subset the adapter issues.
+**Gateway:** `CosmosGateway` (`upsert(container, item)` + single-field equality
+`query(container, field, value)`). Real `_SdkCosmosGateway` wraps
+`azure.cosmos.aio` (`get_database_client(db).get_container_client(name)` →
+`upsert_item` / `query_items`). **Test double:** `InMemoryCosmosGateway` (in
+`tests/support/azure_doubles.py`) backs containers with dict lists and
+implements the `=`-filter query the adapter issues.
 
 ## 5. Adapter 3 — `AzureOpenAIModelClient` (Azure OpenAI)
 
@@ -143,9 +149,12 @@ The synthesizer's `[deterministic]` echo sentinel
 `DeterministicModelClient`. The real client returns real prose/JSON, so the
 fallback simply never triggers — **no coupling change needed**.
 
-**Test double:** `RecordingOpenAIClient` (in `tests/support/azure_doubles.py`)
-records messages and returns a canned completion (a JSON string for the
-structured-output test, plain prose otherwise).
+**Gateway:** `ChatGateway` (one `complete(system, prompt, json_schema) -> str`).
+Real `_SdkChatGateway` wraps `openai.AsyncAzureOpenAI` (built with an
+`azure_ad_token_provider` from `DefaultAzureCredential`). **Test double:**
+`RecordingChatGateway` (in `tests/support/azure_doubles.py`) records calls and
+returns a canned completion (a JSON string for the structured-output test,
+plain prose otherwise).
 
 ## 6. Wiring into `build_services('azure')` — graceful per-endpoint degradation
 
@@ -170,7 +179,7 @@ model  = AzureOpenAIModelClient(endpoint=settings.openai_endpoint,
 ## 7. Testing strategy
 
 - **Per-adapter unit tests** (`tests/config/`, `tests/memory/`, `tests/model/`)
-  using the injected in-memory SDK doubles in `tests/support/azure_doubles.py`.
+  using the injected in-memory gateway doubles in `tests/support/azure_doubles.py`.
   Cover: the read/write/translate semantics, the flag→key mapping, TTL field
   translation, structured-output parsing.
 - **Import-safety test:** importing each `azure_*` adapter module succeeds with
@@ -184,11 +193,11 @@ model  = AzureOpenAIModelClient(endpoint=settings.openai_endpoint,
 
 ## 8. ADR
 
-Add **ADR 0006 — Azure data adapters: injected SDK clients + optional extra +
-graceful degradation**, recording: real adapters behind the existing ports;
-SDK client injected (offline tests); `azure` optional extra with lazy imports;
-per-endpoint graceful fallback to the in-memory sibling. Fulfills (does not
-supersede) ADR 0001/0005.
+Add **ADR 0006 — Azure data adapters: injected gateway seams + optional extra +
+graceful degradation**, recording: real adapters behind the existing ports; a
+narrow gateway injected (offline tests) with the SDK wrapped lazily; `azure`
+optional extra; per-endpoint graceful fallback to the in-memory sibling.
+Fulfills (does not supersede) ADR 0001/0005.
 
 ## 9. Out of scope
 
