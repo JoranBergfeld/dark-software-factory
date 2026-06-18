@@ -14,8 +14,9 @@ dist
 local_state
 *.egg-info
 .env
-# Tests are no longer copied into images (agents copy core/ + feature-council/)
-tests
+# Tests are never copied into images (members are installed by path; wheels ship
+# src/dsf only). Exclude every member's tests/ tree, not just a root one.
+**/tests
 # Non-build artefacts
 config
 Makefile
