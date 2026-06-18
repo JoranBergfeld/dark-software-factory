@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 from dsf.instance.provisioner import InstanceProvisioner
-from dsf.instance.runtime_render import render_runtime_bundle, render_sre_bundle, runtime_dir
+from dsf.instance.runtime_render import (
+    render_runtime_bundle,
+    render_sre_onboarding,
+    runtime_dir,
+)
 from dsf.instance.spec import AzureProvisionResult, InstanceManifest, InstanceSpec
 
 
@@ -75,12 +79,14 @@ def test_render_tolerates_missing_azure_outputs(tmp_path):
     assert "AZURE_APPCONFIG_ENDPOINT=" in env
     assert "AZURE_COSMOS_ENDPOINT=" in env
 
-def test_render_sre_bundle_writes_scoped_app_config(tmp_path):
-    bundle = render_sre_bundle(_manifest(tmp_path), repo_root=tmp_path)
-    assert bundle.runtime_dir == runtime_dir("microbi", tmp_path)
-    assert bundle.app_config_path.name == "sre.containerapp.yaml"
-    app = bundle.app_config_path.read_text(encoding="utf-8")
-    assert "dsf-sre-microbi" in app
-    assert "image:" in app
-    assert "DSF_PRODUCT" in app
-    assert "microbi" in app
+def test_render_sre_onboarding_writes_guided_runbook(tmp_path):
+    onb = render_sre_onboarding(_manifest(tmp_path), repo_root=tmp_path)
+    assert onb.runtime_dir == runtime_dir("microbi", tmp_path)
+    assert onb.onboarding_path.name == "sre-onboarding.md"
+    body = onb.onboarding_path.read_text(encoding="utf-8")
+    assert "sre.azure.com" in body
+    assert "rg-dsf-microbi" in body      # product resource group
+    assert "swedencentral" in body       # region
+    assert "acme/microbi" in body        # product repo
+    assert "squad:ready" in body         # handoff label preserved
+    assert "containerapp" not in body    # no Container App deploy
