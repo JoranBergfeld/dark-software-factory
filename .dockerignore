@@ -1,5 +1,6 @@
-# Build context is limited to pyproject.toml, uv.lock, core/, and src/.
-# Everything else is excluded to keep context minimal and images lean.
+# Build context is limited to core/ and feature-council/ (each a uv workspace
+# member installed by path). Everything else is excluded to keep context
+# minimal and images lean.
 .git
 .github
 .venv
@@ -13,7 +14,7 @@ dist
 local_state
 *.egg-info
 .env
-# Tests are no longer copied into images (agents only copy src/)
+# Tests are no longer copied into images (agents copy core/ + feature-council/)
 tests
 # Non-build artefacts
 config

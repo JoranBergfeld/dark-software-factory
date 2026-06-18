@@ -2,11 +2,10 @@ FROM python:3.12-slim@sha256:d764629ce0ddd8c71fd371e9901efb324a95789d2315a47db7e
 
 WORKDIR /build
 
-COPY pyproject.toml uv.lock ./
 COPY core/ ./core/
-COPY src/ ./src/
+COPY feature-council/ ./feature-council/
 
-RUN pip install --no-cache-dir --prefix=/install ./core .
+RUN pip install --no-cache-dir --prefix=/install ./core ./feature-council
 
 FROM python:3.12-slim@sha256:d764629ce0ddd8c71fd371e9901efb324a95789d2315a47db7e4d27e78f1b0e9
 
@@ -19,6 +18,7 @@ COPY --from=builder /install /usr/local
 
 USER appuser
 
-EXPOSE 8080
-
-CMD ["uvicorn", "dsf.agents.grafana.main:app", "--host", "0.0.0.0", "--port", "8080"]
+# Per-product feature-council orchestrator (the dsfctl instance-control CLI).
+# Scope is supplied at runtime via DSF_PRODUCT (see .env.orchestrator). The
+# global --mode flag MUST precede the subcommand.
+CMD ["dsfctl", "--mode", "azure", "serve-orchestrator"]

@@ -10,23 +10,25 @@ on:
   push:
     branches: [main]
     paths:
-      - 'src/dsf/agents/**'
+      - 'feature-council/src/dsf/agents/**'
       - 'core/src/dsf/contracts/**'
       - 'core/src/dsf/ports/**'
       - 'core/src/dsf/a2a/**'
       - 'core/src/dsf/container.py'
       - 'pyproject.toml'
       - 'core/pyproject.toml'
+      - 'feature-council/pyproject.toml'
       - '.github/workflows/agents-images.yml'
   pull_request:
     paths:
-      - 'src/dsf/agents/**'
+      - 'feature-council/src/dsf/agents/**'
       - 'core/src/dsf/contracts/**'
       - 'core/src/dsf/ports/**'
       - 'core/src/dsf/a2a/**'
       - 'core/src/dsf/container.py'
       - 'pyproject.toml'
       - 'core/pyproject.toml'
+      - 'feature-council/pyproject.toml'
       - '.github/workflows/agents-images.yml'
   workflow_dispatch:
 
@@ -51,21 +53,22 @@ jobs:
             core:
               - 'pyproject.toml'
               - 'core/pyproject.toml'
+              - 'feature-council/pyproject.toml'
               - 'core/src/dsf/contracts/**'
               - 'core/src/dsf/ports/**'
               - 'core/src/dsf/a2a/**'
-              - 'src/dsf/agents/base.py'
+              - 'feature-council/src/dsf/agents/base.py'
               - 'core/src/dsf/container.py'
             sentry:
-              - 'src/dsf/agents/sentry/**'
+              - 'feature-council/src/dsf/agents/sentry/**'
             grafana:
-              - 'src/dsf/agents/grafana/**'
+              - 'feature-council/src/dsf/agents/grafana/**'
             foundryiq:
-              - 'src/dsf/agents/foundryiq/**'
+              - 'feature-council/src/dsf/agents/foundryiq/**'
             webiq:
-              - 'src/dsf/agents/webiq/**'
+              - 'feature-council/src/dsf/agents/webiq/**'
             tickets:
-              - 'src/dsf/agents/tickets/**'
+              - 'feature-council/src/dsf/agents/tickets/**'
 
       - id: set
         env:
@@ -138,7 +141,7 @@ jobs:
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
-          file: src/dsf/agents/${{ matrix.agent }}/Dockerfile
+          file: feature-council/src/dsf/agents/${{ matrix.agent }}/Dockerfile
           load: true
           tags: dsf-agent-${{ matrix.agent }}:scan
           cache-from: type=gha
@@ -157,7 +160,7 @@ jobs:
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
-          file: src/dsf/agents/${{ matrix.agent }}/Dockerfile
+          file: feature-council/src/dsf/agents/${{ matrix.agent }}/Dockerfile
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

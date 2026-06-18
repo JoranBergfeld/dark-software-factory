@@ -8,11 +8,11 @@ from pathlib import Path
 
 import pytest
 
-from dsf.cli.control import main
 from dsf.container import build_services
 from dsf.contracts.enums import RunStatus
 from dsf.orchestrator.blackboard import Blackboard
 from dsf.orchestrator.conveyor import run_line
+from dsf.runtime.control import main
 from dsf.triggers.ingestion import signal_to_run
 
 REPO_ROOT = Path(__file__).resolve().parents[2]

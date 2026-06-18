@@ -12,6 +12,7 @@ resolution-markers = [
 members = [
     "dsf",
     "dsf-core",
+    "dsf-feature-council",
 ]
 
 [[package]]
@@ -336,11 +337,7 @@ source = { editable = "." }
 dependencies = [
     { name = "dsf-core" },
     { name = "fastapi" },
-    { name = "httpx" },
     { name = "jinja2" },
-    { name = "mcp" },
-    { name = "pydantic" },
-    { name = "uvicorn" },
 ]
 
 [package.dev-dependencies]
@@ -354,11 +351,7 @@ dev = [
 requires-dist = [
     { name = "dsf-core", editable = "core" },
     { name = "fastapi", specifier = ">=0.110" },
-    { name = "httpx", specifier = ">=0.27" },
     { name = "jinja2", specifier = ">=3.1" },
-    { name = "mcp", specifier = ">=1.2" },
-    { name = "pydantic", specifier = ">=2.6" },
-    { name = "uvicorn", specifier = ">=0.29" },
 ]
 
 [package.metadata.requires-dev]
@@ -397,6 +390,25 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.6" },
 ]
 provides-extras = ["azure"]
+
+[[package]]
+name = "dsf-feature-council"
+version = "0.1.0"
+source = { editable = "feature-council" }
+dependencies = [
+    { name = "dsf-core" },
+    { name = "fastapi" },
+    { name = "mcp" },
+    { name = "uvicorn" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "dsf-core", editable = "core" },
+    { name = "fastapi", specifier = ">=0.110" },
+    { name = "mcp", specifier = ">=1.2" },
+    { name = "uvicorn", specifier = ">=0.29" },
+]
 
 [[package]]
 name = "fastapi"

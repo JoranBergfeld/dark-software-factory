@@ -49,7 +49,7 @@ _logger = logging.getLogger(__name__)
 # tests/fixtures/sentry_evidence.json relative to repo root.
 # backend.py -> sentry -> agents -> dsf -> src -> <repo root>.
 _FIXTURE_PATH = (
-    Path(__file__).resolve().parents[4] / "tests" / "fixtures" / "sentry_evidence.json"
+    Path(__file__).resolve().parents[5] / "tests" / "fixtures" / "sentry_evidence.json"
 )
 
 
