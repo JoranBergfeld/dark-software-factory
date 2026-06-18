@@ -1,8 +1,7 @@
 .PHONY: install test lint fmt dryrun evals new-demo
 
 install:
-	uv venv --python 3.12
-	uv pip install -e ".[dev]"
+	uv sync
 
 test:
 	uv run pytest -q

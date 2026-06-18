@@ -17,6 +17,13 @@ import/versioning friction across shared contracts. One package keeps the contra
 A2A library coherent and independently testable; the container boundary (Dockerfile +
 entrypoint) provides the portability, not a package boundary.
 
+> **Update (ADR 0010):** The "single Python package" decision is superseded by
+> [ADR 0010](0010-uv-workspace-monorepo.md): the project is now a uv **workspace** of
+> self-contained members (`dsf-core`, `dsf-feature-council`, `dsf-cli`,
+> `dsf-control-center`) sharing one `dsf.` namespace and one lockfile. The per-agent
+> container entrypoints and the ports posture are unaffected; the package boundary now
+> additionally encodes ownership, enforced by per-member deps + an import-linter.
+
 ## 2. Ports + in-memory fakes for every external dependency
 
 **Decision:** Model, memory, config, GitHub, source backends, and tracing are all
