@@ -72,6 +72,7 @@ class ProvisionStep(BaseModel):
     name: str
     description: str
     command: list[str] = Field(default_factory=list)
+    commands: list[list[str]] = Field(default_factory=list)
     cwd: str = ""
     deferred: bool = False
     executed: bool = False

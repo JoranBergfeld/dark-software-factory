@@ -13,6 +13,11 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from dsf.contracts.handoff import (
+    HANDOFF_LABEL,
+    HANDOFF_LABEL_COLOR,
+    HANDOFF_LABEL_DESCRIPTION,
+)
 from dsf.instance.runtime_render import render_runtime_bundle
 from dsf.instance.spec import (
     AzureProvisionResult,
@@ -27,6 +32,32 @@ from dsf.instance.spec import (
 )
 
 Runner = Callable[..., Any]
+
+
+def _label_commands(spec: InstanceSpec) -> list[list[str]]:
+    """Build idempotent ``gh label create --force`` commands for an instance.
+
+    Creates every label in the product's taxonomy plus the universal
+    council->squad :data:`HANDOFF_LABEL`, so council-filed issues never fail on a
+    missing label. Targets the repo with ``--repo`` (cwd-independent).
+    """
+    repo = spec.github_repo()
+    commands: list[list[str]] = []
+    for group in spec.label_taxonomy.values():
+        for name in group:
+            commands.append(
+                ["gh", "label", "create", name, "--repo", repo, "--force"]
+            )
+    commands.append(
+        [
+            "gh", "label", "create", HANDOFF_LABEL,
+            "--repo", repo,
+            "--color", HANDOFF_LABEL_COLOR,
+            "--description", HANDOFF_LABEL_DESCRIPTION,
+            "--force",
+        ]
+    )
+    return commands
 
 
 class InstanceProvisioner:
@@ -68,6 +99,13 @@ class InstanceProvisioner:
                 ],
             ),
             ProvisionStep(
+                name="create_labels",
+                description=(
+                    f"Create the label taxonomy + handoff label in {s.github_repo()}"
+                ),
+                commands=_label_commands(s),
+            ),
+            ProvisionStep(
                 name="squad_init",
                 description=f"Initialize Coding Squad in {s.github_repo()}",
                 command=["squad", "init", "--preset", "default"],
@@ -77,6 +115,14 @@ class InstanceProvisioner:
                 name="squad_copilot",
                 description="Enable Copilot coding agent auto-assignment",
                 command=["squad", "copilot", "--auto-assign"],
+                cwd=repo_dir,
+            ),
+            ProvisionStep(
+                name="squad_triage",
+                description=(
+                    f"Triage council-filed '{HANDOFF_LABEL}' issues -> Copilot agent"
+                ),
+                command=["squad", "triage", "--execute", "--label", HANDOFF_LABEL],
                 cwd=repo_dir,
             ),
             ProvisionStep(
@@ -167,6 +213,11 @@ class InstanceProvisioner:
                         step.executed, step.result = True, "deployed"
                 elif not execute:
                     step.result = "dry-run"
+                elif step.commands:
+                    kwargs = {"cwd": step.cwd} if step.cwd else {}
+                    for cmd in step.commands:
+                        self._run(cmd, check=True, **kwargs)
+                    step.executed, step.result = True, "executed"
                 elif not step.command:
                     step.result = "noop"
                 elif step.name == "create_repo" and self._repo_exists():

@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from dsf.contracts.handoff import HANDOFF_LABEL, HANDOFF_LABEL_COLOR
 from dsf.instance.provisioner import InstanceProvisioner
 from dsf.instance.spec import InstanceSpec, read_manifest
 
@@ -20,8 +21,10 @@ def test_plan_step_order_and_names():
     assert plan.product == "demo"
     assert [s.name for s in plan.steps] == [
         "create_repo",
+        "create_labels",
         "squad_init",
         "squad_copilot",
+        "squad_triage",
         "create_resource_group",
         "provision_azure",
         "deploy_council",
@@ -71,10 +74,76 @@ def test_plan_create_repo_command():
 
 def test_plan_squad_steps_run_in_repo_dir():
     plan = InstanceProvisioner(_spec()).plan()
-    for name in ("squad_init", "squad_copilot"):
+    for name in ("squad_init", "squad_copilot", "squad_triage"):
         step = next(s for s in plan.steps if s.name == name)
         assert step.cwd == "demo"
         assert step.command[0] == "squad"
+
+
+def test_plan_squad_triage_targets_handoff_label():
+    plan = InstanceProvisioner(_spec()).plan()
+    triage = next(s for s in plan.steps if s.name == "squad_triage")
+    assert triage.command == [
+        "squad", "triage", "--execute", "--label", HANDOFF_LABEL,
+    ]
+
+
+def test_plan_create_labels_covers_taxonomy_and_handoff():
+    spec = _spec()
+    plan = InstanceProvisioner(spec).plan()
+    labels = next(s for s in plan.steps if s.name == "create_labels")
+    # No single command — it emits one gh-label-create per label.
+    assert labels.command == []
+    created = [c[3] for c in labels.commands]
+    # Every taxonomy value is created...
+    for group in spec.label_taxonomy.values():
+        for name in group:
+            assert name in created
+    # ...plus the universal handoff label, idempotently (--force), via --repo.
+    assert HANDOFF_LABEL in created
+    for cmd in labels.commands:
+        assert cmd[:3] == ["gh", "label", "create"]
+        assert "--force" in cmd
+        assert cmd[cmd.index("--repo") + 1] == spec.github_repo()
+    handoff_cmd = next(c for c in labels.commands if c[3] == HANDOFF_LABEL)
+    assert handoff_cmd[handoff_cmd.index("--color") + 1] == HANDOFF_LABEL_COLOR
+
+
+def test_apply_execute_creates_labels_and_triages(tmp_path):
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append((cmd, kwargs.get("cwd")))
+        returncode = 1 if cmd[:3] == ["gh", "repo", "view"] else 0
+        return MagicMock(returncode=returncode)
+
+    prov = InstanceProvisioner(_spec(), run=fake_run, repo_root=tmp_path)
+    manifest = prov.apply(execute=True)
+
+    executed = [cmd for cmd, _ in calls]
+    assert ["squad", "triage", "--execute", "--label", HANDOFF_LABEL] in executed
+    label_creates = [c for c in executed if c[:3] == ["gh", "label", "create"]]
+    assert any(c[3] == HANDOFF_LABEL for c in label_creates)
+    assert len(label_creates) >= 1
+    results = {s.name: s.result for s in manifest.plan.steps}
+    assert results["create_labels"] == "executed"
+    assert results["squad_triage"] == "executed"
+
+
+def test_apply_dry_run_records_labels_and_triage(tmp_path):
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return MagicMock(returncode=0)
+
+    prov = InstanceProvisioner(_spec(), run=fake_run, repo_root=tmp_path)
+    manifest = prov.apply(execute=False)
+
+    assert calls == []
+    results = {s.name: s.result for s in manifest.plan.steps}
+    assert results["create_labels"] == "dry-run"
+    assert results["squad_triage"] == "dry-run"
 
 
 def test_apply_dry_run_writes_manifest_and_runs_nothing(tmp_path):
