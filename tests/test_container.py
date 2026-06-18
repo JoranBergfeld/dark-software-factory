@@ -6,11 +6,9 @@ import pytest
 
 from dsf.config.store import InMemoryConfigStore
 from dsf.container import AzureRuntimeSettings, Services, build_services
-from dsf.fakes import (
-    FakeModelClient,
-)
 from dsf.github_client import RealGitHubClient, RecordingGitHubClient
 from dsf.memory import InMemoryMemoryStore
+from dsf.model import DeterministicModelClient
 from dsf.observability.tracing import NoOpTracer
 from dsf.ports import ConfigStore, GitHubClient, MemoryStore, ModelClient, Tracer
 
@@ -19,7 +17,7 @@ def test_build_services_local_wires_fakes():
     services = build_services("local")
     assert isinstance(services, Services)
     assert services.mode == "local"
-    assert isinstance(services.model, FakeModelClient)
+    assert isinstance(services.model, DeterministicModelClient)
     assert isinstance(services.memory, InMemoryMemoryStore)
     assert isinstance(services.config, InMemoryConfigStore)
     assert isinstance(services.github, RecordingGitHubClient)
@@ -96,7 +94,7 @@ def test_build_services_azure_wires_real_github_and_settings():
     assert services.azure is not None
     assert services.azure.product == "microbi"
     # model/memory/config remain fakes (the deferred-adapter seam):
-    assert isinstance(services.model, FakeModelClient)
+    assert isinstance(services.model, DeterministicModelClient)
     assert isinstance(services.memory, InMemoryMemoryStore)
     assert isinstance(services.config, InMemoryConfigStore)
     # tracer comes from build_tracer("azure") and still satisfies the port:

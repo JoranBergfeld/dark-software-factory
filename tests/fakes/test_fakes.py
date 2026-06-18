@@ -5,11 +5,9 @@ from __future__ import annotations
 import time
 
 from dsf.config.store import InMemoryConfigStore
-from dsf.fakes import (
-    FakeModelClient,
-    FakeSourceBackend,
-)
+from dsf.fakes import FakeSourceBackend
 from dsf.memory import InMemoryMemoryStore
+from dsf.model import DeterministicModelClient
 from dsf.ports import (
     ConfigStore,
     MemoryStore,
@@ -19,14 +17,14 @@ from dsf.ports import (
 
 
 def test_fakes_satisfy_protocols():
-    assert isinstance(FakeModelClient(), ModelClient)
+    assert isinstance(DeterministicModelClient(), ModelClient)
     assert isinstance(InMemoryMemoryStore(), MemoryStore)
     assert isinstance(InMemoryConfigStore.from_defaults(), ConfigStore)
     assert isinstance(FakeSourceBackend(), SourceBackend)
 
 
 async def test_model_client_handler_keyed_on_tag():
-    client = FakeModelClient()
+    client = DeterministicModelClient()
     client.register("##SYNTH##", lambda s, p: "synthesized")
     out = await client.complete("sys", "please ##SYNTH## now")
     assert out == "synthesized"
@@ -35,7 +33,7 @@ async def test_model_client_handler_keyed_on_tag():
     assert again == "synthesized"
     # Unmatched prompt falls back to deterministic echo.
     miss = await client.complete("sys", "nothing here")
-    assert miss.startswith("[fake-model]")
+    assert miss.startswith("[deterministic]")
 
 
 async def test_memory_store_working_and_records():

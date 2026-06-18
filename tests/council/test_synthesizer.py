@@ -11,7 +11,7 @@ from tests.council.conftest import make_evidence, make_run
 async def test_two_evidence_same_product_yields_proposal_with_default_fake_model():
     """A run with 2 evidence sharing a product hint -> >=1 grounded proposal.
 
-    Uses build_services("local") with the DEFAULT FakeModelClient (no handler
+    Uses build_services("local") with the DEFAULT DeterministicModelClient (no handler
     registered), proving the synthesizer never depends on structured model
     output.
     """

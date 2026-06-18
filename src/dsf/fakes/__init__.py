@@ -1,9 +1,5 @@
-"""Deterministic in-memory implementations of every port (for dry-run/tests)."""
+"""Offline source backends used as fixtures in dry-run and tests."""
 
-from dsf.fakes.model import FakeModelClient
 from dsf.fakes.source import FakeSourceBackend
 
-__all__ = [
-    "FakeModelClient",
-    "FakeSourceBackend",
-]
+__all__ = ["FakeSourceBackend"]

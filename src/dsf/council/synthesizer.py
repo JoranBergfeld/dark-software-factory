@@ -2,7 +2,7 @@
 
 Robustness contract: this MUST yield >=1 valid proposal for a run that
 carries evidence even when ``services.model`` is the default
-:class:`~dsf.fakes.FakeModelClient` (no registered handler). The model is
+:class:`~dsf.model.DeterministicModelClient` (no registered handler). The model is
 therefore used *only* for prose (title/problem/proposed_change text). The
 load-bearing fields — ``evidence_ids``, ``product`` and ``kind`` — are derived
 deterministically by clustering evidence on shared ``product_hints``.
@@ -80,7 +80,7 @@ def _prose_or_fallback(result: object, fallback: str) -> str:
     """Use model prose when it is a non-blank string, else the fallback."""
     if isinstance(result, str):
         text = result.strip()
-        if text and not text.startswith("[fake-model]"):
+        if text and not text.startswith("[deterministic]"):
             return text
     return fallback
 

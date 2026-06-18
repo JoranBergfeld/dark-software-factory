@@ -9,11 +9,9 @@ from dataclasses import dataclass
 from pydantic import BaseModel
 
 from dsf.config.store import InMemoryConfigStore
-from dsf.fakes import (
-    FakeModelClient,
-)
 from dsf.github_client import RecordingGitHubClient
 from dsf.memory.store import InMemoryMemoryStore
+from dsf.model import DeterministicModelClient
 from dsf.observability.tracing import NoOpTracer
 from dsf.ports import (
     ConfigStore,
@@ -100,7 +98,7 @@ def build_services(
     if mode == "local":
         return Services(
             mode=mode,
-            model=FakeModelClient(),
+            model=DeterministicModelClient(),
             memory=InMemoryMemoryStore(),
             config=InMemoryConfigStore.from_defaults(),
             github=RecordingGitHubClient(),
@@ -111,7 +109,7 @@ def build_services(
 
         return Services(
             mode=mode,
-            model=FakeModelClient(),
+            model=DeterministicModelClient(),
             memory=InMemoryMemoryStore(),
             config=InMemoryConfigStore.from_defaults(),
             github=RealGitHubClient(),
@@ -124,7 +122,7 @@ def build_services(
         settings = AzureRuntimeSettings.from_env(env if env is not None else os.environ)
         return Services(
             mode=mode,
-            model=FakeModelClient(),
+            model=DeterministicModelClient(),
             memory=InMemoryMemoryStore(),
             config=InMemoryConfigStore.from_defaults(),
             github=RealGitHubClient(),
