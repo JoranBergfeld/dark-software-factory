@@ -112,6 +112,23 @@ behavior — it flips feature flags that take effect on the next run with no red
 The Grafana dashboard (`src/dsf/observability/grafana/dashboard.json`) is the
 read-only observability surface; import it into Grafana once App Insights is wired.
 
+## Council → Squad handoff
+
+The council files issues into the product repo; the coding squad triages and
+implements them. The contract is one system-level label —
+`dsf.contracts.handoff.HANDOFF_LABEL` (`squad:ready`) — that S6 stamps on **every**
+routed issue and that `squad triage` filters on (ADR 0007).
+
+Provisioning wires this end to end: `create_labels` idempotently creates the
+product's taxonomy labels + `squad:ready` in the repo (so filing never fails on a
+missing label), and `squad triage --execute --label squad:ready` dispatches the
+Copilot coding agent against council-filed issues. The full closed loop:
+
+```
+council files issue (squad:ready) → squad triage → Copilot agent → PR →
+human review → council feedback-watcher → Lesson → next council run
+```
+
 ## The learning loop
 
 When a downstream spec PR is approved/rejected/edited, post the GitHub PR webhook to
