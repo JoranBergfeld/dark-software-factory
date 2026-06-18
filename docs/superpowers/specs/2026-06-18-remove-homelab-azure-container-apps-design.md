@@ -40,9 +40,9 @@ Azure, hosted on **Azure Container Apps (ACA)**.
    runtime (and source agents) run as Container Apps in the product's resource
    group, reaching the backing services in-Azure.
 3. Because the runtime now runs **inside** Azure, flip workload auth from the
-   Entra service principal (`workloadPrincipalId`) to a **system-assigned Managed
-   Identity** on the Container App(s), which receives the data-plane roles. This
-   removes the SP plumbing and the tunnel/egress-only model entirely.
+   Entra service principal (`workloadPrincipalId`) to a **user-assigned Managed
+   Identity (UAMI)** attached to the Container App, which receives the data-plane
+   roles. This removes the SP plumbing and the tunnel/egress-only model entirely.
 4. Record the reversal in a new **ADR 0004 (supersedes ADR 0002)**.
 
 This yields a coherent "runtime in Azure" base with no homelab left, ready for the
@@ -55,20 +55,35 @@ focused on the data-plane adapters (App Config / Cosmos / LLM). Compute/hosting 
 the direct homelab replacement, so the ACA Bicep + deploy path lands here. Keeps a
 clean seam: #28 = *where the runtime runs*, SP3b = *what the runtime talks to*.
 
-**Decision B — Managed Identity replaces `workloadPrincipalId`.** The SP path
-existed only because homelab is outside Azure (ADR 0002 §4). In ACA we use a
-system-assigned MI and assign the existing data-plane roles to it. The
-`workloadPrincipalId` parameter and all its plumbing are removed; the Bicep wires
-the role assignments to the Container App's `identity.principalId` directly, so
-there is no longer an "empty = skip role assignment" path.
+**Decision B — User-assigned Managed Identity replaces `workloadPrincipalId`.** The
+SP path existed only because homelab is outside Azure (ADR 0002 §4). In ACA we use a
+**user-assigned** MI (UAMI) and assign the existing data-plane roles to it. A UAMI
+(not system-assigned) is required to avoid a **circular dependency**: the Container
+App's env wires in the App Config / Cosmos endpoints (so the app depends on those
+resources), while the data resources' role assignments need the identity's
+principalId — with a system-assigned MI that principalId only exists *after* the app
+is created, forming a cycle. A standalone UAMI has a stable principalId known before
+the app, breaking the cycle (uami ← roles, uami ← app, cosmos ← app(env), cosmos ←
+uami(role) — a clean DAG). The `workloadPrincipalId` parameter and all its plumbing
+are removed; the Bicep wires the role assignments to the UAMI's `principalId`
+unconditionally, so there is no longer an "empty = skip role assignment" path.
 
 **Decision C — Full retarget, minimal footprint (recommended).** `infra/main.bicep`
-gains a **Container Apps Environment + one Container App** (the orchestrator
-runtime image), system-assigned MI, role assignments to that MI. `deploy_council`
-deploys via the injected runner (`az containerapp …` / `az deployment group
-create`) under `--execute`, dry-run otherwise — mirroring SP3's homelab path.
-`render_runtime_bundle` emits an **ACA container-app config** (`containerapp.yaml`
-+ rendered env) instead of a compose file.
+gains a **user-assigned Managed Identity**, a **Container Apps Environment** (wired to
+the existing Log Analytics workspace) + **one Container App** (the orchestrator
+runtime, no ingress — it's a worker), with the UAMI attached and the data-plane role
+assignments pointed at the UAMI. Two new params drive it: `product` (names the app
+`dsf-orchestrator-<product>` and sets `DSF_PRODUCT`) and `runtimeImage` (the
+orchestrator image ref, default a GHCR tag). The container's env is wired in Bicep
+from the sibling resources' endpoints (App Config / Cosmos / Key Vault / App
+Insights) + `AZURE_CLIENT_ID` = the UAMI clientId (so `DefaultAzureCredential` selects
+it). `provision_azure` creates all of this. `deploy_council` then **reconciles** the
+app to the rendered declarative spec via the injected runner
+(`az containerapp update --resource-group <rg> --name dsf-orchestrator-<product>
+--yaml <containerapp.yaml>`) under `--execute`, dry-run (render only) otherwise —
+mirroring SP3's homelab path. `render_runtime_bundle` emits that **ACA container-app
+config** (`containerapp.yaml`) + a resolved `.env` for inspection, instead of a
+compose file.
 _Lighter alternative if you want #28 truly minimal:_ remove homelab + retarget the
 render/ADR only, and defer the ACA Bicep compute + real deploy into redefined
 SP3b. **Recommendation: full retarget**, so the repo never sits in a
@@ -101,14 +116,19 @@ coverage** (the GRAFANA agent itself stays — `microbi` declares
 ## 4. Design / changes
 
 ### Infra (`infra/`)
-- `main.bicep`: add `Microsoft.App/managedEnvironments` + `Microsoft.App/containerApps`
-  (orchestrator runtime; image ref + env parameterized), system-assigned identity;
-  reassign Cosmos/App Config/Key Vault/Service Bus data-plane roles from
-  `workloadPrincipalId` → the Container App's `identity.principalId`. Remove the
-  `workloadPrincipalId` param (and from `main.parameters.json`).
+- `main.bicep`: add a **user-assigned identity**
+  (`Microsoft.ManagedIdentity/userAssignedIdentities`), a Container Apps
+  Environment (`Microsoft.App/managedEnvironments`, wired to the existing Log
+  Analytics workspace) and a Container App (`Microsoft.App/containerApps`, named
+  `dsf-orchestrator-<product>`, no ingress, UAMI attached, env wired from sibling
+  resource endpoints + `AZURE_CLIENT_ID`). Add params `product` and `runtimeImage`.
+  Reassign Cosmos/App Config/Key Vault/Service Bus data-plane roles from
+  `workloadPrincipalId` → the UAMI's `principalId` (unconditional). Remove the
+  `workloadPrincipalId` param (and from `main.parameters.json`). Add a
+  `runtimePrincipalId` output.
 - Delete `infra/compose.homelab.yml` and `infra/.env.homelab.example`.
 - `infra/README.md`, `infra/azure.yaml`, `infra/modules/ingestion.bicep`: drop
-  homelab framing; document the ACA runtime + MI auth.
+  homelab framing; document the ACA runtime + UAMI auth.
 
 ### Instance tooling (`src/dsf/instance/`)
 - `spec.py`: `runtime_target` default `"aca"`; remove `"homelab"`. Remove
@@ -116,9 +136,11 @@ coverage** (the GRAFANA agent itself stays — `microbi` declares
 - `runtime_render.py`: render an **ACA app config** (`containerapp.yaml`) +
   `.env` instead of `compose.orchestrator.yml`; `RuntimeBundle` fields renamed
   (`app_config_path`/`env_path`). `DSF_MODE=azure` retained.
-- `provisioner.py`: `deploy_council` deploys to ACA via the injected runner under
-  `--execute`; the `runtime_target != "homelab"` `NotImplementedError` branch is
-  removed (ACA is now the implemented default).
+- `provisioner.py`: `provision_azure` passes `product=<product>` and **drops**
+  `workloadPrincipalId=`; `deploy_council` reconciles the ACA app via the injected
+  runner (`az containerapp update … --yaml <containerapp.yaml>`) under `--execute`;
+  the homelab `docker compose up` branch and the `runtime_target != "homelab"`
+  `NotImplementedError` branch are both removed (ACA is the implemented default).
 
 ### CLI (`src/dsf/cli/factory.py`)
 - `--runtime-target` default `"aca"`, `choices=["aca"]` (single target, extensible);
