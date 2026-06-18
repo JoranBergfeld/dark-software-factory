@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dsf.instance.provisioner import InstanceProvisioner
-from dsf.instance.runtime_render import render_runtime_bundle, runtime_dir
+from dsf.instance.runtime_render import render_runtime_bundle, render_sre_bundle, runtime_dir
 from dsf.instance.spec import AzureProvisionResult, InstanceManifest, InstanceSpec
 
 
@@ -72,6 +72,15 @@ def test_render_tolerates_missing_azure_outputs(tmp_path):
     bundle = render_runtime_bundle(_manifest(tmp_path, with_azure=False), repo_root=tmp_path)
     env = bundle.env_path.read_text(encoding="utf-8")
     assert "DSF_PRODUCT=microbi" in env
-    # endpoints are blank (not yet provisioned) but the keys are present:
     assert "AZURE_APPCONFIG_ENDPOINT=" in env
     assert "AZURE_COSMOS_ENDPOINT=" in env
+
+def test_render_sre_bundle_writes_scoped_app_config(tmp_path):
+    bundle = render_sre_bundle(_manifest(tmp_path), repo_root=tmp_path)
+    assert bundle.runtime_dir == runtime_dir("microbi", tmp_path)
+    assert bundle.app_config_path.name == "sre.containerapp.yaml"
+    app = bundle.app_config_path.read_text(encoding="utf-8")
+    assert "dsf-sre-microbi" in app
+    assert "image:" in app
+    assert "DSF_PRODUCT" in app
+    assert "microbi" in app

@@ -36,7 +36,7 @@ def test_new_dry_run_prints_plan_without_side_effects(capsys, tmp_path):
     assert rc == 0
     assert "create_repo" in out
     assert "provision_azure" in out
-    assert "deferred" in out
+    assert "deploy_sre" in out
     # pure preview: no manifest written even though a config root was provided
     assert not (tmp_path / "config" / "instances" / "demo.json").exists()
 

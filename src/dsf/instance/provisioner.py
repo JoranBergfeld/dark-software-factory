@@ -18,7 +18,7 @@ from dsf.contracts.handoff import (
     HANDOFF_LABEL_COLOR,
     HANDOFF_LABEL_DESCRIPTION,
 )
-from dsf.instance.runtime_render import render_runtime_bundle
+from dsf.instance.runtime_render import render_runtime_bundle, render_sre_bundle
 from dsf.instance.spec import (
     AzureProvisionResult,
     InstanceManifest,
@@ -161,8 +161,7 @@ class InstanceProvisioner:
             ),
             ProvisionStep(
                 name="deploy_sre",
-                description=f"Deploy SRE agent for {s.product} (deferred to SP5)",
-                deferred=True,
+                description=f"Render + bring up the SRE agent runtime scoped to {s.product}",
             ),
             ProvisionStep(
                 name="write_config",
@@ -206,6 +205,24 @@ class InstanceProvisioner:
                                 "az", "containerapp", "update",
                                 "--resource-group", self.spec.resource_group(),
                                 "--name", f"dsf-orchestrator-{self.spec.product}",
+                                "--image", self.spec.runtime_image,
+                            ],
+                            check=True,
+                        )
+                        step.executed, step.result = True, "deployed"
+                elif step.name == "deploy_sre":
+                    provisional = InstanceManifest(
+                        spec=self.spec, plan=plan, executed=executed, azure=azure_result
+                    )
+                    render_sre_bundle(provisional, repo_root=self._repo_root)
+                    if not execute:
+                        step.result = "rendered (dry-run)"
+                    else:
+                        self._run(
+                            [
+                                "az", "containerapp", "update",
+                                "--resource-group", self.spec.resource_group(),
+                                "--name", f"dsf-sre-{self.spec.product}",
                                 "--image", self.spec.runtime_image,
                             ],
                             check=True,

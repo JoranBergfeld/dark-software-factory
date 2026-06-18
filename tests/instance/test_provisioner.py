@@ -36,7 +36,7 @@ def test_plan_step_order_and_names():
 def test_plan_deferred_flags():
     plan = InstanceProvisioner(_spec()).plan()
     deferred = {s.name for s in plan.steps if s.deferred}
-    assert deferred == {"deploy_sre"}
+    assert deferred == set()
 
 
 def test_plan_create_resource_group_command():
@@ -166,7 +166,7 @@ def test_apply_dry_run_writes_manifest_and_runs_nothing(tmp_path):
     assert (tmp_path / "config" / "instances" / "demo.json").exists()
 
 
-def test_apply_execute_runs_real_steps_and_stubs_deferred(tmp_path):
+def test_apply_execute_runs_real_steps_and_deploys_sre(tmp_path):
     calls = []
 
     def fake_run(cmd, **kwargs):
@@ -187,10 +187,18 @@ def test_apply_execute_runs_real_steps_and_stubs_deferred(tmp_path):
         "az", "group", "create", "--name", "rg-dsf-demo", "--location", "swedencentral",
     ] in executed
     assert any(cmd[:4] == ["az", "deployment", "group", "create"] for cmd in executed)
+    # both council and SRE container apps are reconciled:
+    sre_update = next(
+        cmd for cmd in executed
+        if cmd[:3] == ["az", "containerapp", "update"]
+        and cmd[cmd.index("--name") + 1] == "dsf-sre-demo"
+    )
+    assert "--image" in sre_update
     assert manifest.executed is True
     results = {s.name: s.result for s in manifest.plan.steps}
     assert results["create_repo"] == "executed"
     assert results["deploy_council"] == "deployed"
+    assert results["deploy_sre"] == "deployed"
 
 
 def test_apply_execute_skips_clone_when_repo_and_local_dir_exist(tmp_path, monkeypatch):
@@ -327,7 +335,13 @@ def test_apply_execute_aca_updates_container_app(tmp_path):
     runtime = tmp_path / "config" / "instances" / "demo.runtime"
     assert (runtime / "containerapp.yaml").is_file()
     assert (runtime / ".env.orchestrator").is_file()
-    update = next(c for c in calls if c[:3] == ["az", "containerapp", "update"])
-    assert update[update.index("--name") + 1] == "dsf-orchestrator-demo"
+    assert (runtime / "sre.containerapp.yaml").is_file()
+    update = next(
+        c for c in calls
+        if c[:3] == ["az", "containerapp", "update"]
+        and c[c.index("--name") + 1] == "dsf-orchestrator-demo"
+    )
     assert "--image" in update
-    assert {s.name: s.result for s in manifest.plan.steps}["deploy_council"] == "deployed"
+    results = {s.name: s.result for s in manifest.plan.steps}
+    assert results["deploy_council"] == "deployed"
+    assert results["deploy_sre"] == "deployed"
