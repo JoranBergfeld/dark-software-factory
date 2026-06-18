@@ -87,14 +87,21 @@ renders a per-product onboarding runbook for the managed **Azure SRE Agent** pro
 
 ## Layout
 
-`src/dsf/` — `contracts` (shared models) · `ports` + `fakes` · `config` (flags + product
-registry) · `memory` (tiers, dedup, consolidation) · `a2a` · `agents/<source>` ·
-`council` (synthesizer + critics + decision) · `orchestrator` (conveyor + stations) ·
-`triggers` · `learning` · `evals` · `observability` · `control_center`.
-`instance/` — instance spec + provisioner powering the `dsf new` CLI (greenfield
-product-factory scaffolding; creates the product repo + Coding Squad, provisions a
-dedicated per-product Azure resource group from `infra/main.bicep`, and renders + deploys
-the product's council runtime as an Azure Container App; only SRE-agent deployment is
-deferred to a later sub-project).
-`runtime/` — the orchestrator runtime image (`Dockerfile`) the rendered Container App runs.
-`infra/` — Bicep/azd (backing services + ACA runtime).
+A uv workspace of self-contained members, all sharing the one PEP 420 `dsf.*`
+namespace (install with `uv sync --all-packages`):
+
+- **`core/`** (`dsf-core`) — the shared base every member builds on: `contracts`
+  (shared models) · `ports` · `config` (flags + product registry) · `memory`
+  (tiers, dedup, consolidation) · `a2a` · `model` · `learning` · `observability` ·
+  `container` · `github_client`.
+- **`feature-council/`** (`dsf-feature-council`) — the intake line: `agents/<source>` ·
+  `council` (synthesizer + critics + decision) · `orchestrator` (conveyor + stations) ·
+  `triggers` · `evals` · `runtime` (the orchestrator runtime image `Dockerfile` + the
+  `dsfctl` operator CLI).
+- **`cli/`** (`dsf-cli`) — the `dsf` factory CLI: `cli` + `instance` (instance spec +
+  provisioner powering `dsf new`; creates the product repo + Coding Squad, provisions a
+  dedicated per-product Azure resource group from `infra/main.bicep`, and renders +
+  deploys the product's council runtime as an Azure Container App).
+- **`control-center/`** (`dsf-control-center`) — the Control Center web UI and its
+  `dsf-control-center` serve script.
+- **`infra/`** — Bicep/azd (backing services + ACA runtime).
