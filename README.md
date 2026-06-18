@@ -12,7 +12,7 @@ software factory for one product — its own GitHub repo + Coding Squad, a featu
 scoped to that product, a dedicated Azure resource group, and the council runtime
 deployed as an Azure Container App. See the
 [charter](docs/superpowers/specs/2026-06-17-dark-software-factory-template-charter-design.md)
-for the north-star and roadmap (SP1–SP3 implemented; SRE agent + lifecycle next).
+for the north-star and roadmap (SP1–SP5 implemented; instance lifecycle next).
 
 ```
  signals ──▶ [S1 Triage] ─▶ [S2 Investigation] ─▶ [S3 Synthesis] ─▶ [S4 Grounding gate]
@@ -54,7 +54,9 @@ control-center`).
 
 `dsf new` creates the product GitHub repo + Coding Squad, provisions a dedicated Azure
 resource group from `infra/main.bicep`, and renders + deploys the product's council
-runtime as an Azure Container App (see RUNBOOK). The SRE agent is the next sub-project.
+runtime as an Azure Container App (see RUNBOOK). For the production-watching corner it
+renders a per-product onboarding runbook for the managed **Azure SRE Agent** product
+(ADR 0009), whose incident issues carry the `squad:ready` handoff label.
 
 ## Status
 

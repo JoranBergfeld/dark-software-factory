@@ -93,7 +93,7 @@ This repository holds: the feature-council codebase (`src/dsf/**`, today's intak
 
 **Coding Squad** *(integration).* `squad init` scaffolds `.squad/` into the product repo. `squad triage --execute` polls GitHub issues (those the council files) and dispatches the Copilot coding agent; team members persist learnings (the reflection/knowledge loop). The council's label taxonomy must align with Squad's triage expectations.
 
-**SRE Agent** *(new, phased).* Observes production telemetry (reusing the existing Sentry/Grafana A2A backends already in `src/dsf/agents/`). Two outputs: a **fast path** that fix-forwards production incidents directly into the Squad, and a **slow path** (later) that emits operational signals into the feature council. Maintains its own reflection store to improve over time.
+**SRE Agent** *(managed product — ADR 0009).* DSF leverages the **Azure SRE Agent** product rather than a bespoke runtime. It observes production telemetry (Azure Monitor / App Insights) and **fix-forwards** incidents directly into the Squad by filing GitHub issues/PRs carrying the `squad:ready` handoff label. `dsf new` renders a per-product onboarding runbook (`onboard_sre_agent`); onboarding itself is interactive (wizard + OAuth). A **slow path** that emits operational signals into the feature council remains deferred.
 
 **Azure** *(per-instance).* A dedicated resource group per instance from the existing Bicep (Cosmos, App Config, Key Vault, App Insights, Event Grid → Service Bus ingestion buffer), parameterized by product. The CLI invokes the deployment and feeds outputs back into the instance config.
 
@@ -125,7 +125,7 @@ Each is its own spec → plan → implementation cycle.
 | SP3 ✅ | Feature council productionization *(done)* | `build_services('azure')` (real GitHub client + App Insights tracer; model/memory/config on in-memory implementations behind a seam); single-product scoping via `Run.scope_product_hints`; orchestrator runtime image + per-product council rendered as an Azure Container Apps descriptor and deployed on `--execute`. |
 | SP3b ✅ | Real Azure data adapters *(done — ADR 0006)* | Replace the in-memory implementations behind the azure seam with real App Configuration, Cosmos, and Azure OpenAI adapters (App Configuration first), each behind a narrow injected gateway so the suite stays offline. |
 | SP4 ✅ | Coding-squad handoff hardening *(done — ADR 0007)* | One system-level handoff label (`squad:ready`) stamped by S6 on every routed issue and triaged by the squad; provisioner creates the repo labels and wires `squad triage --execute`; closed knowledge loop documented + tested. |
-| SP5 ✅ | SRE agent *(done — ADR 0008)* | Observe prod (reuse Sentry/Grafana backends) → detect incidents → fix-forward to the squad via the SP4 handoff label → self-reflection. Council slow-path deferred. |
+| SP5 ✅ | SRE agent *(done — ADR 0009 supersedes 0008)* | DSF leverages the managed **Azure SRE Agent** product: `dsf new` renders a per-product onboarding runbook (`onboard_sre_agent`); the agent investigates prod incidents and files issues/PRs carrying the `squad:ready` handoff label, so the same `squad triage` intake fixes them forward. |
 | — | Naming refresh *(cross-cutting)* | Rename "feature council" and related terms. |
 | — ✅ | CLI / runtime split *(cross-cutting, done)* | `dsf` (factory CLI, `dsf.cli.factory`) creates instances; `dsfctl` (instance control, `dsf.cli.control`) operates the feature-council runtime. Two console scripts in one package (ADR 0003). |
 
@@ -138,7 +138,7 @@ Each is its own spec → plan → implementation cycle.
 ## 8. Open decisions (recommendations noted; revisit per sub-project)
 
 1. **Runtime hosting per instance.** *(Resolved: ADR 0004.)* The council runtime runs as an **Azure Container App** on a user-assigned managed identity in the product's RG, created by `main.bicep` and image-rolled by `dsf new --execute`. (The earlier homelab target, ADR 0002, has been retired.)
-2. **SRE agent tech.** Start **dsf-native** (reuse Sentry/Grafana A2A backends + a reflection store); consider an "SRE Squad" later. Resolve in SP5.
+2. **SRE agent tech.** *(Resolved: ADR 0009 supersedes 0008.)* DSF leverages the managed **Azure SRE Agent** product rather than a bespoke runtime: `dsf new` renders a per-product onboarding runbook, and the agent files issues/PRs carrying the `squad:ready` handoff label so the existing squad intake fixes them forward.
 3. **Naming.** "Feature council" and related terms to be renamed; treat as a parallel cross-cutting task.
 4. **Brownfield depth.** Greenfield first (SP1); decide brownfield's exact scope (Squad-into-existing-repo, history-aware council priming) when brownfield onboarding is picked up ([#23](https://github.com/JoranBergfeld/dark-software-factory/issues/23)).
 

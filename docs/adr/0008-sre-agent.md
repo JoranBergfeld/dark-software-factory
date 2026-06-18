@@ -1,8 +1,16 @@
 # ADR 0008: SRE agent — deterministic fast path that fix-forwards to the coding squad
 
-- Status: Accepted
+- Status: Superseded by [ADR 0009](0009-leverage-azure-sre-agent.md)
 - Date: 2026-06-18
 - Fulfils: charter §6 SP5; builds on ADR 0001 (ports), ADR 0004 (ACA runtime), ADR 0005 (no `src/` fakes), ADR 0007 (council→squad handoff). Supersedes nothing.
+
+> **Superseded (2026-06-18):** DSF now leverages the managed **Azure SRE Agent**
+> product instead of the bespoke deterministic sweep described below. The
+> `src/dsf/sre/` package and `dsfctl sre-sweep` CLI were removed; the provisioner
+> renders a per-product onboarding runbook (`onboard_sre_agent` step) instead of
+> deploying a `dsf-sre-<product>` Container App. The handoff contract is
+> unchanged — the Azure SRE Agent files issues carrying `squad:ready` so the same
+> `squad triage` intake picks them up. See [ADR 0009](0009-leverage-azure-sre-agent.md).
 
 ## Context
 
