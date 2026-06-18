@@ -1,0 +1,16 @@
+version: 2
+
+updates:
+  # Keep the SHA-pinned GitHub Actions current. The workflows pin every action
+  # to a full commit SHA (with a "# vX" comment); Dependabot bumps the SHA and
+  # refreshes the comment so pinning never goes stale (#11).
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: ci
