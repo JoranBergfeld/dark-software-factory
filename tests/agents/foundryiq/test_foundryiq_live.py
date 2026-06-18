@@ -9,7 +9,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from dsf.agents.foundryiq.backend import FoundryIqFakeBackend, FoundryIqMcpBackend
+from dsf.agents.foundryiq.backend import FoundryIqFixtureBackend, FoundryIqMcpBackend
 from dsf.agents.foundryiq.client import build_foundryiq_client_from_env
 from dsf.agents.foundryiq.main import build_agent
 
@@ -88,12 +88,12 @@ async def test_retrieve_respects_custom_content_and_ref_fields(monkeypatch):
 
 def test_build_agent_local_uses_fake(monkeypatch):
     monkeypatch.delenv("DSF_MODE", raising=False)
-    assert isinstance(build_agent(mode="local").backend, FoundryIqFakeBackend)
+    assert isinstance(build_agent(mode="local").backend, FoundryIqFixtureBackend)
 
 
 def test_build_agent_default_unset_mode_is_fake(monkeypatch):
     monkeypatch.delenv("DSF_MODE", raising=False)
-    assert isinstance(build_agent().backend, FoundryIqFakeBackend)
+    assert isinstance(build_agent().backend, FoundryIqFixtureBackend)
 
 
 def test_build_agent_live_uses_mcp(monkeypatch):

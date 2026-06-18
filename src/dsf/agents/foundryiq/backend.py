@@ -7,7 +7,7 @@ so the conveyor can ground proposals in real internal context.
 
 Two backends satisfy :class:`~dsf.ports.SourceBackend`:
 
-* :class:`FoundryIqFakeBackend` — local/dry-run; loads canned evidence from a
+* :class:`FoundryIqFixtureBackend` — local/dry-run; loads canned evidence from a
   JSON fixture and never touches the network.
 * :class:`FoundryIqMcpBackend` — azure mode; queries the Foundry knowledge index
   through an injected ``retrieve`` callable (an MCP/SDK client). It does no
@@ -36,12 +36,12 @@ def _fixture_path() -> Path:
     return root / "tests" / "fixtures" / "foundryiq_evidence.json"
 
 
-class FoundryIqFakeBackend:
+class FoundryIqFixtureBackend:
     """Local/dry-run FoundryIQ backend — loads canned company-knowledge evidence.
 
-    Records each call (like :class:`dsf.fakes.source.FakeSourceBackend`) and
-    deserializes :class:`~dsf.contracts.models.EvidenceItem` objects from the
-    JSON fixture. Never hits the network.
+    Records each call and deserializes
+    :class:`~dsf.contracts.models.EvidenceItem` objects from the JSON fixture.
+    Never hits the network.
     """
 
     def __init__(self, fixture: str | Path | None = None) -> None:
@@ -127,4 +127,4 @@ class FoundryIqMcpBackend:
         return evidence
 
 
-__all__ = ["FoundryIqFakeBackend", "FoundryIqMcpBackend", "RetrieveFn"]
+__all__ = ["FoundryIqFixtureBackend", "FoundryIqMcpBackend", "RetrieveFn"]

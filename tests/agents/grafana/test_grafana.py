@@ -5,13 +5,13 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from dsf.agents.grafana.backend import GrafanaFakeBackend, GrafanaMcpBackend
+from dsf.agents.grafana.backend import GrafanaFixtureBackend, GrafanaMcpBackend
 from dsf.agents.grafana.main import app, build_agent
 from dsf.contracts.enums import SourceKind
 
 
 async def test_fake_backend_returns_grounded_evidence():
-    backend = GrafanaFakeBackend()
+    backend = GrafanaFixtureBackend()
     items = await backend.gather({"product_hints": ["microbi"]})
 
     assert len(items) >= 1

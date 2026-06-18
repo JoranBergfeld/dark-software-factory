@@ -9,7 +9,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from dsf.agents.grafana.backend import GrafanaFakeBackend, GrafanaMcpBackend
+from dsf.agents.grafana.backend import GrafanaFixtureBackend, GrafanaMcpBackend
 from dsf.agents.grafana.client import build_grafana_client_from_env
 from dsf.agents.grafana.main import build_agent
 
@@ -135,12 +135,12 @@ async def test_promql_query_maps_and_hits_proxy_path():
 
 def test_build_agent_local_uses_fake(monkeypatch):
     monkeypatch.delenv("DSF_MODE", raising=False)
-    assert isinstance(build_agent(mode="local").backend, GrafanaFakeBackend)
+    assert isinstance(build_agent(mode="local").backend, GrafanaFixtureBackend)
 
 
 def test_build_agent_default_unset_mode_is_fake(monkeypatch):
     monkeypatch.delenv("DSF_MODE", raising=False)
-    assert isinstance(build_agent().backend, GrafanaFakeBackend)
+    assert isinstance(build_agent().backend, GrafanaFixtureBackend)
 
 
 def test_build_agent_live_uses_mcp(monkeypatch):

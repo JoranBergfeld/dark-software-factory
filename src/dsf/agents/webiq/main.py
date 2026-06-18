@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dsf.agents.base import SourceAgent
 from dsf.agents.mode import is_live, resolve_mode
-from dsf.agents.webiq.backend import WebIqFakeBackend, WebIqMcpBackend
+from dsf.agents.webiq.backend import WebIqFixtureBackend, WebIqMcpBackend
 from dsf.config.store import InMemoryConfigStore
 from dsf.contracts.enums import SourceKind
 
@@ -29,7 +29,7 @@ def build_agent(config: object | None = None, mode: str | None = None) -> Source
 
         backend = WebIqMcpBackend(search=build_webiq_client_from_env())
     else:
-        backend = WebIqFakeBackend()
+        backend = WebIqFixtureBackend()
     return SourceAgent(
         kind=SourceKind.WEBIQ,
         backend=backend,

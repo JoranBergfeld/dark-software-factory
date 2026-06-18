@@ -11,11 +11,11 @@ from __future__ import annotations
 from dsf.contracts.models import EvidenceItem
 
 
-class TicketsFakeBackend:
+class TicketsFixtureBackend:
     """Local/dry-run tickets backend — returns no evidence.
 
-    Shaped like :class:`dsf.fakes.source.FakeSourceBackend`: records each call
-    and satisfies the :class:`~dsf.ports.SourceBackend` protocol.
+    Records each call and satisfies the :class:`~dsf.ports.SourceBackend`
+    protocol.
     """
 
     def __init__(self) -> None:
@@ -39,4 +39,4 @@ class TicketsMcpBackend:
         raise NotImplementedError("tickets source not yet integrated")
 
 
-__all__ = ["TicketsFakeBackend", "TicketsMcpBackend"]
+__all__ = ["TicketsFixtureBackend", "TicketsMcpBackend"]

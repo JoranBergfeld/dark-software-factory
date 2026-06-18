@@ -9,7 +9,7 @@ retrieve client and is selected only in azure mode.
 from __future__ import annotations
 
 from dsf.agents.base import SourceAgent
-from dsf.agents.foundryiq.backend import FoundryIqFakeBackend, FoundryIqMcpBackend
+from dsf.agents.foundryiq.backend import FoundryIqFixtureBackend, FoundryIqMcpBackend
 from dsf.agents.mode import is_live, resolve_mode
 from dsf.config.store import InMemoryConfigStore
 from dsf.contracts.enums import SourceKind
@@ -29,7 +29,7 @@ def build_agent(config: object | None = None, mode: str | None = None) -> Source
 
         backend = FoundryIqMcpBackend(retrieve=build_foundryiq_client_from_env())
     else:
-        backend = FoundryIqFakeBackend()
+        backend = FoundryIqFixtureBackend()
     return SourceAgent(
         kind=SourceKind.FOUNDRYIQ,
         backend=backend,

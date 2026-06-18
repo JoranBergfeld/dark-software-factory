@@ -12,7 +12,7 @@ import os
 
 from dsf.agents.base import SourceAgent
 from dsf.agents.mode import is_live, resolve_mode
-from dsf.agents.sentry.backend import SentryFakeBackend, SentryMcpBackend
+from dsf.agents.sentry.backend import SentryFixtureBackend, SentryMcpBackend
 from dsf.config.store import InMemoryConfigStore
 from dsf.contracts.enums import SourceKind
 
@@ -45,7 +45,7 @@ def build_agent(config: object | None = None, mode: str | None = None) -> Source
                 "SENTRY_AUTH_TOKEN (Sentry REST API)"
             )
     else:
-        backend = SentryFakeBackend()
+        backend = SentryFixtureBackend()
     return SourceAgent(
         kind=SourceKind.SENTRY,
         backend=backend,

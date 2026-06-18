@@ -5,14 +5,14 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from dsf.agents.foundryiq.backend import FoundryIqFakeBackend, FoundryIqMcpBackend
+from dsf.agents.foundryiq.backend import FoundryIqFixtureBackend, FoundryIqMcpBackend
 from dsf.agents.foundryiq.main import app, build_agent
 from dsf.config.store import InMemoryConfigStore
 from dsf.contracts.enums import SourceKind
 
 
 async def test_fake_gather_returns_grounded_evidence():
-    backend = FoundryIqFakeBackend()
+    backend = FoundryIqFixtureBackend()
     out = await backend.gather({"product_hints": ["alpha"]})
 
     assert len(out) >= 1

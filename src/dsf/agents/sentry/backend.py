@@ -2,7 +2,7 @@
 
 Two interchangeable implementations of :class:`dsf.ports.SourceBackend`:
 
-* :class:`SentryFakeBackend` — local/dry-run. Loads canned, EvidenceItem-shaped
+* :class:`SentryFixtureBackend` — local/dry-run. Loads canned, EvidenceItem-shaped
   records from ``tests/fixtures/sentry_evidence.json`` and never touches the
   network. Used by default in :mod:`dsf.agents.sentry.main`.
 * :class:`SentryMcpBackend` — azure mode. Maps a Sentry query to evidence by
@@ -53,12 +53,12 @@ _FIXTURE_PATH = (
 )
 
 
-class SentryFakeBackend:
+class SentryFixtureBackend:
     """Local/dry-run Sentry backend — loads canned evidence from a fixture.
 
-    Shaped like :class:`dsf.fakes.source.FakeSourceBackend`: records each call
-    on ``.calls`` and satisfies the :class:`~dsf.ports.SourceBackend` protocol.
-    Never performs any network/MCP I/O.
+    Records each call on ``.calls`` and satisfies the
+    :class:`~dsf.ports.SourceBackend` protocol. Never performs any network/MCP
+    I/O.
     """
 
     def __init__(self, fixture_path: Path | None = None) -> None:
@@ -165,4 +165,4 @@ class SentryMcpBackend:
         return evidence
 
 
-__all__ = ["SentryFakeBackend", "SentryMcpBackend"]
+__all__ = ["SentryFixtureBackend", "SentryMcpBackend"]

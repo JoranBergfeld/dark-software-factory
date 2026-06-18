@@ -5,13 +5,13 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from dsf.agents.webiq.backend import WebIqFakeBackend, WebIqMcpBackend
+from dsf.agents.webiq.backend import WebIqFixtureBackend, WebIqMcpBackend
 from dsf.agents.webiq.main import app, build_agent
 from dsf.contracts.enums import SourceKind
 
 
 async def test_webiq_fake_returns_grounded_evidence():
-    backend = WebIqFakeBackend()
+    backend = WebIqFixtureBackend()
     out = await backend.gather({"product_hints": ["microbi"]})
 
     assert len(out) >= 1
