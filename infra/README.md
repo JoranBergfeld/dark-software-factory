@@ -81,7 +81,7 @@ Runs on every change under `infra/`.
 ### `agents-images` (`.github/workflows/agents-images.yml`)
 Builds each source agent as its own image and pushes to **GHCR**
 (`ghcr.io/<owner>/dsf-agent-<kind>`), tagged `sha-<long>` and `latest` (on main).
-Change-detection: an agent rebuilds only when its own `src/dsf/agents/<kind>/**`
+Change-detection: an agent rebuilds only when its own `feature-council/src/dsf/agents/<kind>/**`
 changes; a change to shared core (`contracts`, `ports`, `a2a`, `agents/base.py`,
 `container.py`, `pyproject.toml`) rebuilds **all** agents. Pull requests build for
 validation but do **not** push. Uses the built-in `GITHUB_TOKEN` (no secrets).
@@ -138,7 +138,7 @@ ingress. The agent images are published to GHCR by the `agents-images` pipeline.
 `dsf new <product>` provisions a *dedicated* RG per product (including the runtime
 identity + orchestrator Container App) and renders that product's runtime descriptor
 to `config/instances/<product>.runtime/` — a generated `containerapp.yaml` for
-`src/dsf/runtime/Dockerfile` plus a resolved `.env.orchestrator` whose endpoints come
+`feature-council/src/dsf/runtime/Dockerfile` plus a resolved `.env.orchestrator` whose endpoints come
 straight from that deployment's Bicep outputs (App Config, Key Vault URI, App
 Insights, Cosmos). **Only endpoints are rendered; secrets stay in Key Vault** and are
 fetched at runtime via the managed identity. Under `--execute` `dsf new` rolls the app

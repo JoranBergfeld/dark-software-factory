@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 def _fixture_path() -> Path:
     """Locate ``tests/fixtures/grafana_evidence.json`` at the repo root.
 
-    ``src/dsf/agents/grafana/backend.py`` -> repo root is four parents up.
+    ``feature-council/src/dsf/agents/grafana/backend.py`` -> repo root is five parents up.
     """
     here = Path(__file__).resolve()
     return here.parents[5] / "tests" / "fixtures" / "grafana_evidence.json"
