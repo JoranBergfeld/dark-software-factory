@@ -84,6 +84,20 @@ co-located in Azure.
 is next, this workstream introduces **no** new fake classes; tests use the
 existing injected-runner DI pattern (`subprocess.run` seam) only.
 
+**Decision F — Remove the `homelab-dash` demo product entirely (owner-directed).**
+"Homelab" appears in a *second*, unrelated guise: a sample product literally named
+`homelab-dash` (Grafana dashboard `homelab-overview`) woven through
+`config/products.json`, the **golden eval cases** (`src/dsf/evals/golden/cases.json`),
+the grafana evidence fixture (`tests/fixtures/grafana_evidence.json`), and the
+registry/grafana/flags/eval tests. The owner directed removing this demo product
+*entirely* from the registry/fixtures. `microbi` remains the sole demo product, so
+the registry stays non-empty. **To preserve GRAFANA-source + multi-source eval
+coverage** (the GRAFANA agent itself stays — `microbi` declares
+`grafana_dashboards`), the grafana sample evidence and the grafana golden case are
+**re-scoped to `microbi`** rather than deleted; citation hosts move off
+`grafana.homelab.lan` to a neutral `grafana.example.com`. The eval gate
+(`uv run python -m dsf.evals.runner --gate`) must stay green after re-scoping.
+
 ## 4. Design / changes
 
 ### Infra (`infra/`)
@@ -114,6 +128,19 @@ existing injected-runner DI pattern (`subprocess.run` seam) only.
 - Remove homelab comments/branches in `agents/grafana/{backend,main,__init__}.py`,
   `agents/sentry/mcp_client.py`, `runtime/__init__.py`.
 
+### Demo data / fixtures (Decision F)
+- `config/products.json`: delete the entire `homelab-dash` product object; `microbi`
+  remains the sole demo product.
+- `src/dsf/evals/golden/cases.json`: re-scope the grafana case
+  `grafana-homelab-latency` → `grafana-microbi-latency` (`expected_product` /
+  `product_hints` → `microbi`); drop the `homelab-dash` hint from the
+  `sentry-grafana-multi-source` case (microbi-only). No homelab strings remain.
+- `tests/fixtures/grafana_evidence.json`: `product_hints` `homelab-dash` → `microbi`;
+  citation host `grafana.homelab.lan` → `grafana.example.com`.
+- `tests/config/test_{registry,flags}.py`, `tests/evals/test_runner.py`,
+  `tests/agents/grafana/*`: drop `homelab-dash`/`homelab-overview` assertions and
+  fixtures; assert against `microbi` instead.
+
 ### Docs & ADRs
 - New **`docs/adr/0004-azure-container-apps-runtime.md`** (Status: Accepted;
   *Supersedes ADR 0002*): runtime hosted on ACA in the product RG; MI data-plane
@@ -141,9 +168,14 @@ existing injected-runner DI pattern (`subprocess.run` seam) only.
 - Splitting into standalone apps — **#26** (later/structural).
 
 ## 7. Done when
-- `grep -rni homelab` over `src/`, `infra/`, `docs/adr/`, `README.md`,
-  `docs/RUNBOOK.md` returns **0** (historical dated specs/plans excepted).
+- `grep -rni homelab` over the whole repo **except** the dated
+  `docs/superpowers/specs|plans/*` records returns **0** (covers `src/`, `infra/`,
+  `config/`, `tests/`, `docs/adr/`, `README.md`, `docs/RUNBOOK.md`, golden cases &
+  fixtures).
 - `runtime_target` is `"aca"` end-to-end; `deploy_council` deploys to ACA via the
   injected runner (dry-run by default); MI replaces `workloadPrincipalId`.
+- The `homelab-dash` demo product is gone; `microbi` is the sole demo product and
+  GRAFANA/multi-source eval coverage is preserved (re-scoped to `microbi`).
 - ADR 0004 added; ADR 0002 marked superseded.
-- `uv run ruff check .` clean and `uv run pytest -q` green.
+- `uv run ruff check .` clean, `uv run pytest -q` green, and
+  `uv run python -m dsf.evals.runner --gate` PASSES.
