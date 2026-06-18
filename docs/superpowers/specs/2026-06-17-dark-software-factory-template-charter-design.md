@@ -122,8 +122,8 @@ Each is its own spec → plan → implementation cycle.
 |---|---|---|
 | **SP1 ✅** | **`dsf new` greenfield walking skeleton** *(done)* | Instance contract/manifest; create product repo + `squad init` + per-product factory config; **dry-run stubs** for Azure/council/SRE wiring. A real, demoable instance shell end-to-end. |
 | SP2 ✅ | Per-product Azure provisioning *(done)* | Parameterize Bicep; CLI provisions a dedicated RG and captures outputs into instance config. |
-| SP3 ✅ | Feature council productionization *(done)* | `build_services('azure')` (real GitHub client + App Insights tracer; model/memory/config on fakes behind a seam); single-product scoping via `Run.scope_product_hints`; orchestrator runtime image + per-product council rendered as an Azure Container Apps descriptor and deployed on `--execute`. |
-| SP3b | Real Azure data adapters | Replace the fakes behind the azure seam with real App Configuration, Cosmos, and LLM adapters (App Configuration first). |
+| SP3 ✅ | Feature council productionization *(done)* | `build_services('azure')` (real GitHub client + App Insights tracer; model/memory/config on in-memory implementations behind a seam); single-product scoping via `Run.scope_product_hints`; orchestrator runtime image + per-product council rendered as an Azure Container Apps descriptor and deployed on `--execute`. |
+| SP3b ✅ | Real Azure data adapters *(done — ADR 0006)* | Replace the in-memory implementations behind the azure seam with real App Configuration, Cosmos, and Azure OpenAI adapters (App Configuration first), each behind a narrow injected gateway so the suite stays offline. |
 | SP4 | Coding-squad handoff hardening | Align label taxonomy/triage; `squad triage --execute`; Copilot coding agent; verify knowledge loop. |
 | SP5 | SRE agent | Observe prod (reuse Sentry/Grafana backends) → fix-forward to Squad → (later) signals to council → self-reflection. |
 | — | Naming refresh *(cross-cutting)* | Rename "feature council" and related terms. |
