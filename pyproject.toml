@@ -1,16 +1,13 @@
 [project]
 name = "dsf"
 version = "0.1.0"
-description = "Dark Software Factory — legacy umbrella (cli, control_center, instance; being split into workspace members under #26)"
+description = "Dark Software Factory — legacy umbrella (control_center; being split into workspace members under #26)"
 requires-python = ">=3.12"
 dependencies = [
     "dsf-core",
     "fastapi>=0.110",
     "jinja2>=3.1",
 ]
-
-[project.scripts]
-dsf = "dsf.cli.factory:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -20,7 +17,7 @@ build-backend = "hatchling.build"
 packages = ["src/dsf"]
 
 [tool.uv.workspace]
-members = ["core", "feature-council"]
+members = ["core", "feature-council", "cli"]
 
 [tool.uv.sources]
 dsf-core = { workspace = true }
