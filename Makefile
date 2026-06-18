@@ -1,7 +1,7 @@
 .PHONY: install test lint fmt dryrun evals new-demo
 
 install:
-	uv sync
+	uv sync --all-packages
 
 test:
 	uv run pytest -q

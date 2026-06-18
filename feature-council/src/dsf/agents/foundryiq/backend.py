@@ -31,8 +31,8 @@ RetrieveFn = Callable[[str], Awaitable[list[dict[str, Any]]]]
 
 def _fixture_path() -> Path:
     """Locate ``tests/fixtures/foundryiq_evidence.json`` at the repo root."""
-    # src/dsf/agents/foundryiq/backend.py -> repo root is four parents up.
-    root = Path(__file__).resolve().parents[4]
+    # feature-council/src/dsf/agents/foundryiq/backend.py -> repo root is five parents up.
+    root = Path(__file__).resolve().parents[5]
     return root / "tests" / "fixtures" / "foundryiq_evidence.json"
 
 

@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-DOCKERFILE = Path(__file__).resolve().parents[2] / "src" / "dsf" / "runtime" / "Dockerfile"
+DOCKERFILE = (
+    Path(__file__).resolve().parents[2]
+    / "feature-council"
+    / "src"
+    / "dsf"
+    / "runtime"
+    / "Dockerfile"
+)
 
 
 def test_runtime_dockerfile_exists():

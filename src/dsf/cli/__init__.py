@@ -1,9 +1,9 @@
-"""DSF command-line entry points.
+"""DSF factory command-line entry point.
 
-Two console scripts live here, both inside the single ``dsf`` package (ADR 0001):
+The ``dsf`` console script (:mod:`dsf.cli.factory`) creates/manages product
+instances from the template (``dsf new``; future
+``status``/``upgrade``/``destroy``).
 
-* ``dsf``    (:mod:`dsf.cli.factory`) — create/manage product instances from the
-  template (``dsf new``; future ``status``/``upgrade``/``destroy``).
-* ``dsfctl`` (:mod:`dsf.cli.control`) — operate a running instance's feature-council
-  runtime (``run``/``sweep``/``serve-orchestrator``/``serve-agent``/``control-center``).
+The operator CLI ``dsfctl`` (:mod:`dsf.runtime.control`) lives in the
+feature-council member (see ADR 0010).
 """

@@ -90,7 +90,7 @@ identity, ADR 0004). The orchestrator Container App itself is created by `main.b
 under `--execute`, `dsf new` rolls its image with
 `az containerapp update --name dsf-orchestrator-<product> --image <runtimeImage>`.
 
-The runtime image is `src/dsf/runtime/Dockerfile`; its entrypoint is the orchestrator in
+The runtime image is `feature-council/src/dsf/runtime/Dockerfile`; its entrypoint is the orchestrator in
 **azure mode**, which reads endpoints from the rendered env and emits traces to
 Application Insights (the OTel tracer is wired automatically when `DSF_MODE=azure`; it
 degrades to a no-op fake if OpenTelemetry isn't importable). To run it by hand:
@@ -195,7 +195,7 @@ roles), and the **Container Apps environment + `dsf-orchestrator-microbi` app**.
 `infra-whatif` pipeline's full preview on every infra change (OIDC, no secrets). The
 `agents-images` pipeline already publishes each agent to `ghcr.io/<owner>/dsf-agent-<kind>`.
 
-**3. Roll the orchestrator image:** publish the runtime image (`src/dsf/runtime/Dockerfile`)
+**3. Roll the orchestrator image:** publish the runtime image (`feature-council/src/dsf/runtime/Dockerfile`)
 to GHCR, then update the Container App in place:
 ```bash
 az containerapp update -g rg-dsf-dev -n dsf-orchestrator-microbi \

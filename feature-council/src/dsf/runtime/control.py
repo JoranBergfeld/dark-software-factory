@@ -93,8 +93,22 @@ def _cmd_serve_agent(args: argparse.Namespace) -> int:
 
 def _cmd_control_center(args: argparse.Namespace) -> int:
     """Serve the Control Center web UI via uvicorn."""
+    import importlib.util
+
     import uvicorn
 
+    # dsf.control_center ships with the root workspace, not the feature-council
+    # runtime image (which installs only core + feature-council). Fail with an
+    # actionable message instead of an opaque uvicorn import error. The #26
+    # Phase 4 split gives the Control Center its own member and entrypoint.
+    if importlib.util.find_spec("dsf.control_center") is None:
+        print(
+            "control-center is unavailable here: dsf.control_center is not "
+            "installed in the feature-council runtime image. Run it from the dev "
+            "workspace via `uv run dsfctl control-center`.",
+            file=sys.stderr,
+        )
+        return 1
     uvicorn.run("dsf.control_center.app:app", host=args.host, port=args.port)
     return 0
 

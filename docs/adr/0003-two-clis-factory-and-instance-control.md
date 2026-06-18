@@ -2,6 +2,9 @@
 
 Status: Accepted · Date: 2026-06-17 · Supersedes the SP1 note "no console-script
 entry point — keep it that way" (docs/superpowers/plans/2026-06-17-dsf-new-greenfield-instance.md)
+· Refined by ADR 0010: in the #26 workspace split the operator CLI module path
+moved `dsf.cli.control` → `dsf.runtime.control` (the `dsfctl` script and behaviour
+are unchanged); references to `dsf.cli.control` below are historical.
 
 ## Context
 

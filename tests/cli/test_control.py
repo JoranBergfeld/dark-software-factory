@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from dsf.cli.control import build_parser, main
+from dsf.runtime.control import build_parser, main
 
 
 def test_cli_azure_mode_without_product_exits_cleanly(capsys, monkeypatch):
@@ -55,7 +55,7 @@ def test_cli_serve_agent_unknown_kind_errors():
 
 
 def test_cli_serve_agent_uses_registry(monkeypatch):
-    import dsf.cli.control as control
+    import dsf.runtime.control as control
     from dsf.agents.registry import app_path
 
     # the CLI must not own a hardcoded agent map anymore (#25)

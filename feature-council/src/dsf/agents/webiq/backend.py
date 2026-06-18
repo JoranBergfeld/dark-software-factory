@@ -41,9 +41,9 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
 # tests/fixtures/webiq_evidence.json relative to repo root.
-# backend.py -> webiq -> agents -> dsf -> src -> <repo root>.
+# backend.py -> webiq -> agents -> dsf -> src -> feature-council -> <repo root>.
 _FIXTURE_PATH = (
-    Path(__file__).resolve().parents[4] / "tests" / "fixtures" / "webiq_evidence.json"
+    Path(__file__).resolve().parents[5] / "tests" / "fixtures" / "webiq_evidence.json"
 )
 
 
