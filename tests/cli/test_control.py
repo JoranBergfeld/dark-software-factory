@@ -78,6 +78,19 @@ def test_cli_serve_agent_unknown_kind_errors():
     assert main(["serve-agent", "--kind", "nope"]) == 1
 
 
+def test_cli_serve_agent_uses_registry(monkeypatch):
+    import dsf.cli.control as control
+    from dsf.agents.registry import app_path
+
+    # the CLI must not own a hardcoded agent map anymore (#25)
+    assert not hasattr(control, "_AGENT_MODULES")
+
+    launched: list[str] = []
+    monkeypatch.setattr("uvicorn.run", lambda target, **kw: launched.append(target))
+    assert main(["serve-agent", "--kind", "grafana"]) == 0
+    assert launched == [app_path("grafana")]
+
+
 def test_cli_serve_commands_launch_uvicorn(monkeypatch):
     launched: list[str] = []
     monkeypatch.setattr("uvicorn.run", lambda target, **kw: launched.append(target))
