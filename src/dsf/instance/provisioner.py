@@ -18,7 +18,11 @@ from dsf.contracts.handoff import (
     HANDOFF_LABEL_COLOR,
     HANDOFF_LABEL_DESCRIPTION,
 )
-from dsf.instance.runtime_render import render_runtime_bundle, render_sre_onboarding
+from dsf.instance.runtime_render import (
+    render_product_registration,
+    render_runtime_bundle,
+    render_sre_onboarding,
+)
 from dsf.instance.spec import (
     AzureProvisionResult,
     InstanceManifest,
@@ -154,6 +158,13 @@ class InstanceProvisioner:
                 ],
             ),
             ProvisionStep(
+                name="register_product",
+                description=(
+                    f"Register {s.product} -> {s.github_repo()} in the routing "
+                    "registry (config/products.json)"
+                ),
+            ),
+            ProvisionStep(
                 name="deploy_council",
                 description=(
                     f"Render + bring up the feature-council runtime scoped to {s.product}"
@@ -194,6 +205,15 @@ class InstanceProvisioner:
                     continue  # finalized after the manifest is built
                 if step.deferred:
                     step.result = "deferred"
+                elif step.name == "register_product":
+                    render_product_registration(
+                        InstanceManifest(
+                            spec=self.spec, plan=plan, executed=executed, azure=azure_result
+                        ),
+                        repo_root=self._repo_root,
+                    )
+                    step.executed = execute
+                    step.result = "registered" if execute else "registered (dry-run)"
                 elif step.name == "deploy_council":
                     provisional = InstanceManifest(
                         spec=self.spec, plan=plan, executed=executed, azure=azure_result

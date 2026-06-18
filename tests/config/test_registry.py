@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
-from dsf.config.registry import _MIN_KEY_LEN, Product, load_registry, route_product
+from dsf.config.registry import (
+    _MIN_KEY_LEN,
+    Product,
+    load_registry,
+    register_product,
+    route_product,
+)
 
 
 def test_load_registry_seeds_microbi():
@@ -109,3 +115,40 @@ def test_route_product_exact_match_not_gated_by_min_key_length():
     result = route_product(["api"], registry)
     assert result is not None
     assert result.key == "api"
+
+
+# ---------------------------------------------------------------------------
+# Tests for issue #34: register_product upserts into config/products.json
+# ---------------------------------------------------------------------------
+
+def test_register_product_creates_new_registry(tmp_path):
+    """Registering into a non-existent file creates the canonical shape."""
+    path = tmp_path / "config" / "products.json"
+    written = register_product(
+        Product(key="acme", github_repo="acme/acme", confidence_threshold=0.7),
+        path=path,
+    )
+    assert written == path
+    registry = load_registry(path)
+    assert registry["acme"].github_repo == "acme/acme"
+    assert registry["acme"].confidence_threshold == 0.7
+
+
+def test_register_product_idempotent_update(tmp_path):
+    """Re-registering the same key updates in place — no duplicate entries."""
+    path = tmp_path / "config" / "products.json"
+    register_product(Product(key="acme", github_repo="acme/old"), path=path)
+    register_product(Product(key="acme", github_repo="acme/new"), path=path)
+    registry = load_registry(path)
+    assert list(registry) == ["acme"]
+    assert registry["acme"].github_repo == "acme/new"
+
+
+def test_register_product_appends_without_clobbering(tmp_path):
+    """A new key is appended, leaving existing entries untouched and ordered."""
+    path = tmp_path / "config" / "products.json"
+    register_product(Product(key="alpha", github_repo="o/alpha"), path=path)
+    register_product(Product(key="beta", github_repo="o/beta"), path=path)
+    registry = load_registry(path)
+    assert list(registry) == ["alpha", "beta"]
+    assert registry["alpha"].github_repo == "o/alpha"

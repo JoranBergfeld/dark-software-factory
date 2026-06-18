@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from dsf.config.registry import load_registry, route_product
 from dsf.contracts.handoff import HANDOFF_LABEL, HANDOFF_LABEL_COLOR
 from dsf.instance.provisioner import InstanceProvisioner
 from dsf.instance.spec import InstanceSpec, read_manifest
@@ -27,6 +28,7 @@ def test_plan_step_order_and_names():
         "squad_triage",
         "create_resource_group",
         "provision_azure",
+        "register_product",
         "deploy_council",
         "onboard_sre_agent",
         "write_config",
@@ -164,6 +166,37 @@ def test_apply_dry_run_writes_manifest_and_runs_nothing(tmp_path):
     assert results["deploy_council"] == "rendered (dry-run)"
     assert results["write_config"].endswith("demo.json")
     assert (tmp_path / "config" / "instances" / "demo.json").exists()
+
+
+def test_apply_execute_registers_product_into_routing_registry(tmp_path):
+    def fake_run(cmd, **kwargs):
+        returncode = 1 if cmd[:3] == ["gh", "repo", "view"] else 0
+        return MagicMock(returncode=returncode)
+
+    prov = InstanceProvisioner(_spec(), run=fake_run, repo_root=tmp_path)
+    manifest = prov.apply(execute=True)
+
+    products = tmp_path / "config" / "products.json"
+    assert products.exists()
+    registry = load_registry(products)
+    assert registry["demo"].github_repo == "acme/demo"
+    # The freshly-registered product is now routable by S6.
+    routed = route_product(["demo"], registry)
+    assert routed is not None and routed.key == "demo"
+    assert {s.name: s.result for s in manifest.plan.steps}["register_product"] == "registered"
+
+
+def test_apply_dry_run_also_registers_product(tmp_path):
+    prov = InstanceProvisioner(_spec(), run=MagicMock(returncode=0), repo_root=tmp_path)
+    manifest = prov.apply(execute=False)
+
+    # Registration is a local, idempotent config write — it runs in dry-run too.
+    registry = load_registry(tmp_path / "config" / "products.json")
+    assert "demo" in registry
+    assert registry["demo"].github_repo == "acme/demo"
+    assert {s.name: s.result for s in manifest.plan.steps}[
+        "register_product"
+    ] == "registered (dry-run)"
 
 
 def test_apply_execute_runs_real_steps_and_onboards_sre(tmp_path):

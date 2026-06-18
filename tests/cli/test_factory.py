@@ -36,9 +36,12 @@ def test_new_dry_run_prints_plan_without_side_effects(capsys, tmp_path):
     assert rc == 0
     assert "create_repo" in out
     assert "provision_azure" in out
+    assert "register_product" in out
     assert "onboard_sre_agent" in out
     # pure preview: no manifest written even though a config root was provided
     assert not (tmp_path / "config" / "instances" / "demo.json").exists()
+    # ...and registration never fires in pure preview (plan() only, no apply)
+    assert not (tmp_path / "config" / "products.json").exists()
 
 
 def test_new_write_plan_writes_manifest(tmp_path):
