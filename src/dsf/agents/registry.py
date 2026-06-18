@@ -6,8 +6,9 @@ Paths are strings so importing this registry has **no side effects** — the age
 the target lazily only when an agent is actually served. The CLI consumes this
 registry instead of owning the list (issue #25).
 
-The SRE agent is intentionally absent: it is a scheduled sweep
-(``dsfctl sre-sweep``) deployed as its own Container App, not an A2A-served app.
+The SRE agent is intentionally absent: DSF leverages the managed **Azure SRE
+Agent** product (ADR 0009), onboarded interactively per product, not an
+A2A-served app.
 """
 
 from __future__ import annotations
