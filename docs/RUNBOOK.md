@@ -57,14 +57,14 @@ uv run dsfctl control-center --port 8081
 uv run uvicorn dsf.triggers.app:app --port 8082
 ```
 
-## Creating a product instance (SP1–SP3)
+## Creating a product instance (SP1–SP5)
 
 `dsf new` scaffolds an isolated product factory. `--name-prefix` is **required**;
 it is sanitized and randomized into a <=12-char Azure resource prefix (persisted in
 the manifest and reused on re-runs). Under `--execute`, repo creation + Coding Squad
-init, **the dedicated Azure resource group + Bicep deployment**, and **rendering +
-deploying the product's feature-council runtime** (Azure Container App) are all real;
-only SRE-agent deployment remains a **deferred** stub step (SP5).
+init, **the dedicated Azure resource group + Bicep deployment**, **rendering +
+deploying the product's feature-council runtime**, and **rendering + deploying the
+product's SRE agent runtime** (both Azure Container Apps) are all real.
 
 ```bash
 # Preview the plan (no side effects):
@@ -128,6 +128,37 @@ Copilot coding agent against council-filed issues. The full closed loop:
 council files issue (squad:ready) → squad triage → Copilot agent → PR →
 human review → council feedback-watcher → Lesson → next council run
 ```
+
+## SRE agent (fix-forward)
+
+The SRE agent (`dsf.sre`) is the production-watching corner of the factory. One
+sweep runs `observe → detect → fix_forward → reflect`:
+
+- **observe** — gathers `EvidenceItem`s from the same Sentry/Grafana backends the
+  council uses (offline fixture backends by default), degrading past any backend
+  that is disabled or fails.
+- **detect** — keeps evidence above a confidence threshold, groups it by product,
+  and assigns a severity + a stable fingerprint.
+- **fix_forward** — routes each incident to its product repo and files a GitHub
+  issue labelled `sre`, a severity, **and `squad:ready`** — so the *same*
+  `squad triage --execute` picks it up. Repeated incidents dedup by fingerprint;
+  a `--dry-run` files nothing and indexes nothing (a true preview).
+- **reflect** — records the incident and a product-scoped lesson for the loop.
+
+```
+prod telemetry → SRE observe → detect → fix_forward → issue (sre + squad:ready)
+→ squad triage → Copilot agent → PR        ↘ reflect → Lesson → next sweep/run
+```
+
+Run one sweep in-process (fully offline in local mode):
+
+```bash
+uv run dsfctl sre-sweep --dry-run --product microbi   # preview, files nothing
+uv run dsfctl sre-sweep --product microbi             # file-forward for real (gh/azure mode)
+```
+
+In azure mode the provisioned `dsf-sre-<product>` Container App runs the sweep on
+a schedule (ADR 0008).
 
 ## The learning loop
 
