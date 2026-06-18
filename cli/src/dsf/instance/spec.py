@@ -105,8 +105,8 @@ class InstanceManifest(BaseModel):
 
 
 def _default_repo_root() -> Path:
-    """Repo root (where ``config/`` lives): three parents up from this file."""
-    return Path(__file__).resolve().parents[3]
+    """Repo root (where ``config/`` lives): four parents up from this file."""
+    return Path(__file__).resolve().parents[4]
 
 
 def instances_dir(repo_root: Path | None = None) -> Path:

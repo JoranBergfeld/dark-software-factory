@@ -11,6 +11,7 @@ resolution-markers = [
 [manifest]
 members = [
     "dsf",
+    "dsf-cli",
     "dsf-core",
     "dsf-feature-council",
 ]
@@ -360,6 +361,17 @@ dev = [
     { name = "pytest-asyncio", specifier = ">=0.23" },
     { name = "ruff", specifier = ">=0.4" },
 ]
+
+[[package]]
+name = "dsf-cli"
+version = "0.1.0"
+source = { editable = "cli" }
+dependencies = [
+    { name = "dsf-core" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "dsf-core", editable = "core" }]
 
 [[package]]
 name = "dsf-core"
