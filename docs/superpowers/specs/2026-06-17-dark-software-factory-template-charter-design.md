@@ -126,10 +126,10 @@ Each is its own spec → plan → implementation cycle.
 | SP3b | Real Azure data adapters | Replace the fakes behind the azure seam with real App Configuration, Cosmos, and LLM adapters (App Configuration first). |
 | SP4 | Coding-squad handoff hardening | Align label taxonomy/triage; `squad triage --execute`; Copilot coding agent; verify knowledge loop. |
 | SP5 | SRE agent | Observe prod (reuse Sentry/Grafana backends) → fix-forward to Squad → (later) signals to council → self-reflection. |
-| SP6 | Brownfield onboarding | `dsf onboard <existing-repo>`. |
-| SP7 | Instance lifecycle & ops | `status`/`upgrade`/`destroy`; runbook; begin evolution toward declarative manifest (approach B). |
 | — | Naming refresh *(cross-cutting)* | Rename "feature council" and related terms. |
 | — ✅ | CLI / runtime split *(cross-cutting, done)* | `dsf` (factory CLI, `dsf.cli.factory`) creates instances; `dsfctl` (instance control, `dsf.cli.control`) operates the feature-council runtime. Two console scripts in one package (ADR 0003). |
+
+> **Deferred:** brownfield onboarding (former SP6) and instance lifecycle & ops (former SP7) are removed from the active roadmap and tracked as GitHub issues [#23](https://github.com/JoranBergfeld/dark-software-factory/issues/23) and [#24](https://github.com/JoranBergfeld/dark-software-factory/issues/24). They re-enter the roadmap after the SP3b → SP4 → SP5 push.
 
 ## 7. First sub-project (SP1)
 
@@ -140,7 +140,7 @@ Each is its own spec → plan → implementation cycle.
 1. **Runtime hosting per instance.** *(Resolved in SP3.)* The council runtime is rendered as a per-product compose bundle targeting **homelab (default, ADR 0002)** — brought up by `dsf new --execute`. An **Azure Container Apps** target is kept as an explicit, unimplemented seam so the choice stays open without hard-picking now.
 2. **SRE agent tech.** Start **dsf-native** (reuse Sentry/Grafana A2A backends + a reflection store); consider an "SRE Squad" later. Resolve in SP5.
 3. **Naming.** "Feature council" and related terms to be renamed; treat as a parallel cross-cutting task.
-4. **Brownfield depth.** Greenfield first (SP1); decide brownfield's exact scope (Squad-into-existing-repo, history-aware council priming) in SP6.
+4. **Brownfield depth.** Greenfield first (SP1); decide brownfield's exact scope (Squad-into-existing-repo, history-aware council priming) when brownfield onboarding is picked up ([#23](https://github.com/JoranBergfeld/dark-software-factory/issues/23)).
 
 ## 9. Constraints carried forward (from existing ADRs)
 
