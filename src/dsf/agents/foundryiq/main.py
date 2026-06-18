@@ -1,6 +1,6 @@
 """FoundryIQ agent entrypoint (plan Task 2.4).
 
-Builds the A2A app over the fake company-knowledge backend. Run with
+Builds the A2A app over the fixture-backed company-knowledge backend. Run with
 ``uvicorn dsf.agents.foundryiq.main:app``. The azure-mode backend
 (:class:`dsf.agents.foundryiq.backend.FoundryIqMcpBackend`) requires an injected
 retrieve client and is selected only in azure mode.
@@ -21,7 +21,7 @@ def build_agent(config: object | None = None, mode: str | None = None) -> Source
     In live mode (``DSF_MODE`` set to anything but ``local``, or ``mode``
     explicitly live) the real MCP backend is wired to the Azure AI Search
     retrieve client built from env vars. Otherwise the deterministic
-    fixture-backed fake is used.
+    fixture-backed backend is used.
     """
     cfg = config if config is not None else InMemoryConfigStore.from_defaults()
     if is_live(resolve_mode(mode)):

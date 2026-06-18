@@ -164,7 +164,7 @@ def _set_value(services: Services, key: str, value: float) -> None:
     """Write a numeric config value, tolerating ConfigStore variants.
 
     Prefers an explicit ``set_value`` method; falls back to writing the dotted
-    key path into the store's backing data dict (the in-memory fake).
+    key path into the store's backing data dict (the in-memory implementation).
     """
     cfg = services.config
     setter = getattr(cfg, "set_value", None)

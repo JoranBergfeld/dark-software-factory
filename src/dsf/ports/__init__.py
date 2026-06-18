@@ -21,7 +21,7 @@ from dsf.contracts.models import EvidenceItem
 class ModelClient(Protocol):
     """LLM completion port.
 
-    The fake returns deterministic output driven by a handler registered
+    The local implementation returns deterministic output driven by a handler registered
     against a tag substring found in the prompt.
     """
 

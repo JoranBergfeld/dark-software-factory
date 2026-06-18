@@ -1,6 +1,6 @@
 """Tickets agent entrypoint — STUB (plan Task 2.6).
 
-Builds the A2A app over the fake (empty) tickets backend. Run with
+Builds the A2A app over the empty tickets backend. Run with
 ``uvicorn dsf.agents.tickets.main:app``. The real backend is deferred; see
 :mod:`dsf.agents.tickets.backend`.
 """
@@ -14,7 +14,7 @@ from dsf.contracts.enums import SourceKind
 
 
 def build_agent(config: object | None = None) -> SourceAgent:
-    """Build the tickets :class:`SourceAgent` over the fake backend."""
+    """Build the tickets :class:`SourceAgent` over the fixture backend."""
     cfg = config if config is not None else InMemoryConfigStore.from_defaults()
     return SourceAgent(
         kind=SourceKind.TICKETS,

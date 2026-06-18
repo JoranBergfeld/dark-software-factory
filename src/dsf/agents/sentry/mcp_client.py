@@ -77,7 +77,7 @@ def parse_search_issues(text: str) -> list[dict[str, Any]]:
 async def _default_tool_caller(tool_name: str, arguments: dict) -> str:
     """Open a Streamable-HTTP MCP session, call ``tool_name``, return its text."""
     # Imported lazily so importing this module never requires the mcp SDK at
-    # collection time and the fake/REST paths stay dependency-light.
+    # collection time and the offline/REST paths stay dependency-light.
     from mcp import ClientSession
     from mcp.client.streamable_http import streamablehttp_client
 

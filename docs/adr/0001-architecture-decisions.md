@@ -27,6 +27,14 @@ implementations (`DSF_MODE=azure`).
 LLM — for local development, CI, and the eval gate. It also makes the system testable
 without mocking frameworks and lets cloud impls be swapped in without touching logic.
 
+> **Update (ADR 0005):** The "in-memory fakes" naming and the `dsf.fakes` package are
+> superseded by [ADR 0005](0005-honest-local-implementations.md). The ports +
+> offline-by-default posture stands; the implementations are now honest,
+> domain-co-located classes (`InMemoryConfigStore`, `InMemoryMemoryStore`,
+> `NoOpTracer`, `RecordingGitHubClient`, `DeterministicModelClient`,
+> per-agent `*FixtureBackend`) and pure test-doubles live under `tests/`. Other
+> ADR 0001 decisions are unaffected.
+
 ## 3. Hybrid conveyor: deterministic stations, agentic workcells
 
 **Decision:** A fixed, auditable 7-station conveyor; only investigation (S2) and the

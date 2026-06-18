@@ -1,6 +1,6 @@
 """Grafana agent entrypoint (plan Task 2.3).
 
-Builds the A2A app over the fake (fixture-backed) Grafana backend. Run with
+Builds the A2A app over the fixture-backed Grafana backend. Run with
 ``uvicorn dsf.agents.grafana.main:app``. The MCP backend is selected only in
 azure mode; see :mod:`dsf.agents.grafana.backend`.
 
@@ -22,7 +22,7 @@ def build_agent(config: object | None = None, mode: str | None = None) -> Source
 
     In live mode (``DSF_MODE`` set to anything but ``local``, or ``mode``
     explicitly live) the real MCP backend is wired to the Grafana HTTP client
-    built from env vars. Otherwise the deterministic fixture-backed fake is used.
+    built from env vars. Otherwise the deterministic fixture-backed backend is used.
     """
     cfg = config if config is not None else InMemoryConfigStore.from_defaults()
     if is_live(resolve_mode(mode)):

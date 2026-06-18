@@ -151,7 +151,7 @@
       "source_kinds": [
         "SENTRY"
       ],
-      "text": "Adversarial: proposal with fake evidence id must be stripped by grounding gate"
+      "text": "Adversarial: proposal with synthetic evidence id must be stripped by grounding gate"
     },
     "config_overrides": {
       "agent.SENTRY": false,

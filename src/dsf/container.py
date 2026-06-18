@@ -80,10 +80,10 @@ def build_services(
     Supported modes
     ---------------
     ``local``
-        Fully in-memory fakes — deterministic, no network calls, no credentials
+        Fully in-memory local implementations — deterministic, no network calls, no credentials
         required.  All filing is dry-run unless explicitly overridden per-run.
     ``gh``
-        Same fakes for model/memory/config/tracer, but with a real
+        Same in-memory implementations for model/memory/config/tracer, but with a real
         :class:`~dsf.github_client.RealGitHubClient` that calls the ``gh`` CLI.
         Requires ``gh`` to be authenticated in the environment.
     ``azure``
@@ -91,8 +91,8 @@ def build_services(
         ``env`` (defaults to ``os.environ``; only ``DSF_PRODUCT`` is required),
         wires the real GitHub client and the OpenTelemetry tracer
         (:func:`dsf.observability.tracing.build_tracer`, which degrades to the
-        fake tracer when OpenTelemetry is not installed), and keeps
-        model/memory/config on fakes behind the deferred-adapter seam (SP3b).
+        NoOpTracer when OpenTelemetry is not installed), and keeps
+        model/memory/config on in-memory implementations behind the deferred-adapter seam (SP3b).
         The resolved ``product``/``azure`` settings are carried on the bundle.
     """
     if mode == "local":

@@ -15,7 +15,7 @@ python -m dsf.evals.runner --gate      # exits non-zero on any sub-threshold met
 
 ## How the line actually behaves (and why cases are shaped this way)
 
-The in-process **fake** source agents read their *own* fixtures
+The in-process **fixture-backed** source agents read their *own* fixtures
 (`tests/fixtures/<source>_evidence.json`) regardless of the signal payload. So a
 case cannot steer *what* evidence appears via the payload — only *which sources*
 participate (via `source_kinds`) and *which product* the resulting issues route
@@ -30,7 +30,7 @@ case's `expected_product`:
 | `WEBIQ`        | `microbi`                       | `microbi`       |
 | `GRAFANA`      | `microbi`                       | `microbi`       |
 
-With default fakes the dry-run line gathers fixture evidence, synthesizes a
+With the default local backends the dry-run line gathers fixture evidence, synthesizes a
 grounded proposal per product cluster, passes the council, routes to a product,
 and reaches **FILED** with grounded `RoutedIssue`s (no real GitHub call — dry
 run). Multi-source cases set `expected_product: null` (routing unconstrained).

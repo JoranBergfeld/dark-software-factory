@@ -1,6 +1,6 @@
 """``dsfctl`` — operate a running instance's feature-council runtime.
 
-``run``/``sweep`` execute the conveyor in-process (local fakes by default, fully
+``run``/``sweep`` execute the conveyor in-process (local in-memory implementations by default, fully
 dry-run safe). ``serve-agent``/``serve-orchestrator``/``control-center`` launch the
 respective ASGI services via uvicorn. The global ``--mode`` flag selects the service
 bundle (``local``/``gh``/``azure``).
@@ -116,7 +116,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--mode",
         default="local",
         help=(
-            "service mode: 'local' (in-memory fakes, default), 'gh' (real GitHub "
+            "service mode: 'local' (in-memory implementations, default), 'gh' (real GitHub "
             "client via gh CLI), or 'azure' (per-product runtime; requires "
             "DSF_PRODUCT). Other modes are not yet supported."
         ),

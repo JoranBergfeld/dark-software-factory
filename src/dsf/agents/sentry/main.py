@@ -1,6 +1,6 @@
 """Sentry agent entrypoint (plan Task 2.2).
 
-Builds the A2A app over the fake Sentry backend (canned fixture evidence). Run
+Builds the A2A app over the fixture-backed Sentry backend (canned evidence). Run
 with ``uvicorn dsf.agents.sentry.main:app``. The azure-mode MCP backend lives in
 :mod:`dsf.agents.sentry.backend` and is selected only when an MCP client is
 injected.
@@ -27,7 +27,7 @@ def build_agent(config: object | None = None, mode: str | None = None) -> Source
     * else ``SENTRY_AUTH_TOKEN`` set -> call the Sentry REST API directly;
     * else raise (live mode must not silently fabricate coverage).
 
-    Otherwise the deterministic fixture-backed fake is used.
+    Otherwise the deterministic fixture-backed backend is used.
     """
     cfg = config if config is not None else InMemoryConfigStore.from_defaults()
     if is_live(resolve_mode(mode)):

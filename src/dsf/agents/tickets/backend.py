@@ -1,7 +1,7 @@
 """Tickets backends — STUB.
 
 This module is intentionally a stub: the support-ticket source is contract-only
-for now (design §5.1, "Tickets ... stubbed"). The fake yields no evidence so the
+for now (design §5.1, "Tickets ... stubbed"). The backend yields no evidence so the
 conveyor runs end-to-end without it; the MCP backend is a deliberate
 ``NotImplementedError`` placeholder selected only in azure mode.
 """

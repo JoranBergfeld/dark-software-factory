@@ -122,7 +122,7 @@ class SentryMcpBackend:
         query = run_scope.get("sentry_query", "is:unresolved is:regression")
 
         # In azure mode this is the Sentry MCP ``search_issues`` tool. In tests
-        # it is a tiny fake returning canned issue dicts.
+        # it returns canned issue dicts via an injected caller.
         issues = await self._mcp_call(
             "search_issues",
             organization_slug=organization,

@@ -35,7 +35,7 @@ from dsf.triggers.ingestion import signal_to_run
 if TYPE_CHECKING:
     from dsf.container import Services
 
-#: Module-level local services bundle (fakes), shared across requests by default.
+#: Module-level local services bundle, shared across requests by default.
 _LOCAL_SERVICES: Services = build_services("local")
 
 
@@ -97,7 +97,7 @@ async def file_signal(
     * The services bundle to carry a real :class:`~dsf.github_client.RealGitHubClient`
       (use ``--mode gh`` or override ``get_services``).
     * The global ``dry_run`` config flag to be off (it defaults to ``True`` for
-      safety in local/fake mode).
+      safety in local mode).
     """
     if triggers_paused(services.config, TriggerKind.SIGNAL):
         return {"status": "paused"}

@@ -113,7 +113,7 @@ class WebIqMcpBackend:
         """Run industry web research via the injected client and map findings.
 
         For each derived query, ``search`` is invoked (in azure mode this is the
-        web search/fetch tool; in tests a tiny fake returning canned result
+        web search/fetch tool; in tests a tiny injected client returning canned result
         dicts). Each result is mapped to one EvidenceItem whose ``raw_citation``
         is the external source URL and whose provenance records the exact query
         used.
