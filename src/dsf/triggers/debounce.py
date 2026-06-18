@@ -7,7 +7,7 @@ record already exists via :func:`dsf.memory.dedup.is_duplicate`.
 
 Records are stored with a TTL (default :data:`DEFAULT_DEBOUNCE_TTL` seconds)
 so the suppression window expires and the same signal is accepted again after
-the window closes. The :class:`~dsf.fakes.memory.FakeMemoryStore` honours the
+the window closes. The :class:`~dsf.memory.store.InMemoryMemoryStore` honours the
 TTL; a real backing store should use its native TTL mechanism.
 
 The caller is responsible for recording the signal after it decides to *accept*

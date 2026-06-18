@@ -10,10 +10,10 @@ from pydantic import BaseModel
 
 from dsf.config.store import InMemoryConfigStore
 from dsf.fakes import (
-    FakeMemoryStore,
     FakeModelClient,
 )
 from dsf.github_client import RecordingGitHubClient
+from dsf.memory.store import InMemoryMemoryStore
 from dsf.observability.tracing import NoOpTracer
 from dsf.ports import (
     ConfigStore,
@@ -101,7 +101,7 @@ def build_services(
         return Services(
             mode=mode,
             model=FakeModelClient(),
-            memory=FakeMemoryStore(),
+            memory=InMemoryMemoryStore(),
             config=InMemoryConfigStore.from_defaults(),
             github=RecordingGitHubClient(),
             tracer=NoOpTracer(),
@@ -112,7 +112,7 @@ def build_services(
         return Services(
             mode=mode,
             model=FakeModelClient(),
-            memory=FakeMemoryStore(),
+            memory=InMemoryMemoryStore(),
             config=InMemoryConfigStore.from_defaults(),
             github=RealGitHubClient(),
             tracer=NoOpTracer(),
@@ -125,7 +125,7 @@ def build_services(
         return Services(
             mode=mode,
             model=FakeModelClient(),
-            memory=FakeMemoryStore(),
+            memory=InMemoryMemoryStore(),
             config=InMemoryConfigStore.from_defaults(),
             github=RealGitHubClient(),
             tracer=build_tracer("azure"),

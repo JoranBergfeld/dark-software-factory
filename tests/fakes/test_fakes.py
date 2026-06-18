@@ -6,10 +6,10 @@ import time
 
 from dsf.config.store import InMemoryConfigStore
 from dsf.fakes import (
-    FakeMemoryStore,
     FakeModelClient,
     FakeSourceBackend,
 )
+from dsf.memory import InMemoryMemoryStore
 from dsf.ports import (
     ConfigStore,
     MemoryStore,
@@ -20,7 +20,7 @@ from dsf.ports import (
 
 def test_fakes_satisfy_protocols():
     assert isinstance(FakeModelClient(), ModelClient)
-    assert isinstance(FakeMemoryStore(), MemoryStore)
+    assert isinstance(InMemoryMemoryStore(), MemoryStore)
     assert isinstance(InMemoryConfigStore.from_defaults(), ConfigStore)
     assert isinstance(FakeSourceBackend(), SourceBackend)
 
@@ -39,7 +39,7 @@ async def test_model_client_handler_keyed_on_tag():
 
 
 async def test_memory_store_working_and_records():
-    mem = FakeMemoryStore()
+    mem = InMemoryMemoryStore()
     await mem.put_working("k", {"x": 1})
     assert await mem.get_working("k") == {"x": 1}
     assert await mem.get_working("missing") is None
@@ -56,7 +56,7 @@ async def test_memory_store_working_and_records():
 
 
 async def test_memory_store_lessons():
-    mem = FakeMemoryStore()
+    mem = InMemoryMemoryStore()
     await mem.put_lesson({"product": "alpha", "text": "lesson one"})
     await mem.put_lesson({"product": "beta", "text": "other"})
     lessons = await mem.get_lessons("alpha")
@@ -76,7 +76,7 @@ def test_config_store_seeded_defaults():
 
 async def test_memory_store_record_ttl_expires():
     """Records with a TTL are invisible to query_similar after they expire."""
-    mem = FakeMemoryStore()
+    mem = InMemoryMemoryStore()
     # Insert a record with a very short TTL.
     await mem.put_record({"kind": "sig", "text": "checkout error"}, ttl=0.01)
     # Immediately visible.
@@ -90,7 +90,7 @@ async def test_memory_store_record_ttl_expires():
 
 async def test_memory_store_working_ttl_expires():
     """Working-tier entries expire after their ttl."""
-    mem = FakeMemoryStore()
+    mem = InMemoryMemoryStore()
     await mem.put_working("k", "value", ttl=0.01)
     assert await mem.get_working("k") == "value"
     time.sleep(0.02)
@@ -99,7 +99,7 @@ async def test_memory_store_working_ttl_expires():
 
 async def test_memory_store_max_records_eviction():
     """Records beyond max_records are evicted (oldest first) to bound growth."""
-    mem = FakeMemoryStore(max_records=5)
+    mem = InMemoryMemoryStore(max_records=5)
     for i in range(7):
         await mem.put_record({"kind": "evt", "text": f"event {i}"})
     # Only the 5 most recent should survive.
@@ -112,7 +112,7 @@ async def test_memory_store_max_records_eviction():
 
 async def test_memory_store_query_similar_strips_internal_keys():
     """_inserted_at and _ttl must not appear in query_similar results."""
-    mem = FakeMemoryStore()
+    mem = InMemoryMemoryStore()
     await mem.put_record({"kind": "k", "text": "hello world"}, ttl=9999)
     hits = await mem.query_similar("hello world", "k", k=1)
     assert hits

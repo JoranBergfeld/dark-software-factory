@@ -4,19 +4,18 @@ from __future__ import annotations
 
 from dsf.contracts.enums import RunStatus, TriggerKind, Verdict
 from dsf.contracts.models import CouncilVerdict, CriticScore, Run
-from dsf.fakes import FakeMemoryStore
-from dsf.memory import Memory, consolidate_run, is_duplicate
+from dsf.memory import InMemoryMemoryStore, Memory, consolidate_run, is_duplicate
 
 
 async def test_working_put_get():
-    mem = Memory(FakeMemoryStore())
+    mem = Memory(InMemoryMemoryStore())
     await mem.remember_working("run:42", {"status": "OPEN"}, ttl=60)
     assert await mem.recall_working("run:42") == {"status": "OPEN"}
     assert await mem.recall_working("missing") is None
 
 
 async def test_record_and_similar_roundtrip():
-    store = FakeMemoryStore()
+    store = InMemoryMemoryStore()
     mem = Memory(store)
     await store.put_record(
         {"kind": "proposal", "text": "add export to csv button on dashboard"}
@@ -27,7 +26,7 @@ async def test_record_and_similar_roundtrip():
 
 
 async def test_is_duplicate_true_for_near_identical():
-    store = FakeMemoryStore()
+    store = InMemoryMemoryStore()
     text = "improve latency of the microbi ingestion pipeline under load"
     await store.put_record({"kind": "proposal", "text": text})
     # Highly overlapping query -> token overlap above threshold.
@@ -35,18 +34,18 @@ async def test_is_duplicate_true_for_near_identical():
 
 
 async def test_is_duplicate_false_when_no_records():
-    store = FakeMemoryStore()
+    store = InMemoryMemoryStore()
     assert await is_duplicate("brand new idea", store, "proposal") is False
 
 
 async def test_is_duplicate_false_for_dissimilar():
-    store = FakeMemoryStore()
+    store = InMemoryMemoryStore()
     await store.put_record({"kind": "proposal", "text": "alpha beta gamma delta"})
     assert await is_duplicate("zeta eta theta iota", store, "proposal") is False
 
 
 async def test_consolidate_run_writes_retrievable_lesson():
-    store = FakeMemoryStore()
+    store = InMemoryMemoryStore()
     run = Run(
         trigger=TriggerKind.SIGNAL,
         status=RunStatus.FILED,
