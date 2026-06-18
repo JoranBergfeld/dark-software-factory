@@ -15,8 +15,8 @@ from pydantic import BaseModel, Field
 
 def _repo_root() -> Path:
     """Locate repo root (where ``config/products.json`` lives)."""
-    # src/dsf/config/registry.py -> repo root is three parents up from src/dsf.
-    return Path(__file__).resolve().parents[3]
+    # core/src/dsf/config/registry.py -> repo root is four parents up.
+    return Path(__file__).resolve().parents[4]
 
 
 class Product(BaseModel):

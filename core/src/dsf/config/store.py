@@ -10,9 +10,9 @@ from typing import Any
 
 def _repo_root() -> Path:
     """Locate repo root (where ``config/defaults.json`` lives)."""
-    # src/dsf/config/store.py -> repo root is three parents up from src/dsf.
+    # core/src/dsf/config/store.py -> repo root is four parents up.
     here = Path(__file__).resolve()
-    return here.parents[3]
+    return here.parents[4]
 
 
 def load_defaults() -> dict:

@@ -111,7 +111,7 @@ behavior — it flips feature flags that take effect on the next run with no red
 - per-product confidence thresholds and council weights (with calibration proposals)
 - the **global DRY-RUN kill switch** — run the full line but never file
 
-The Grafana dashboard (`src/dsf/observability/grafana/dashboard.json`) is the
+The Grafana dashboard (`core/src/dsf/observability/grafana/dashboard.json`) is the
 read-only observability surface; import it into Grafana once App Insights is wired.
 
 ## Council → Squad handoff

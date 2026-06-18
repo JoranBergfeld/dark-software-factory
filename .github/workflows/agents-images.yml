@@ -11,20 +11,22 @@ on:
     branches: [main]
     paths:
       - 'src/dsf/agents/**'
-      - 'src/dsf/contracts/**'
-      - 'src/dsf/ports/**'
-      - 'src/dsf/a2a/**'
-      - 'src/dsf/container.py'
+      - 'core/src/dsf/contracts/**'
+      - 'core/src/dsf/ports/**'
+      - 'core/src/dsf/a2a/**'
+      - 'core/src/dsf/container.py'
       - 'pyproject.toml'
+      - 'core/pyproject.toml'
       - '.github/workflows/agents-images.yml'
   pull_request:
     paths:
       - 'src/dsf/agents/**'
-      - 'src/dsf/contracts/**'
-      - 'src/dsf/ports/**'
-      - 'src/dsf/a2a/**'
-      - 'src/dsf/container.py'
+      - 'core/src/dsf/contracts/**'
+      - 'core/src/dsf/ports/**'
+      - 'core/src/dsf/a2a/**'
+      - 'core/src/dsf/container.py'
       - 'pyproject.toml'
+      - 'core/pyproject.toml'
       - '.github/workflows/agents-images.yml'
   workflow_dispatch:
 
@@ -48,11 +50,12 @@ jobs:
           filters: |
             core:
               - 'pyproject.toml'
-              - 'src/dsf/contracts/**'
-              - 'src/dsf/ports/**'
-              - 'src/dsf/a2a/**'
+              - 'core/pyproject.toml'
+              - 'core/src/dsf/contracts/**'
+              - 'core/src/dsf/ports/**'
+              - 'core/src/dsf/a2a/**'
               - 'src/dsf/agents/base.py'
-              - 'src/dsf/container.py'
+              - 'core/src/dsf/container.py'
             sentry:
               - 'src/dsf/agents/sentry/**'
             grafana:
