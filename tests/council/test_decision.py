@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from dsf.config.flags import weights
+from dsf.config.store import InMemoryConfigStore
 from dsf.container import build_services
 from dsf.contracts.enums import Verdict
+from dsf.contracts.models import CouncilVerdict, CriticScore
 from dsf.council.decision import decide
 from tests.council.conftest import make_evidence, make_proposal, make_run
 
@@ -73,3 +76,25 @@ async def test_below_threshold_yields_kill():
     assert verdict.verdict == Verdict.KILL
     # KILL is by threshold, not by veto.
     assert not any(s.veto for s in verdict.scores)
+
+
+def test_seeded_weight_shifts_council_weighted_score():
+    """A weight seeded under the canonical ``weight.<critic>`` block flows
+    through ``weights()`` into the verdict, shifting the weighted score toward
+    the up-weighted critic (#5). This is the single location the Control Center
+    tweaks at runtime, so 'governing on the go' moves real decisions."""
+    scores = [
+        CriticScore(critic="value", score=1.0),
+        CriticScore(critic="cost", score=0.0),
+    ]
+
+    # Equal default weights -> plain mean.
+    default_weights = weights(InMemoryConfigStore.from_defaults(), ["value", "cost"])
+    base = CouncilVerdict.from_scores("p", scores, 0.6, default_weights)
+    assert base.weighted_score == 0.5
+
+    # Up-weight 'value' 3:1 via the canonical top-level block only.
+    seeded_weights = weights(InMemoryConfigStore({"weight": {"value": 3.0}}), ["value", "cost"])
+    up = CouncilVerdict.from_scores("p", scores, 0.6, seeded_weights)
+    assert up.weighted_score == 0.75
+    assert up.weighted_score > base.weighted_score

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dsf.config.store import InMemoryConfigStore, resolve_flag_key
+from dsf.config.store import InMemoryConfigStore, load_defaults, resolve_flag_key
 from dsf.ports import ConfigStore
 
 
@@ -25,4 +25,19 @@ def test_config_store_seeded_defaults():
     assert cfg.is_enabled("agent.SENTRY") is True
     assert cfg.is_enabled("trigger.SIGNAL.paused") is False
     assert cfg.get_value("default_threshold") == 0.6
-    assert cfg.get_value("critics.value.weight") == 1.0
+    assert cfg.get_value("weight.value") == 1.0
+
+
+def test_critic_weights_live_only_in_top_level_block():
+    """``critics.<name>`` carries only ``enabled``; weights live under the
+    canonical top-level ``weight`` block (the sole location ``weights()`` reads
+    and the Control Center tweaks). Guards against re-introducing the dead
+    ``critics.<name>.weight`` trap (#5)."""
+    data = load_defaults()
+    for name, critic_cfg in data["critics"].items():
+        assert "weight" not in critic_cfg, (
+            f"critics.{name}.weight is dead config (never read); "
+            f"use the canonical top-level weight.{name} instead"
+        )
+    # Every critic has a seed under the canonical block.
+    assert set(data["weight"]) >= set(data["critics"])

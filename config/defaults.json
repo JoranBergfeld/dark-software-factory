@@ -3,32 +3,25 @@
   "default_threshold": 0.6,
   "critics": {
     "grounding": {
-      "enabled": true,
-      "weight": 1.0
+      "enabled": true
     },
     "value": {
-      "enabled": true,
-      "weight": 1.0
+      "enabled": true
     },
     "duplication": {
-      "enabled": true,
-      "weight": 1.0
+      "enabled": true
     },
     "feasibility": {
-      "enabled": true,
-      "weight": 1.0
+      "enabled": true
     },
     "strategic_fit": {
-      "enabled": true,
-      "weight": 1.0
+      "enabled": true
     },
     "cost": {
-      "enabled": true,
-      "weight": 1.0
+      "enabled": true
     },
     "security": {
-      "enabled": true,
-      "weight": 1.0
+      "enabled": true
     }
   },
   "agents": {
