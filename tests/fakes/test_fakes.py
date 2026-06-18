@@ -10,7 +10,6 @@ from dsf.fakes import (
     FakeMemoryStore,
     FakeModelClient,
     FakeSourceBackend,
-    FakeTracer,
 )
 from dsf.ports import (
     ConfigStore,
@@ -18,7 +17,6 @@ from dsf.ports import (
     MemoryStore,
     ModelClient,
     SourceBackend,
-    Tracer,
 )
 
 
@@ -28,7 +26,6 @@ def test_fakes_satisfy_protocols():
     assert isinstance(FakeConfigStore.from_defaults(), ConfigStore)
     assert isinstance(FakeGitHubClient(), GitHubClient)
     assert isinstance(FakeSourceBackend(), SourceBackend)
-    assert isinstance(FakeTracer(), Tracer)
 
 
 async def test_model_client_handler_keyed_on_tag():

@@ -10,9 +10,9 @@ from dsf.fakes import (
     FakeGitHubClient,
     FakeMemoryStore,
     FakeModelClient,
-    FakeTracer,
 )
 from dsf.github_client import RealGitHubClient
+from dsf.observability.tracing import NoOpTracer
 from dsf.ports import ConfigStore, GitHubClient, MemoryStore, ModelClient, Tracer
 
 
@@ -24,7 +24,7 @@ def test_build_services_local_wires_fakes():
     assert isinstance(services.memory, FakeMemoryStore)
     assert isinstance(services.config, FakeConfigStore)
     assert isinstance(services.github, FakeGitHubClient)
-    assert isinstance(services.tracer, FakeTracer)
+    assert isinstance(services.tracer, NoOpTracer)
 
 
 def test_build_services_satisfy_protocols():

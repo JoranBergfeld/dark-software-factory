@@ -5,7 +5,6 @@ from dsf.fakes.github import FakeGitHubClient
 from dsf.fakes.memory import FakeMemoryStore
 from dsf.fakes.model import FakeModelClient
 from dsf.fakes.source import FakeSourceBackend
-from dsf.fakes.tracer import FakeTracer
 
 __all__ = [
     "FakeConfigStore",
@@ -13,6 +12,5 @@ __all__ = [
     "FakeMemoryStore",
     "FakeModelClient",
     "FakeSourceBackend",
-    "FakeTracer",
     "load_defaults",
 ]

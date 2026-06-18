@@ -13,8 +13,8 @@ from dsf.fakes import (
     FakeGitHubClient,
     FakeMemoryStore,
     FakeModelClient,
-    FakeTracer,
 )
+from dsf.observability.tracing import NoOpTracer
 from dsf.ports import (
     ConfigStore,
     GitHubClient,
@@ -104,7 +104,7 @@ def build_services(
             memory=FakeMemoryStore(),
             config=FakeConfigStore.from_defaults(),
             github=FakeGitHubClient(),
-            tracer=FakeTracer(),
+            tracer=NoOpTracer(),
         )
     if mode == "gh":
         from dsf.github_client import RealGitHubClient
@@ -115,7 +115,7 @@ def build_services(
             memory=FakeMemoryStore(),
             config=FakeConfigStore.from_defaults(),
             github=RealGitHubClient(),
-            tracer=FakeTracer(),
+            tracer=NoOpTracer(),
         )
     if mode == "azure":
         from dsf.github_client import RealGitHubClient

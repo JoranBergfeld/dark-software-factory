@@ -5,8 +5,7 @@ from __future__ import annotations
 from dsf.container import build_services
 from dsf.contracts.enums import TriggerKind
 from dsf.contracts.models import Run
-from dsf.fakes import FakeTracer
-from dsf.observability.tracing import build_tracer, span_attrs_for_run
+from dsf.observability.tracing import NoOpTracer, build_tracer, span_attrs_for_run
 from dsf.orchestrator.conveyor import run_line
 
 #: The seven station span names the conveyor must emit.
@@ -21,13 +20,19 @@ STATION_SPANS = {
 }
 
 
-def test_build_tracer_local_returns_fake() -> None:
+def test_build_tracer_local_returns_noop() -> None:
     tracer = build_tracer("local")
-    assert isinstance(tracer, FakeTracer)
+    assert isinstance(tracer, NoOpTracer)
+
+
+def test_noop_tracer_satisfies_protocol() -> None:
+    from dsf.ports import Tracer
+
+    assert isinstance(NoOpTracer(), Tracer)
 
 
 def test_build_tracer_azure_does_not_raise() -> None:
-    # Without opentelemetry installed this falls back to FakeTracer; either way
+    # Without opentelemetry installed this falls back to NoOpTracer; either way
     # it returns a usable tracer and never raises.
     tracer = build_tracer("azure")
     assert tracer is not None
