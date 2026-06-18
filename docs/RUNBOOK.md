@@ -50,7 +50,7 @@ uv run dsfctl sweep
 uv run dsfctl serve-agent --kind sentry --port 8080
 
 # Serve the Control Center UI (toggles, thresholds, dry-run kill switch):
-uv run dsfctl control-center --port 8081
+uv run dsf-control-center --port 8081
 # then open http://localhost:8081
 
 # Serve the signal-ingestion endpoint (POST /ingest):

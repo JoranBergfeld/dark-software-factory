@@ -19,6 +19,8 @@ jobs:
         run: uv sync --all-packages
       - name: Lint
         run: uv run ruff check .
+      - name: Import boundaries
+        run: uv run lint-imports
       - name: Test
         run: uv run pytest -q
       - name: Evals gate

@@ -327,4 +327,35 @@ def create_app(services: Services | None = None, *, token: str | None = None) ->
 app = create_app()
 
 
-__all__ = ["AGENTS", "CC_BEARER_TOKEN_ENV", "CRITICS", "TRIGGERS", "app", "create_app"]
+def main(argv: list[str] | None = None) -> int:
+    """Serve the Control Center web UI via uvicorn (``dsf-control-center`` script)."""
+    import argparse
+
+    import uvicorn
+
+    parser = argparse.ArgumentParser(
+        prog="dsf-control-center",
+        description="Dark Software Factory — Control Center web UI",
+    )
+    parser.add_argument(
+        "--host", default="127.0.0.1", help="bind host (localhost-only by default)"
+    )
+    parser.add_argument("--port", type=int, default=8081, help="bind port")
+    args = parser.parse_args(argv)
+    uvicorn.run("dsf.control_center.app:app", host=args.host, port=args.port)
+    return 0
+
+
+__all__ = [
+    "AGENTS",
+    "CC_BEARER_TOKEN_ENV",
+    "CRITICS",
+    "TRIGGERS",
+    "app",
+    "create_app",
+    "main",
+]
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
