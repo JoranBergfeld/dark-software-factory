@@ -28,7 +28,7 @@ def test_critic_enabled_per_product_override():
     cfg = FakeConfigStore.from_defaults()
     cfg.set_flag("critic.value", False, product="microbi")
     assert critic_enabled(cfg, "value", product="microbi") is False
-    assert critic_enabled(cfg, "value", product="homelab-dash") is True
+    assert critic_enabled(cfg, "value", product="other-product") is True
 
 
 def test_agent_enabled_accepts_enum_and_str():

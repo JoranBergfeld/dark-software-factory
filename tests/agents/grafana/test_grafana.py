@@ -12,7 +12,7 @@ from dsf.contracts.enums import SourceKind
 
 async def test_fake_backend_returns_grounded_evidence():
     backend = GrafanaFakeBackend()
-    items = await backend.gather({"product_hints": ["homelab-dash"]})
+    items = await backend.gather({"product_hints": ["microbi"]})
 
     assert len(items) >= 1
     for item in items:
@@ -20,7 +20,7 @@ async def test_fake_backend_returns_grounded_evidence():
         assert item.raw_citation.strip()
         assert item.provenance.source_kind == SourceKind.GRAFANA
     # Scope was recorded.
-    assert backend.calls == [{"product_hints": ["homelab-dash"]}]
+    assert backend.calls == [{"product_hints": ["microbi"]}]
 
 
 def test_agent_builds_with_grafana_kind():
@@ -41,7 +41,7 @@ def test_card_endpoint_reports_grafana():
 
 def test_gather_endpoint_returns_evidence():
     client = TestClient(build_agent().make_app(token=""))
-    resp = client.post("/gather", json={"run_scope": {"product_hints": ["homelab-dash"]}})
+    resp = client.post("/gather", json={"run_scope": {"product_hints": ["microbi"]}})
     assert resp.status_code == 200
     body = resp.json()
     assert body["degraded"] is False
@@ -64,10 +64,10 @@ async def test_mcp_backend_maps_results_to_evidence():
         return [
             {
                 "summary": "Error-rate jumped to 7% on the api gateway over 10m.",
-                "panel_url": "https://grafana.homelab.lan/d/gw/gateway?viewPanel=3",
+                "panel_url": "https://grafana.example.com/d/gw/gateway?viewPanel=3",
                 "query": 'sum(rate(http_requests_total{code=~"5.."}[5m]))',
                 "confidence": 0.77,
-                "product_hints": ["homelab-dash", "gateway"],
+                "product_hints": ["microbi", "gateway"],
             }
         ]
 
@@ -78,8 +78,8 @@ async def test_mcp_backend_maps_results_to_evidence():
     item = items[0]
     assert item.source_agent == "grafana"
     assert item.claim.startswith("Error-rate jumped")
-    assert item.raw_citation == "https://grafana.homelab.lan/d/gw/gateway?viewPanel=3"
+    assert item.raw_citation == "https://grafana.example.com/d/gw/gateway?viewPanel=3"
     assert item.provenance.source_kind == SourceKind.GRAFANA
     assert item.provenance.query_used.startswith("sum(rate(")
     assert item.confidence == pytest.approx(0.77)
-    assert item.product_hints == ["homelab-dash", "gateway"]
+    assert item.product_hints == ["microbi", "gateway"]

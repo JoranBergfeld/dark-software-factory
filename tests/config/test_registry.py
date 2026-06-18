@@ -5,9 +5,9 @@ from __future__ import annotations
 from dsf.config.registry import _MIN_KEY_LEN, Product, load_registry, route_product
 
 
-def test_load_registry_seeds_two_products():
+def test_load_registry_seeds_microbi():
     registry = load_registry()
-    assert set(registry) >= {"microbi", "homelab-dash"}
+    assert set(registry) >= {"microbi"}
     microbi = registry["microbi"]
     assert isinstance(microbi, Product)
     assert microbi.github_repo
@@ -26,9 +26,9 @@ def test_route_product_matches_hint_to_product():
 
 def test_route_product_case_insensitive_key_match():
     registry = load_registry()
-    product = route_product(["HomeLab-Dash"], registry)
+    product = route_product(["MicroBI"], registry)
     assert product is not None
-    assert product.key == "homelab-dash"
+    assert product.key == "microbi"
 
 
 def test_route_product_unknown_hint_returns_none():
@@ -67,10 +67,11 @@ def test_word_boundary_prevents_partial_key_match():
 
 def test_exact_match_works_for_hyphenated_key():
     """Exact match (after normalisation) works for hyphenated product keys."""
-    registry = load_registry()
-    product = route_product(["homelab-dash"], registry)
+    p = Product(key="metrics-dash", github_repo="example/metrics-dash")
+    registry = _mini_registry(p)
+    product = route_product(["metrics-dash"], registry)
     assert product is not None
-    assert product.key == "homelab-dash"
+    assert product.key == "metrics-dash"
 
 
 def test_word_boundary_match_works_for_key_embedded_in_longer_hint():
@@ -83,13 +84,13 @@ def test_word_boundary_match_works_for_key_embedded_in_longer_hint():
 
 def test_ambiguous_multi_match_returns_longest_key():
     """When two keys both match a hint the longest key wins."""
-    shorter = Product(key="home", github_repo="example/home")
-    longer = Product(key="homelab", github_repo="example/homelab")
+    shorter = Product(key="node", github_repo="example/node")
+    longer = Product(key="nodegroup", github_repo="example/nodegroup")
     registry = _mini_registry(shorter, longer)
-    # Both "home" and "homelab" are whole tokens in the hint.
-    result = route_product(["home network homelab performance degraded"], registry)
+    # Both "node" and "nodegroup" are whole tokens in the hint.
+    result = route_product(["node nodegroup performance degraded"], registry)
     assert result is not None
-    assert result.key == "homelab"
+    assert result.key == "nodegroup"
 
 
 def test_first_hint_that_matches_is_returned():

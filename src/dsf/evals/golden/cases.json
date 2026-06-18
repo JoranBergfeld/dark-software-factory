@@ -18,19 +18,19 @@
     }
   },
   {
-    "id": "grafana-homelab-latency",
-    "name": "Grafana latency/memory signals route to homelab-dash and file",
+    "id": "grafana-microbi-latency",
+    "name": "Grafana latency/memory signals route to microbi and file",
     "signal_payload": {
       "product_hints": [
-        "homelab-dash"
+        "microbi"
       ],
       "source_kinds": [
         "GRAFANA"
       ],
-      "text": "Checkout API p99 latency spike and node memory saturation"
+      "text": "Checkout API p99 latency spike and node memory saturation in microbi"
     },
     "expectations": {
-      "expected_product": "homelab-dash",
+      "expected_product": "microbi",
       "expect_filed": true,
       "must_be_grounded": true
     }
@@ -58,14 +58,13 @@
     "name": "Sentry + Grafana multi-source run reaches FILED with grounded issues",
     "signal_payload": {
       "product_hints": [
-        "microbi",
-        "homelab-dash"
+        "microbi"
       ],
       "source_kinds": [
         "SENTRY",
         "GRAFANA"
       ],
-      "text": "Multi-source incident: microbi errors plus homelab latency"
+      "text": "Multi-source incident: microbi errors plus latency saturation"
     },
     "expectations": {
       "expected_product": null,

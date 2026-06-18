@@ -141,12 +141,12 @@ def test_routing_accuracy_evaluator_units() -> None:
 
     issue_a = RoutedIssue(proposal_id="1", product="microbi", repo="r", title="t", body="b")
     issue_b = RoutedIssue(
-        proposal_id="2", product="homelab-dash", repo="r", title="t", body="b"
+        proposal_id="2", product="other-product", repo="r", title="t", body="b"
     )
 
     assert routing_accuracy([issue_a], "microbi") == 1.0
     assert routing_accuracy([issue_a, issue_b], "microbi") == 0.5
-    assert routing_accuracy([issue_a], "homelab-dash") == 0.0
+    assert routing_accuracy([issue_a], "other-product") == 0.0
     # Unconstrained expectation.
     assert routing_accuracy([issue_a, issue_b], None) == 1.0
     # No issues, product expected -> unmet.
