@@ -6,7 +6,7 @@ from dsf.agents.base import SourceAgent
 from dsf.config.store import InMemoryConfigStore
 from dsf.contracts.enums import SourceKind
 from dsf.contracts.models import EvidenceItem, Provenance
-from dsf.fakes import FakeSourceBackend
+from tests.support.source_double import RecordingSourceBackend
 
 
 def _evidence() -> EvidenceItem:
@@ -19,7 +19,7 @@ def _evidence() -> EvidenceItem:
 
 
 async def test_enabled_agent_delegates_to_backend():
-    backend = FakeSourceBackend([_evidence()])
+    backend = RecordingSourceBackend([_evidence()])
     agent = SourceAgent(
         kind=SourceKind.GRAFANA,
         backend=backend,
@@ -35,7 +35,7 @@ async def test_enabled_agent_delegates_to_backend():
 async def test_disabled_agent_returns_degraded_empty():
     cfg = InMemoryConfigStore.from_defaults()
     cfg.set_flag("agent.GRAFANA", False)
-    backend = FakeSourceBackend([_evidence()])
+    backend = RecordingSourceBackend([_evidence()])
     agent = SourceAgent(kind=SourceKind.GRAFANA, backend=backend, config=cfg)
 
     resp = await agent.gather({})
@@ -64,7 +64,7 @@ async def test_backend_exception_degrades():
 
 def test_card_reflects_enabled_flag():
     cfg = InMemoryConfigStore.from_defaults()
-    agent = SourceAgent(kind=SourceKind.WEBIQ, backend=FakeSourceBackend(), config=cfg)
+    agent = SourceAgent(kind=SourceKind.WEBIQ, backend=RecordingSourceBackend(), config=cfg)
     assert agent.card().enabled is True
     cfg.set_flag("agent.WEBIQ", False)
     assert agent.card().enabled is False

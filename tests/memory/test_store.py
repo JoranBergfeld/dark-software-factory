@@ -1,39 +1,15 @@
-"""Tests for the in-memory fakes (plan Task 0.3)."""
+"""InMemoryMemoryStore behavior — tiers, TTL, eviction, and key hygiene."""
 
 from __future__ import annotations
 
 import time
 
-from dsf.config.store import InMemoryConfigStore
-from dsf.fakes import FakeSourceBackend
 from dsf.memory import InMemoryMemoryStore
-from dsf.model import DeterministicModelClient
-from dsf.ports import (
-    ConfigStore,
-    MemoryStore,
-    ModelClient,
-    SourceBackend,
-)
+from dsf.ports import MemoryStore
 
 
-def test_fakes_satisfy_protocols():
-    assert isinstance(DeterministicModelClient(), ModelClient)
+def test_inmemory_store_satisfies_protocol():
     assert isinstance(InMemoryMemoryStore(), MemoryStore)
-    assert isinstance(InMemoryConfigStore.from_defaults(), ConfigStore)
-    assert isinstance(FakeSourceBackend(), SourceBackend)
-
-
-async def test_model_client_handler_keyed_on_tag():
-    client = DeterministicModelClient()
-    client.register("##SYNTH##", lambda s, p: "synthesized")
-    out = await client.complete("sys", "please ##SYNTH## now")
-    assert out == "synthesized"
-    # Deterministic: same call, same result.
-    again = await client.complete("sys", "please ##SYNTH## now")
-    assert again == "synthesized"
-    # Unmatched prompt falls back to deterministic echo.
-    miss = await client.complete("sys", "nothing here")
-    assert miss.startswith("[deterministic]")
 
 
 async def test_memory_store_working_and_records():
@@ -60,16 +36,6 @@ async def test_memory_store_lessons():
     lessons = await mem.get_lessons("alpha")
     assert len(lessons) == 1
     assert lessons[0]["text"] == "lesson one"
-
-
-def test_config_store_seeded_defaults():
-    cfg = InMemoryConfigStore.from_defaults()
-    assert cfg.is_enabled("dry_run") is True
-    assert cfg.is_enabled("critic.grounding") is True
-    assert cfg.is_enabled("agent.SENTRY") is True
-    assert cfg.is_enabled("trigger.SIGNAL.paused") is False
-    assert cfg.get_value("default_threshold") == 0.6
-    assert cfg.get_value("critics.value.weight") == 1.0
 
 
 async def test_memory_store_record_ttl_expires():

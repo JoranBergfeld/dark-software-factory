@@ -1,12 +1,16 @@
-"""Deterministic fake SourceBackend returning a provided evidence list."""
+"""Recording SourceBackend double for agent/A2A tests.
+
+Records each ``gather`` call and returns a fixed evidence list. Satisfies the
+:class:`~dsf.ports.SourceBackend` protocol without any I/O.
+"""
 
 from __future__ import annotations
 
 from dsf.contracts.models import EvidenceItem
 
 
-class FakeSourceBackend:
-    """Base fake source backend returning a fixed list of evidence."""
+class RecordingSourceBackend:
+    """Source backend double returning a fixed list of evidence."""
 
     def __init__(self, evidence: list[EvidenceItem] | None = None) -> None:
         self._evidence: list[EvidenceItem] = list(evidence or [])

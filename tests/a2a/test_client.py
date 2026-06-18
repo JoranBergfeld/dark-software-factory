@@ -10,7 +10,7 @@ from dsf.agents.base import SourceAgent
 from dsf.config.store import InMemoryConfigStore
 from dsf.contracts.enums import SourceKind
 from dsf.contracts.models import EvidenceItem, Provenance
-from dsf.fakes import FakeSourceBackend
+from tests.support.source_double import RecordingSourceBackend
 
 
 class _RaisingBackend:
@@ -36,7 +36,7 @@ def _transport(agent: SourceAgent) -> httpx.ASGITransport:
 async def test_inprocess_gather_returns_evidence():
     agent = SourceAgent(
         kind=SourceKind.SENTRY,
-        backend=FakeSourceBackend([_evidence()]),
+        backend=RecordingSourceBackend([_evidence()]),
         config=InMemoryConfigStore.from_defaults(),
     )
     resp = await a2a_client.gather(
@@ -52,7 +52,7 @@ async def test_inprocess_gather_returns_evidence():
 async def test_inprocess_fetch_card():
     agent = SourceAgent(
         kind=SourceKind.GRAFANA,
-        backend=FakeSourceBackend(),
+        backend=RecordingSourceBackend(),
         config=InMemoryConfigStore.from_defaults(),
     )
     card = await a2a_client.fetch_card(endpoint=None, transport=_transport(agent))
@@ -94,7 +94,7 @@ async def test_client_http_error_returns_degraded(monkeypatch):
 
     agent = SourceAgent(
         kind=SourceKind.SENTRY,
-        backend=FakeSourceBackend(),
+        backend=RecordingSourceBackend(),
         config=InMemoryConfigStore.from_defaults(),
     )
     # Bypass SourceAgent wrapping: make the endpoint raise inside FastAPI.

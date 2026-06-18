@@ -1,8 +1,9 @@
 """Port protocols — the seams every external dependency hides behind.
 
 Each port is a :class:`typing.Protocol`. I/O-bearing methods are async so the
-real Azure/MCP implementations can do network calls; the in-memory fakes in
-``dsf.fakes`` satisfy the same signatures deterministically for dry-run.
+real Azure/MCP implementations can do network calls; the honest local
+implementations (``InMemory*`` / ``NoOp*`` / ``Recording*`` / ``Deterministic*``)
+satisfy the same signatures deterministically for offline runs.
 """
 
 from __future__ import annotations
