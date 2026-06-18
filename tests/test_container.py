@@ -93,7 +93,7 @@ def test_build_services_azure_wires_real_github_and_settings():
     assert services.product == "microbi"
     assert services.azure is not None
     assert services.azure.product == "microbi"
-    # model/memory/config remain fakes (the deferred-adapter seam):
+    # without endpoints configured, the adapters fall back to the in-memory siblings:
     assert isinstance(services.model, DeterministicModelClient)
     assert isinstance(services.memory, InMemoryMemoryStore)
     assert isinstance(services.config, InMemoryConfigStore)

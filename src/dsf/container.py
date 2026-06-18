@@ -36,6 +36,8 @@ class AzureRuntimeSettings(BaseModel):
     keyvault_uri: str = ""
     appinsights_connection_string: str = ""
     cosmos_endpoint: str = ""
+    openai_endpoint: str = ""
+    openai_deployment: str = ""
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> AzureRuntimeSettings:
@@ -55,6 +57,8 @@ class AzureRuntimeSettings(BaseModel):
                 env.get("APPLICATIONINSIGHTS_CONNECTION_STRING") or ""
             ).strip(),
             cosmos_endpoint=(env.get("AZURE_COSMOS_ENDPOINT") or "").strip(),
+            openai_endpoint=(env.get("AZURE_OPENAI_ENDPOINT") or "").strip(),
+            openai_deployment=(env.get("AZURE_OPENAI_DEPLOYMENT") or "").strip(),
         )
 
 
@@ -91,8 +95,10 @@ def build_services(
         ``env`` (defaults to ``os.environ``; only ``DSF_PRODUCT`` is required),
         wires the real GitHub client and the OpenTelemetry tracer
         (:func:`dsf.observability.tracing.build_tracer`, which degrades to the
-        NoOpTracer when OpenTelemetry is not installed), and keeps
-        model/memory/config on in-memory implementations behind the deferred-adapter seam (SP3b).
+        NoOpTracer when OpenTelemetry is not installed), and wires the real
+        Azure data adapters (App Configuration / Cosmos / Azure OpenAI) for each
+        configured endpoint, falling back to the in-memory sibling when an
+        endpoint is unset (SP3b).
         The resolved ``product``/``azure`` settings are carried on the bundle.
     """
     if mode == "local":
@@ -120,11 +126,40 @@ def build_services(
         from dsf.observability.tracing import build_tracer
 
         settings = AzureRuntimeSettings.from_env(env if env is not None else os.environ)
+
+        config: ConfigStore
+        if settings.appconfig_endpoint:
+            from dsf.config.azure_store import AppConfigStore
+
+            config = AppConfigStore.from_endpoint(settings.appconfig_endpoint)
+        else:
+            config = InMemoryConfigStore.from_defaults()
+
+        memory: MemoryStore
+        if settings.cosmos_endpoint:
+            from dsf.memory.azure_store import CosmosMemoryStore
+
+            memory = CosmosMemoryStore.from_endpoint(
+                settings.cosmos_endpoint, database=settings.product
+            )
+        else:
+            memory = InMemoryMemoryStore()
+
+        model: ModelClient
+        if settings.openai_endpoint and settings.openai_deployment:
+            from dsf.model.azure_client import AzureOpenAIModelClient
+
+            model = AzureOpenAIModelClient.from_endpoint(
+                settings.openai_endpoint, deployment=settings.openai_deployment
+            )
+        else:
+            model = DeterministicModelClient()
+
         return Services(
             mode=mode,
-            model=DeterministicModelClient(),
-            memory=InMemoryMemoryStore(),
-            config=InMemoryConfigStore.from_defaults(),
+            model=model,
+            memory=memory,
+            config=config,
             github=RealGitHubClient(),
             tracer=build_tracer("azure"),
             product=settings.product,
