@@ -62,9 +62,11 @@ uv run uvicorn dsf.triggers.app:app --port 8082
 `dsf new` scaffolds an isolated product factory. `--name-prefix` is **required**;
 it is sanitized and randomized into a <=12-char Azure resource prefix (persisted in
 the manifest and reused on re-runs). Under `--execute`, repo creation + Coding Squad
-init, **the dedicated Azure resource group + Bicep deployment**, **rendering +
-deploying the product's feature-council runtime**, and **rendering + deploying the
-product's SRE agent runtime** (both Azure Container Apps) are all real.
+init, **the dedicated Azure resource group + Bicep deployment**, and **rendering +
+deploying the product's feature-council runtime** (an Azure Container App) are all
+real. The SRE corner is **onboarded interactively** against the managed Azure SRE
+Agent product (ADR 0009): the `onboard_sre_agent` step renders a per-product
+runbook (`onboard_sre_agent` is render-only — no Container App is deployed).
 
 ```bash
 # Preview the plan (no side effects):
@@ -129,36 +131,35 @@ council files issue (squad:ready) → squad triage → Copilot agent → PR →
 human review → council feedback-watcher → Lesson → next council run
 ```
 
-## SRE agent (fix-forward)
+## SRE agent (Azure SRE Agent product)
 
-The SRE agent (`dsf.sre`) is the production-watching corner of the factory. One
-sweep runs `observe → detect → fix_forward → reflect`:
+The production-watching corner of the factory is the managed **Azure SRE Agent**
+product (ADR 0009), not a bespoke runtime. Onboarding is interactive — a wizard at
+[sre.azure.com](https://sre.azure.com) plus browser-OAuth GitHub and Azure
+resource-access grants — so `dsf new` renders a per-product runbook instead of
+deploying anything:
 
-- **observe** — gathers `EvidenceItem`s from the same Sentry/Grafana backends the
-  council uses (offline fixture backends by default), degrading past any backend
-  that is disabled or fails.
-- **detect** — keeps evidence above a confidence threshold, groups it by product,
-  and assigns a severity + a stable fingerprint.
-- **fix_forward** — routes each incident to its product repo and files a GitHub
-  issue labelled `sre`, a severity, **and `squad:ready`** — so the *same*
-  `squad triage --execute` picks it up. Repeated incidents dedup by fingerprint;
-  a `--dry-run` files nothing and indexes nothing (a true preview).
-- **reflect** — records the incident and a product-scoped lesson for the loop.
+- The provisioner's `onboard_sre_agent` step writes
+  `config/instances/<product>.runtime/sre-onboarding.md` scoped to the product's
+  resource group, region, and repo.
+- Follow that runbook to create the agent (`dsf-sre-<product>`), connect the repo,
+  and grant Reader on the product resource group.
+
+The handoff is preserved: the Azure SRE Agent investigates incidents (Azure
+Monitor / App Insights) and files GitHub issues/PRs carrying the `squad:ready`
+label, so the **same** `squad triage --execute` intake picks them up.
 
 ```
-prod telemetry → SRE observe → detect → fix_forward → issue (sre + squad:ready)
-→ squad triage → Copilot agent → PR        ↘ reflect → Lesson → next sweep/run
+prod telemetry → Azure SRE Agent → investigate → issue/PR (squad:ready)
+→ squad triage → Copilot agent → PR
 ```
 
-Run one sweep in-process (fully offline in local mode):
+Render the onboarding runbook (offline; part of the normal plan):
 
 ```bash
-uv run dsfctl sre-sweep --dry-run --product microbi   # preview, files nothing
-uv run dsfctl sre-sweep --product microbi             # file-forward for real (gh/azure mode)
+uv run dsf new --product microbi --owner acme --name-prefix microbi \
+  --execute   # writes sre-onboarding.md alongside the other runtime artifacts
 ```
-
-In azure mode the provisioned `dsf-sre-<product>` Container App runs the sweep on
-a schedule (ADR 0008).
 
 ## The learning loop
 

@@ -34,39 +34,15 @@ def test_cli_run_missing_signal_returns_error(capsys):
 
 def test_cli_subcommands_importable():
     parser = build_parser()
-    for cmd in ("run", "sweep", "serve-agent", "serve-orchestrator", "control-center", "sre-sweep"):
+    for cmd in ("run", "sweep", "serve-agent", "serve-orchestrator", "control-center"):
         args = parser.parse_args([cmd])
         assert args.command == cmd
 
 
-def test_cli_sre_sweep_parses_flags():
+def test_cli_sre_sweep_removed():
     parser = build_parser()
-    args = parser.parse_args(["sre-sweep", "--dry-run", "--product", "microbi"])
-    assert args.command == "sre-sweep"
-    assert args.dry_run is True
-    assert args.product == "microbi"
-
-
-def test_cli_sre_sweep_dispatches(monkeypatch, capsys):
-    calls: dict = {}
-
-    async def fake_run_sweep(services, scope=None, *, dry_run=False):
-        from dsf.sre.models import SreSweepResult
-
-        calls["scope"] = scope
-        calls["dry_run"] = dry_run
-        return SreSweepResult(
-            observed=6, incidents=5, filed=["local://issue/1"], duplicates=0, dry_run=dry_run
-        )
-
-    monkeypatch.setattr("dsf.sre.main.run_sweep", fake_run_sweep)
-    rc = main(["sre-sweep", "--dry-run", "--product", "microbi"])
-    assert rc == 0
-    out = capsys.readouterr().out
-    assert "observed=6" in out
-    assert "filed=1" in out
-    assert calls["dry_run"] is True
-    assert calls["scope"] == {"products": ["microbi"]}
+    with pytest.raises(SystemExit):
+        parser.parse_args(["sre-sweep"])
 
 
 def test_cli_sweep_runs_line(capsys):

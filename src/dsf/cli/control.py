@@ -66,21 +66,6 @@ def _cmd_sweep(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_sre_sweep(args: argparse.Namespace) -> int:
-    """Run one SRE sweep — observe production, fix-forward incidents to the squad."""
-    from dsf.sre.main import run_sweep
-
-    services = _get_services(args.mode)
-    scope = {"products": [args.product]} if args.product else None
-    dry = args.dry_run or services.config.is_enabled("dry_run")
-    result = asyncio.run(run_sweep(services, scope, dry_run=dry))
-    print(
-        f"[dsf] sre-sweep -> observed={result.observed} incidents={result.incidents} "
-        f"filed={len(result.filed)} duplicates={result.duplicates} dry_run={result.dry_run}"
-    )
-    return 0
-
-
 def _cmd_serve_orchestrator(args: argparse.Namespace) -> int:
     """One-shot orchestrator worker (a real deployment would loop on a queue)."""
     from dsf.triggers.scheduler import run_sweep
@@ -139,10 +124,6 @@ def build_parser() -> argparse.ArgumentParser:
     p_sweep = sub.add_parser("sweep", help="run a scheduled sweep")
     p_sweep.set_defaults(func=_cmd_sweep)
 
-    p_sre = sub.add_parser("sre-sweep", help="run one SRE sweep (fix-forward to the squad)")
-    p_sre.add_argument("--dry-run", action="store_true", help="detect only, skip filing")
-    p_sre.add_argument("--product", help="scope the sweep to a single product")
-    p_sre.set_defaults(func=_cmd_sre_sweep)
 
     p_orch = sub.add_parser(
         "serve-orchestrator", help="run the orchestrator worker (one-shot sweep)"
