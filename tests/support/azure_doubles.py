@@ -48,3 +48,17 @@ class InMemoryCosmosGateway:
         return [
             dict(i) for i in self.containers.get(container, []) if i.get(field) == value
         ]
+
+
+class RecordingChatGateway:
+    """ChatGateway double: records calls, returns a canned ``response`` string."""
+
+    def __init__(self, response: str = "") -> None:
+        self.response = response
+        self.calls: list[dict] = []
+
+    async def complete(self, system: str, prompt: str, json_schema: dict | None) -> str:
+        self.calls.append(
+            {"system": system, "prompt": prompt, "json_schema": json_schema}
+        )
+        return self.response
