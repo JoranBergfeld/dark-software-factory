@@ -27,11 +27,25 @@ target-version = "py312"
 select = ["E", "F", "I", "UP", "B"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["dsf"]
+known-first-party = ["dsf", "dsf_testing"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["tests"]
+# Each member owns its tests under <member>/tests/. Because every member's test
+# root is named `tests`, prepend/append import modes would collide on the package
+# name (and on duplicate test-file basenames). importlib mode + namespace-package
+# awareness import each test module by path with no shared `tests` package.
+# Shared, dependency-light doubles/builders live in `testing/dsf_testing` (on the
+# path below) so any member's tests can `from dsf_testing import ...`.
+addopts = "--import-mode=importlib"
+consider_namespace_packages = true
+pythonpath = ["testing"]
+testpaths = [
+    "core/tests",
+    "feature-council/tests",
+    "cli/tests",
+    "control-center/tests",
+]
 
 # Architectural boundaries between workspace members (enforced in CI via
 # `uv run lint-imports`). All members share the one `dsf` namespace, so the

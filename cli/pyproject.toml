@@ -25,4 +25,4 @@ target-version = "py312"
 select = ["E", "F", "I", "UP", "B"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["dsf"]
+known-first-party = ["dsf", "dsf_testing"]
