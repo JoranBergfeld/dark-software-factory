@@ -1,4 +1,4 @@
-# Build context is limited to pyproject.toml, uv.lock, and src/.
+# Build context is limited to pyproject.toml, uv.lock, core/, and src/.
 # Everything else is excluded to keep context minimal and images lean.
 .git
 .github
