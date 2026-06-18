@@ -8,8 +8,8 @@ from dataclasses import dataclass
 
 from pydantic import BaseModel
 
+from dsf.config.store import InMemoryConfigStore
 from dsf.fakes import (
-    FakeConfigStore,
     FakeMemoryStore,
     FakeModelClient,
 )
@@ -102,7 +102,7 @@ def build_services(
             mode=mode,
             model=FakeModelClient(),
             memory=FakeMemoryStore(),
-            config=FakeConfigStore.from_defaults(),
+            config=InMemoryConfigStore.from_defaults(),
             github=RecordingGitHubClient(),
             tracer=NoOpTracer(),
         )
@@ -113,7 +113,7 @@ def build_services(
             mode=mode,
             model=FakeModelClient(),
             memory=FakeMemoryStore(),
-            config=FakeConfigStore.from_defaults(),
+            config=InMemoryConfigStore.from_defaults(),
             github=RealGitHubClient(),
             tracer=NoOpTracer(),
         )
@@ -126,7 +126,7 @@ def build_services(
             mode=mode,
             model=FakeModelClient(),
             memory=FakeMemoryStore(),
-            config=FakeConfigStore.from_defaults(),
+            config=InMemoryConfigStore.from_defaults(),
             github=RealGitHubClient(),
             tracer=build_tracer("azure"),
             product=settings.product,

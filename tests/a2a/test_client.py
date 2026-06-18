@@ -7,9 +7,10 @@ import httpx
 from dsf.a2a import client as a2a_client
 from dsf.a2a.card import AgentCard
 from dsf.agents.base import SourceAgent
+from dsf.config.store import InMemoryConfigStore
 from dsf.contracts.enums import SourceKind
 from dsf.contracts.models import EvidenceItem, Provenance
-from dsf.fakes import FakeConfigStore, FakeSourceBackend
+from dsf.fakes import FakeSourceBackend
 
 
 class _RaisingBackend:
@@ -36,7 +37,7 @@ async def test_inprocess_gather_returns_evidence():
     agent = SourceAgent(
         kind=SourceKind.SENTRY,
         backend=FakeSourceBackend([_evidence()]),
-        config=FakeConfigStore.from_defaults(),
+        config=InMemoryConfigStore.from_defaults(),
     )
     resp = await a2a_client.gather(
         endpoint=None,
@@ -52,7 +53,7 @@ async def test_inprocess_fetch_card():
     agent = SourceAgent(
         kind=SourceKind.GRAFANA,
         backend=FakeSourceBackend(),
-        config=FakeConfigStore.from_defaults(),
+        config=InMemoryConfigStore.from_defaults(),
     )
     card = await a2a_client.fetch_card(endpoint=None, transport=_transport(agent))
     assert isinstance(card, AgentCard)
@@ -65,7 +66,7 @@ async def test_gather_against_raising_backend_degrades_not_raises():
     agent = SourceAgent(
         kind=SourceKind.SENTRY,
         backend=_RaisingBackend(),
-        config=FakeConfigStore.from_defaults(),
+        config=InMemoryConfigStore.from_defaults(),
     )
     resp = await a2a_client.gather(endpoint=None, scope={}, transport=_transport(agent))
     assert resp.degraded is True
@@ -94,7 +95,7 @@ async def test_client_http_error_returns_degraded(monkeypatch):
     agent = SourceAgent(
         kind=SourceKind.SENTRY,
         backend=FakeSourceBackend(),
-        config=FakeConfigStore.from_defaults(),
+        config=InMemoryConfigStore.from_defaults(),
     )
     # Bypass SourceAgent wrapping: make the endpoint raise inside FastAPI.
     monkeypatch.setattr(type(agent), "gather", _boom, raising=True)

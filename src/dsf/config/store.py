@@ -10,7 +10,7 @@ from typing import Any
 
 def _repo_root() -> Path:
     """Locate repo root (where ``config/defaults.json`` lives)."""
-    # src/dsf/fakes/config_store.py -> repo root is three parents up from src/dsf.
+    # src/dsf/config/store.py -> repo root is three parents up from src/dsf.
     here = Path(__file__).resolve()
     return here.parents[3]
 
@@ -21,7 +21,7 @@ def load_defaults() -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-class FakeConfigStore:
+class InMemoryConfigStore:
     """In-memory feature-flag/config store seeded from a dict.
 
     Flag namespacing convention used by the typed accessors in
@@ -39,7 +39,7 @@ class FakeConfigStore:
         self._overrides: dict[tuple[str, str | None], bool] = {}
 
     @classmethod
-    def from_defaults(cls) -> FakeConfigStore:
+    def from_defaults(cls) -> InMemoryConfigStore:
         """Build a store seeded from ``config/defaults.json``."""
         return cls(load_defaults())
 

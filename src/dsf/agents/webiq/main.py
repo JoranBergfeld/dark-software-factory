@@ -11,8 +11,8 @@ from __future__ import annotations
 from dsf.agents.base import SourceAgent
 from dsf.agents.mode import is_live, resolve_mode
 from dsf.agents.webiq.backend import WebIqFakeBackend, WebIqMcpBackend
+from dsf.config.store import InMemoryConfigStore
 from dsf.contracts.enums import SourceKind
-from dsf.fakes import FakeConfigStore
 
 
 def build_agent(config: object | None = None, mode: str | None = None) -> SourceAgent:
@@ -23,7 +23,7 @@ def build_agent(config: object | None = None, mode: str | None = None) -> Source
     (Tavily) built from env vars. Otherwise the deterministic fixture-backed fake
     is used.
     """
-    cfg = config if config is not None else FakeConfigStore.from_defaults()
+    cfg = config if config is not None else InMemoryConfigStore.from_defaults()
     if is_live(resolve_mode(mode)):
         from dsf.agents.webiq.client import build_webiq_client_from_env
 

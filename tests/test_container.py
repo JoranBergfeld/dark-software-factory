@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import pytest
 
+from dsf.config.store import InMemoryConfigStore
 from dsf.container import AzureRuntimeSettings, Services, build_services
 from dsf.fakes import (
-    FakeConfigStore,
     FakeMemoryStore,
     FakeModelClient,
 )
@@ -21,7 +21,7 @@ def test_build_services_local_wires_fakes():
     assert services.mode == "local"
     assert isinstance(services.model, FakeModelClient)
     assert isinstance(services.memory, FakeMemoryStore)
-    assert isinstance(services.config, FakeConfigStore)
+    assert isinstance(services.config, InMemoryConfigStore)
     assert isinstance(services.github, RecordingGitHubClient)
     assert isinstance(services.tracer, NoOpTracer)
 
@@ -98,7 +98,7 @@ def test_build_services_azure_wires_real_github_and_settings():
     # model/memory/config remain fakes (the deferred-adapter seam):
     assert isinstance(services.model, FakeModelClient)
     assert isinstance(services.memory, FakeMemoryStore)
-    assert isinstance(services.config, FakeConfigStore)
+    assert isinstance(services.config, InMemoryConfigStore)
     # tracer comes from build_tracer("azure") and still satisfies the port:
     assert isinstance(services.tracer, Tracer)
 

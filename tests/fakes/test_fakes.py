@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import time
 
+from dsf.config.store import InMemoryConfigStore
 from dsf.fakes import (
-    FakeConfigStore,
     FakeMemoryStore,
     FakeModelClient,
     FakeSourceBackend,
@@ -21,7 +21,7 @@ from dsf.ports import (
 def test_fakes_satisfy_protocols():
     assert isinstance(FakeModelClient(), ModelClient)
     assert isinstance(FakeMemoryStore(), MemoryStore)
-    assert isinstance(FakeConfigStore.from_defaults(), ConfigStore)
+    assert isinstance(InMemoryConfigStore.from_defaults(), ConfigStore)
     assert isinstance(FakeSourceBackend(), SourceBackend)
 
 
@@ -65,7 +65,7 @@ async def test_memory_store_lessons():
 
 
 def test_config_store_seeded_defaults():
-    cfg = FakeConfigStore.from_defaults()
+    cfg = InMemoryConfigStore.from_defaults()
     assert cfg.is_enabled("dry_run") is True
     assert cfg.is_enabled("critic.grounding") is True
     assert cfg.is_enabled("agent.SENTRY") is True

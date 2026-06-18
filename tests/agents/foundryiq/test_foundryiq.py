@@ -7,8 +7,8 @@ from fastapi.testclient import TestClient
 
 from dsf.agents.foundryiq.backend import FoundryIqFakeBackend, FoundryIqMcpBackend
 from dsf.agents.foundryiq.main import app, build_agent
+from dsf.config.store import InMemoryConfigStore
 from dsf.contracts.enums import SourceKind
-from dsf.fakes import FakeConfigStore
 
 
 async def test_fake_gather_returns_grounded_evidence():
@@ -28,7 +28,7 @@ def test_agent_builds_with_foundryiq_kind():
     agent = build_agent()
     assert agent.kind == SourceKind.FOUNDRYIQ
     # Honors an explicitly supplied config store.
-    assert build_agent(FakeConfigStore.from_defaults()).kind == SourceKind.FOUNDRYIQ
+    assert build_agent(InMemoryConfigStore.from_defaults()).kind == SourceKind.FOUNDRYIQ
 
 
 def test_card_endpoint_reports_foundryiq():

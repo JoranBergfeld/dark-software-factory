@@ -7,9 +7,10 @@ from fastapi.testclient import TestClient
 
 from dsf.a2a.auth import build_bearer_dependency
 from dsf.agents.base import SourceAgent
+from dsf.config.store import InMemoryConfigStore
 from dsf.contracts.enums import SourceKind
 from dsf.contracts.models import EvidenceItem, Provenance
-from dsf.fakes import FakeConfigStore, FakeSourceBackend
+from dsf.fakes import FakeSourceBackend
 
 
 def _seeded_evidence() -> EvidenceItem:
@@ -23,11 +24,11 @@ def _seeded_evidence() -> EvidenceItem:
     )
 
 
-def _agent(backend: FakeSourceBackend, cfg: FakeConfigStore | None = None) -> SourceAgent:
+def _agent(backend: FakeSourceBackend, cfg: InMemoryConfigStore | None = None) -> SourceAgent:
     return SourceAgent(
         kind=SourceKind.SENTRY,
         backend=backend,
-        config=cfg or FakeConfigStore.from_defaults(),
+        config=cfg or InMemoryConfigStore.from_defaults(),
         endpoint="http://sentry-agent",
     )
 

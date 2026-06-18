@@ -9,13 +9,13 @@ from __future__ import annotations
 
 from dsf.agents.base import SourceAgent
 from dsf.agents.tickets.backend import TicketsFakeBackend
+from dsf.config.store import InMemoryConfigStore
 from dsf.contracts.enums import SourceKind
-from dsf.fakes import FakeConfigStore
 
 
 def build_agent(config: object | None = None) -> SourceAgent:
     """Build the tickets :class:`SourceAgent` over the fake backend."""
-    cfg = config if config is not None else FakeConfigStore.from_defaults()
+    cfg = config if config is not None else InMemoryConfigStore.from_defaults()
     return SourceAgent(
         kind=SourceKind.TICKETS,
         backend=TicketsFakeBackend(),

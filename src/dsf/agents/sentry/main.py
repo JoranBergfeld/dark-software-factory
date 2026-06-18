@@ -13,8 +13,8 @@ import os
 from dsf.agents.base import SourceAgent
 from dsf.agents.mode import is_live, resolve_mode
 from dsf.agents.sentry.backend import SentryFakeBackend, SentryMcpBackend
+from dsf.config.store import InMemoryConfigStore
 from dsf.contracts.enums import SourceKind
-from dsf.fakes import FakeConfigStore
 
 
 def build_agent(config: object | None = None, mode: str | None = None) -> SourceAgent:
@@ -29,7 +29,7 @@ def build_agent(config: object | None = None, mode: str | None = None) -> Source
 
     Otherwise the deterministic fixture-backed fake is used.
     """
-    cfg = config if config is not None else FakeConfigStore.from_defaults()
+    cfg = config if config is not None else InMemoryConfigStore.from_defaults()
     if is_live(resolve_mode(mode)):
         if os.environ.get("SENTRY_MCP_URL"):
             from dsf.agents.sentry.mcp_client import build_sentry_mcp_call_from_env
