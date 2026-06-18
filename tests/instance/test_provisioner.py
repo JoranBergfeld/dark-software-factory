@@ -55,7 +55,8 @@ def test_plan_provision_azure_command_shape():
     assert "namePrefix=dsf" in az.command
     assert "environmentName=dev" in az.command
     assert "location=swedencentral" in az.command
-    assert "workloadPrincipalId=" in az.command
+    assert "product=demo" in az.command
+    assert any(c.startswith("runtimeImage=") for c in az.command)
     assert az.command[az.command.index("--query") + 1] == "properties.outputs"
     assert az.command[-2:] == ["-o", "json"]
 

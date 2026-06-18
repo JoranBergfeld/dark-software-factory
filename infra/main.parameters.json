@@ -8,9 +8,6 @@
     "environmentName": {
       "value": "dev"
     },
-    "workloadPrincipalId": {
-      "value": ""
-    },
     "adminPrincipalId": {
       "value": ""
     }

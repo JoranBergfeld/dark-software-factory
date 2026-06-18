@@ -1,20 +1,12 @@
 // main.bicep
-// Dark Software Factory — Azure BACKING SERVICES we rely on (design §8).
+// Dark Software Factory — Azure resources for one product factory instance.
 //
-// This template provisions ONLY the services the intake line depends on. It does
-// NOT host or deploy any container/compute: the agent + orchestrator runtime is
-// hosted by the user (e.g. a Proxmox homelab) and reaches these services purely
-// OUTBOUND over HTTPS — no VNet peering, no inbound to the homelab. See ADR 0002.
-//
-// Provisions: Log Analytics + Application Insights, Key Vault (RBAC), App
-// Configuration with seeded feature flags, Cosmos DB (NoSQL + vector) for unified
-// memory, and a signal-ingestion buffer (Event Grid custom topic → Service Bus
-// queue) that the homelab orchestrator polls outbound.
-//
-// Data-plane access is granted to a caller-supplied homelab workload principal
-// (an Entra service principal object id). Managed Identity is not used because
-// there is no Azure compute here. Azure OpenAI / Foundry is referenced by the
-// homelab runtime, not provisioned here.
+// Provisions the backing services the intake line depends on (Log Analytics +
+// Application Insights, Key Vault, App Configuration with seeded flags, Cosmos DB,
+// Event Grid -> Service Bus ingestion) AND the runtime that consumes them: an
+// Azure Container Apps environment + a single no-ingress orchestrator Container
+// App. The runtime authenticates to the data plane with a user-assigned managed
+// identity (ADR 0004); there is no service principal and nothing inbound.
 //
 // Validate (no deploy):  az deployment group what-if -g <rg> -f infra/main.bicep -p @infra/main.parameters.json
 
@@ -35,8 +27,11 @@ param location string = resourceGroup().location
 @description('Environment moniker (dev/test/prod), tagged on resources and used in names.')
 param environmentName string = 'dev'
 
-@description('Object ID of the homelab workload service principal granted data-plane access (Cosmos/App Config/Key Vault/Service Bus). Empty = skip role assignments (provision-only).')
-param workloadPrincipalId string = ''
+@description('Product key this factory instance serves (sets DSF_PRODUCT and names the runtime Container App).')
+param product string = 'demo'
+
+@description('Container image for the feature-council orchestrator runtime.')
+param runtimeImage string = 'ghcr.io/joranbergfeld/dsf-runtime:latest'
 
 @description('Object ID of a human user/group granted App Configuration Data Owner (to edit flags via the Control Center during dev). Optional.')
 param adminPrincipalId string = ''
@@ -96,7 +91,20 @@ resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
 }
 
 // ---------------------------------------------------------------------------
-// Key Vault (RBAC auth, soft-delete) + data-plane role to the homelab workload
+// Runtime identity: user-assigned MI holding the data-plane roles (ADR 0004).
+// A USER-assigned (not system-assigned) identity has a stable principalId known
+// before the Container App, avoiding a cycle (the app's env wires in the Cosmos /
+// App Config endpoints, while those resources' role assignments need this id).
+// ---------------------------------------------------------------------------
+
+resource runtimeIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name: '${namePrefix}-runtime-${suffix}'
+  location: location
+  tags: tags
+}
+
+// ---------------------------------------------------------------------------
+// Key Vault (RBAC auth, soft-delete) + data-plane role to the runtime identity
 // ---------------------------------------------------------------------------
 
 resource keyVault 'Microsoft.KeyVault/vaults@2024-04-01-preview' = {
@@ -124,11 +132,11 @@ resource keyVault 'Microsoft.KeyVault/vaults@2024-04-01-preview' = {
   }
 }
 
-resource kvSecretsUserAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(workloadPrincipalId)) {
-  name: guid(keyVault.id, workloadPrincipalId, keyVaultSecretsUserRoleId)
+resource kvSecretsUserAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(keyVault.id, runtimeIdentity.id, keyVaultSecretsUserRoleId)
   scope: keyVault
   properties: {
-    principalId: workloadPrincipalId
+    principalId: runtimeIdentity.properties.principalId
     principalType: 'ServicePrincipal'
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', keyVaultSecretsUserRoleId)
   }
@@ -150,11 +158,11 @@ resource appConfig 'Microsoft.AppConfiguration/configurationStores@2024-05-01' =
   }
 }
 
-resource appConfigDataReaderAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(workloadPrincipalId)) {
-  name: guid(appConfig.id, workloadPrincipalId, appConfigDataReaderRoleId)
+resource appConfigDataReaderAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(appConfig.id, runtimeIdentity.id, appConfigDataReaderRoleId)
   scope: appConfig
   properties: {
-    principalId: workloadPrincipalId
+    principalId: runtimeIdentity.properties.principalId
     principalType: 'ServicePrincipal'
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', appConfigDataReaderRoleId)
   }
@@ -218,14 +226,14 @@ module cosmos 'modules/cosmos.bicep' = {
     accountName: '${namePrefix}cos${suffix}'
     location: location
     tags: tags
-    // Grant the homelab workload Cosmos data-plane access (account-scoped SQL role).
-    dataPlanePrincipalId: workloadPrincipalId
+    // Grant the runtime identity Cosmos data-plane access (account-scoped SQL role).
+    dataPlanePrincipalId: runtimeIdentity.properties.principalId
   }
 }
 
 // ---------------------------------------------------------------------------
 // Signal ingestion buffer: Event Grid custom topic -> Service Bus queue
-// (homelab orchestrator polls the queue OUTBOUND; nothing pushes into homelab)
+// (the orchestrator polls the queue; nothing is pushed into the runtime)
 // ---------------------------------------------------------------------------
 
 module ingestion 'modules/ingestion.bicep' = {
@@ -235,14 +243,79 @@ module ingestion 'modules/ingestion.bicep' = {
     suffix: suffix
     location: location
     tags: tags
-    // Grant the homelab workload Service Bus Data Receiver on the queue.
-    receiverPrincipalId: workloadPrincipalId
+    // Grant the runtime identity Service Bus Data Receiver on the queue.
+    receiverPrincipalId: runtimeIdentity.properties.principalId
     allowPublicNetworkAccess: allowPublicNetworkAccess
   }
 }
 
 // ---------------------------------------------------------------------------
-// Outputs (consumed by the homelab runtime's azure-mode configuration)
+// Runtime compute: Azure Container Apps environment + orchestrator app (ADR 0004)
+// ---------------------------------------------------------------------------
+
+resource containerEnv 'Microsoft.App/managedEnvironments@2024-03-01' = {
+  name: '${namePrefix}-cae-${suffix}'
+  location: location
+  tags: tags
+  properties: {
+    appLogsConfiguration: {
+      destination: 'log-analytics'
+      logAnalyticsConfiguration: {
+        customerId: logAnalytics.properties.customerId
+        sharedKey: logAnalytics.listKeys().primarySharedKey
+      }
+    }
+  }
+}
+
+resource orchestratorApp 'Microsoft.App/containerApps@2024-03-01' = {
+  name: 'dsf-orchestrator-${product}'
+  location: location
+  tags: tags
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${runtimeIdentity.id}': {}
+    }
+  }
+  properties: {
+    managedEnvironmentId: containerEnv.id
+    configuration: {
+      activeRevisionsMode: 'Single'
+    }
+    template: {
+      containers: [
+        {
+          name: 'orchestrator'
+          image: runtimeImage
+          resources: {
+            cpu: json('0.5')
+            memory: '1Gi'
+          }
+          env: [
+            { name: 'DSF_MODE', value: 'azure' }
+            { name: 'DSF_PRODUCT', value: product }
+            { name: 'AZURE_CLIENT_ID', value: runtimeIdentity.properties.clientId }
+            { name: 'AZURE_APPCONFIG_ENDPOINT', value: appConfig.properties.endpoint }
+            { name: 'AZURE_KEYVAULT_URI', value: keyVault.properties.vaultUri }
+            { name: 'AZURE_COSMOS_ENDPOINT', value: cosmos.outputs.endpoint }
+            {
+              name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
+              value: appInsights.properties.ConnectionString
+            }
+          ]
+        }
+      ]
+      scale: {
+        minReplicas: 1
+        maxReplicas: 1
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Outputs (consumed by the ACA runtime's azure-mode configuration)
 // ---------------------------------------------------------------------------
 
 @description('Cosmos DB document endpoint.')
@@ -265,3 +338,9 @@ output serviceBusNamespace string = ingestion.outputs.namespaceHostname
 
 @description('Service Bus signals queue name.')
 output signalsQueueName string = ingestion.outputs.queueName
+
+@description('Principal ID of the runtime user-assigned identity (data-plane RBAC holder).')
+output runtimePrincipalId string = runtimeIdentity.properties.principalId
+
+@description('Name of the orchestrator Container App.')
+output orchestratorAppName string = orchestratorApp.name

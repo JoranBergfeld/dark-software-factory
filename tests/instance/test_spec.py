@@ -81,7 +81,7 @@ def test_instance_spec_azure_defaults():
     assert spec.name_prefix == "dsf"
     assert spec.environment == "dev"
     assert spec.location == "swedencentral"
-    assert spec.workload_principal_id == ""
+    assert spec.runtime_image == "ghcr.io/joranbergfeld/dsf-runtime:latest"
     assert spec.deployment_name() == "dsf-demo"
 
 

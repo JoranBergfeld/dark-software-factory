@@ -46,7 +46,6 @@ def _cmd_new(args: argparse.Namespace) -> int:
         name_prefix=name_prefix,
         environment=args.environment,
         location=args.location,
-        workload_principal_id=args.workload_principal_id,
     )
     prov = InstanceProvisioner(spec, repo_root=root)
     if args.execute:
@@ -97,11 +96,6 @@ def build_parser() -> argparse.ArgumentParser:
         "--location",
         default="swedencentral",
         help="Azure region for the resource group and resources",
-    )
-    p_new.add_argument(
-        "--workload-principal-id",
-        default="",
-        help="object id granted data-plane roles (empty = provision-only)",
     )
     p_new.add_argument(
         "--execute",

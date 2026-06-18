@@ -38,7 +38,6 @@ class InstanceSpec(BaseModel):
     name_prefix: str = "dsf"
     environment: str = "dev"
     location: str = "swedencentral"
-    workload_principal_id: str = ""
     label_taxonomy: dict[str, list[str]] = Field(default_factory=default_label_taxonomy)
 
     @field_validator("name_prefix")
