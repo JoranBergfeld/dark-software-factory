@@ -2,7 +2,7 @@
 
 ``dsf new`` provisions an isolated product factory: its own GitHub repo + Coding
 Squad, a dedicated Azure resource group, and the per-product feature-council runtime
-rendered as a homelab compose bundle. Future lifecycle verbs (``status``/``upgrade``/
+deployed to Azure Container Apps. Future lifecycle verbs (``status``/``upgrade``/
 ``destroy``, SP7) will live here too.
 """
 
@@ -79,8 +79,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_new.add_argument(
         "--runtime-target",
-        default="homelab",
-        choices=["homelab", "aca"],
+        default="aca",
+        choices=["aca"],
         help="where the factory runtime is hosted",
     )
     p_new.add_argument(

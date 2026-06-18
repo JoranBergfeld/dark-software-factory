@@ -242,7 +242,7 @@ def test_apply_dry_run_preserves_prior_azure_outputs(tmp_path):
     assert manifest.executed is True
 
 
-def test_apply_execute_homelab_brings_up_runtime(tmp_path):
+def test_apply_execute_aca_updates_container_app(tmp_path):
     calls = []
 
     def fake_run(cmd, **kwargs):
@@ -250,27 +250,14 @@ def test_apply_execute_homelab_brings_up_runtime(tmp_path):
         returncode = 1 if cmd[:3] == ["gh", "repo", "view"] else 0
         return MagicMock(returncode=returncode, stdout="{}")
 
-    spec = InstanceSpec(product="demo", owner="acme")  # runtime_target defaults to homelab
+    spec = InstanceSpec(product="demo", owner="acme")  # runtime_target defaults to aca
     prov = InstanceProvisioner(spec, run=fake_run, repo_root=tmp_path)
     manifest = prov.apply(execute=True)
 
-    compose = tmp_path / "config" / "instances" / "demo.runtime" / "compose.orchestrator.yml"
-    env = tmp_path / "config" / "instances" / "demo.runtime" / ".env.orchestrator"
-    up = next(c for c in calls if c[:3] == ["docker", "compose", "-f"])
-    assert str(compose) in up
-    assert "--env-file" in up and str(env) in up
-    assert up[-2:] == ["up", "-d"]
+    runtime = tmp_path / "config" / "instances" / "demo.runtime"
+    assert (runtime / "containerapp.yaml").is_file()
+    assert (runtime / ".env.orchestrator").is_file()
+    update = next(c for c in calls if c[:3] == ["az", "containerapp", "update"])
+    assert update[update.index("--name") + 1] == "dsf-orchestrator-demo"
+    assert "--image" in update
     assert {s.name: s.result for s in manifest.plan.steps}["deploy_council"] == "deployed"
-
-
-def test_apply_execute_aca_target_raises(tmp_path):
-    def fake_run(cmd, **kwargs):
-        returncode = 1 if cmd[:3] == ["gh", "repo", "view"] else 0
-        return MagicMock(returncode=returncode, stdout="{}")
-
-    spec = InstanceSpec(product="demo", owner="acme", runtime_target="aca")
-    prov = InstanceProvisioner(spec, run=fake_run, repo_root=tmp_path)
-    with pytest.raises(NotImplementedError, match="aca"):
-        prov.apply(execute=True)
-    # manifest is still persisted (try/finally) so the prefix survives:
-    assert (tmp_path / "config" / "instances" / "demo.json").exists()

@@ -150,25 +150,20 @@ class InstanceProvisioner:
                     provisional = InstanceManifest(
                         spec=self.spec, plan=plan, executed=executed, azure=azure_result
                     )
-                    bundle = render_runtime_bundle(provisional, repo_root=self._repo_root)
+                    render_runtime_bundle(provisional, repo_root=self._repo_root)
                     if not execute:
                         step.result = "rendered (dry-run)"
-                    elif self.spec.runtime_target == "homelab":
+                    else:
                         self._run(
                             [
-                                "docker", "compose",
-                                "-f", str(bundle.compose_path),
-                                "--env-file", str(bundle.env_path),
-                                "up", "-d",
+                                "az", "containerapp", "update",
+                                "--resource-group", self.spec.resource_group(),
+                                "--name", f"dsf-orchestrator-{self.spec.product}",
+                                "--image", self.spec.runtime_image,
                             ],
                             check=True,
                         )
                         step.executed, step.result = True, "deployed"
-                    else:
-                        raise NotImplementedError(
-                            f"runtime_target {self.spec.runtime_target!r} bring-up is "
-                            "not yet implemented (homelab only in SP3)."
-                        )
                 elif not execute:
                     step.result = "dry-run"
                 elif not step.command:

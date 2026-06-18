@@ -29,7 +29,7 @@ def test_default_label_taxonomy_shape():
 def test_instance_spec_defaults():
     spec = InstanceSpec(product="demo", owner="acme")
     assert spec.visibility == "private"
-    assert spec.runtime_target == "homelab"
+    assert spec.runtime_target == "aca"
     assert spec.confidence_threshold == 0.6
     assert spec.label_taxonomy == default_label_taxonomy()
 

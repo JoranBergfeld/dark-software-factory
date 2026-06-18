@@ -32,7 +32,8 @@ class InstanceSpec(BaseModel):
     owner: str
     repo: str = ""
     visibility: str = "private"
-    runtime_target: str = "homelab"
+    runtime_target: str = "aca"
+    runtime_image: str = "ghcr.io/joranbergfeld/dsf-runtime:latest"
     confidence_threshold: float = 0.6
     name_prefix: str = "dsf"
     environment: str = "dev"

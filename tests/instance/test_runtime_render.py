@@ -28,13 +28,13 @@ def _manifest(tmp_path, *, with_azure: bool = True) -> InstanceManifest:
     return InstanceManifest(spec=spec, plan=plan, executed=with_azure, azure=azure)
 
 
-def test_render_writes_compose_and_env_under_runtime_dir(tmp_path):
+def test_render_writes_app_config_and_env_under_runtime_dir(tmp_path):
     bundle = render_runtime_bundle(_manifest(tmp_path), repo_root=tmp_path)
     assert bundle.runtime_dir == runtime_dir("microbi", tmp_path)
     assert bundle.runtime_dir == tmp_path / "config" / "instances" / "microbi.runtime"
-    assert bundle.compose_path.is_file()
+    assert bundle.app_config_path.is_file()
     assert bundle.env_path.is_file()
-    assert bundle.compose_path.name == "compose.orchestrator.yml"
+    assert bundle.app_config_path.name == "containerapp.yaml"
     assert bundle.env_path.name == ".env.orchestrator"
 
 
@@ -49,19 +49,20 @@ def test_render_env_scopes_product_and_maps_endpoints(tmp_path):
     assert "APPLICATIONINSIGHTS_CONNECTION_STRING=InstrumentationKey=abc" in env
 
 
-def test_render_compose_scopes_container_and_references_env_file(tmp_path):
+def test_render_app_config_scopes_product(tmp_path):
     bundle = render_runtime_bundle(_manifest(tmp_path), repo_root=tmp_path)
-    compose = bundle.compose_path.read_text(encoding="utf-8")
-    assert "dsf-orchestrator-microbi" in compose
-    assert ".env.orchestrator" in compose
-    assert "src/dsf/runtime/Dockerfile" in compose
+    app = bundle.app_config_path.read_text(encoding="utf-8")
+    assert "dsf-orchestrator-microbi" in app
+    assert "image:" in app
+    assert "DSF_PRODUCT" in app
+    assert "microbi" in app
 
 
 def test_render_does_not_inline_secrets(tmp_path):
     bundle = render_runtime_bundle(_manifest(tmp_path), repo_root=tmp_path)
     env = bundle.env_path.read_text(encoding="utf-8")
-    # bearer/GitHub tokens are runtime-injected (Key Vault via the homelab SP, ADR 0002),
-    # never rendered into the bundle:
+    # bearer/GitHub tokens are read at runtime from Key Vault via the ACA managed
+    # identity (ADR 0004), never rendered into the bundle:
     assert "A2A_BEARER_TOKEN" not in env
     assert "GITHUB_TOKEN" not in env
     assert "GH_TOKEN" not in env
