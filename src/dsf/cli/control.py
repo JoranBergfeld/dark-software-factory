@@ -91,22 +91,15 @@ def _cmd_serve_orchestrator(args: argparse.Namespace) -> int:
     return 0
 
 
-_AGENT_MODULES = {
-    "sentry": "dsf.agents.sentry.main:app",
-    "grafana": "dsf.agents.grafana.main:app",
-    "foundryiq": "dsf.agents.foundryiq.main:app",
-    "webiq": "dsf.agents.webiq.main:app",
-    "tickets": "dsf.agents.tickets.main:app",
-}
-
-
 def _cmd_serve_agent(args: argparse.Namespace) -> int:
     """Serve a source agent over A2A via uvicorn."""
     import uvicorn
 
-    target = _AGENT_MODULES.get(args.kind)
+    from dsf.agents.registry import app_path, serveable_agents
+
+    target = app_path(args.kind)
     if target is None:
-        choices = sorted(_AGENT_MODULES)
+        choices = serveable_agents()
         print(f"unknown agent kind: {args.kind} (choices: {choices})", file=sys.stderr)
         return 1
     uvicorn.run(target, host=args.host, port=args.port)
