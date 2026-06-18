@@ -21,6 +21,24 @@ def load_defaults() -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def resolve_flag_key(flag: str) -> str | None:
+    """Map a namespaced flag token to its underlying dotted boolean key.
+
+    Returns ``None`` for unknown flags (``is_enabled`` then reports ``False``).
+    Shared by :class:`InMemoryConfigStore` and the App Configuration adapter so
+    the two cannot drift.
+    """
+    if flag == "dry_run":
+        return "dry_run"
+    if flag.startswith("critic."):
+        return f"critics.{flag.split('.', 1)[1]}.enabled"
+    if flag.startswith("agent."):
+        return f"agents.{flag.split('.', 1)[1]}.enabled"
+    if flag.startswith("trigger.") and flag.endswith(".paused"):
+        return f"triggers.{flag.split('.')[1]}.paused"
+    return None
+
+
 class InMemoryConfigStore:
     """In-memory feature-flag/config store seeded from a dict.
 
@@ -50,18 +68,10 @@ class InMemoryConfigStore:
         if (flag, None) in self._overrides:
             return self._overrides[(flag, None)]
 
-        if flag == "dry_run":
-            return bool(self._data.get("dry_run", False))
-        if flag.startswith("critic."):
-            name = flag.split(".", 1)[1]
-            return bool(self._data.get("critics", {}).get(name, {}).get("enabled", False))
-        if flag.startswith("agent."):
-            name = flag.split(".", 1)[1]
-            return bool(self._data.get("agents", {}).get(name, {}).get("enabled", False))
-        if flag.startswith("trigger.") and flag.endswith(".paused"):
-            name = flag.split(".")[1]
-            return bool(self._data.get("triggers", {}).get(name, {}).get("paused", False))
-        return False
+        key = resolve_flag_key(flag)
+        if key is None:
+            return False
+        return bool(self.get_value(key, False))
 
     def get_value(self, key: str, default: Any = None) -> Any:
         """Read a config value by dotted key path."""

@@ -2,8 +2,16 @@
 
 from __future__ import annotations
 
-from dsf.config.store import InMemoryConfigStore
+from dsf.config.store import InMemoryConfigStore, resolve_flag_key
 from dsf.ports import ConfigStore
+
+
+def test_resolve_flag_key_mapping():
+    assert resolve_flag_key("dry_run") == "dry_run"
+    assert resolve_flag_key("critic.grounding") == "critics.grounding.enabled"
+    assert resolve_flag_key("agent.SENTRY") == "agents.SENTRY.enabled"
+    assert resolve_flag_key("trigger.SENTRY.paused") == "triggers.SENTRY.paused"
+    assert resolve_flag_key("nonsense") is None
 
 
 def test_inmemory_config_satisfies_protocol():
