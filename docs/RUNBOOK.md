@@ -121,10 +121,14 @@ implements them. The contract is one system-level label —
 `dsf.contracts.handoff.HANDOFF_LABEL` (`squad:ready`) — that S6 stamps on **every**
 routed issue and that `squad triage` filters on (ADR 0007).
 
-Provisioning wires this end to end: `create_labels` idempotently creates the
-product's taxonomy labels + `squad:ready` in the repo (so filing never fails on a
-missing label), and `squad triage --execute --label squad:ready` dispatches the
-Copilot coding agent against council-filed issues. The full closed loop:
+Provisioning wires this end to end: `register_product` upserts the product
+(key → repo + label taxonomy + confidence threshold) into the routing registry
+(`config/products.json`) that S1 scoping and S6 routing read — so routing is
+populated at provisioning time rather than hand-maintained; `create_labels`
+idempotently creates the product's taxonomy labels + `squad:ready` in the repo
+(so filing never fails on a missing label), and `squad triage --execute --label
+squad:ready` dispatches the Copilot coding agent against council-filed issues.
+The full closed loop:
 
 ```
 council files issue (squad:ready) → squad triage → Copilot agent → PR →

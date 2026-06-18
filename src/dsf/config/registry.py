@@ -46,6 +46,38 @@ def load_registry(path: str | Path | None = None) -> dict[str, Product]:
     return registry
 
 
+def register_product(product: Product, *, path: str | Path | None = None) -> Path:
+    """Upsert ``product`` into ``config/products.json`` (idempotent by key).
+
+    Provisioning (``dsf new``) calls this to register each product into the
+    runtime routing registry that S1 scoping and S6 routing read, so the registry
+    is populated at provisioning time instead of being hand-maintained.
+
+    Re-registering an existing key updates that entry *in place* (preserving
+    order); a new key is appended. The canonical ``{"products": [...]}`` shape is
+    always written. Pure local file IO — no network. ``path`` overrides the
+    default location.
+    """
+    target = Path(path) if path is not None else _repo_root() / "config" / "products.json"
+    entries: list[dict] = []
+    if target.exists():
+        raw = json.loads(target.read_text(encoding="utf-8"))
+        existing = raw["products"] if isinstance(raw, dict) and "products" in raw else raw
+        entries = list(existing)
+
+    new_entry = product.model_dump()
+    for index, entry in enumerate(entries):
+        if entry.get("key") == product.key:
+            entries[index] = new_entry
+            break
+    else:
+        entries.append(new_entry)
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps({"products": entries}, indent=2) + "\n", encoding="utf-8")
+    return target
+
+
 # Minimum key length for word-boundary fallback matching.
 # Keys shorter than this (e.g. 3-char "api") are skipped to prevent mis-routing.
 _MIN_KEY_LEN: int = 4
@@ -97,4 +129,4 @@ def route_product(hints: list[str], registry: dict[str, Product]) -> Product | N
 
 
 
-__all__ = ["Product", "load_registry", "route_product"]
+__all__ = ["Product", "load_registry", "register_product", "route_product"]
