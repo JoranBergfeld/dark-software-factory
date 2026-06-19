@@ -22,6 +22,7 @@ from dsf.config.flags import (
 )
 from dsf.contracts.models import CouncilVerdict
 from dsf.council.critics import ALL_CRITICS
+from dsf.council.deliberation import GATE_NAMES, deliberate
 from dsf.council.jury import convene_jury
 from dsf.council.outcome import decide_outcome
 
@@ -31,34 +32,38 @@ if TYPE_CHECKING:
 
 
 async def _recommend(proposal: Proposal, run: Run, services: Services) -> CouncilVerdict:
-    """Deterministic critic recommendation (the pre-jury proposer tier).
+    """Synthesize a recommendation from the deterministic gates and the lenses.
 
-    Only critics with ``critic.<name>`` enabled (per the proposal's product)
-    participate. The recommendation verdict and weighted score come from
-    :meth:`CouncilVerdict.from_scores`, with weights resolved for exactly the
-    enabled critics. A readable per-critic summary is attached for the audit log.
+    The gates (grounding, duplication) run as deterministic checks that can veto;
+    the lenses (value, cost, feasibility, security, strategic fit) deliberate via
+    :func:`dsf.council.deliberation.deliberate`. Their positions are folded by
+    :meth:`CouncilVerdict.from_scores`: any veto kills, else the weighted mean of
+    the enabled gate and lens scores must clear the per-product threshold. Offline
+    the lenses fall back to their critics, so the synthesis is identical to the
+    pre-deliberation critic loop. A readable per-score summary is attached for the
+    audit log.
     """
     product = proposal.product
-    enabled_names = [
-        name
-        for name in ALL_CRITICS
-        if critic_enabled(services.config, name, product=product)
-    ]
 
-    scores = []
-    for name in enabled_names:
-        scores.append(await ALL_CRITICS[name](proposal, run, services))
+    enabled_gates = [
+        name for name in GATE_NAMES if critic_enabled(services.config, name, product=product)
+    ]
+    gate_scores = [await ALL_CRITICS[name](proposal, run, services) for name in enabled_gates]
+    lens_scores = await deliberate(proposal, run, services)
+
+    scores = gate_scores + lens_scores
+    scored_names = [s.critic for s in scores]
 
     recommendation = CouncilVerdict.from_scores(
         proposal.id,
         scores,
         threshold(services.config, product=product),
-        weights(services.config, enabled_names),
+        weights(services.config, scored_names),
     )
     vetoes = [s.critic for s in scores if s.veto]
     recommendation.rationale = (
         f"{recommendation.rationale} "
-        f"Critics ({len(scores)} enabled): "
+        f"Gates ({len(gate_scores)}) + lenses ({len(lens_scores)}): "
         + ", ".join(f"{s.critic}={s.score:.2f}{'[VETO]' if s.veto else ''}" for s in scores)
         + (f". Vetoes: {', '.join(vetoes)}." if vetoes else ".")
     )
