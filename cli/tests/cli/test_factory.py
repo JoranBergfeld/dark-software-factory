@@ -18,8 +18,27 @@ def test_new_parser_wiring():
     assert args.name_prefix == "demopfx"
     assert args.environment == "dev"
     assert args.location == "swedencentral"
+    assert args.squad_maturity == "low"
     assert args.execute is False
     assert args.write_plan is False
+
+
+def test_new_squad_maturity_high_flows_into_manifest(tmp_path):
+    rc = main([
+        "new", "--product", "demo", "--owner", "acme",
+        "--name-prefix", "demopfx", "--squad-maturity", "high",
+        "--write-plan", "--config-root", str(tmp_path),
+    ])
+    assert rc == 0
+    assert read_manifest("demo", repo_root=tmp_path).spec.squad_maturity == "high"
+
+
+def test_new_rejects_unknown_squad_maturity():
+    with pytest.raises(SystemExit):
+        build_parser().parse_args([
+            "new", "--product", "demo", "--owner", "acme",
+            "--name-prefix", "demopfx", "--squad-maturity", "wild",
+        ])
 
 
 def test_new_requires_name_prefix():
