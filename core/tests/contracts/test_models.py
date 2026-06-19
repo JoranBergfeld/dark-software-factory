@@ -116,6 +116,11 @@ def test_proposal_fields():
     assert prop.kind is ProposalKind.FEATURE
 
 
+def test_verdict_has_escalate_outcome():
+    assert Verdict.ESCALATE.value == "ESCALATE"
+    assert Verdict.ESCALATE not in (Verdict.ACCEPT, Verdict.KILL)
+
+
 def test_export_schemas(tmp_path: Path):
     written = export_schemas(out_dir=tmp_path)
     assert len(written) == len(TOP_LEVEL_MODELS)
