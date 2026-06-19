@@ -371,9 +371,10 @@ def test_apply_execute_aca_updates_container_app(tmp_path):
 
 
 def test_removed_one_shot_squad_steps_are_gone():
+    """The pre-Ralph Cloud Agent steps (squad_copilot, squad_triage) are gone."""
     plan = InstanceProvisioner(_spec()).plan()
-    assert f"squad_{'copilot'}" not in {s.name for s in plan.steps}
-    assert f"squad_{'triage'}" not in {s.name for s in plan.steps}
+    names = {s.name for s in plan.steps}
+    assert not names & {"squad_copilot", "squad_triage"}
 
 
 def test_squad_governance_low_maturity_disables_auto_merge():
