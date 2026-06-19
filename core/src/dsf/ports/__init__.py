@@ -118,11 +118,30 @@ class Tracer(Protocol):
         ...
 
 
+@runtime_checkable
+class SignalBuffer(Protocol):
+    """Pending-signal queue drained by the scheduled council sweep.
+
+    Sources enqueue accepted signal payloads; the council pulls them on its own
+    schedule (the governed pull of ADR 0011). The in-memory implementation is
+    at-most-once; the real Azure Service Bus adapter adds lease/ack/dead-letter.
+    """
+
+    async def enqueue(self, payload: dict) -> None:
+        """Append a signal payload to the pending queue."""
+        ...
+
+    async def drain(self) -> list[dict]:
+        """Return all pending payloads and clear the queue."""
+        ...
+
+
 __all__ = [
     "ConfigStore",
     "GitHubClient",
     "MemoryStore",
     "ModelClient",
+    "SignalBuffer",
     "SourceBackend",
     "Tracer",
     "SourceKind",
