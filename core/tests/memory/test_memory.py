@@ -71,3 +71,20 @@ async def test_consolidate_run_writes_retrievable_lesson():
     # A long-term record was also written and is retrievable.
     records = await store.query_similar("microbi", "run_outcome")
     assert records
+
+
+async def test_consolidate_run_labels_escalated_outcome():
+    store = InMemoryMemoryStore()
+    run = Run(
+        trigger=TriggerKind.SIGNAL,
+        status=RunStatus.FILED,
+        scope_product_hints=["microbi"],
+    )
+    verdict = CouncilVerdict(
+        proposal_id="prop-1",
+        verdict=Verdict.ESCALATE,
+        weighted_score=0.5,
+        threshold=0.6,
+    )
+    lesson = await consolidate_run(run, verdict, store)
+    assert lesson["outcome"] == "escalated"
