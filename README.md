@@ -95,5 +95,6 @@ phases sit at different points along that path.
 
 **Read more:** the
 [charter](docs/superpowers/specs/2026-06-17-dark-software-factory-template-charter-design.md)
-covers the north-star and roadmap, and architecture decisions live in
+covers the north-star and roadmap, each phase has a deeper write-up under
+[`docs/phases/`](docs/phases/), and architecture decisions live in
 [`docs/adr/`](docs/adr/).
