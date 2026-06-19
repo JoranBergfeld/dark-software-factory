@@ -53,11 +53,11 @@ class InstanceSpec(BaseModel):
     @field_validator("squad_maturity")
     @classmethod
     def _validate_squad_maturity(cls, value: str) -> str:
-            if value not in {"low", "high"}:
-                raise ValueError(
-                    f"squad_maturity must be 'low' or 'high', got {value!r}"
-                )
-            return value
+        if value not in {"low", "high"}:
+            raise ValueError(
+                f"squad_maturity must be 'low' or 'high', got {value!r}"
+            )
+        return value
 
     def resolved_repo(self) -> str:
             """Repository name (defaults to the product key)."""
