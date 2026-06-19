@@ -143,6 +143,24 @@ def test_jury_result_empty_has_no_consensus():
     assert jr.majority_go is False
 
 
+def test_council_verdict_carries_optional_jury():
+    jr = JuryResult(votes=[JurorVote(juror="a", go=True)])
+    v = CouncilVerdict(
+        proposal_id="p",
+        verdict=Verdict.ESCALATE,
+        weighted_score=0.7,
+        threshold=0.6,
+        jury=jr,
+    )
+    assert v.jury is not None
+    assert v.jury.votes[0].juror == "a"
+
+
+def test_council_verdict_jury_defaults_to_none():
+    base = CouncilVerdict.from_scores("p", [], threshold=0.6)
+    assert base.jury is None
+
+
 def test_export_schemas(tmp_path: Path):
     written = export_schemas(out_dir=tmp_path)
     assert len(written) == len(TOP_LEVEL_MODELS)

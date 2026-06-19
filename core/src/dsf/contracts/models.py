@@ -155,6 +155,7 @@ class CouncilVerdict(BaseModel):
     weighted_score: float
     threshold: float
     scores: list[CriticScore] = Field(default_factory=list)
+    jury: JuryResult | None = None
     rationale: str = ""
 
     @classmethod
