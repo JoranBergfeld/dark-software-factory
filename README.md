@@ -1,107 +1,99 @@
 # Dark Software Factory
 
-Inspired by manufacturing "dark factories," this repo automates the hardest part of the
-SDLC: **deciding what to build.** It's a mostly-autonomous, multi-product pipeline that
-listens to operational and market signals, investigates them with rigorous grounding,
-runs proposals past an adversarial critic council, and files labeled GitHub issues (dry-run
-by default; real filing via ``--mode gh`` or ``--mode azure``) with a full evidence trail.
-The only human gate is downstream, approving the spec PR.
+> An autonomous software factory: software that decides what to build, builds it, and
+> keeps it running. People stay outside the process and govern it.
 
-This repo is also a **template + CLI**: `dsf new <product>` stamps out an *isolated*
-software factory for one product — its own GitHub repo + Coding Squad, a feature council
-scoped to that product, a dedicated Azure resource group, and the council runtime
-deployed as an Azure Container App. See the
+## Why
+
+A "dark factory" in manufacturing runs with the lights off. The line keeps moving and
+nobody stands on the floor. Dark Software Factory (DSF) takes that idea to software:
+deciding what to build, building it, and operating it all run on agents.
+
+People don't work the line. They stay outside it and do two things:
+
+- Tend the harness: the guardrails, policy, and configuration that keep the agents safe
+  and grounded.
+- Steer: decide what matters right now, and where to point the factory.
+
+So the job changes. Instead of running the assembly line, you govern the factory around
+it. How far that goes is your call; the goal is as much autonomy as each phase can safely
+take.
+
+## The loop
+
+DSF runs as a loop of three phases. Each one has a single job, hands off to the next, and
+what happens in production comes back to the start.
+
+```mermaid
+flowchart LR
+    signals(["market and operational signals"]) --> FC["Feature Council<br/>decide what to build"]
+    FC -->|issues| CS["Coding Squad<br/>build it"]
+    CS -->|PRs| SRE["SRE Agent<br/>operate and feed back"]
+    SRE --> prod(["production"])
+    SRE -->|fix-forward incidents| CS
+    SRE -->|signals and lessons| FC
+```
+
+### Feature Council: decide what to build
+
+It watches operational and market signals and digs into each one against real evidence.
+It puts the proposals in front of a council of critics that argue them down, and the ones
+that survive get filed as labeled, de-duplicated GitHub issues. The job is to work out
+what's worth building.
+
+### Coding Squad: build it
+
+It takes the Council's issues, writes the software, and opens pull requests. A coding
+agent does the work, backed by a knowledge base that grows as it goes.
+
+### SRE Agent: operate and feed back
+
+It watches production, sends incidents straight back to the Squad as fixes, and passes
+what it learns to the Council as new signals and lessons. It keeps the product running and
+teaches the factory how that product actually behaves.
+
+Every product gets its own copy of this loop, fully isolated. No signals, memory, or
+context cross between products, so each factory's reasoning stays scoped and easy to audit.
+
+## The harness
+
+Because people sit outside the loop, the factory puts the controls where they can reach
+them. You govern the factory, not the assembly line:
+
+- **Control Center** is a live console for turning critics, source agents, and triggers on
+  or off, setting per-product confidence thresholds, and flipping the global dry-run kill
+  switch that runs the whole line without filing anything.
+- **Critic weights** set how much each critic counts toward the council's verdict, and you
+  can change them while the line runs.
+- **Grounding** forces every claim the factory files to trace back to real evidence. If a
+  source is down, you get partial, flagged evidence instead of invented coverage.
+- **Policy** is the label taxonomy and routing that connect one phase to the next.
+- **Budget** sets the per-run cost caps and de-duplication that keep the line from flooding
+  or refiling.
+
+These are the dials you turn to raise or lower autonomy and point the factory's attention.
+
+## One factory per product
+
+This repository is the blueprint, not a factory that's already running. One command stamps
+out a complete, isolated factory for a product:
+
+```
+dsf new <product>
+```
+
+That gives the product its own GitHub repo with a Coding Squad ready to go, a Feature
+Council scoped to just that product, an SRE Agent on its production, and a dedicated Azure
+resource group behind them, all wired into the loop above. The template and CLI are how
+you instantiate it. The factory itself is the loop.
+
+## Where this is going
+
+The work ahead is to push each phase further toward running on its own, as far as it can
+safely go, and eventually to let you choose how far to push each one. Right now the three
+phases sit at different points along that path.
+
+**Read more:** the
 [charter](docs/superpowers/specs/2026-06-17-dark-software-factory-template-charter-design.md)
-for the north-star and roadmap (SP1–SP5 implemented; instance lifecycle next).
-
-```
- signals ──▶ [S1 Triage] ─▶ [S2 Investigation] ─▶ [S3 Synthesis] ─▶ [S4 Grounding gate]
-          ─▶ [S5 Critic Council] ─▶ [S6 Routing] ─▶ [S7 Filing] ──▶ labeled GitHub issue
-```
-
-Investigation gathers evidence from **Sentry, Grafana, FoundryIQ, WebIQ** (each a portable
-A2A agent deployed near its source). A 7-member critic council (grounding, value,
-duplication, feasibility, strategic-fit, cost-to-build, security/compliance) scores and
-can veto. A **Control Center** UI toggles critics/agents/triggers and a global dry-run
-kill switch at runtime. A **learning loop** feeds human PR verdicts back as retrievable
-lessons and council-weight calibration.
-
-## Quickstart
-
-```bash
-make install   # uv venv (Python 3.12) + editable install
-make test      # full suite (in-memory, no cloud, no LLM)
-make dryrun    # run the whole line on a sample signal, dry-run
-make evals     # golden-set eval gate
-```
-
-Then explore the Control Center:
-
-```bash
-uv run dsf-control-center   # http://localhost:8081
-```
-
-Or stamp out a product factory (dry-run by default; `--execute` is destructive):
-
-```bash
-uv run dsf new --product microbi --owner your-org --name-prefix microbi   # preview the 8-step plan
-```
-
-Three console scripts ship from the workspace members: **`dsf`** creates/manages
-product instances from the template (`dsf new`), **`dsfctl`** operates a running
-instance's feature-council runtime (`dsfctl run|sweep|serve-orchestrator|serve-agent`),
-and **`dsf-control-center`** serves the Control Center web UI.
-
-`dsf new` creates the product GitHub repo + Coding Squad, provisions a dedicated Azure
-resource group from `infra/main.bicep`, and renders + deploys the product's council
-runtime as an Azure Container App (see RUNBOOK). For the production-watching corner it
-renders a per-product onboarding runbook for the managed **Azure SRE Agent** product
-(ADR 0009), whose incident issues carry the `squad:ready` handoff label.
-
-## Status
-
-- **Runnable locally, end-to-end, in dry-run** against in-memory fakes — every component
-  built behind a port. The full conveyor drives a signal to a (simulated) filed issue with
-  grounding enforced and no network calls. All tests pass (run ``make test`` for the current count).
-- **Azure-ready, not deployed.** Bicep provisions the **backing services** (Cosmos, App
-  Config, Key Vault, App Insights, Event Grid → Service Bus ingestion buffer) **and the
-  runtime** — a Container Apps environment + orchestrator app on a user-assigned managed
-  identity (ADR 0004). An `infra-whatif` pipeline previews infra changes (OIDC) and an
-  `agents-images` pipeline publishes each agent to GHCR. No billable resources are
-  provisioned by the local flow.
-- **Per-product factories.** `dsf new <product>` provisions an isolated Azure RG per
-  product (backing services + runtime identity + orchestrator Container App) and renders
-  that product's runtime descriptor to `config/instances/<product>.runtime/`. In `--mode
-  azure` the orchestrator reads endpoints from the product's deployment outputs and emits
-  traces to Application Insights. Real Cosmos/App Config/LLM adapters land in SP3b.
-
-## Docs
-
-- Design spec: `docs/superpowers/specs/2026-06-15-dark-software-factory-intake-design.md`
-- Implementation plan: `docs/superpowers/plans/2026-06-15-dark-software-factory-intake.md`
-- **Template + CLI charter: `docs/superpowers/specs/2026-06-17-dark-software-factory-template-charter-design.md`**
-- **Runbook (how to run & deploy): `docs/RUNBOOK.md`**
-- Architecture decisions: `docs/adr/0001-architecture-decisions.md` ·
-  `docs/adr/0002-homelab-runtime-azure-backing-only.md` (superseded) ·
-  `docs/adr/0004-azure-container-apps-runtime.md`
-
-## Layout
-
-A uv workspace of self-contained members, all sharing the one PEP 420 `dsf.*`
-namespace (install with `uv sync --all-packages`):
-
-- **`core/`** (`dsf-core`) — the shared base every member builds on: `contracts`
-  (shared models) · `ports` · `config` (flags + product registry) · `memory`
-  (tiers, dedup, consolidation) · `a2a` · `model` · `learning` · `observability` ·
-  `container` · `github_client`.
-- **`feature-council/`** (`dsf-feature-council`) — the intake line: `agents/<source>` ·
-  `council` (synthesizer + critics + decision) · `orchestrator` (conveyor + stations) ·
-  `triggers` · `evals` · `runtime` (the orchestrator runtime image `Dockerfile` + the
-  `dsfctl` operator CLI).
-- **`cli/`** (`dsf-cli`) — the `dsf` factory CLI: `cli` + `instance` (instance spec +
-  provisioner powering `dsf new`; creates the product repo + Coding Squad, provisions a
-  dedicated per-product Azure resource group from `infra/main.bicep`, and renders +
-  deploys the product's council runtime as an Azure Container App).
-- **`control-center/`** (`dsf-control-center`) — the Control Center web UI and its
-  `dsf-control-center` serve script.
-- **`infra/`** — Bicep/azd (backing services + ACA runtime).
+covers the north-star and roadmap, and architecture decisions live in
+[`docs/adr/`](docs/adr/).
