@@ -81,3 +81,64 @@ async def test_registered_lens_handler_overrides_the_fallback():
     value = next(s for s in positions if s.critic == "value")
     assert value.score == 0.123
     assert value.rationale == "scripted"
+
+
+def _services_with_rounds(rounds: int):
+    """Build local services whose config seeds a specific deliberation-round count.
+
+    ``deliberation_rounds`` reads ``default_deliberation_rounds`` via ``get_value``
+    (not the boolean override path), so seed the store directly. ``Services`` is a
+    mutable dataclass, so the config can be swapped after build.
+    """
+    from dsf.config.store import InMemoryConfigStore, load_defaults
+
+    services = build_services("local")
+    services.config = InMemoryConfigStore(
+        {**load_defaults(), "default_deliberation_rounds": rounds}
+    )
+    return services
+
+
+async def test_runs_one_model_call_per_lens_per_round():
+    # Default rounds is 2 (config/defaults.json), so no seeding needed.
+    services = build_services("local")
+    run = make_run([make_evidence("CRITICAL outage", confidence=0.9)])
+    prop = make_proposal(run, proposed_change="Add a small cache.")
+
+    await deliberate(prop, run, services)
+    # Five lenses x two rounds = ten model calls.
+    lens_calls = [c for c in services.model.calls if "[lens:" in c[1]]
+    assert len(lens_calls) == len(LENS_NAMES) * 2
+
+
+async def test_second_round_sees_peer_positions_and_revises():
+    services = build_services("local")  # default 2 rounds
+
+    # The value lens scores 0.2 in round 1 (no peers in prompt) and 0.9 once it
+    # sees peer positions in round 2. This proves peers are fed forward and the
+    # final position is the revised one.
+    def value_handler(system: str, prompt: str) -> LensPosition:
+        if "Peer positions" in prompt:
+            return LensPosition(score=0.9, veto=False, rationale="revised up after debate")
+        return LensPosition(score=0.2, veto=False, rationale="initial")
+
+    services.model.register("[lens:value]", value_handler)
+    run = make_run([make_evidence("CRITICAL outage", confidence=0.9)])
+    prop = make_proposal(run, proposed_change="Add a small cache.")
+
+    positions = await deliberate(prop, run, services)
+    value = next(s for s in positions if s.critic == "value")
+    assert value.score == 0.9
+    assert "revised" in value.rationale
+
+
+async def test_offline_is_stable_across_rounds():
+    # With no handlers, more rounds must not change the deterministic outcome.
+    one = _services_with_rounds(1)
+    two = _services_with_rounds(2)
+    run = make_run([make_evidence("CRITICAL outage", confidence=0.9)])
+    prop = make_proposal(run, proposed_change="Add a small cache.")
+
+    p1 = {s.critic: s.score for s in await deliberate(prop, run, one)}
+    p2 = {s.critic: s.score for s in await deliberate(prop, run, two)}
+    assert p1 == p2

@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
-from dsf.config.flags import critic_enabled
+from dsf.config.flags import critic_enabled, deliberation_rounds
 from dsf.contracts.models import CriticScore
 from dsf.council.critics import ALL_CRITICS
 from dsf.model.client import ECHO_PREFIX
@@ -145,18 +145,27 @@ async def _lens_position(
 async def deliberate(proposal: Proposal, run: Run, services: Services) -> list[CriticScore]:
     """Run the deliberation council and return one final position per enabled lens.
 
-    Single round in this task; a later change extends it to ``deliberation.rounds``
-    see-and-revise rounds. Only lenses whose ``critic.<name>`` flag is enabled for
-    the proposal's product participate.
+    Each enabled lens states a position; over ``deliberation.rounds`` rounds it
+    re-states after seeing the others' previous-round positions (see-and-revise).
+    Only lenses whose ``critic.<name>`` flag is enabled for the proposal's product
+    participate. Offline (no model handler) every position is the lens's
+    deterministic critic score and is stable across rounds.
     """
     product = proposal.product
     enabled = [
         name for name in LENS_NAMES if critic_enabled(services.config, name, product=product)
     ]
+    rounds = deliberation_rounds(services.config, product=product)
 
     positions: dict[str, CriticScore] = {}
-    for name in enabled:
-        positions[name] = await _lens_position(name, proposal, run, services, {}, 0)
+    for round_index in range(rounds):
+        revised: dict[str, CriticScore] = {}
+        for name in enabled:
+            peers = {peer: pos for peer, pos in positions.items() if peer != name}
+            revised[name] = await _lens_position(
+                name, proposal, run, services, peers, round_index
+            )
+        positions = revised
     return [positions[name] for name in enabled]
 
 
