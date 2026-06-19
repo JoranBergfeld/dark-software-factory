@@ -36,6 +36,7 @@ class InstanceSpec(BaseModel):
     runtime_image: str = "ghcr.io/joranbergfeld/dsf-runtime:latest"
     confidence_threshold: float = 0.6
     name_prefix: str = "dsf"
+    squad_maturity: str = "low"
     environment: str = "dev"
     location: str = "swedencentral"
     label_taxonomy: dict[str, list[str]] = Field(default_factory=default_label_taxonomy)
@@ -49,9 +50,18 @@ class InstanceSpec(BaseModel):
             )
         return value
 
+    @field_validator("squad_maturity")
+    @classmethod
+    def _validate_squad_maturity(cls, value: str) -> str:
+            if value not in {"low", "high"}:
+                raise ValueError(
+                    f"squad_maturity must be 'low' or 'high', got {value!r}"
+                )
+            return value
+
     def resolved_repo(self) -> str:
-        """Repository name (defaults to the product key)."""
-        return self.repo or self.product
+            """Repository name (defaults to the product key)."""
+            return self.repo or self.product
 
     def github_repo(self) -> str:
         """``owner/repo`` slug for the product repository."""

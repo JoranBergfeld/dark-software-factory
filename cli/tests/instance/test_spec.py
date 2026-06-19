@@ -106,3 +106,18 @@ def test_azure_provision_result_round_trips_in_manifest(tmp_path):
     assert loaded.azure is not None
     assert loaded.azure.outputs["cosmosEndpoint"] == "https://x"
     assert loaded.azure.deployment_name == "dsf-demo"
+
+
+def test_squad_maturity_defaults_to_low():
+    spec = InstanceSpec(product="demo", owner="acme")
+    assert spec.squad_maturity == "low"
+
+
+def test_squad_maturity_accepts_high():
+    spec = InstanceSpec(product="demo", owner="acme", squad_maturity="high")
+    assert spec.squad_maturity == "high"
+
+
+def test_squad_maturity_rejects_unknown_value():
+    with pytest.raises(ValueError):
+        InstanceSpec(product="demo", owner="acme", squad_maturity="medium")
