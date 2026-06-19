@@ -69,12 +69,18 @@ def _cmd_sweep(args: argparse.Namespace) -> int:
 
 
 def _cmd_serve_orchestrator(args: argparse.Namespace) -> int:
-    """One-shot orchestrator worker (a real deployment would loop on a queue)."""
-    from dsf.triggers.scheduler import run_sweep
+    """One-shot orchestrator worker: drain the signal buffer, then sweep sources.
+
+    A real deployment loops this on the council's schedule. Each tick runs the
+    governed pull (drain buffered signals) and the source-kind sweep (ADR 0011).
+    """
+    from dsf.triggers.scheduler import run_orchestrator_tick
 
     services = _get_services(args.mode)
-    final = asyncio.run(run_sweep(services))
-    _print_run_summary(final)
+    drained, swept = asyncio.run(run_orchestrator_tick(services))
+    for run in drained:
+        _print_run_summary(run)
+    _print_run_summary(swept)
     return 0
 
 
@@ -120,7 +126,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
     p_orch = sub.add_parser(
-        "serve-orchestrator", help="run the orchestrator worker (one-shot sweep)"
+        "serve-orchestrator",
+        help="run the orchestrator worker (one tick: drain the buffer, then sweep)",
     )
     p_orch.set_defaults(func=_cmd_serve_orchestrator)
 

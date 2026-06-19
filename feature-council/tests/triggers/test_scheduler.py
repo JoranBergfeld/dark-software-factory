@@ -5,7 +5,13 @@ from __future__ import annotations
 from dsf.config.flags import triggers_paused
 from dsf.container import build_services
 from dsf.contracts.enums import RunStatus, SourceKind, TriggerKind
-from dsf.triggers.scheduler import PAUSED_MESSAGE, drain_signals, run_sweep, sweep
+from dsf.triggers.scheduler import (
+    PAUSED_MESSAGE,
+    drain_signals,
+    run_orchestrator_tick,
+    run_sweep,
+    sweep,
+)
 
 
 async def test_sweep_paused_returns_killed_run() -> None:
@@ -101,3 +107,28 @@ async def test_drain_signals_paused_leaves_items_buffered() -> None:
     assert runs == []
     # Items are not dropped while paused: they wait for intake to resume.
     assert await services.signals.drain() == [{"text": "x"}]
+
+
+async def test_orchestrator_tick_drains_buffer_and_sweeps() -> None:
+    services = build_services("local")
+    await services.signals.enqueue({"text": "x", "product_hints": ["alpha"]})
+
+    drained, swept = await run_orchestrator_tick(services)
+
+    # The buffered signal was processed as a SIGNAL run...
+    assert len(drained) == 1
+    assert drained[0].trigger == TriggerKind.SIGNAL
+    # ...and the source-kind sweep still ran on the same tick.
+    assert swept.trigger == TriggerKind.SCHEDULED
+    assert swept.status != RunStatus.OPEN
+    # The buffer is drained.
+    assert await services.signals.drain() == []
+
+
+async def test_orchestrator_tick_empty_buffer_still_sweeps() -> None:
+    services = build_services("local")
+
+    drained, swept = await run_orchestrator_tick(services)
+
+    assert drained == []
+    assert swept.trigger == TriggerKind.SCHEDULED
