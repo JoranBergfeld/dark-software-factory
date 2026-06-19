@@ -20,6 +20,8 @@ from dsf.contracts.models import (
     CouncilVerdict,
     CriticScore,
     EvidenceItem,
+    JurorVote,
+    JuryResult,
     Proposal,
     Provenance,
     Run,
@@ -114,6 +116,49 @@ def test_proposal_fields():
     )
     assert prop.product is None
     assert prop.kind is ProposalKind.FEATURE
+
+
+def test_verdict_has_escalate_outcome():
+    assert Verdict.ESCALATE.value == "ESCALATE"
+    assert Verdict.ESCALATE not in (Verdict.ACCEPT, Verdict.KILL)
+
+
+def test_jury_result_reports_fraction_consensus_majority():
+    jr = JuryResult(
+        votes=[
+            JurorVote(juror="a", go=True),
+            JurorVote(juror="b", go=True),
+            JurorVote(juror="c", go=False),
+        ]
+    )
+    assert abs(jr.go_fraction - 2 / 3) < 1e-9
+    assert jr.majority_go is True
+    assert abs(jr.consensus - 2 / 3) < 1e-9
+
+
+def test_jury_result_empty_has_no_consensus():
+    jr = JuryResult()
+    assert jr.go_fraction == 0.0
+    assert jr.consensus == 0.0
+    assert jr.majority_go is False
+
+
+def test_council_verdict_carries_optional_jury():
+    jr = JuryResult(votes=[JurorVote(juror="a", go=True)])
+    v = CouncilVerdict(
+        proposal_id="p",
+        verdict=Verdict.ESCALATE,
+        weighted_score=0.7,
+        threshold=0.6,
+        jury=jr,
+    )
+    assert v.jury is not None
+    assert v.jury.votes[0].juror == "a"
+
+
+def test_council_verdict_jury_defaults_to_none():
+    base = CouncilVerdict.from_scores("p", [], threshold=0.6)
+    assert base.jury is None
 
 
 def test_export_schemas(tmp_path: Path):

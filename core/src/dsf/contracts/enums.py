@@ -49,6 +49,7 @@ class Verdict(StrEnum):
     """Council verdict outcome."""
 
     ACCEPT = "ACCEPT"
+    ESCALATE = "ESCALATE"
     KILL = "KILL"
 
 

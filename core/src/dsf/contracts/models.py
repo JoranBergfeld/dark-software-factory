@@ -111,6 +111,40 @@ class CriticScore(BaseModel):
     rationale: str = ""
 
 
+class JurorVote(BaseModel):
+    """One juror's go / no-go vote validating a council recommendation."""
+
+    juror: str
+    go: bool
+    rationale: str = ""
+
+
+class JuryResult(BaseModel):
+    """The validation jury's panel of votes over a recommendation."""
+
+    votes: list[JurorVote] = Field(default_factory=list)
+
+    @property
+    def go_fraction(self) -> float:
+        """Fraction of jurors voting to proceed (0.0 when no votes)."""
+        if not self.votes:
+            return 0.0
+        return sum(1 for v in self.votes if v.go) / len(self.votes)
+
+    @property
+    def majority_go(self) -> bool:
+        """Whether a strict majority voted to proceed."""
+        return self.go_fraction > 0.5
+
+    @property
+    def consensus(self) -> float:
+        """Agreement strength of the majority side (1.0 = unanimous)."""
+        if not self.votes:
+            return 0.0
+        go = self.go_fraction
+        return max(go, 1.0 - go)
+
+
 class CouncilVerdict(BaseModel):
     """The council's aggregated decision on a proposal."""
 
@@ -121,6 +155,7 @@ class CouncilVerdict(BaseModel):
     weighted_score: float
     threshold: float
     scores: list[CriticScore] = Field(default_factory=list)
+    jury: JuryResult | None = None
     rationale: str = ""
 
     @classmethod

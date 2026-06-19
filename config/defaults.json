@@ -1,6 +1,8 @@
 {
   "dry_run": true,
   "default_threshold": 0.6,
+  "default_maturity": "supervised",
+  "default_consensus_bar": 0.67,
   "critics": {
     "grounding": {
       "enabled": true
@@ -57,5 +59,8 @@
     "strategic_fit": 1.0,
     "cost": 1.0,
     "security": 1.0
+  },
+  "jury": {
+    "roster": ["pragmatist", "skeptic", "user_advocate"]
   }
 }

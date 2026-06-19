@@ -5,8 +5,11 @@ from __future__ import annotations
 from dsf.config.flags import (
     DEFAULT_THRESHOLD,
     agent_enabled,
+    consensus_bar,
     critic_enabled,
     dry_run_global,
+    jury_roster,
+    maturity_level,
     threshold,
     triggers_paused,
     weights,
@@ -79,3 +82,34 @@ def test_weights_reads_overridden_value():
     cfg = InMemoryConfigStore({"weight": {"value": 2.5}})
     result = weights(cfg, ["value", "cost"])
     assert result == {"value": 2.5, "cost": 1.0}
+
+
+def test_maturity_defaults_to_supervised():
+    cfg = InMemoryConfigStore.from_defaults()
+    assert maturity_level(cfg) == "supervised"
+
+
+def test_maturity_per_product_override():
+    cfg = InMemoryConfigStore(
+        {"default_maturity": "supervised", "maturity": {"acme": "autonomous"}}
+    )
+    assert maturity_level(cfg, product="acme") == "autonomous"
+    assert maturity_level(cfg, product="other") == "supervised"
+
+
+def test_consensus_bar_default():
+    cfg = InMemoryConfigStore.from_defaults()
+    assert consensus_bar(cfg) == 0.67
+
+
+def test_consensus_bar_per_product_override():
+    cfg = InMemoryConfigStore(
+        {"default_consensus_bar": 0.67, "consensus_bar": {"acme": 0.9}}
+    )
+    assert consensus_bar(cfg, product="acme") == 0.9
+    assert consensus_bar(cfg, product="other") == 0.67
+
+
+def test_jury_roster_default():
+    cfg = InMemoryConfigStore.from_defaults()
+    assert jury_roster(cfg) == ["pragmatist", "skeptic", "user_advocate"]

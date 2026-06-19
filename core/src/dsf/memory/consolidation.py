@@ -45,7 +45,12 @@ async def consolidate_run(run: Run, verdict: CouncilVerdict, store: MemoryStore)
     is retrievable via :meth:`MemoryStore.get_lessons`.
     """
     product = run.scope_product_hints[0] if run.scope_product_hints else "unknown"
-    outcome = "accepted" if verdict.verdict == Verdict.ACCEPT else "killed"
+    if verdict.verdict == Verdict.ACCEPT:
+        outcome = "accepted"
+    elif verdict.verdict == Verdict.ESCALATE:
+        outcome = "escalated"
+    else:
+        outcome = "killed"
 
     record = {
         "kind": "run_outcome",

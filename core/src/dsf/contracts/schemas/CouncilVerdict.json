@@ -29,10 +29,49 @@
       "title": "CriticScore",
       "type": "object"
     },
+    "JurorVote": {
+      "description": "One juror's go / no-go vote validating a council recommendation.",
+      "properties": {
+        "go": {
+          "title": "Go",
+          "type": "boolean"
+        },
+        "juror": {
+          "title": "Juror",
+          "type": "string"
+        },
+        "rationale": {
+          "default": "",
+          "title": "Rationale",
+          "type": "string"
+        }
+      },
+      "required": [
+        "juror",
+        "go"
+      ],
+      "title": "JurorVote",
+      "type": "object"
+    },
+    "JuryResult": {
+      "description": "The validation jury's panel of votes over a recommendation.",
+      "properties": {
+        "votes": {
+          "items": {
+            "$ref": "#/$defs/JurorVote"
+          },
+          "title": "Votes",
+          "type": "array"
+        }
+      },
+      "title": "JuryResult",
+      "type": "object"
+    },
     "Verdict": {
       "description": "Council verdict outcome.",
       "enum": [
         "ACCEPT",
+        "ESCALATE",
         "KILL"
       ],
       "title": "Verdict",
@@ -49,6 +88,17 @@
     "id": {
       "title": "Id",
       "type": "string"
+    },
+    "jury": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JuryResult"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "proposal_id": {
       "title": "Proposal Id",

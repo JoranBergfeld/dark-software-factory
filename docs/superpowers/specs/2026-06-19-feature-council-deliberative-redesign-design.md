@@ -1,6 +1,6 @@
 # Feature Council: Deliberative Council and Validation Jury (Design)
 
-**Status:** Accepted (2026-06-19); recorded as ADR 0011, implementation pending a follow-up plan
+**Status:** Accepted (2026-06-19); recorded as ADR 0011. Plan 1 (validation jury, maturity-gated outcome policy, escalate outcome) is implemented in `docs/superpowers/plans/2026-06-19-feature-council-validation-jury.md`; the multi-round deliberation council and governed pull intake remain pending.
 
 **Scope:** Re-architect the Feature Council's decision path. Replace the single
 deterministic critic verdict (where any one critic holds a unilateral veto) with
