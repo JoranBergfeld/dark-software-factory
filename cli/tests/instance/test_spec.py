@@ -119,5 +119,5 @@ def test_squad_maturity_accepts_high():
 
 
 def test_squad_maturity_rejects_unknown_value():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValidationError):
         InstanceSpec(product="demo", owner="acme", squad_maturity="medium")

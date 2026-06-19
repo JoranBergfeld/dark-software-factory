@@ -54,14 +54,12 @@ class InstanceSpec(BaseModel):
     @classmethod
     def _validate_squad_maturity(cls, value: str) -> str:
         if value not in {"low", "high"}:
-            raise ValueError(
-                f"squad_maturity must be 'low' or 'high', got {value!r}"
-            )
+            raise ValueError(f"squad_maturity must be 'low' or 'high', got {value!r}")
         return value
 
     def resolved_repo(self) -> str:
-            """Repository name (defaults to the product key)."""
-            return self.repo or self.product
+        """Repository name (defaults to the product key)."""
+        return self.repo or self.product
 
     def github_repo(self) -> str:
         """``owner/repo`` slug for the product repository."""
