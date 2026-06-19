@@ -39,36 +39,43 @@ def test_ingest_paused_signal_returns_paused(client: TestClient, services: Servi
 
     assert resp.status_code == 200
     assert resp.json() == {"status": "paused"}
-    # Nothing ran.
+    # Nothing ran and nothing was queued.
     assert services.github.calls == []
+    import asyncio
+
+    assert asyncio.run(services.signals.drain()) == []
 
 
-def test_ingest_sample_signal_runs_dry_run_line(client: TestClient, services: Services) -> None:
+def test_ingest_enqueues_signal_and_does_not_run_the_line(
+    client: TestClient, services: Services
+) -> None:
+    import asyncio
+
     payload = json.loads(_FIXTURE.read_text(encoding="utf-8"))
 
     resp = client.post("/ingest", json=payload)
 
     assert resp.status_code == 200
-    body = resp.json()
-    # A run id is returned and the run reached a known terminal status.
-    assert body["run_id"]
-    assert body["status"] in {
-        RunStatus.FILED.value,
-        RunStatus.KILLED.value,
-        RunStatus.ERROR.value,
-    }
-    # Dry-run: the GitHub fake was never called for a real issue.
+    assert resp.json() == {"status": "queued"}
+    # The line did not run synchronously: nothing was filed, and the signal is
+    # waiting in the buffer for the scheduled drain (governed pull, ADR 0011).
     assert services.github.calls == []
+    assert asyncio.run(services.signals.drain()) == [payload]
 
 
 def test_ingest_duplicate_signal_suppressed(client: TestClient, services: Services) -> None:
+    import asyncio
+
     payload = json.loads(_FIXTURE.read_text(encoding="utf-8"))
 
     first = client.post("/ingest", json=payload)
-    assert first.json()["status"] != "suppressed"
+    assert first.json() == {"status": "queued"}
 
     second = client.post("/ingest", json=payload)
     assert second.json() == {"status": "suppressed"}
+
+    # Only the first, accepted signal is buffered; the suppressed repeat is not.
+    assert asyncio.run(services.signals.drain()) == [payload]
 
 
 def test_app_importable() -> None:
