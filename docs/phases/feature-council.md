@@ -51,20 +51,26 @@ job and hands the run to the next:
 
 ## The decision subprocess
 
-S5 is where the Council earns its name. In the intended shape, a grounded
-proposal is argued by a council of role agents, validated by a separate panel,
-and a fixed policy turns the result into an action. (Today the critics propose,
-the validation jury reviews, and the outcome policy acts; the multi-round
-deliberation council is still pending. See "Where it lives" below.)
+S5 is where the Council earns its name. A grounded proposal is argued by a
+council of role agents, validated by a separate panel, and a fixed policy turns
+the result into an action. Two deterministic gates, grounding and duplication,
+bracket the debate and can veto on their own; the five role lenses deliberate
+over one or two see-and-revise rounds, and a synthesizer folds the gate and lens
+scores into one recommendation for the validation jury. (Intake is the one piece
+still pending: today a scheduled sweep runs next to a push endpoint, and the
+redesign moves to a governed pull. See "Where it lives" below.)
 
 ```mermaid
 flowchart TD
-    prop["Grounded proposal from S4"] --> lenses
+    prop["Grounded proposal from S4"] --> gates
+    prop --> lenses
 
     subgraph deliberate [Deliberation council]
+        gates["Deterministic gates: grounding, duplication, each can veto"]
         lenses["Role agents: value, cost, feasibility, security, strategic fit"]
         lenses --> rounds["One or two see-and-revise rounds, adversarial challenge"]
-        rounds --> synth["Synthesizer: one recommendation"]
+        gates --> synth
+        rounds --> synth["Synthesizer: weighted vote over gate and lens scores, one recommendation"]
     end
 
     synth --> panel
@@ -151,15 +157,19 @@ Azure Container App scoped to a single product (ADR 0004). It is the most
 built-out phase of the loop: the full conveyor, the grounding gate, and the
 filing path all run today.
 
-The decision path is mid-evolution. Today the proposer tier is deterministic
-critics with a unilateral veto and a weighted threshold, and a separate
-model-diverse validation jury reviews that recommendation under a per-product
-maturity dial that accepts, escalates to a human review queue, or kills (Plan 1,
-landed). The multi-round deliberation council (Plan 2) and the scheduled-pull
-intake (Plan 3) are the remaining intended shape, grounded in the multi-agent
-literature and designed in ADR 0011 and its spec. Architecture decisions for
-this phase live in ADR 0006 (data adapters), ADR 0007 (the squad handoff), and
-ADR 0011 (the deliberative redesign).
+The decision path is nearly all the way to its intended shape. The proposer tier
+is the deliberation council: five role lenses debate over one or two
+see-and-revise rounds, grounding and duplication run as deterministic veto gates,
+and a synthesizer folds the scores into one recommendation (Plan 2, landed). A
+separate model-diverse validation jury reviews that recommendation under a
+per-product maturity dial that accepts, escalates to a human review queue, or
+kills (Plan 1, landed). Offline the lenses fall back to their former critics, so
+the synthesis is the same audited weighted vote the factory shipped before. The
+one piece still pending is the scheduled-pull intake (Plan 3): today a push
+endpoint runs next to the sweep, and the redesign drops the push. The whole
+redesign is grounded in the multi-agent literature and designed in ADR 0011 and
+its spec. Architecture decisions for this phase live in ADR 0006 (data adapters),
+ADR 0007 (the squad handoff), and ADR 0011 (the deliberative redesign).
 
 **See also:** the [loop overview](../../README.md#the-loop), the next phase
 [Coding Squad](coding-squad.md), and the decision-path redesign in

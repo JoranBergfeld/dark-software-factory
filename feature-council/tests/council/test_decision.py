@@ -131,3 +131,52 @@ async def test_accept_path_populates_the_jury():
     assert verdict.jury is not None
     assert len(verdict.jury.votes) == 3
     assert all(v.go for v in verdict.jury.votes)
+
+
+async def test_recommendation_is_offline_identical_to_critic_scoring():
+    """The deliberation council, offline, reproduces the exact critic score set
+    and weighted score the pre-slice critic loop produced."""
+    from dsf.config.flags import threshold, weights
+    from dsf.council.critics import ALL_CRITICS
+    from dsf.council.decision import _recommend
+
+    services = build_services("local")
+    run = make_run(
+        [
+            make_evidence("CRITICAL outage", confidence=0.9),
+            make_evidence("high severity failure", confidence=0.9),
+        ]
+    )
+    prop = make_proposal(run, proposed_change="Add a small cache.")
+
+    # Recompute what the old loop would have produced: every enabled critic.
+    enabled = [
+        name
+        for name in ALL_CRITICS
+        if services.config.is_enabled(f"critic.{name}", product=prop.product)
+    ]
+    expected_scores = [await ALL_CRITICS[n](prop, run, services) for n in enabled]
+    expected = CouncilVerdict.from_scores(
+        prop.id,
+        expected_scores,
+        threshold(services.config, product=prop.product),
+        weights(services.config, enabled),
+    )
+
+    rec = await _recommend(prop, run, services)
+    assert rec.weighted_score == expected.weighted_score
+    assert rec.verdict == expected.verdict
+    assert {s.critic for s in rec.scores} == set(enabled)
+
+
+async def test_recommendation_carries_gate_and_lens_scores():
+    from dsf.council.decision import _recommend
+    from dsf.council.deliberation import GATE_NAMES, LENS_NAMES
+
+    services = build_services("local")
+    run = make_run([make_evidence("CRITICAL outage", confidence=0.9)])
+    prop = make_proposal(run, proposed_change="Add a small cache.")
+
+    rec = await _recommend(prop, run, services)
+    names = {s.critic for s in rec.scores}
+    assert names == set(GATE_NAMES) | set(LENS_NAMES)

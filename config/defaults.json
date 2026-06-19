@@ -3,6 +3,7 @@
   "default_threshold": 0.6,
   "default_maturity": "supervised",
   "default_consensus_bar": 0.67,
+  "default_deliberation_rounds": 2,
   "critics": {
     "grounding": {
       "enabled": true

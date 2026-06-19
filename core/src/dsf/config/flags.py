@@ -38,6 +38,11 @@ DEFAULT_CONSENSUS_BAR = 0.67
 JURY_ROSTER_KEY = "jury.roster"
 #: Hard fallback roster when no ``jury.roster`` is configured.
 DEFAULT_JURY_ROSTER = ("pragmatist", "skeptic", "user_advocate")
+#: Fallback config key for the global number of deliberation rounds.
+DEFAULT_DELIBERATION_ROUNDS_KEY = "default_deliberation_rounds"
+#: Hard fallback when ``default_deliberation_rounds`` is itself unset. One to two
+#: see-and-revise rounds is the design range; two is the deliberative default.
+DEFAULT_DELIBERATION_ROUNDS = 2
 
 
 def critic_enabled(cfg: ConfigStore, name: str, product: str | None = None) -> bool:
@@ -118,9 +123,24 @@ def jury_roster(cfg: ConfigStore) -> list[str]:
     return [str(name) for name in value]
 
 
+def deliberation_rounds(cfg: ConfigStore, product: str | None = None) -> int:
+    """Per-product number of deliberation see-and-revise rounds.
+
+    Resolution order: ``deliberation_rounds.<product>`` ->
+    ``default_deliberation_rounds`` -> :data:`DEFAULT_DELIBERATION_ROUNDS`.
+    Floored at 1 so the council always states at least one position.
+    """
+    default = int(cfg.get_value(DEFAULT_DELIBERATION_ROUNDS_KEY, DEFAULT_DELIBERATION_ROUNDS))
+    if product is not None:
+        default = int(cfg.get_value(f"deliberation_rounds.{product}", default))
+    return max(1, default)
+
+
 __all__ = [
     "DEFAULT_CONSENSUS_BAR",
     "DEFAULT_CONSENSUS_BAR_KEY",
+    "DEFAULT_DELIBERATION_ROUNDS",
+    "DEFAULT_DELIBERATION_ROUNDS_KEY",
     "DEFAULT_MATURITY",
     "DEFAULT_MATURITY_KEY",
     "DEFAULT_THRESHOLD",
@@ -130,6 +150,7 @@ __all__ = [
     "agent_enabled",
     "consensus_bar",
     "critic_enabled",
+    "deliberation_rounds",
     "dry_run_global",
     "jury_roster",
     "maturity_level",
