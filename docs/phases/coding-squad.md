@@ -47,31 +47,43 @@ Downstream, the Squad produces pull requests. What happens to a PR (review,
 merge, deploy) is the boundary where a person can still step in, and it is where
 production starts to change, which is what the SRE Agent then watches.
 
-## Harness and steering
+## How it runs
 
-- The handoff label (`squad:ready`) is the single wire between intake and the
-  Squad. Change nothing else and issues still flow.
-- `squad triage --execute --label squad:ready` is how the factory points the
-  Squad at the right issues.
-- Copilot auto-assignment is enabled at provisioning
-  (`squad copilot --auto-assign`) so triaged issues reach the coding agent
-  without a human handoff.
-- The `.squad/` preset and knowledge base shape how the Squad triages and what
-  it remembers.
+Each product runs Ralph, squad's watch loop (`squad watch --execute`), as a
+standing Deployment on its own AKS cluster. A KEDA ScaledObject scales it between
+zero and one off the count of open `squad:ready` issues: no work means no pod and
+no cost, one ready issue brings the loop up, a drained queue scales it back down.
+Ralph polls, builds each member's context, dispatches the coding agent, opens pull
+requests, and writes what each member learned back into `.squad/`.
 
-DSF sets these up when it stamps the instance (the `squad_init`,
-`squad_copilot`, and `squad_triage` provisioning steps). After that the loop
-runs on the label.
+```mermaid
+flowchart LR
+    I["Open squad:ready issues"] -->|count| K[KEDA ScaledObject]
+    K -->|0..1| R["Ralph watch loop (AKS)"]
+    R -->|gh copilot -p context| A[Coding agent]
+    A --> PR[Pull request]
+    R -->|learnings| M[".squad/ memory (git)"]
+    M -.->|compounds next run| R
+    PR -->|maturity dial| G{Auto-merge?}
+    G -->|high: green CI| Merge
+    G -->|low: human review| Person
+```
+
+The single `squad:ready` label is still the whole contract (ADR 0007). The maturity
+dial decides what happens to a squad pull request: low maturity routes it to a human,
+high maturity auto-merges it on green CI. Knowledge iteration is squad's own
+`.squad/` memory, which lives in git and compounds per run; the loop runs with a
+git-notes state backend so it survives the scale-to-zero pod.
 
 ## Where it lives and how autonomous it is today
 
 The Squad is an external product that lives inside the product's own repository,
-not in this one. DSF provisions and configures it through the CLI but does not
-own its code. The handoff into it is implemented and tested in this repo
-(ADR 0007). The coding agent and the knowledge loop are the Squad product's own.
-In factory terms this phase is an integration: the wiring is in place, and how
-far the coding agent runs on its own follows the Squad product and the repo's
-own review and merge settings.
+not in this one. DSF owns the deployment harness (the AKS cluster, the Ralph
+Deployment, the KEDA ScaledObject, and the maturity dial) and stamps it when it
+provisions the instance; the coding agent and the knowledge loop are the Squad
+product's own (ADR 0007, ADR 0012). How far the loop runs unattended is the
+maturity dial: low keeps a human on every merge, high lets green pull requests
+land on their own.
 
 **See also:** the [loop overview](../../README.md#the-loop), the upstream
 [Feature Council](feature-council.md), and the [SRE Agent](sre-agent.md) that
