@@ -915,11 +915,11 @@ Expected: only historical references in ADR 0007/0012 context, not live code.
 
 ## Definition of done
 
-- [ ] Task 1 - `squad_maturity` dial on InstanceSpec + validator + tests.
-- [ ] Task 2 - open-handoff-issue count helper + tests.
-- [ ] Task 3 - maturity-dial governance commands + tests.
-- [ ] Task 4 - Ralph + KEDA + exporter bundle renderer + tests.
-- [ ] Task 5 - provisioner drops `squad_copilot`, deploys Ralph, governs; tests updated.
-- [ ] Task 6 - per-product AKS + KEDA Bicep module compiles.
-- [ ] Task 7 - coding-squad phase doc rewritten with the loop diagram; humanizer-clean.
-- [ ] Full gauntlet green: `uv run pytest -q`, `uv run ruff check .`, `uv run lint-imports`.
+- [x] Task 1 - `squad_maturity` dial on InstanceSpec + validator + tests.
+- [x] Task 2 - open-handoff-issue count helper + tests.
+- [x] Task 3 - maturity-dial governance commands + tests.
+- [x] Task 4 - Ralph + KEDA + exporter bundle renderer + tests.
+- [x] Task 5 - provisioner drops `squad_copilot`, deploys Ralph, governs; tests updated.
+- [x] Task 6 - per-product AKS + KEDA Bicep module compiles.
+- [x] Task 7 - coding-squad phase doc rewritten with the loop diagram; humanizer-clean.
+- [x] Full gauntlet green: `uv run pytest -q`, `uv run ruff check .`, `uv run lint-imports`.
