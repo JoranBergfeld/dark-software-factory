@@ -149,7 +149,7 @@ def _render_sre_onboarding_md(
         f"`{resource_group}`.\n\n"
         "## 4. Keep the squad handoff\n\n"
         "The agent files issues/PRs into the repo. Incident issues must carry the\n"
-        f"`{HANDOFF_LABEL}` label so the **same** `squad triage --execute` intake\n"
+        f"`{HANDOFF_LABEL}` label so the standing coding-squad Ralph watch loop\n"
         "picks them up — that label is already created by the `create_labels`\n"
         "provisioning step.\n"
     )

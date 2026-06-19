@@ -119,20 +119,21 @@ read-only observability surface; import it into Grafana once App Insights is wir
 The council files issues into the product repo; the coding squad triages and
 implements them. The contract is one system-level label —
 `dsf.contracts.handoff.HANDOFF_LABEL` (`squad:ready`) — that S6 stamps on **every**
-routed issue and that `squad triage` filters on (ADR 0007).
+routed issue and that the squad's watch loop filters on (ADR 0007, ADR 0012).
 
 Provisioning wires this end to end: `register_product` upserts the product
 (key → repo + label taxonomy + confidence threshold) into the routing registry
 (`config/products.json`) that S1 scoping and S6 routing read — so routing is
 populated at provisioning time rather than hand-maintained; `create_labels`
 idempotently creates the product's taxonomy labels + `squad:ready` in the repo
-(so filing never fails on a missing label), and `squad triage --execute --label
-squad:ready` dispatches the Copilot coding agent against council-filed issues.
-The full closed loop:
+(so filing never fails on a missing label), and `deploy_squad_ralph` brings up
+the per-product Ralph watch loop on AKS (`squad watch --execute`), which KEDA
+scales 0→1 on the open `squad:ready` issue count (ADR 0012). The full closed loop:
 
 ```
-council files issue (squad:ready) → squad triage → Copilot agent → PR →
-human review → council feedback-watcher → Lesson → next council run
+council files issue (squad:ready) → KEDA wakes the Ralph loop → squad watch →
+PR → human review (or auto-merge) → council feedback-watcher → Lesson →
+next council run
 ```
 
 ## SRE agent (Azure SRE Agent product)
@@ -151,11 +152,11 @@ deploying anything:
 
 The handoff is preserved: the Azure SRE Agent investigates incidents (Azure
 Monitor / App Insights) and files GitHub issues/PRs carrying the `squad:ready`
-label, so the **same** `squad triage --execute` intake picks them up.
+label, so the **same** Ralph watch loop picks them up.
 
 ```
 prod telemetry → Azure SRE Agent → investigate → issue/PR (squad:ready)
-→ squad triage → Copilot agent → PR
+→ KEDA wakes Ralph loop → squad watch → PR
 ```
 
 Render the onboarding runbook (offline; part of the normal plan):

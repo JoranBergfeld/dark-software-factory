@@ -398,19 +398,24 @@ def test_deploy_squad_ralph_renders_bundle_in_dry_run(tmp_path):
 def test_deploy_squad_ralph_applies_manifests_on_execute(tmp_path):
     spec = InstanceSpec(product="demo", owner="acme")
     run = MagicMock(return_value=subprocess.CompletedProcess([], 0, stdout="{}", stderr=""))
-    InstanceProvisioner(spec, run=run, repo_root=tmp_path).apply(execute=True)
+    manifest = InstanceProvisioner(spec, run=run, repo_root=tmp_path).apply(execute=True)
     calls = [c.args[0] for c in run.call_args_list]
     assert any(cmd[:3] == ["az", "aks", "get-credentials"] for cmd in calls)
-    applied = {
+    applied = [
         Path(cmd[-1]).name
         for cmd in calls
         if cmd[:3] == ["kubectl", "apply", "-f"]
-    }
-    assert applied == {
+    ]
+    # Order is load-bearing: the exporter manifest carries the Namespace, so it
+    # must be applied before the namespaced Deployment and ScaledObject.
+    assert applied == [
         "issue-exporter.yaml",
         "ralph-deployment.yaml",
         "ralph-scaledobject.yaml",
-    }
+    ]
     assert any(
         cmd[:5] == ["gh", "api", "--method", "PATCH", "repos/acme/demo"] for cmd in calls
     )
+    # The kubectl loop must not clobber the manifest path reported by write_config.
+    write_config = next(s for s in manifest.plan.steps if s.name == "write_config")
+    assert write_config.result.endswith("demo.json")

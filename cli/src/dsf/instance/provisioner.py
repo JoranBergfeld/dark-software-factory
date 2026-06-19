@@ -251,13 +251,14 @@ class InstanceProvisioner:
                             ],
                             check=True,
                         )
-                        for path in (
+                        for manifest_file in (
                             bundle.exporter_path,
                             bundle.deployment_path,
                             bundle.scaledobject_path,
                         ):
                             self._run(
-                                ["kubectl", "apply", "-f", str(path)], check=True
+                                ["kubectl", "apply", "-f", str(manifest_file)],
+                                check=True,
                             )
                         step.executed, step.result = True, "deployed"
                 elif step.name == "onboard_sre_agent":
