@@ -46,6 +46,7 @@ def _cmd_new(args: argparse.Namespace) -> int:
         name_prefix=name_prefix,
         environment=args.environment,
         location=args.location,
+        squad_maturity=args.squad_maturity,
     )
     prov = InstanceProvisioner(spec, repo_root=root)
     if args.execute:
@@ -96,6 +97,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--location",
         default="swedencentral",
         help="Azure region for the resource group and resources",
+    )
+    p_new.add_argument(
+        "--squad-maturity",
+        default="low",
+        choices=["low", "high"],
+        help="coding-squad autonomy: 'low' routes every PR to a human, "
+        "'high' auto-merges on green CI",
     )
     p_new.add_argument(
         "--execute",
