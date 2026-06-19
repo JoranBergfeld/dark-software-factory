@@ -80,9 +80,21 @@ review (Verga et al. 2024, arXiv:2404.18796).
   call the model through the injected port, so tests script their outputs and
   assert on pipeline behavior with no network; the outcome policy is unit-tested
   directly.
+- **Plan 2 landed the deliberation council** (`council/deliberation.py`). The five
+  lenses (value, cost, feasibility, security, strategic fit) each take a position,
+  read their peers, and revise over `deliberation.rounds` rounds (a new per-product
+  dial, default 2, floored at 1). `council/decision.py` runs the grounding and
+  duplication gates as deterministic checks that can veto, then folds the gate and
+  lens scores through the unchanged `CouncilVerdict.from_scores`. Three choices
+  kept the change safe: grounding and duplication stay gates rather than becoming
+  lenses, so the golden cases are untouched; offline each lens falls back to its
+  former critic, so the synthesis is identical to the old critic loop and the eval
+  gate stays green; and the synthesizer stays the deterministic weighted vote
+  rather than an LLM verdict, so the decision stays auditable. The S3 evidence
+  synthesis is left in place, since the grounding gate must run on proposals before
+  the council; only the recommendation aggregation moves into this tier.
 - This ADR records the decision. The detailed design is in the spec, and the
-  implementation is staged across follow-up plans. Plan 1 has landed: the
-  model-diverse validation jury, the per-product maturity dial, and the escalate
-  outcome that routes a split decision to a human review queue. The proposer tier
-  is still the deterministic critics, and the multi-round deliberation council and
-  the governed pull intake remain pending. The phase doc marks the state honestly.
+  implementation is staged across follow-up plans. Plan 1 (model-diverse validation
+  jury, per-product maturity dial, escalate outcome) and Plan 2 (deliberation
+  council) have landed; only the governed pull intake (Plan 3) remains pending. The
+  phase doc marks the state honestly.

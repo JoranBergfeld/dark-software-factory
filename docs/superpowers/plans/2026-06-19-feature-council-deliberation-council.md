@@ -707,11 +707,11 @@ Expect no output. Avoid AI-vocabulary (robust, leverage, seamless, crucial, delv
 
 ## Definition of done
 
-- [ ] Task 1 - `deliberation.rounds` dial + accessor + tests.
-- [ ] Task 2 - deliberation module (single round) + tests; offline parity with critics proven.
-- [ ] Task 3 - see-and-revise rounds + tests.
-- [ ] Task 4 - `_recommend` wired to gates + deliberation; full gauntlet green.
-- [ ] Task 5 - docs + ADR + plan check-off; humanizer-clean.
+- [x] Task 1 - `deliberation.rounds` dial + accessor + tests.
+- [x] Task 2 - deliberation module (single round) + tests; offline parity with critics proven.
+- [x] Task 3 - see-and-revise rounds + tests.
+- [x] Task 4 - `_recommend` wired to gates + deliberation; full gauntlet green.
+- [x] Task 5 - docs + ADR + plan check-off; humanizer-clean.
 
 **Final gate (all must pass):**
 - `uv run pytest -q`
