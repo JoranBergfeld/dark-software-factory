@@ -26,6 +26,18 @@ DEFAULT_THRESHOLD_KEY = "default_threshold"
 DEFAULT_THRESHOLD = 0.6
 #: Default weight for any critic without an explicit ``weight.<critic>`` value.
 DEFAULT_WEIGHT = 1.0
+#: Fallback config key for the per-product maturity dial.
+DEFAULT_MATURITY_KEY = "default_maturity"
+#: Hard fallback when ``default_maturity`` is itself unset.
+DEFAULT_MATURITY = "supervised"
+#: Fallback config key for the per-product jury consensus bar.
+DEFAULT_CONSENSUS_BAR_KEY = "default_consensus_bar"
+#: Hard fallback when ``default_consensus_bar`` is itself unset.
+DEFAULT_CONSENSUS_BAR = 0.67
+#: Config key for the jury roster (list of juror persona names).
+JURY_ROSTER_KEY = "jury.roster"
+#: Hard fallback roster when no ``jury.roster`` is configured.
+DEFAULT_JURY_ROSTER = ("pragmatist", "skeptic", "user_advocate")
 
 
 def critic_enabled(cfg: ConfigStore, name: str, product: str | None = None) -> bool:
@@ -74,13 +86,53 @@ def weights(cfg: ConfigStore, critics: list[str]) -> dict[str, float]:
     return {name: float(cfg.get_value(f"weight.{name}", DEFAULT_WEIGHT)) for name in critics}
 
 
+def maturity_level(cfg: ConfigStore, product: str | None = None) -> str:
+    """Per-product maturity dial, falling back to ``default_maturity``.
+
+    Resolution order: ``maturity.<product>`` -> ``default_maturity`` ->
+    :data:`DEFAULT_MATURITY`.
+    """
+    default = str(cfg.get_value(DEFAULT_MATURITY_KEY, DEFAULT_MATURITY))
+    if product is None:
+        return default
+    return str(cfg.get_value(f"maturity.{product}", default))
+
+
+def consensus_bar(cfg: ConfigStore, product: str | None = None) -> float:
+    """Per-product jury consensus bar, falling back to ``default_consensus_bar``.
+
+    Resolution order: ``consensus_bar.<product>`` -> ``default_consensus_bar`` ->
+    :data:`DEFAULT_CONSENSUS_BAR`.
+    """
+    default = float(cfg.get_value(DEFAULT_CONSENSUS_BAR_KEY, DEFAULT_CONSENSUS_BAR))
+    if product is None:
+        return default
+    return float(cfg.get_value(f"consensus_bar.{product}", default))
+
+
+def jury_roster(cfg: ConfigStore) -> list[str]:
+    """Resolve the jury roster (list of juror persona names)."""
+    value = cfg.get_value(JURY_ROSTER_KEY, None)
+    if not value:
+        return list(DEFAULT_JURY_ROSTER)
+    return [str(name) for name in value]
+
+
 __all__ = [
+    "DEFAULT_CONSENSUS_BAR",
+    "DEFAULT_CONSENSUS_BAR_KEY",
+    "DEFAULT_MATURITY",
+    "DEFAULT_MATURITY_KEY",
     "DEFAULT_THRESHOLD",
     "DEFAULT_THRESHOLD_KEY",
     "DEFAULT_WEIGHT",
+    "JURY_ROSTER_KEY",
     "agent_enabled",
+    "consensus_bar",
     "critic_enabled",
     "dry_run_global",
+    "jury_roster",
+    "maturity_level",
     "threshold",
     "triggers_paused",
     "weights",
