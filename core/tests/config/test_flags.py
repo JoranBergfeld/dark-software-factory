@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from dsf.config.flags import (
+    DEFAULT_DELIBERATION_ROUNDS,
     DEFAULT_THRESHOLD,
     agent_enabled,
     consensus_bar,
     critic_enabled,
+    deliberation_rounds,
     dry_run_global,
     jury_roster,
     maturity_level,
@@ -113,3 +115,26 @@ def test_consensus_bar_per_product_override():
 def test_jury_roster_default():
     cfg = InMemoryConfigStore.from_defaults()
     assert jury_roster(cfg) == ["pragmatist", "skeptic", "user_advocate"]
+
+
+def test_deliberation_rounds_defaults_to_two():
+    cfg = InMemoryConfigStore.from_defaults()
+    assert deliberation_rounds(cfg) == 2
+
+
+def test_deliberation_rounds_hard_fallback_when_unset():
+    cfg = InMemoryConfigStore({})
+    assert deliberation_rounds(cfg) == DEFAULT_DELIBERATION_ROUNDS
+
+
+def test_deliberation_rounds_per_product_override():
+    cfg = InMemoryConfigStore(
+        {"default_deliberation_rounds": 2, "deliberation_rounds": {"alpha": 1}}
+    )
+    assert deliberation_rounds(cfg) == 2
+    assert deliberation_rounds(cfg, product="alpha") == 1
+
+
+def test_deliberation_rounds_is_floored_at_one():
+    cfg = InMemoryConfigStore({"default_deliberation_rounds": 0})
+    assert deliberation_rounds(cfg) == 1
