@@ -37,10 +37,11 @@ job and hands the run to the next:
   recommendation. A separate, model-diverse jury reads that recommendation and
   returns go or no-go by consensus. A deterministic outcome policy turns the
   result into an action: strong consensus proceeds, a split escalates to a
-  person, consensus against kills. Every step goes to the log. (Today this station
-  runs deterministic critics with a unilateral veto and a weighted score against
-  a threshold; the deliberative shape is designed in ADR 0011 and not yet built.
-  See below.)
+  person, consensus against kills. Every step goes to the log. (Today the proposer
+  tier runs deterministic critics with a unilateral veto and a weighted score
+  against a threshold, and the model-diverse validation jury, the maturity-gated
+  outcome policy, and the escalate-to-review outcome are built. The multi-round
+  deliberation council is designed in ADR 0011 and still pending. See below.)
 - **S6 Routing** maps each accepted proposal to a product and repo, attaches
   labels from the product's taxonomy, and writes the issue body with a grounded
   evidence appendix.
@@ -52,8 +53,9 @@ job and hands the run to the next:
 
 S5 is where the Council earns its name. In the intended shape, a grounded
 proposal is argued by a council of role agents, validated by a separate panel,
-and a fixed policy turns the result into an action. (Today S5 is deterministic
-critics; see "Where it lives" below.)
+and a fixed policy turns the result into an action. (Today the critics propose,
+the validation jury reviews, and the outcome policy acts; the multi-round
+deliberation council is still pending. See "Where it lives" below.)
 
 ```mermaid
 flowchart TD
@@ -134,7 +136,7 @@ Grounding and de-duplication are not optional dials. The grounding gate and the
 final dedup always run, so the factory cannot file an ungrounded or repeated
 issue regardless of how the other dials are set.
 
-As the decision path moves to deliberation and a jury (ADR 0011), these dials
+As the decision path moves to full deliberation (ADR 0011), these dials
 evolve in place: critic toggles become lens toggles, weights become each lens's
 influence in the debate, the accept threshold becomes the consensus bar, and a
 new per-product maturity level sets how much jury consensus is needed to act
@@ -149,14 +151,15 @@ Azure Container App scoped to a single product (ADR 0004). It is the most
 built-out phase of the loop: the full conveyor, the grounding gate, and the
 filing path all run today.
 
-The decision path is mid-evolution. Today S5 is deterministic critics with a
-unilateral veto and a weighted threshold, intake still accepts a synchronous
-push, and there is no jury or maturity dial. The deliberation council, the
-separate validation jury, the scheduled-pull intake, and the single maturity
-dial are the intended shape, grounded in the multi-agent literature and designed
-in ADR 0011 and its spec. Implementation follows in a later plan. Architecture
-decisions for this phase live in ADR 0006 (data adapters), ADR 0007 (the squad
-handoff), and ADR 0011 (the deliberative redesign).
+The decision path is mid-evolution. Today the proposer tier is deterministic
+critics with a unilateral veto and a weighted threshold, and a separate
+model-diverse validation jury reviews that recommendation under a per-product
+maturity dial that accepts, escalates to a human review queue, or kills (Plan 1,
+landed). The multi-round deliberation council (Plan 2) and the scheduled-pull
+intake (Plan 3) are the remaining intended shape, grounded in the multi-agent
+literature and designed in ADR 0011 and its spec. Architecture decisions for
+this phase live in ADR 0006 (data adapters), ADR 0007 (the squad handoff), and
+ADR 0011 (the deliberative redesign).
 
 **See also:** the [loop overview](../../README.md#the-loop), the next phase
 [Coding Squad](coding-squad.md), and the decision-path redesign in

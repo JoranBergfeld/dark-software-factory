@@ -67,7 +67,7 @@ Key invariants you must not break:
 - Modify: `core/src/dsf/contracts/enums.py:48-52`
 - Test: `core/tests/contracts/test_models.py`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add to `core/tests/contracts/test_models.py` (the `Verdict` import already exists at the top of the file):
 
@@ -77,12 +77,12 @@ def test_verdict_has_escalate_outcome():
     assert Verdict.ESCALATE not in (Verdict.ACCEPT, Verdict.KILL)
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `uv run pytest core/tests/contracts/test_models.py::test_verdict_has_escalate_outcome -v`
 Expected: FAIL with `AttributeError: ESCALATE`.
 
-- [ ] **Step 3: Add the enum member**
+- [x] **Step 3: Add the enum member**
 
 In `core/src/dsf/contracts/enums.py`, change the `Verdict` class:
 
@@ -95,12 +95,12 @@ class Verdict(StrEnum):
     KILL = "KILL"
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `uv run pytest core/tests/contracts/test_models.py::test_verdict_has_escalate_outcome -v`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add core/src/dsf/contracts/enums.py core/tests/contracts/test_models.py
@@ -116,7 +116,7 @@ git commit -m "feat(contracts): add ESCALATE verdict outcome"
 - Modify: `core/src/dsf/contracts/__init__.py`
 - Test: `core/tests/contracts/test_models.py`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add to `core/tests/contracts/test_models.py`. First extend the existing `from dsf.contracts.models import (...)` block (currently `CouncilVerdict, CriticScore, EvidenceItem, Proposal, Provenance, Run`) to:
 
@@ -156,12 +156,12 @@ def test_jury_result_empty_has_no_consensus():
     assert jr.majority_go is False
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `uv run pytest core/tests/contracts/test_models.py::test_jury_result_reports_fraction_consensus_majority -v`
 Expected: FAIL with `ImportError` (cannot import `JurorVote`).
 
-- [ ] **Step 3: Add the contracts**
+- [x] **Step 3: Add the contracts**
 
 In `core/src/dsf/contracts/models.py`, insert immediately after the `CriticScore` class (after its `rationale: str = ""` line) and before `class CouncilVerdict`:
 
@@ -202,7 +202,7 @@ class JuryResult(BaseModel):
 
 `BaseModel` and `Field` are already imported at the top of `models.py`.
 
-- [ ] **Step 4: Export the contracts**
+- [x] **Step 4: Export the contracts**
 
 In `core/src/dsf/contracts/__init__.py`, add `JurorVote` and `JuryResult` to both the `from dsf.contracts.models import (...)` block and the `__all__` list (keep the existing alphabetical-ish grouping):
 
@@ -230,12 +230,12 @@ from dsf.contracts.models import (
     "Proposal",
 ```
 
-- [ ] **Step 5: Run tests to verify they pass**
+- [x] **Step 5: Run tests to verify they pass**
 
 Run: `uv run pytest core/tests/contracts/test_models.py -v`
 Expected: PASS (new tests plus all existing ones).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add core/src/dsf/contracts/models.py core/src/dsf/contracts/__init__.py core/tests/contracts/test_models.py
@@ -251,7 +251,7 @@ git commit -m "feat(contracts): add JurorVote and JuryResult"
 - Modify: `core/src/dsf/contracts/schemas/CouncilVerdict.json` (regenerated)
 - Test: `core/tests/contracts/test_models.py`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add to `core/tests/contracts/test_models.py`:
 
@@ -274,12 +274,12 @@ def test_council_verdict_jury_defaults_to_none():
     assert base.jury is None
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `uv run pytest core/tests/contracts/test_models.py::test_council_verdict_carries_optional_jury -v`
 Expected: FAIL with a Pydantic validation error (unexpected keyword `jury`).
 
-- [ ] **Step 3: Add the field**
+- [x] **Step 3: Add the field**
 
 In `core/src/dsf/contracts/models.py`, add the `jury` field to `CouncilVerdict` immediately after the `scores` field:
 
@@ -291,24 +291,24 @@ In `core/src/dsf/contracts/models.py`, add the `jury` field to `CouncilVerdict` 
 
 `from_scores` does not set `jury`, so it stays `None` there - no change needed to the classmethod.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `uv run pytest core/tests/contracts/test_models.py -v`
 Expected: PASS.
 
-- [ ] **Step 5: Regenerate the schema snapshot**
+- [x] **Step 5: Regenerate the schema snapshot**
 
 The committed JSON Schemas under `core/src/dsf/contracts/schemas/` are generated. Refresh them so the repo stays consistent:
 
 Run: `uv run python -m dsf.contracts.export_schema`
 Expected: prints `wrote .../CouncilVerdict.json` (and the other models). Only `CouncilVerdict.json` changes (it gains `jury` plus nested `JurorVote`/`JuryResult` `$defs`).
 
-- [ ] **Step 6: Run the contracts test that exercises export**
+- [x] **Step 6: Run the contracts test that exercises export**
 
 Run: `uv run pytest core/tests/contracts/test_models.py::test_export_schemas -v`
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add core/src/dsf/contracts/models.py core/src/dsf/contracts/schemas/CouncilVerdict.json core/tests/contracts/test_models.py
@@ -323,7 +323,7 @@ git commit -m "feat(contracts): carry optional validation jury on CouncilVerdict
 - Create: `feature-council/src/dsf/council/outcome.py`
 - Test: `feature-council/tests/council/test_outcome.py`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `feature-council/tests/council/test_outcome.py`:
 
@@ -399,12 +399,12 @@ def test_unknown_maturity_falls_back_to_supervised():
     assert verdict is Verdict.ACCEPT
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `uv run pytest feature-council/tests/council/test_outcome.py -v`
 Expected: FAIL with `ModuleNotFoundError: dsf.council.outcome`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Create `feature-council/src/dsf/council/outcome.py`:
 
@@ -498,12 +498,12 @@ def decide_outcome(
 __all__ = ["Maturity", "decide_outcome"]
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `uv run pytest feature-council/tests/council/test_outcome.py -v`
 Expected: PASS (all 11 tests).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add feature-council/src/dsf/council/outcome.py feature-council/tests/council/test_outcome.py
@@ -519,7 +519,7 @@ git commit -m "feat(council): add maturity-gated outcome policy"
 - Modify: `config/defaults.json`
 - Test: `core/tests/config/test_flags.py`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add to `core/tests/config/test_flags.py`. First extend the existing `from dsf.config.flags import (...)` block (currently `DEFAULT_THRESHOLD, agent_enabled, critic_enabled, dry_run_global, threshold, triggers_paused, weights`) to also import the three new accessors:
 
@@ -572,12 +572,12 @@ def test_jury_roster_default():
     assert jury_roster(cfg) == ["pragmatist", "skeptic", "user_advocate"]
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `uv run pytest core/tests/config/test_flags.py::test_maturity_defaults_to_supervised -v`
 Expected: FAIL with `ImportError` (cannot import `maturity_level`).
 
-- [ ] **Step 3: Add the accessors**
+- [x] **Step 3: Add the accessors**
 
 In `core/src/dsf/config/flags.py`, add the constants after `DEFAULT_WEIGHT` (line 28):
 
@@ -655,7 +655,7 @@ __all__ = [
 ]
 ```
 
-- [ ] **Step 4: Add the defaults**
+- [x] **Step 4: Add the defaults**
 
 In `config/defaults.json`, add `default_maturity` and `default_consensus_bar` after `default_threshold` (line 3), and a `jury` block after the `weight` block. The result:
 
@@ -686,12 +686,12 @@ and at the end, after the closing brace of `weight`:
 }
 ```
 
-- [ ] **Step 5: Run tests to verify they pass**
+- [x] **Step 5: Run tests to verify they pass**
 
 Run: `uv run pytest core/tests/config/test_flags.py -v`
 Expected: PASS (new tests plus existing).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add core/src/dsf/config/flags.py config/defaults.json core/tests/config/test_flags.py
@@ -706,7 +706,7 @@ git commit -m "feat(config): add maturity, consensus bar, and jury roster access
 - Create: `feature-council/src/dsf/council/jury.py`
 - Test: `feature-council/tests/council/test_jury.py`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `feature-council/tests/council/test_jury.py`:
 
@@ -773,12 +773,12 @@ async def test_jury_splits_when_one_model_dissents():
     assert "thin" in skeptic.rationale.lower()
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `uv run pytest feature-council/tests/council/test_jury.py -v`
 Expected: FAIL with `ModuleNotFoundError: dsf.council.jury`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Create `feature-council/src/dsf/council/jury.py`:
 
@@ -884,12 +884,12 @@ async def convene_jury(
 __all__ = ["convene_jury"]
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `uv run pytest feature-council/tests/council/test_jury.py -v`
 Expected: PASS (3 tests).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add feature-council/src/dsf/council/jury.py feature-council/tests/council/test_jury.py
@@ -904,7 +904,7 @@ git commit -m "feat(council): add model-diverse validation jury"
 - Modify: `feature-council/src/dsf/council/decision.py` (full rewrite)
 - Test: `feature-council/tests/council/test_decision.py`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `feature-council/tests/council/test_decision.py` (the imports `build_services`, `make_evidence`, `make_proposal`, `make_run`, and `Verdict` already exist):
 
@@ -942,12 +942,12 @@ async def test_accept_path_populates_the_jury():
     assert all(v.go for v in verdict.jury.votes)
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `uv run pytest feature-council/tests/council/test_decision.py::test_jury_dissent_escalates_under_supervised -v`
 Expected: FAIL - `decide()` still returns ACCEPT (no jury wired) and `verdict.jury` is `None`.
 
-- [ ] **Step 3: Rewrite decision.py**
+- [x] **Step 3: Rewrite decision.py**
 
 Replace the entire contents of `feature-council/src/dsf/council/decision.py` with:
 
@@ -1052,17 +1052,17 @@ async def decide(proposal: Proposal, run: Run, services: Services) -> CouncilVer
 __all__ = ["decide"]
 ```
 
-- [ ] **Step 4: Run the full decision test file to verify it passes**
+- [x] **Step 4: Run the full decision test file to verify it passes**
 
 Run: `uv run pytest feature-council/tests/council/test_decision.py -v`
 Expected: PASS - the four original tests still pass (offline jury echoes the recommendation under the default supervised maturity) plus the three new ones.
 
-- [ ] **Step 5: Run the end-to-end dry-run line to confirm it stays green**
+- [x] **Step 5: Run the end-to-end dry-run line to confirm it stays green**
 
 Run: `uv run pytest feature-council/tests/e2e/test_dry_run_line.py -v`
 Expected: PASS - the offline jury is unanimous, so accepts still route and file.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add feature-council/src/dsf/council/decision.py feature-council/tests/council/test_decision.py
@@ -1077,7 +1077,7 @@ git commit -m "feat(council): route decisions through the validation jury and ou
 - Modify: `feature-council/src/dsf/orchestrator/stations/s5_council.py`
 - Test: `feature-council/tests/orchestrator/test_s5_escalation.py`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `feature-council/tests/orchestrator/test_s5_escalation.py`:
 
@@ -1114,12 +1114,12 @@ async def test_escalated_proposal_goes_to_review_queue_not_routed():
     assert any("escalated" in rec.message.lower() for rec in result.audit)
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `uv run pytest feature-council/tests/orchestrator/test_s5_escalation.py -v`
 Expected: FAIL with `ImportError` (no `REVIEW_QUEUE_KIND`).
 
-- [ ] **Step 3: Update S5 to handle three outcomes**
+- [x] **Step 3: Update S5 to handle three outcomes**
 
 In `feature-council/src/dsf/orchestrator/stations/s5_council.py`, add the new record-kind constant after `KILL_LOG_KIND` (line 25):
 
@@ -1202,12 +1202,12 @@ Update the `__all__` line at the bottom of the file:
 __all__ = ["STATION", "KILL_LOG_KIND", "REVIEW_QUEUE_KIND", "run"]
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `uv run pytest feature-council/tests/orchestrator/test_s5_escalation.py -v`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add feature-council/src/dsf/orchestrator/stations/s5_council.py feature-council/tests/orchestrator/test_s5_escalation.py
@@ -1222,7 +1222,7 @@ git commit -m "feat(orchestrator): route escalated proposals to a human review q
 - Modify: `core/src/dsf/memory/consolidation.py:48`
 - Test: `core/tests/memory/test_memory.py`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add to `core/tests/memory/test_memory.py`. This file already imports everything the test needs (`Run`, `TriggerKind`, `RunStatus`, `Verdict`, `CouncilVerdict`, `consolidate_run`, `InMemoryMemoryStore`), so no import changes are required. Match the existing `test_consolidate_run_writes_retrievable_lesson` style (build `Run(...)` inline):
 
@@ -1244,12 +1244,12 @@ async def test_consolidate_run_labels_escalated_outcome():
     assert lesson["outcome"] == "escalated"
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `uv run pytest core/tests/memory/test_memory.py::test_consolidate_run_labels_escalated_outcome -v`
 Expected: FAIL - `lesson["outcome"]` is `"killed"`, not `"escalated"`.
 
-- [ ] **Step 3: Update the outcome mapping**
+- [x] **Step 3: Update the outcome mapping**
 
 In `core/src/dsf/memory/consolidation.py`, replace line 48:
 
@@ -1268,12 +1268,12 @@ with:
         outcome = "killed"
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `uv run pytest core/tests/memory/test_memory.py -v`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add core/src/dsf/memory/consolidation.py core/tests/memory/test_memory.py
@@ -1290,27 +1290,27 @@ git commit -m "feat(memory): label escalated runs in consolidation"
 - Modify: `docs/adr/0011-feature-council-deliberative-redesign.md` (consequence note)
 - Modify: this plan file (check off completed tasks)
 
-- [ ] **Step 1: Run the whole suite**
+- [x] **Step 1: Run the whole suite**
 
 Run: `uv run pytest -q`
 Expected: PASS, with the new tests added (the count should be the prior total plus the new tests from this plan).
 
-- [ ] **Step 2: Run lint**
+- [x] **Step 2: Run lint**
 
 Run: `uv run ruff check .`
 Expected: `All checks passed!`
 
-- [ ] **Step 3: Run the eval gate**
+- [x] **Step 3: Run the eval gate**
 
 Run: `uv run python -m dsf.evals.runner --gate`
 Expected: gate PASSED (offline the verdicts are unchanged: supervised maturity plus a unanimous jury reproduce the prior accept/kill outcomes).
 
-- [ ] **Step 4: Run the import-linter contracts**
+- [x] **Step 4: Run the import-linter contracts**
 
 Run: `uv run lint-imports`
 Expected: contracts kept (no app member imported by core; the jury contracts live in core, so no boundary is crossed).
 
-- [ ] **Step 5: Update the docs to reflect what is now real**
+- [x] **Step 5: Update the docs to reflect what is now real**
 
 In `docs/phases/feature-council.md`, find the honest "today is deterministic critics" note in the S5 / harness section and update it to reflect that the validation jury, the maturity dial, and the escalate outcome now exist (the deliberation council and pull intake remain pending - Plans 2 and 3). Keep the prose humanizer-clean (no em dashes, no curly quotes, no AI-vocabulary, no emojis). Example replacement text for the S5 note:
 
@@ -1326,16 +1326,16 @@ In `docs/superpowers/specs/2026-06-19-feature-council-deliberative-redesign-desi
 
 In `docs/adr/0011-feature-council-deliberative-redesign.md`, update the consequences/"not built yet" note so it records that the validation jury, maturity gate, and escalate outcome have landed, with the deliberation council and pull intake still pending.
 
-- [ ] **Step 6: Verify the docs are humanizer-clean**
+- [x] **Step 6: Verify the docs are humanizer-clean**
 
 Run: `grep -nP "[\x{2014}\x{2013}\x{2018}\x{2019}\x{201C}\x{201D}]" docs/phases/feature-council.md docs/adr/0011-feature-council-deliberative-redesign.md docs/superpowers/specs/2026-06-19-feature-council-deliberative-redesign-design.md`
 Expected: no output (no em/en dashes, no curly quotes).
 
-- [ ] **Step 7: Check off the completed tasks in this plan**
+- [x] **Step 7: Check off the completed tasks in this plan**
 
-Edit `docs/superpowers/plans/2026-06-19-feature-council-validation-jury.md` and mark every completed `- [ ]` as `- [x]`.
+Edit `docs/superpowers/plans/2026-06-19-feature-council-validation-jury.md` and mark every completed `- [x]` as `- [x]`.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add docs/phases/feature-council.md docs/superpowers/specs/2026-06-19-feature-council-deliberative-redesign-design.md docs/adr/0011-feature-council-deliberative-redesign.md docs/superpowers/plans/2026-06-19-feature-council-validation-jury.md

@@ -80,7 +80,9 @@ review (Verga et al. 2024, arXiv:2404.18796).
   call the model through the injected port, so tests script their outputs and
   assert on pipeline behavior with no network; the outcome policy is unit-tested
   directly.
-- This ADR records the decision. The detailed design is in the spec; the
-  implementation is staged for a follow-up plan and is not built yet. Until then
-  the council keeps its deterministic critics and its push intake, and the phase
-  doc marks that honestly.
+- This ADR records the decision. The detailed design is in the spec, and the
+  implementation is staged across follow-up plans. Plan 1 has landed: the
+  model-diverse validation jury, the per-product maturity dial, and the escalate
+  outcome that routes a split decision to a human review queue. The proposer tier
+  is still the deterministic critics, and the multi-round deliberation council and
+  the governed pull intake remain pending. The phase doc marks the state honestly.
