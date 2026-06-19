@@ -475,10 +475,10 @@ Commit: `docs(council): record governed pull intake landing (Plan 3)`.
 
 ## Definition of done
 
-- [ ] Task 1 - `SignalBuffer` port + `InMemorySignalBuffer` + `Services` wiring + tests.
-- [ ] Task 2 - `/ingest` enqueues; queued contract; app tests updated.
-- [ ] Task 3 - `drain_signals` pulls + processes; SIGNAL-pause leaves buffered; tests.
-- [ ] Task 4 - orchestrator tick drains then sweeps; tests.
-- [ ] Task 5 - docs + ADR + plan check-off; humanizer-clean.
-- [ ] Full gauntlet green: `uv run pytest -q`, `uv run ruff check .`,
+- [x] Task 1 - `SignalBuffer` port + `InMemorySignalBuffer` + `Services` wiring + tests.
+- [x] Task 2 - `/ingest` enqueues; queued contract; app tests updated.
+- [x] Task 3 - `drain_signals` pulls + processes; SIGNAL-pause leaves buffered; tests.
+- [x] Task 4 - orchestrator tick drains then sweeps; tests.
+- [x] Task 5 - docs + ADR + plan check-off; humanizer-clean.
+- [x] Full gauntlet green: `uv run pytest -q`, `uv run ruff check .`,
   `uv run python -m dsf.evals.runner --gate`, `uv run lint-imports`.

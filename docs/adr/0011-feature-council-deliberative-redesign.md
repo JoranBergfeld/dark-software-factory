@@ -93,8 +93,22 @@ review (Verga et al. 2024, arXiv:2404.18796).
   rather than an LLM verdict, so the decision stays auditable. The S3 evidence
   synthesis is left in place, since the grounding gate must run on proposals before
   the council; only the recommendation aggregation moves into this tier.
+- **Plan 3 landed the governed pull intake.** A `SignalBuffer` port
+  (`core/src/dsf/ports`) with an in-memory implementation
+  (`core/src/dsf/signals/buffer.py`) sits between the sources and the council.
+  `POST /ingest` (`triggers/app.py`) is now enqueue-only: it debounces, records,
+  and enqueues, returning `{"status": "queued"}` rather than driving the conveyor,
+  so an inbound source can no longer set the council's cadence. The scheduled
+  worker runs `run_orchestrator_tick` (`triggers/scheduler.py`): `drain_signals`
+  pulls the buffer and runs each signal through the conveyor in dry-run, then the
+  source-kind sweep runs. A paused SIGNAL trigger leaves the buffer intact so
+  queued signals wait rather than being dropped. The in-memory buffer is
+  at-most-once; the real Azure Service Bus adapter (per the charter) will add
+  lease/ack/dead-letter behind the same port, the same way the model/memory/config
+  ports grew real Azure siblings later. `/file` stays the deliberate human filing
+  path, unchanged.
 - This ADR records the decision. The detailed design is in the spec, and the
-  implementation is staged across follow-up plans. Plan 1 (model-diverse validation
-  jury, per-product maturity dial, escalate outcome) and Plan 2 (deliberation
-  council) have landed; only the governed pull intake (Plan 3) remains pending. The
-  phase doc marks the state honestly.
+  implementation was staged across follow-up plans. Plan 1 (model-diverse
+  validation jury, per-product maturity dial, escalate outcome), Plan 2
+  (deliberation council), and Plan 3 (governed pull intake) have all landed, so the
+  whole ADR 0011 redesign is shipped. The phase doc marks the state honestly.

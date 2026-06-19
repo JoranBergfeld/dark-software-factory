@@ -106,12 +106,12 @@ layered-aggregation result (Wang et al. 2024).
 
 ## Inputs and outputs
 
-**In:** signals scoped to one product. In the target shape they arrive one way:
-sources collect into a buffer and the Council drains it on a schedule it owns, so
-nothing outside the factory sets the pace. (Today a scheduled sweep runs next to
-a push ingestion endpoint; the redesign drops the push, leaving event-driven
-urgency to the SRE fast-path. See ADR 0011.) The sources today are Sentry,
-Grafana, FoundryIQ, WebIQ, and tickets.
+**In:** signals scoped to one product. They arrive one way: sources collect into
+a buffer and the Council drains it on a schedule it owns, so nothing outside the
+factory sets the pace. The webhook endpoint (`/ingest`) only enqueues; the
+scheduled worker drains the buffer on each tick. Event-driven urgency stays with
+the SRE fast-path (ADR 0011). The sources today are Sentry, Grafana, FoundryIQ,
+WebIQ, and tickets.
 
 **Out:** GitHub issues in the product's repo. Each one is labeled by type and
 severity, carries the handoff label, and includes the problem, the proposed
@@ -142,12 +142,13 @@ Grounding and de-duplication are not optional dials. The grounding gate and the
 final dedup always run, so the factory cannot file an ungrounded or repeated
 issue regardless of how the other dials are set.
 
-As the decision path moves to full deliberation (ADR 0011), these dials
-evolve in place: critic toggles become lens toggles, weights become each lens's
-influence in the debate, the accept threshold becomes the consensus bar, and a
-new per-product maturity level sets how much jury consensus is needed to act
-without a person and whether the drafted spec auto-merges. All stay adjustable
-while the line runs.
+These dials have evolved in place with the deliberation redesign (ADR 0011): the
+critic toggles enable or disable lenses, the critic weights set each lens's
+influence in the synthesized vote, the accept threshold is the consensus bar, a
+per-product deliberation-rounds dial sets how many see-and-revise rounds the
+lenses run, and a per-product maturity level sets how much jury consensus is
+needed to act without a person and whether the drafted spec auto-merges. All stay
+adjustable while the line runs.
 
 ## Where it lives and how autonomous it is today
 
@@ -157,19 +158,19 @@ Azure Container App scoped to a single product (ADR 0004). It is the most
 built-out phase of the loop: the full conveyor, the grounding gate, and the
 filing path all run today.
 
-The decision path is nearly all the way to its intended shape. The proposer tier
-is the deliberation council: five role lenses debate over one or two
-see-and-revise rounds, grounding and duplication run as deterministic veto gates,
-and a synthesizer folds the scores into one recommendation (Plan 2, landed). A
-separate model-diverse validation jury reviews that recommendation under a
-per-product maturity dial that accepts, escalates to a human review queue, or
-kills (Plan 1, landed). Offline the lenses fall back to their former critics, so
-the synthesis is the same audited weighted vote the factory shipped before. The
-one piece still pending is the scheduled-pull intake (Plan 3): today a push
-endpoint runs next to the sweep, and the redesign drops the push. The whole
-redesign is grounded in the multi-agent literature and designed in ADR 0011 and
-its spec. Architecture decisions for this phase live in ADR 0006 (data adapters),
-ADR 0007 (the squad handoff), and ADR 0011 (the deliberative redesign).
+The decision path is the intended shape. The proposer tier is the deliberation
+council: five role lenses debate over one or two see-and-revise rounds, grounding
+and duplication run as deterministic veto gates, and a synthesizer folds the
+scores into one recommendation (Plan 2, landed). A separate model-diverse
+validation jury reviews that recommendation under a per-product maturity dial that
+accepts, escalates to a human review queue, or kills (Plan 1, landed). Offline the
+lenses fall back to their former critics, so the synthesis is the same audited
+weighted vote the factory shipped before. Intake is a governed pull: the webhook
+endpoint only enqueues and the scheduled worker drains the buffer on the Council's
+own cadence (Plan 3, landed). The whole redesign is grounded in the multi-agent
+literature and designed in ADR 0011 and its spec. Architecture decisions for this
+phase live in ADR 0006 (data adapters), ADR 0007 (the squad handoff), and ADR 0011
+(the deliberative redesign).
 
 **See also:** the [loop overview](../../README.md#the-loop), the next phase
 [Coding Squad](coding-squad.md), and the decision-path redesign in
