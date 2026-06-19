@@ -24,6 +24,9 @@ STATION = "S5:council"
 #: Memory record-kind for the accept/kill decision log.
 KILL_LOG_KIND = "kill_log"
 
+#: Memory record-kind for proposals escalated to human review.
+REVIEW_QUEUE_KIND = "review_queue"
+
 
 async def run(run: Run, services: Services) -> Run:
     """Decide each proposal; keep ACCEPTs, log KILLs."""
@@ -35,6 +38,7 @@ async def run(run: Run, services: Services) -> Run:
 
         accepted: list[Proposal] = []
         verdicts: list[CouncilVerdict] = []
+        escalated = 0
         for proposal in proposals:
             verdict = await decide(proposal, run, services)
             verdicts.append(verdict)
@@ -51,6 +55,22 @@ async def run(run: Run, services: Services) -> Run:
                 await services.memory.put_working(
                     f"critic_scores:{proposal.id}",
                     {s.critic: s.score for s in verdict.scores},
+                )
+            elif verdict.verdict == Verdict.ESCALATE:
+                escalated += 1
+                run.audit.append(
+                    _audit(f"council escalated {proposal.id} to human review: {verdict.rationale}")
+                )
+                await services.memory.put_record(
+                    {
+                        "kind": REVIEW_QUEUE_KIND,
+                        "run_id": run.id,
+                        "proposal_id": proposal.id,
+                        "verdict": verdict.verdict.value,
+                        "weighted_score": verdict.weighted_score,
+                        "threshold": verdict.threshold,
+                        "text": f"{proposal.title} :: {verdict.rationale}",
+                    }
                 )
             else:
                 run.audit.append(_audit(f"council killed {proposal.id}: {verdict.rationale}"))
@@ -69,8 +89,11 @@ async def run(run: Run, services: Services) -> Run:
         await blackboard.save_proposals(run.id, accepted)
         await blackboard.save_verdicts(run.id, verdicts)
         run.proposals = [p.id for p in accepted]
+        killed = len(proposals) - len(accepted) - escalated
         run.audit.append(
-            _audit(f"council: {len(accepted)} accepted, {len(proposals) - len(accepted)} killed")
+            _audit(
+                f"council: {len(accepted)} accepted, {escalated} escalated, {killed} killed"
+            )
         )
         return run
 
@@ -82,4 +105,4 @@ def _audit(message: str):
     return AuditRecord(station=STATION, message=message)
 
 
-__all__ = ["STATION", "KILL_LOG_KIND", "run"]
+__all__ = ["STATION", "KILL_LOG_KIND", "REVIEW_QUEUE_KIND", "run"]
