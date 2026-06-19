@@ -7,7 +7,9 @@ no handler registered the model echoes, so each lens falls back to its existing
 deterministic critic in :data:`~dsf.council.critics.ALL_CRITICS`. The offline
 positions are therefore identical to the critic scores that drive the golden
 suite, which keeps the synthesized recommendation byte-identical to the pre-slice
-behavior.
+behavior. A lens also falls back to its critic if the model call fails (a
+response-validation, strict-schema, or network error), so a flaky backend
+degrades the run rather than failing it.
 
 Grounding and duplication are *gates*, not lenses: they are matters of fact, run
 deterministically in the decision engine, and can veto. They are listed here as
@@ -138,7 +140,15 @@ async def _lens_position(
     fallback = await ALL_CRITICS[name](proposal, run, services)
     persona = _PERSONAS.get(name, _DEFAULT_PERSONA)
     prompt = _lens_prompt(name, proposal, peers, round_index)
-    result = await services.model.complete(system=persona, prompt=prompt, schema=LensPosition)
+    try:
+        result = await services.model.complete(system=persona, prompt=prompt, schema=LensPosition)
+    except Exception:
+        # A real model can fail (response validation, a strict-schema rejection, a
+        # network error). The deterministic critic is the safety net, so degrade to
+        # it rather than crash the whole council run, and note it for the audit log.
+        note = "[lens model unavailable; used deterministic critic]"
+        rationale = f"{fallback.rationale} {note}".strip() if fallback.rationale else note
+        return fallback.model_copy(update={"rationale": rationale})
     return _parse_position(result, name, fallback)
 
 
