@@ -97,3 +97,12 @@ def test_cli_run_dry_run_exits_zero(capsys) -> None:
     out = capsys.readouterr().out
     assert code == 0
     assert "status=filed" in out.lower()
+
+
+def test_cli_serve_orchestrator_exits_zero(capsys) -> None:
+    # The orchestrator tick drains the (empty) buffer and runs the source sweep.
+    code = main(["serve-orchestrator"])
+    out = capsys.readouterr().out
+    assert code == 0
+    # A run summary was printed for the scheduled sweep.
+    assert "[dsf] run" in out

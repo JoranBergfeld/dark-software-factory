@@ -10,7 +10,8 @@ from dsf.github_client import RealGitHubClient, RecordingGitHubClient
 from dsf.memory import InMemoryMemoryStore
 from dsf.model import DeterministicModelClient
 from dsf.observability.tracing import NoOpTracer
-from dsf.ports import ConfigStore, GitHubClient, MemoryStore, ModelClient, Tracer
+from dsf.ports import ConfigStore, GitHubClient, MemoryStore, ModelClient, SignalBuffer, Tracer
+from dsf.signals import InMemorySignalBuffer
 
 
 def test_build_services_local_wires_fakes():
@@ -22,6 +23,7 @@ def test_build_services_local_wires_fakes():
     assert isinstance(services.config, InMemoryConfigStore)
     assert isinstance(services.github, RecordingGitHubClient)
     assert isinstance(services.tracer, NoOpTracer)
+    assert isinstance(services.signals, InMemorySignalBuffer)
 
 
 def test_build_services_satisfy_protocols():
@@ -31,6 +33,13 @@ def test_build_services_satisfy_protocols():
     assert isinstance(services.config, ConfigStore)
     assert isinstance(services.github, GitHubClient)
     assert isinstance(services.tracer, Tracer)
+    assert isinstance(services.signals, SignalBuffer)
+
+
+async def test_local_services_wire_a_usable_signal_buffer():
+    services = build_services("local")
+    await services.signals.enqueue({"text": "x"})
+    assert await services.signals.drain() == [{"text": "x"}]
 
 
 def test_azure_runtime_settings_from_env_requires_product():
