@@ -98,3 +98,36 @@ def test_seeded_weight_shifts_council_weighted_score():
     up = CouncilVerdict.from_scores("p", scores, 0.6, seeded_weights)
     assert up.weighted_score == 0.75
     assert up.weighted_score > base.weighted_score
+
+
+async def test_jury_dissent_escalates_under_supervised():
+    services = build_services("local")
+    services.model.register("[jury:skeptic]", lambda system, prompt: "NO-GO")
+    run = make_run([make_evidence("CRITICAL outage", confidence=0.9)])
+    prop = make_proposal(run, proposed_change="Add a small cache.")
+    verdict = await decide(prop, run, services)
+    # ACCEPT recommendation, but a 2-1 jury under supervised maturity escalates.
+    assert verdict.verdict == Verdict.ESCALATE
+    assert verdict.jury is not None
+    assert len(verdict.jury.votes) == 3
+
+
+async def test_unanimous_jury_against_kills_a_strong_recommendation():
+    services = build_services("local")
+    for persona in ("pragmatist", "skeptic", "user_advocate"):
+        services.model.register(f"[jury:{persona}]", lambda system, prompt: "NO-GO")
+    run = make_run([make_evidence("CRITICAL outage", confidence=0.9)])
+    prop = make_proposal(run, proposed_change="Add a small cache.")
+    verdict = await decide(prop, run, services)
+    assert verdict.verdict == Verdict.KILL
+
+
+async def test_accept_path_populates_the_jury():
+    services = build_services("local")
+    run = make_run([make_evidence("CRITICAL outage", confidence=0.9)])
+    prop = make_proposal(run, proposed_change="Add a small cache.")
+    verdict = await decide(prop, run, services)
+    assert verdict.verdict == Verdict.ACCEPT
+    assert verdict.jury is not None
+    assert len(verdict.jury.votes) == 3
+    assert all(v.go for v in verdict.jury.votes)
