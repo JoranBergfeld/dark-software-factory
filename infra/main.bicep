@@ -60,6 +60,7 @@ var tags = {
 
 // Built-in role definition IDs.
 var keyVaultSecretsUserRoleId = '4633458b-17de-408a-b874-0445c86b69e6' // Key Vault Secrets User
+var keyVaultSecretsOfficerRoleId = 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7' // Key Vault Secrets Officer
 var appConfigDataReaderRoleId = '516239f1-63e1-4d78-a4de-a74fb236a071' // App Configuration Data Reader
 var appConfigDataOwnerRoleId = '5ae67dd6-50cb-40e7-96ff-dc2bfa4b606b' // App Configuration Data Owner
 
@@ -139,6 +140,19 @@ resource kvSecretsUserAssignment 'Microsoft.Authorization/roleAssignments@2022-0
     principalId: runtimeIdentity.properties.principalId
     principalType: 'ServicePrincipal'
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', keyVaultSecretsUserRoleId)
+  }
+}
+
+// Admin (human/operator) gets Secrets Officer so `dsf new --execute` can seed the
+// squad GitHub token into the vault (ADR 0012), mirroring the App Config admin grant.
+// Data-plane reachability still requires allowPublicNetworkAccess=true (or running
+// provisioning from inside the vault's network); see docs/RUNBOOK.md.
+resource keyVaultAdminAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(adminPrincipalId)) {
+  name: guid(keyVault.id, adminPrincipalId, keyVaultSecretsOfficerRoleId)
+  scope: keyVault
+  properties: {
+    principalId: adminPrincipalId
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', keyVaultSecretsOfficerRoleId)
   }
 }
 
@@ -263,6 +277,38 @@ module aks 'modules/aks.bicep' = {
   }
 }
 
+// Squad workload identity: a dedicated user-assigned identity federated to the
+// squad-<product> Kubernetes service account, granted Key Vault Secrets User so
+// the CSI driver can project the GitHub token secret into the Ralph + exporter
+// pods (ADR 0012).
+resource squadIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name: '${namePrefix}-squad-${suffix}'
+  location: location
+  tags: tags
+}
+
+resource squadFederation 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-01-31' = {
+  parent: squadIdentity
+  name: 'squad-${product}'
+  properties: {
+    issuer: aks.outputs.aksOidcIssuerUrl
+    subject: 'system:serviceaccount:squad-${product}:squad-${product}'
+    audiences: [
+      'api://AzureADTokenExchange'
+    ]
+  }
+}
+
+resource squadKvSecretsUser 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(keyVault.id, squadIdentity.id, keyVaultSecretsUserRoleId)
+  scope: keyVault
+  properties: {
+    principalId: squadIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', keyVaultSecretsUserRoleId)
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Runtime compute: Azure Container Apps environment + orchestrator app (ADR 0004)
 // ---------------------------------------------------------------------------
@@ -360,3 +406,12 @@ output runtimePrincipalId string = runtimeIdentity.properties.principalId
 output orchestratorAppName string = orchestratorApp.name
 
 output aksName string = aks.outputs.aksName
+
+@description('Client ID of the squad workload identity (for the K8s ServiceAccount annotation).')
+output squadIdentityClientId string = squadIdentity.properties.clientId
+
+@description('Key Vault name (for the squad SecretProviderClass).')
+output keyVaultName string = keyVault.name
+
+@description('Entra tenant ID (for the squad SecretProviderClass).')
+output tenantId string = subscription().tenantId

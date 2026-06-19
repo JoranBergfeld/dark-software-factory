@@ -128,7 +128,23 @@ populated at provisioning time rather than hand-maintained; `create_labels`
 idempotently creates the product's taxonomy labels + `squad:ready` in the repo
 (so filing never fails on a missing label), and `deploy_squad_ralph` brings up
 the per-product Ralph watch loop on AKS (`squad watch --execute`), which KEDA
-scales 0→1 on the open `squad:ready` issue count (ADR 0012). The full closed loop:
+scales 0→1 on the open `squad:ready` issue count (ADR 0012). Under `--execute`,
+that step seeds the operator's `gh auth token` into the product's Key Vault as
+`github-token`, then applies the identity manifest (Namespace + ServiceAccount +
+Key Vault CSI `SecretProviderClass`) before the exporter, Deployment, and
+ScaledObject, so Ralph reads its credential under AKS workload identity rather
+than from a static in-cluster secret.
+
+> **Prerequisite for the token seed.** The seed runs `az keyvault secret set` as
+> the operator, so the principal passed as `adminPrincipalId` is granted **Key
+> Vault Secrets Officer** on the product vault. Because the vault defaults to
+> network-`Deny` (`allowPublicNetworkAccess=false`), the seed must run from a host
+> that can reach the vault data plane: deploy with `allowPublicNetworkAccess=true`
+> for a dev instance, or run provisioning from inside the vault's network. The
+> later GitHub App installation-token hardening (ADR 0012) only changes the secret
+> value, not this path.
+
+The full closed loop:
 
 ```
 council files issue (squad:ready) → KEDA wakes the Ralph loop → squad watch →

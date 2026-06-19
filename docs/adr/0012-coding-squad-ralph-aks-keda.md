@@ -48,9 +48,15 @@ squad:ready` is wired. Two things are wrong for a factory meant to run unattende
   runs, mirroring the council's maturity dial. Low maturity requires human review
   (branch protection); high maturity enables GitHub auto-merge on green CI. The dial
   toggles repo settings, not Ralph's behavior.
-- **Identity is a scoped GitHub App, not a PAT.** Ralph authenticates with a GitHub
-  App installation token scoped to the product repo, delivered through AKS workload
-  identity and the Key Vault CSI driver, reusing the per-product Key Vault.
+- **Identity is AKS workload identity over a Key Vault secret.** Ralph runs under a
+  per-product `squad-<product>` ServiceAccount, bound through an AKS federated
+  credential to a dedicated managed identity, and reads its GitHub token from the
+  per-product Key Vault via the CSI driver, never a static in-cluster secret. The
+  provisioner seeds that token from the operator's `gh auth token` at execute time.
+  Because the secret is referenced by name, moving to a GitHub App installation token
+  scoped to the product repo (the recommended hardening) is a Key Vault value change,
+  not a rewrite; that path is not automated only because GitHub App creation requires
+  a one-time interactive browser approval with no headless REST equivalent.
 
 ## Consequences
 
@@ -72,6 +78,9 @@ squad:ready` is wired. Two things are wrong for a factory meant to run unattende
   phase).
 - The SRE-to-squad path is unchanged: incident issues reach the squad through the
   same `squad:ready` label (ADR 0008, ADR 0009).
-- Implementation is staged in the follow-up plan
-  (`docs/superpowers/plans/2026-06-19-coding-squad-ralph-aks-keda.md`); this ADR
-  records the decision.
+- Implemented across the Bicep modules (per-product AKS, KEDA, the squad managed
+  identity, federated credential, Key Vault role, and CSI add-on), the manifest
+  renderer (identity, Deployment, ScaledObject, exporter), and the provisioner
+  (token seed plus ordered `kubectl apply`); the plan
+  (`docs/superpowers/plans/2026-06-19-coding-squad-ralph-aks-keda.md`) records the
+  staging, and this ADR records the decision.
