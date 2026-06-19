@@ -34,6 +34,8 @@ from dsf.instance.spec import (
     read_manifest,
     write_manifest,
 )
+from dsf.instance.squad_governance import governance_commands
+from dsf.instance.squad_render import render_squad_bundle
 
 Runner = Callable[..., Any]
 
@@ -116,20 +118,6 @@ class InstanceProvisioner:
                 cwd=repo_dir,
             ),
             ProvisionStep(
-                name="squad_copilot",
-                description="Enable Copilot coding agent auto-assignment",
-                command=["squad", "copilot", "--auto-assign"],
-                cwd=repo_dir,
-            ),
-            ProvisionStep(
-                name="squad_triage",
-                description=(
-                    f"Triage council-filed '{HANDOFF_LABEL}' issues -> Copilot agent"
-                ),
-                command=["squad", "triage", "--execute", "--label", HANDOFF_LABEL],
-                cwd=repo_dir,
-            ),
-            ProvisionStep(
                 name="create_resource_group",
                 description=f"Create dedicated Azure resource group {s.resource_group()}",
                 command=[
@@ -169,6 +157,20 @@ class InstanceProvisioner:
                 description=(
                     f"Render + bring up the feature-council runtime scoped to {s.product}"
                 ),
+            ),
+            ProvisionStep(
+                name="deploy_squad_ralph",
+                description=(
+                    f"Render + apply the Ralph watch loop (AKS + KEDA) for {s.product}"
+                ),
+            ),
+            ProvisionStep(
+                name="squad_governance",
+                description=(
+                    f"Apply the '{s.squad_maturity}' squad maturity dial to "
+                    f"{s.github_repo()}"
+                ),
+                commands=governance_commands(s),
             ),
             ProvisionStep(
                 name="onboard_sre_agent",
@@ -231,6 +233,32 @@ class InstanceProvisioner:
                             ],
                             check=True,
                         )
+                        step.executed, step.result = True, "deployed"
+                elif step.name == "deploy_squad_ralph":
+                    provisional = InstanceManifest(
+                        spec=self.spec, plan=plan, executed=executed, azure=azure_result
+                    )
+                    bundle = render_squad_bundle(provisional, repo_root=self._repo_root)
+                    if not execute:
+                        step.result = "rendered (dry-run)"
+                    else:
+                        self._run(
+                            [
+                                "az", "aks", "get-credentials",
+                                "--resource-group", self.spec.resource_group(),
+                                "--name", f"aks-dsf-{self.spec.product}",
+                                "--overwrite-existing",
+                            ],
+                            check=True,
+                        )
+                        for path in (
+                            bundle.exporter_path,
+                            bundle.deployment_path,
+                            bundle.scaledobject_path,
+                        ):
+                            self._run(
+                                ["kubectl", "apply", "-f", str(path)], check=True
+                            )
                         step.executed, step.result = True, "deployed"
                 elif step.name == "onboard_sre_agent":
                     provisional = InstanceManifest(

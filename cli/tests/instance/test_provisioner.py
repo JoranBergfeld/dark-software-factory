@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -24,12 +25,12 @@ def test_plan_step_order_and_names():
         "create_repo",
         "create_labels",
         "squad_init",
-        "squad_copilot",
-        "squad_triage",
         "create_resource_group",
         "provision_azure",
         "register_product",
         "deploy_council",
+        "deploy_squad_ralph",
+        "squad_governance",
         "onboard_sre_agent",
         "write_config",
     ]
@@ -76,18 +77,10 @@ def test_plan_create_repo_command():
 
 def test_plan_squad_steps_run_in_repo_dir():
     plan = InstanceProvisioner(_spec()).plan()
-    for name in ("squad_init", "squad_copilot", "squad_triage"):
+    for name in ("squad_init",):
         step = next(s for s in plan.steps if s.name == name)
         assert step.cwd == "demo"
         assert step.command[0] == "squad"
-
-
-def test_plan_squad_triage_targets_handoff_label():
-    plan = InstanceProvisioner(_spec()).plan()
-    triage = next(s for s in plan.steps if s.name == "squad_triage")
-    assert triage.command == [
-        "squad", "triage", "--execute", "--label", HANDOFF_LABEL,
-    ]
 
 
 def test_plan_create_labels_covers_taxonomy_and_handoff():
@@ -111,7 +104,7 @@ def test_plan_create_labels_covers_taxonomy_and_handoff():
     assert handoff_cmd[handoff_cmd.index("--color") + 1] == HANDOFF_LABEL_COLOR
 
 
-def test_apply_execute_creates_labels_and_triages(tmp_path):
+def test_apply_execute_creates_labels(tmp_path):
     calls = []
 
     def fake_run(cmd, **kwargs):
@@ -123,16 +116,14 @@ def test_apply_execute_creates_labels_and_triages(tmp_path):
     manifest = prov.apply(execute=True)
 
     executed = [cmd for cmd, _ in calls]
-    assert ["squad", "triage", "--execute", "--label", HANDOFF_LABEL] in executed
     label_creates = [c for c in executed if c[:3] == ["gh", "label", "create"]]
     assert any(c[3] == HANDOFF_LABEL for c in label_creates)
     assert len(label_creates) >= 1
     results = {s.name: s.result for s in manifest.plan.steps}
     assert results["create_labels"] == "executed"
-    assert results["squad_triage"] == "executed"
 
 
-def test_apply_dry_run_records_labels_and_triage(tmp_path):
+def test_apply_dry_run_records_labels(tmp_path):
     calls = []
 
     def fake_run(cmd, **kwargs):
@@ -145,7 +136,6 @@ def test_apply_dry_run_records_labels_and_triage(tmp_path):
     assert calls == []
     results = {s.name: s.result for s in manifest.plan.steps}
     assert results["create_labels"] == "dry-run"
-    assert results["squad_triage"] == "dry-run"
 
 
 def test_apply_dry_run_writes_manifest_and_runs_nothing(tmp_path):
@@ -378,3 +368,48 @@ def test_apply_execute_aca_updates_container_app(tmp_path):
     results = {s.name: s.result for s in manifest.plan.steps}
     assert results["deploy_council"] == "deployed"
     assert results["onboard_sre_agent"] == "onboarding ready"
+
+
+def test_removed_one_shot_squad_steps_are_gone():
+    plan = InstanceProvisioner(_spec()).plan()
+    assert f"squad_{'copilot'}" not in {s.name for s in plan.steps}
+    assert f"squad_{'triage'}" not in {s.name for s in plan.steps}
+
+
+def test_squad_governance_low_maturity_disables_auto_merge():
+    spec = InstanceSpec(product="demo", owner="acme", squad_maturity="low")
+    plan = InstanceProvisioner(spec).plan()
+    gov = next(s for s in plan.steps if s.name == "squad_governance")
+    assert gov.commands == [
+        ["gh", "api", "--method", "PATCH", "repos/acme/demo", "-F", "allow_auto_merge=false"]
+    ]
+
+
+def test_deploy_squad_ralph_renders_bundle_in_dry_run(tmp_path):
+    spec = InstanceSpec(product="demo", owner="acme")
+    InstanceProvisioner(spec, repo_root=tmp_path).apply(execute=False)
+    squad_dir = tmp_path / "config" / "instances" / "demo.runtime" / "squad"
+    assert (squad_dir / "ralph-deployment.yaml").is_file()
+    assert (squad_dir / "ralph-scaledobject.yaml").is_file()
+    assert (squad_dir / "issue-exporter.yaml").is_file()
+
+
+def test_deploy_squad_ralph_applies_manifests_on_execute(tmp_path):
+    spec = InstanceSpec(product="demo", owner="acme")
+    run = MagicMock(return_value=subprocess.CompletedProcess([], 0, stdout="{}", stderr=""))
+    InstanceProvisioner(spec, run=run, repo_root=tmp_path).apply(execute=True)
+    calls = [c.args[0] for c in run.call_args_list]
+    assert any(cmd[:3] == ["az", "aks", "get-credentials"] for cmd in calls)
+    applied = {
+        Path(cmd[-1]).name
+        for cmd in calls
+        if cmd[:3] == ["kubectl", "apply", "-f"]
+    }
+    assert applied == {
+        "issue-exporter.yaml",
+        "ralph-deployment.yaml",
+        "ralph-scaledobject.yaml",
+    }
+    assert any(
+        cmd[:5] == ["gh", "api", "--method", "PATCH", "repos/acme/demo"] for cmd in calls
+    )
