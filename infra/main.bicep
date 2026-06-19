@@ -250,6 +250,20 @@ module ingestion 'modules/ingestion.bicep' = {
 }
 
 // ---------------------------------------------------------------------------
+// Coding squad compute: per-product AKS cluster running the Ralph watch loop,
+// scaled 0..1 by KEDA off the open squad:ready issue count (ADR 0012)
+// ---------------------------------------------------------------------------
+
+module aks 'modules/aks.bicep' = {
+  name: 'aks'
+  params: {
+    namePrefix: namePrefix
+    location: location
+    product: product
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Runtime compute: Azure Container Apps environment + orchestrator app (ADR 0004)
 // ---------------------------------------------------------------------------
 
@@ -344,3 +358,5 @@ output runtimePrincipalId string = runtimeIdentity.properties.principalId
 
 @description('Name of the orchestrator Container App.')
 output orchestratorAppName string = orchestratorApp.name
+
+output aksName string = aks.outputs.aksName
