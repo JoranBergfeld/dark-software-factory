@@ -63,7 +63,7 @@ def test_api_state_has_seeded_flags(client):
     assert "duplication" in critic_names
     assert all(c["enabled"] for c in data["critics"])
     agent_names = {a["name"] for a in data["agents"]}
-    assert {"SENTRY", "GRAFANA", "FOUNDRYIQ", "WEBIQ", "TICKETS"} <= agent_names
+    assert {"SENTRY", "GRAFANA", "FOUNDRYIQ", "WEBIQ"} <= agent_names
     assert "_overrides" in data["snapshot"]
 
 

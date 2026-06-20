@@ -15,7 +15,6 @@ from dsf.agents.foundryiq.main import build_agent as _build_foundryiq
 from dsf.agents.grafana.main import build_agent as _build_grafana
 from dsf.agents.incidents.main import build_agent as _build_incidents
 from dsf.agents.sentry.main import build_agent as _build_sentry
-from dsf.agents.tickets.main import build_agent as _build_tickets
 from dsf.agents.webiq.main import build_agent as _build_webiq
 from dsf.contracts.enums import SourceKind
 
@@ -29,7 +28,6 @@ AGENT_BUILDERS: dict[SourceKind, Callable[[ConfigStore], SourceAgent]] = {
     SourceKind.GRAFANA: _build_grafana,
     SourceKind.FOUNDRYIQ: _build_foundryiq,
     SourceKind.WEBIQ: _build_webiq,
-    SourceKind.TICKETS: _build_tickets,
     SourceKind.INCIDENTS: _build_incidents,
     SourceKind.AZUREMONITOR: _build_azuremonitor,
 }

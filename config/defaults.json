@@ -40,9 +40,6 @@
     "WEBIQ": {
       "enabled": true
     },
-    "TICKETS": {
-      "enabled": true
-    },
     "INCIDENTS": {
       "enabled": true
     },

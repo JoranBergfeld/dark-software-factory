@@ -29,14 +29,14 @@ async def test_sweep_paused_returns_killed_run() -> None:
 async def test_sweep_scopes_to_enabled_source_kinds() -> None:
     services = build_test_services()
     # Disable one agent so we prove sweep filters by agent_enabled.
-    services.config.set_flag("agent.TICKETS", False)
+    services.config.set_flag("agent.WEBIQ", False)
 
     run = await sweep(services)
 
     assert run.trigger == TriggerKind.SCHEDULED
     assert run.status == RunStatus.OPEN
     assert run.source_kinds  # non-empty
-    assert SourceKind.TICKETS not in run.source_kinds
+    assert SourceKind.WEBIQ not in run.source_kinds
     assert SourceKind.SENTRY in run.source_kinds
 
 
