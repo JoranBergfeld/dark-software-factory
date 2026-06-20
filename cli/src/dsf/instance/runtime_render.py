@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from dsf.config.registry import Product, register_product
-from dsf.contracts.handoff import HANDOFF_LABEL
+from dsf.contracts.handoff import HANDOFF_LABEL, INCIDENT_LABEL
 from dsf.instance.spec import (
     InstanceManifest,
     InstanceSpec,
@@ -147,11 +147,17 @@ def _render_sre_onboarding_md(
         "## 3. Grant Azure resource access\n\n"
         f"On the **Azure Resources** card, grant the agent Reader on resource group\n"
         f"`{resource_group}`.\n\n"
-        "## 4. Keep the squad handoff\n\n"
+        "## 4. Keep the squad handoff (fast path)\n\n"
         "The agent files issues/PRs into the repo. Incident issues must carry the\n"
         f"`{HANDOFF_LABEL}` label so the standing coding-squad Ralph watch loop\n"
         "picks them up — that label is already created by the `create_labels`\n"
-        "provisioning step.\n"
+        "provisioning step.\n\n"
+        "## 5. Stamp the incident marker (slow path)\n\n"
+        f"Also stamp every incident issue with the `{INCIDENT_LABEL}` label. The\n"
+        "feature council's incidents source pulls issues carrying it on its own\n"
+        "schedule, so the council now learns from resolved incidents (recurring\n"
+        "faults become systemic hardening proposals) alongside production\n"
+        f"telemetry. `{INCIDENT_LABEL}` is created by the `create_labels` step.\n"
     )
 
 
