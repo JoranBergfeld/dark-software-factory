@@ -12,8 +12,7 @@ from dsf.container import build_services
 from dsf.contracts.enums import RunStatus
 from dsf.orchestrator.blackboard import Blackboard
 from dsf.orchestrator.conveyor import run_line
-from dsf.runtime.control import main
-from dsf.triggers.ingestion import signal_to_run
+from dsf.runtime.control import main, signal_to_run
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SAMPLE_SIGNAL = REPO_ROOT / "tests" / "fixtures" / "sample_signal.json"
@@ -100,7 +99,7 @@ def test_cli_run_dry_run_exits_zero(capsys) -> None:
 
 
 def test_cli_serve_orchestrator_exits_zero(capsys) -> None:
-    # The orchestrator tick drains the (empty) buffer and runs the source sweep.
+    # The orchestrator tick runs the source sweep (DSF is pull-only).
     code = main(["serve-orchestrator"])
     out = capsys.readouterr().out
     assert code == 0

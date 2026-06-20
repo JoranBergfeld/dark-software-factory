@@ -19,10 +19,8 @@ from dsf.ports import (
     GitHubClient,
     MemoryStore,
     ModelClient,
-    SignalBuffer,
     Tracer,
 )
-from dsf.signals import InMemorySignalBuffer
 
 
 class AzureRuntimeSettings(BaseModel):
@@ -79,7 +77,6 @@ class Services:
     config: ConfigStore
     github: GitHubClient
     tracer: Tracer
-    signals: SignalBuffer
     product: str | None = None
     azure: AzureRuntimeSettings | None = None
 
@@ -117,7 +114,6 @@ def build_services(
             config=InMemoryConfigStore.from_defaults(),
             github=RecordingGitHubClient(),
             tracer=NoOpTracer(),
-            signals=InMemorySignalBuffer(),
         )
     if mode == "gh":
         from dsf.github_client import RealGitHubClient
@@ -129,7 +125,6 @@ def build_services(
             config=InMemoryConfigStore.from_defaults(),
             github=RealGitHubClient(),
             tracer=NoOpTracer(),
-            signals=InMemorySignalBuffer(),
         )
     if mode == "azure":
         from dsf.github_client import RealGitHubClient
@@ -183,7 +178,6 @@ def build_services(
             config=config,
             github=RealGitHubClient(),
             tracer=build_tracer("azure"),
-            signals=InMemorySignalBuffer(),
             product=settings.product,
             azure=settings,
         )

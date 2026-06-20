@@ -17,6 +17,56 @@ import sys
 from pathlib import Path
 
 from dsf.container import build_services
+from dsf.contracts.enums import SourceKind, TriggerKind
+from dsf.contracts.models import Run
+
+
+def _coerce_hints(payload: dict) -> list[str]:
+    """Pull product hints from ``payload['product_hints']`` (str or list)."""
+    value = payload.get("product_hints")
+    if isinstance(value, str) and value.strip():
+        return [value.strip()]
+    if isinstance(value, list):
+        return [str(v).strip() for v in value if str(v).strip()]
+    return []
+
+
+def _coerce_source_kinds(payload: dict) -> list[SourceKind]:
+    """Map ``payload['source_kinds']`` to :class:`SourceKind`, dropping unknowns."""
+    raw = payload.get("source_kinds")
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list):
+        return []
+    kinds: list[SourceKind] = []
+    for entry in raw:
+        try:
+            kinds.append(SourceKind(str(entry).upper()))
+        except ValueError:
+            continue
+    return kinds
+
+
+def signal_to_run(payload: dict) -> Run:
+    """Build a SIGNAL-triggered :class:`Run` from a manual ``--signal`` payload.
+
+    Deterministic, no I/O: normalizes a webhook/alert-shaped payload into a
+    :class:`~dsf.contracts.models.Run`. The whole payload is preserved on
+    ``signal_payload`` so later stations can re-derive scope.
+
+    * ``scope_product_hints`` <- ``payload['product_hints']`` (or ``[]``).
+    * ``source_kinds`` <- ``payload['source_kinds']`` mapped to
+      :class:`SourceKind` (unknown kinds dropped; missing -> ``[]``).
+    * ``dry_run`` <- ``payload['dry_run']`` (default ``True``).
+    """
+    payload = payload or {}
+    return Run(
+        trigger=TriggerKind.SIGNAL,
+        signal_payload=dict(payload),
+        scope_product_hints=_coerce_hints(payload),
+        source_kinds=_coerce_source_kinds(payload),
+        dry_run=bool(payload.get("dry_run", True)),
+    )
 
 
 def _print_run_summary(run) -> None:
@@ -39,7 +89,6 @@ def _get_services(mode: str):
 def _cmd_run(args: argparse.Namespace) -> int:
     """Run the intake line for one signal JSON file."""
     from dsf.orchestrator.conveyor import run_line
-    from dsf.triggers.ingestion import signal_to_run
 
     services = _get_services(args.mode)
     if not args.signal:
@@ -69,17 +118,15 @@ def _cmd_sweep(args: argparse.Namespace) -> int:
 
 
 def _cmd_serve_orchestrator(args: argparse.Namespace) -> int:
-    """One-shot orchestrator worker: drain the signal buffer, then sweep sources.
+    """One-shot orchestrator worker: sweep the enabled source agents.
 
-    A real deployment loops this on the council's schedule. Each tick runs the
-    governed pull (drain buffered signals) and the source-kind sweep (ADR 0011).
+    A real deployment loops this on the council's schedule. DSF is pull-only, so
+    each tick just runs the source-kind sweep.
     """
     from dsf.triggers.scheduler import run_orchestrator_tick
 
     services = _get_services(args.mode)
-    drained, swept = asyncio.run(run_orchestrator_tick(services))
-    for run in drained:
-        _print_run_summary(run)
+    swept = asyncio.run(run_orchestrator_tick(services))
     _print_run_summary(swept)
     return 0
 
@@ -127,7 +174,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_orch = sub.add_parser(
         "serve-orchestrator",
-        help="run the orchestrator worker (one tick: drain the buffer, then sweep)",
+        help="run the orchestrator worker (one tick: sweep the enabled sources)",
     )
     p_orch.set_defaults(func=_cmd_serve_orchestrator)
 

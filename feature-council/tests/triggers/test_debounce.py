@@ -24,7 +24,7 @@ async def test_first_signal_not_suppressed_then_duplicate_suppressed() -> None:
     # First sighting: nothing in the window yet -> not suppressed.
     assert await should_suppress(payload, services) is False
 
-    # Record it (as the /ingest handler would once it accepts the signal).
+    # Record it (as S1 triage does once it accepts the signal).
     await record_signal(payload, services)
 
     # A repeat of the same signal -> suppressed.

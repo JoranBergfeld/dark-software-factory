@@ -74,8 +74,8 @@ def load_cases(path: str | Path | None = None) -> list[dict[str, Any]]:
 def _build_run(case: dict[str, Any]) -> Run:
     """Build a dry-run SIGNAL run from a case's ``signal_payload``.
 
-    Mirrors what ``dsf.triggers.ingestion.signal_to_run`` will do, but built
-    locally to avoid coupling to a module being authored in parallel.
+    Mirrors what ``dsf.runtime.control.signal_to_run`` does, but built locally to
+    keep the eval runner self-contained.
     """
     payload = dict(case.get("signal_payload", {}))
     hints = payload.get("product_hints") or []

@@ -1,11 +1,10 @@
-"""Triggers & ingestion — turn scheduled sweeps and webhook signals into Runs.
+"""Triggers — turn scheduled sweeps into Runs.
 
-Public surface:
+DSF is pull-only: the orchestrator gets work by sweeping source agents on a
+schedule. Public surface:
 
-* :func:`dsf.triggers.ingestion.signal_to_run` — webhook payload -> ``Run``.
-* :func:`dsf.triggers.debounce.should_suppress` — suppress a repeat signal.
 * :func:`dsf.triggers.scheduler.sweep` / ``run_sweep`` — scheduled run builder.
-* :data:`dsf.triggers.app.app` — FastAPI app exposing ``POST /ingest``.
+* :data:`dsf.triggers.app.app` — FastAPI app exposing a liveness probe.
 """
 
 from __future__ import annotations

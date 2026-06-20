@@ -8,7 +8,7 @@ from dsf.contracts.enums import RunStatus, SourceKind
 from dsf.contracts.handoff import HANDOFF_LABEL
 from dsf.orchestrator.blackboard import Blackboard
 from dsf.orchestrator.conveyor import run_line
-from dsf.triggers.ingestion import signal_to_run
+from dsf.runtime.control import signal_to_run
 
 
 async def test_incident_signal_flows_to_grounded_squad_issue() -> None:
