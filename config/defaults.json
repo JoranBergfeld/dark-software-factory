@@ -42,6 +42,12 @@
     },
     "TICKETS": {
       "enabled": true
+    },
+    "INCIDENTS": {
+      "enabled": true
+    },
+    "AZUREMONITOR": {
+      "enabled": true
     }
   },
   "triggers": {

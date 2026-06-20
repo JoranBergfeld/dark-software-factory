@@ -1,0 +1,24 @@
+[
+  {
+    "source_agent": "incidents",
+    "claim": "Checkout 5xx incident recurred 4 times in 14 days with the same DB connection-pool exhaustion signature; each occurrence required a manual pool bump.",
+    "raw_citation": "https://github.com/example/microbi/issues/512",
+    "provenance": {
+      "query_used": "label:incident state:open signature=checkout-5xx-pool-exhaustion",
+      "source_kind": "INCIDENTS"
+    },
+    "confidence": 0.86,
+    "product_hints": ["microbi", "checkout"]
+  },
+  {
+    "source_agent": "incidents",
+    "claim": "Orders webhook timeout incident filed once; no recurrence yet.",
+    "raw_citation": "https://github.com/example/microbi/issues/518",
+    "provenance": {
+      "query_used": "label:incident state:open signature=orders-webhook-timeout",
+      "source_kind": "INCIDENTS"
+    },
+    "confidence": 0.42,
+    "product_hints": ["microbi", "orders"]
+  }
+]

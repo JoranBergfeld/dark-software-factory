@@ -10,8 +10,10 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
+from dsf.agents.azuremonitor.main import build_agent as _build_azuremonitor
 from dsf.agents.foundryiq.main import build_agent as _build_foundryiq
 from dsf.agents.grafana.main import build_agent as _build_grafana
+from dsf.agents.incidents.main import build_agent as _build_incidents
 from dsf.agents.sentry.main import build_agent as _build_sentry
 from dsf.agents.tickets.main import build_agent as _build_tickets
 from dsf.agents.webiq.main import build_agent as _build_webiq
@@ -28,6 +30,8 @@ AGENT_BUILDERS: dict[SourceKind, Callable[[ConfigStore], SourceAgent]] = {
     SourceKind.FOUNDRYIQ: _build_foundryiq,
     SourceKind.WEBIQ: _build_webiq,
     SourceKind.TICKETS: _build_tickets,
+    SourceKind.INCIDENTS: _build_incidents,
+    SourceKind.AZUREMONITOR: _build_azuremonitor,
 }
 
 
