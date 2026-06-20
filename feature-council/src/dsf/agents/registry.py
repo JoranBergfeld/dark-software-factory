@@ -22,6 +22,8 @@ DEPLOYABLE_AGENTS: dict[str, str] = {
     "foundryiq": "dsf.agents.foundryiq.main:app",
     "webiq": "dsf.agents.webiq.main:app",
     "tickets": "dsf.agents.tickets.main:app",
+    "incidents": "dsf.agents.incidents.main:app",
+    "azuremonitor": "dsf.agents.azuremonitor.main:app",
 }
 
 

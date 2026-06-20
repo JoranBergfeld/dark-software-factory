@@ -22,6 +22,8 @@ class SourceKind(StrEnum):
     FOUNDRYIQ = "FOUNDRYIQ"
     WEBIQ = "WEBIQ"
     TICKETS = "TICKETS"
+    INCIDENTS = "INCIDENTS"
+    AZUREMONITOR = "AZUREMONITOR"
 
 
 class ProposalKind(StrEnum):

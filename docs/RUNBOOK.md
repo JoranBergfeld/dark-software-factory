@@ -57,7 +57,7 @@ uv run dsf-control-center --port 8081
 uv run uvicorn dsf.triggers.app:app --port 8082
 ```
 
-## Creating a product instance (SP1–SP5)
+## Creating a product instance (SP1-SP5)
 
 `dsf new` scaffolds an isolated product factory. `--name-prefix` is **required**;
 it is sanitized and randomized into a <=12-char Azure resource prefix (persisted in
@@ -173,6 +173,18 @@ label, so the **same** Ralph watch loop picks them up.
 ```
 prod telemetry → Azure SRE Agent → investigate → issue/PR (squad:ready)
 → KEDA wakes Ralph loop → squad watch → PR
+```
+
+The loop also closes back to the council (the slow path, ADR 0013). The SRE Agent
+additionally stamps each incident issue with the `incident` label, and the
+council's `incidents` and `azuremonitor` sources pull those incidents plus
+Application Insights telemetry on the council's own schedule — so recurring
+production faults become validated, systemic hardening proposals rather than
+one-off fixes:
+
+```
+prod incidents/telemetry → issue (incident) + Azure Monitor
+→ council incidents/azuremonitor sources → S1-S7 → squad:ready proposal
 ```
 
 Render the onboarding runbook (offline; part of the normal plan):

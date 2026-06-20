@@ -17,6 +17,9 @@ from dsf.contracts.handoff import (
     HANDOFF_LABEL,
     HANDOFF_LABEL_COLOR,
     HANDOFF_LABEL_DESCRIPTION,
+    INCIDENT_LABEL,
+    INCIDENT_LABEL_COLOR,
+    INCIDENT_LABEL_DESCRIPTION,
 )
 from dsf.instance.runtime_render import (
     render_product_registration,
@@ -44,8 +47,9 @@ def _label_commands(spec: InstanceSpec) -> list[list[str]]:
     """Build idempotent ``gh label create --force`` commands for an instance.
 
     Creates every label in the product's taxonomy plus the universal
-    council->squad :data:`HANDOFF_LABEL`, so council-filed issues never fail on a
-    missing label. Targets the repo with ``--repo`` (cwd-independent).
+    council->squad :data:`HANDOFF_LABEL` and the SRE->council
+    :data:`INCIDENT_LABEL`, so filed issues never fail on a missing label.
+    Targets the repo with ``--repo`` (cwd-independent).
     """
     repo = spec.github_repo()
     commands: list[list[str]] = []
@@ -60,6 +64,15 @@ def _label_commands(spec: InstanceSpec) -> list[list[str]]:
             "--repo", repo,
             "--color", HANDOFF_LABEL_COLOR,
             "--description", HANDOFF_LABEL_DESCRIPTION,
+            "--force",
+        ]
+    )
+    commands.append(
+        [
+            "gh", "label", "create", INCIDENT_LABEL,
+            "--repo", repo,
+            "--color", INCIDENT_LABEL_COLOR,
+            "--description", INCIDENT_LABEL_DESCRIPTION,
             "--force",
         ]
     )

@@ -90,3 +90,31 @@ def test_render_sre_onboarding_writes_guided_runbook(tmp_path):
     assert "acme/microbi" in body        # product repo
     assert "squad:ready" in body         # handoff label preserved
     assert "containerapp" not in body    # no Container App deploy
+
+
+def test_sre_onboarding_instructs_incident_label(tmp_path):
+    from dsf.contracts.handoff import INCIDENT_LABEL
+    from dsf.instance.runtime_render import _render_sre_onboarding_md
+
+    md = _render_sre_onboarding_md(
+        product="microbi",
+        resource_group="rg-microbi",
+        location="westeurope",
+        repo="example/microbi",
+    )
+    # The agent must stamp the incident marker so the council's incidents source
+    # pulls it, and the runbook must explain the council now learns from incidents.
+    assert f"`{INCIDENT_LABEL}`" in md
+    assert "council" in md.lower()
+
+
+def test_product_from_spec_threads_azure_monitor_scope():
+    from dsf.instance.runtime_render import _product_from_spec
+    from dsf.instance.spec import InstanceSpec
+
+    spec = InstanceSpec(product="microbi", owner="acme")
+    product = _product_from_spec(spec)
+    # Defaults to the product key so the telemetry source has a non-empty scope to
+    # resolve in azure mode; the live Application Insights id is filled in during
+    # observability onboarding.
+    assert product.azure_monitor_scope == spec.product

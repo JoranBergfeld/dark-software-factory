@@ -61,7 +61,8 @@ def _labels_for(proposal: Proposal, product: Product) -> list[str]:
     if sev:
         labels.append(sev)
 
-    # The universal council->squad handoff signal: squad triage keys on this.
+    # The universal council->squad handoff signal: the coding-squad Ralph watch
+    # loop (ADR 0012) keys on this.
     labels.append(HANDOFF_LABEL)
 
     return labels

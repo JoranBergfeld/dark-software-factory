@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from dsf.config.registry import load_registry, route_product
-from dsf.contracts.handoff import HANDOFF_LABEL, HANDOFF_LABEL_COLOR
+from dsf.contracts.handoff import HANDOFF_LABEL, HANDOFF_LABEL_COLOR, INCIDENT_LABEL
 from dsf.instance.provisioner import InstanceProvisioner
 from dsf.instance.spec import InstanceSpec, read_manifest
 
@@ -435,3 +435,15 @@ def test_deploy_squad_ralph_applies_manifests_on_execute(tmp_path):
     # The kubectl loop must not clobber the manifest path reported by write_config.
     write_config = next(s for s in manifest.plan.steps if s.name == "write_config")
     assert write_config.result.endswith("demo.json")
+
+
+def test_plan_create_labels_includes_incident_marker():
+    spec = _spec()
+    plan = InstanceProvisioner(spec).plan()
+    labels = next(s for s in plan.steps if s.name == "create_labels")
+    created = [c[3] for c in labels.commands]
+    assert INCIDENT_LABEL in created
+    incident_cmd = next(c for c in labels.commands if c[3] == INCIDENT_LABEL)
+    assert incident_cmd[:3] == ["gh", "label", "create"]
+    assert "--force" in incident_cmd
+    assert incident_cmd[incident_cmd.index("--repo") + 1] == spec.github_repo()
