@@ -1,0 +1,24 @@
+[
+  {
+    "source_agent": "azuremonitor",
+    "claim": "App Insights: dependency failure rate to Azure SQL spiked to 12% (baseline <1%) for 18 minutes, correlating with checkout 5xx errors.",
+    "raw_citation": "https://portal.azure.com/#@/resource/subscriptions/.../components/microbi-ai/failures",
+    "provenance": {
+      "query_used": "dependencies | where success == false | summarize failrate=...",
+      "source_kind": "AZUREMONITOR"
+    },
+    "confidence": 0.81,
+    "product_hints": ["microbi", "checkout"]
+  },
+  {
+    "source_agent": "azuremonitor",
+    "claim": "App Insights: server exceptions/min on the api role increased 6x and stayed elevated for 30 minutes.",
+    "raw_citation": "https://portal.azure.com/#@/resource/subscriptions/.../components/microbi-ai/exceptions",
+    "provenance": {
+      "query_used": "exceptions | summarize count() by bin(timestamp, 1m), cloud_RoleName",
+      "source_kind": "AZUREMONITOR"
+    },
+    "confidence": 0.77,
+    "product_hints": ["microbi", "api"]
+  }
+]
