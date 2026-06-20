@@ -193,8 +193,9 @@ def _product_from_spec(spec: InstanceSpec) -> Product:
 
     Observability scopes (``sentry_projects`` / ``grafana_dashboards``) are left
     empty here — they are filled in during observability onboarding —, while
-    ``foundryiq_scope`` defaults to the product key (the existing registry
-    convention).
+    ``foundryiq_scope`` and ``azure_monitor_scope`` default to the product key
+    (the live Application Insights id is filled in during observability
+    onboarding).
     """
     return Product(
         key=spec.product,
@@ -202,6 +203,7 @@ def _product_from_spec(spec: InstanceSpec) -> Product:
         label_taxonomy=spec.label_taxonomy,
         confidence_threshold=spec.confidence_threshold,
         foundryiq_scope=spec.product,
+        azure_monitor_scope=spec.product,
     )
 
 

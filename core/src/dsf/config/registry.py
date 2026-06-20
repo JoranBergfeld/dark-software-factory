@@ -28,6 +28,7 @@ class Product(BaseModel):
     foundryiq_scope: str = ""
     sentry_projects: list[str] = Field(default_factory=list)
     grafana_dashboards: list[str] = Field(default_factory=list)
+    azure_monitor_scope: str = ""
     confidence_threshold: float = 0.6
 
 

@@ -152,3 +152,17 @@ def test_register_product_appends_without_clobbering(tmp_path):
     registry = load_registry(path)
     assert list(registry) == ["alpha", "beta"]
     assert registry["alpha"].github_repo == "o/alpha"
+
+
+def test_product_has_azure_monitor_scope_default():
+    from dsf.config.registry import Product
+
+    p = Product(key="microbi", github_repo="example/microbi")
+    assert p.azure_monitor_scope == ""
+
+    scoped = Product(
+        key="microbi",
+        github_repo="example/microbi",
+        azure_monitor_scope="app-123",
+    )
+    assert scoped.azure_monitor_scope == "app-123"
