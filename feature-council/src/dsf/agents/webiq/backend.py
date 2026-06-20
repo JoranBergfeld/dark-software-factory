@@ -6,14 +6,16 @@ external/industry web-research source:
 * :class:`WebIqFixtureBackend` — local/dry-run. Loads canned, EvidenceItem-shaped
   records from ``tests/fixtures/webiq_evidence.json`` and never touches the
   network. Used by default in :mod:`dsf.agents.webiq.main`.
-* :class:`WebIqMcpBackend` — azure mode. Derives industry/competitive research
+* :class:`WebIqMcpBackend` — live mode. Derives industry/competitive research
   queries from ``run_scope`` and maps web search/fetch results to evidence by
   calling an *injected* ``search`` callable so it stays unit-testable and never
-  hits the network in local mode.
+  hits the network in local mode. In live mode :mod:`dsf.agents.webiq.main`
+  wires this backend to the real provider client built by
+  :func:`dsf.agents.webiq.client.build_webiq_client_from_env` (Tavily today).
 
-Azure-mode contract (documented; not invoked here):
-    In azure mode ``search`` is a web search/fetch client (e.g. a Bing/Grounding
-    or MCP-backed web tool). The backend builds one or more industry queries from
+Live-mode contract:
+    ``search`` is a web search/fetch client (Tavily today; selected via
+    ``WEBIQ_PROVIDER``). The backend builds one or more industry queries from
     ``run_scope`` — product hints plus competitive/market framing (e.g.
     ``"<product> competitor feature release"`` or
     ``"<product> industry trend market signal"``) — and calls ``search`` to
