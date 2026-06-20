@@ -48,3 +48,44 @@ async def test_incident_signal_flows_to_grounded_squad_issue() -> None:
     # Dry-run: nothing filed for real.
     assert services.github.calls == []
     assert all(issue.filed_url is None for issue in issues)
+
+
+def _incident_signal() -> dict:
+    return {
+        "id": "evt_incident_recurrence",
+        "source": "incidents",
+        "product_hints": ["microbi"],
+        "source_kinds": ["INCIDENTS"],
+        "title": "Recurring checkout 5xx",
+        "text": "Checkout 5xx incident recurred several times this sprint.",
+        "dry_run": False,
+    }
+
+
+async def test_incident_line_files_real_issue_then_dedups_on_recurrence() -> None:
+    """With dry-run off, operational INCIDENTS evidence files a real issue via the
+    GitHub port; an identical second run files nothing (deduped at S5/S7)."""
+    services = build_services("local")  # github = RecordingGitHubClient
+    services.config.set_flag("dry_run", False)  # off the global kill switch
+    bb = Blackboard(services.memory)
+
+    first = await run_line(signal_to_run(_incident_signal()), services)
+    assert first.status is RunStatus.FILED
+    issues = await bb.load_issues(first.id)
+    assert issues, "expected at least one routed issue"
+
+    # The real filing path was taken: create_issue once per routed issue, each
+    # carrying the squad:ready handoff label and a returned URL.
+    assert len(services.github.calls) == len(issues)
+    for issue in issues:
+        assert issue.filed_url is not None
+        assert issue.filed_url.startswith("local://issue/")
+        assert HANDOFF_LABEL in issue.labels
+    filed_after_first = len(services.github.calls)
+
+    # The identical recurrence must NOT re-file: the duplication critic vetoes the
+    # repeat proposal at S5, and S7's title index is a second safety net.
+    await run_line(signal_to_run(_incident_signal()), services)
+    assert len(services.github.calls) == filed_after_first, (
+        "a duplicate incident run must not file a second real issue"
+    )
