@@ -118,6 +118,14 @@ class SentryMcpBackend:
         project = run_scope.get("project")
         if project is None and product_hints:
             project = sentry_projects.get(product_hints[0])
+        if project is None:
+            # Fall back to the threaded product-registry scope (a list of project
+            # slugs); use the product's first project.
+            registry_projects = (
+                run_scope.get("product_registry", {}).get("sentry_projects") or []
+            )
+            if registry_projects:
+                project = registry_projects[0]
 
         query = run_scope.get("sentry_query", "is:unresolved is:regression")
 

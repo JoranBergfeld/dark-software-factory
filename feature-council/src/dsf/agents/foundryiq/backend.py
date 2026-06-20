@@ -85,7 +85,11 @@ class FoundryIqMcpBackend:
         Scopes by the product registry ``foundryiq_scope`` and any product
         hints / free-text signal carried on the run scope.
         """
-        scope = run_scope.get("foundryiq_scope") or ""
+        scope = (
+            run_scope.get("product_registry", {}).get("foundryiq_scope")
+            or run_scope.get("foundryiq_scope")
+            or ""
+        )
         hints = run_scope.get("product_hints") or []
         signal = run_scope.get("signal_text") or run_scope.get("query") or ""
         parts = [str(p) for p in (scope, *hints, signal) if p]

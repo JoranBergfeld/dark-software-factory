@@ -63,6 +63,24 @@ async def test_search_issues_maps_and_hits_project_path():
     assert first["user_count"] == 312
 
 
+async def test_gather_resolves_project_from_product_registry():
+    captured: dict = {}
+
+    async def _mcp(tool, **kwargs):
+        captured.update(kwargs)
+        return []
+
+    backend = SentryMcpBackend(mcp_call=_mcp)
+    await backend.gather(
+        {
+            "product_hints": ["demo"],
+            "product_registry": {"sentry_projects": ["proj-demo"]},
+        }
+    )
+
+    assert captured["project_slug"] == "proj-demo"
+
+
 async def test_unknown_tool_returns_empty():
     def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover
         raise AssertionError("should not perform a request for unknown tools")

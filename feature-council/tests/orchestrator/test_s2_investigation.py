@@ -2,10 +2,78 @@
 
 from __future__ import annotations
 
+from dsf.config.registry import Product
 from dsf.container import build_services
 from dsf.contracts.enums import RunStatus, SourceKind, TriggerKind
 from dsf.contracts.models import Run
 from dsf.orchestrator.stations import s2_investigation
+
+
+def _demo_registry() -> dict[str, Product]:
+    return {
+        "demo": Product(
+            key="demo",
+            github_repo="acme/demo",
+            azure_monitor_scope="appinsights-demo",
+            grafana_dashboards=["dash-1"],
+            foundryiq_scope="kb-demo",
+            sentry_projects=["proj-demo"],
+        )
+    }
+
+
+def test_run_scope_injects_resolved_product_registry(monkeypatch) -> None:
+    monkeypatch.setattr(
+        s2_investigation, "load_registry", lambda: _demo_registry(), raising=False
+    )
+    run = Run(
+        trigger=TriggerKind.SIGNAL,
+        scope_product_hints=["demo"],
+        source_kinds=[SourceKind.AZUREMONITOR],
+    )
+
+    scope = s2_investigation._run_scope(run)
+
+    registry_scope = scope.get("product_registry", {})
+    assert registry_scope.get("azure_monitor_scope") == "appinsights-demo"
+    assert registry_scope.get("grafana_dashboards") == ["dash-1"]
+    assert registry_scope.get("foundryiq_scope") == "kb-demo"
+    assert registry_scope.get("sentry_projects") == ["proj-demo"]
+
+
+def test_run_scope_omits_registry_when_no_product_matches(monkeypatch) -> None:
+    monkeypatch.setattr(
+        s2_investigation, "load_registry", lambda: _demo_registry(), raising=False
+    )
+    run = Run(
+        trigger=TriggerKind.SIGNAL,
+        scope_product_hints=["no-such-product"],
+        source_kinds=[SourceKind.AZUREMONITOR],
+    )
+
+    scope = s2_investigation._run_scope(run)
+
+    assert "product_registry" not in scope
+
+
+def test_live_azuremonitor_backend_resolves_scope_from_run_scope(monkeypatch) -> None:
+    from dsf.agents.azuremonitor.backend import AzureMonitorBackend
+
+    monkeypatch.setattr(
+        s2_investigation, "load_registry", lambda: _demo_registry(), raising=False
+    )
+    run = Run(
+        trigger=TriggerKind.SIGNAL,
+        scope_product_hints=["demo"],
+        source_kinds=[SourceKind.AZUREMONITOR],
+    )
+    scope = s2_investigation._run_scope(run)
+
+    async def _dummy_mcp(spec: dict):
+        return []
+
+    backend = AzureMonitorBackend(mcp_call=_dummy_mcp)
+    assert backend._queries(scope) == [{"app": "appinsights-demo"}]
 
 
 async def test_collects_evidence_from_enabled_agents() -> None:

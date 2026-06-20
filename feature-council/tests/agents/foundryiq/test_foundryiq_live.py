@@ -86,6 +86,19 @@ async def test_retrieve_respects_custom_content_and_ref_fields(monkeypatch):
     assert out[0]["confidence"] == pytest.approx(0.5)
 
 
+def test_build_query_reads_foundryiq_scope_from_product_registry():
+    async def _retrieve(query):
+        return []
+
+    backend = FoundryIqMcpBackend(retrieve=_retrieve)
+    scope = {
+        "product_registry": {"foundryiq_scope": "kb-demo"},
+        "product_hints": ["demo"],
+    }
+
+    assert "kb-demo" in backend._build_query(scope)
+
+
 def test_build_agent_local_uses_fake(monkeypatch):
     monkeypatch.delenv("DSF_MODE", raising=False)
     assert isinstance(build_agent(mode="local").backend, FoundryIqFixtureBackend)

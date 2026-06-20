@@ -15,6 +15,7 @@ import httpx
 
 from dsf.a2a import client as a2a_client
 from dsf.config.flags import agent_enabled
+from dsf.config.registry import load_registry, route_product
 from dsf.contracts.enums import RunStatus
 from dsf.observability.tracing import span_attrs_for_run
 from dsf.orchestrator.agent_registry import build_agents
@@ -29,13 +30,23 @@ STATION = "S2:investigation"
 
 
 def _run_scope(run: Run) -> dict:
-    """Serialize the subset of the run that source agents need."""
-    return {
+    """Serialize the subset of the run that source agents need.
+
+    Threads the resolved product-registry entry (when the run's hints match a
+    registered product) under ``product_registry`` so live source backends —
+    grafana, sentry, foundryiq, azuremonitor — can scope their queries by the
+    product's registry fields instead of falling back to their empty path.
+    """
+    scope = {
         "run_id": run.id,
         "product_hints": list(run.scope_product_hints),
         "source_kinds": [k.value for k in run.source_kinds],
         "signal_payload": dict(run.signal_payload),
     }
+    product = route_product(list(run.scope_product_hints), load_registry())
+    if product is not None:
+        scope["product_registry"] = product.model_dump()
+    return scope
 
 
 async def _gather_one(
