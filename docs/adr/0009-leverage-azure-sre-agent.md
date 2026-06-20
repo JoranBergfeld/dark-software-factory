@@ -46,7 +46,7 @@ full IaC automation of onboarding is not achievable.
     `az sre-agent create` command and never deploys a Container App.
 - **Preserve the handoff contract.** Once onboarded, the Azure SRE Agent files
   issues/PRs into the product repo; keeping the `HANDOFF_LABEL = "squad:ready"`
-  label means the **same** `squad triage --execute` intake picks them up — one
+  label means the **same** coding-squad Ralph watch loop (ADR 0012) picks them up — one
   intake for council and SRE, unchanged.
 - **Stay offline-testable.** Rendering and the prerequisite steps run through the
   injected `run` callable; the suite asserts the runbook references the correct
@@ -60,8 +60,9 @@ dsf provision → create_labels (squad:ready) → onboard_sre_agent → renders 
 operator follows the runbook at sre.azure.com:
         create agent (product RG) → connect product repo (OAuth/PAT) → grant Reader on product RG
         │
-Azure SRE Agent → investigates incidents → files issues/PRs (squad:ready)
-        → squad triage --execute → Copilot coding agent → PR → human review
+Azure SRE Agent → investigates incidents → files issues/PRs (squad:ready + incident)
+        → coding-squad Ralph watch loop (ADR 0012) → PR → review/auto-merge
+        → incident issues also feed the feature council (ADR 0013, slow path)
 ```
 
 ## Consequences
