@@ -11,6 +11,12 @@ from __future__ import annotations
 
 from dsf.contracts.enums import ProposalKind, SourceKind, TriggerKind
 from dsf.contracts.models import EvidenceItem, Proposal, Provenance, Run
+from dsf_testing.config import InMemoryConfigStore
+from dsf_testing.github import RecordingGitHubClient
+from dsf_testing.memory import InMemoryMemoryStore
+from dsf_testing.model import ECHO_PREFIX, DeterministicModelClient
+from dsf_testing.services import build_test_services
+from dsf_testing.tracing import NoOpTracer
 
 
 class RecordingSourceBackend:
@@ -85,7 +91,14 @@ def make_proposal(
 
 
 __all__ = [
+    "ECHO_PREFIX",
+    "DeterministicModelClient",
+    "InMemoryConfigStore",
+    "InMemoryMemoryStore",
+    "NoOpTracer",
+    "RecordingGitHubClient",
     "RecordingSourceBackend",
+    "build_test_services",
     "make_evidence",
     "make_proposal",
     "make_run",
