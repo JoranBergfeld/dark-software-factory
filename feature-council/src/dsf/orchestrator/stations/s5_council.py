@@ -44,13 +44,9 @@ async def run(run: Run, services: Services) -> Run:
             verdicts.append(verdict)
             if verdict.verdict == Verdict.ACCEPT:
                 accepted.append(proposal)
-                # #3: index this proposal so future runs can detect duplicates
-                await services.memory.put_record({
-                    "kind": "proposal",
-                    "text": f"{proposal.title} {proposal.problem}",
-                    "proposal_id": proposal.id,
-                    "run_id": run.id,
-                })
+                # Dedup is keyed on the filed-issue corpus (written by S7), so a
+                # proposal is deduplicated against what the factory actually files
+                # — not against accepted-but-unfiled proposals. No index write here.
                 # #4: persist per-critic scores for later calibration join
                 await services.memory.put_working(
                     f"critic_scores:{proposal.id}",

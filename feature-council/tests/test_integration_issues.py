@@ -14,6 +14,7 @@ from dsf.council.critics import strategic_fit
 from dsf.learning.calibration import proposed_weight_update
 from dsf.learning.feedback_watcher import PrOutcome, record_outcome
 from dsf.memory.consolidation import consolidate_run
+from dsf.memory.dedup import FILED_ISSUE_KIND, dedup_key
 from dsf.orchestrator.blackboard import Blackboard
 from dsf.orchestrator.stations import s5_council
 from dsf_testing import make_evidence, make_proposal, make_run
@@ -80,25 +81,27 @@ async def test_pr_outcome_lesson_text_boosts_strategic_fit():
 # ---------------------------------------------------------------------------
 
 
-async def test_s5_writes_proposal_record_and_second_run_is_deduped():
-    """S5 on ACCEPT writes kind=proposal; second identical proposal is vetoed."""
+async def test_proposal_matching_filed_issue_is_deduped():
+    """A proposal matching an already-filed issue is vetoed by the duplication critic.
+
+    Dedup is keyed on the filed-issue corpus (written by S7), so this seeds a
+    filed-issue record as a prior run would, then runs S5.
+    """
     services = build_services("local")
     bb = Blackboard(services.memory)
 
-    # --- First run ---
-    run1 = make_run([make_evidence("error spike")])
-    prop1 = make_proposal(run1)  # title="Improve alpha latency", problem="alpha p99 ..."
-    await bb.save_proposals(run1.id, [prop1])
-    result1 = await s5_council.run(run1, services)
-    assert result1.proposals, "First proposal should be accepted by council"
+    run = make_run([make_evidence("error spike")])
+    prop = make_proposal(run)  # default title + problem
+    # Seed the filed-issue corpus exactly as S7 would for a prior filing.
+    await services.memory.put_record(
+        {"kind": FILED_ISSUE_KIND, "text": dedup_key(prop.title, prop.problem)}
+    )
+    await bb.save_proposals(run.id, [prop])
 
-    # --- Second run with identical title/problem ---
-    run2 = make_run([make_evidence("error spike")])
-    prop2 = make_proposal(run2)  # same defaults: same title + problem
-    await bb.save_proposals(run2.id, [prop2])
-    result2 = await s5_council.run(run2, services)
-    assert result2.proposals == [], (
-        "Second identical proposal should be killed by duplication critic"
+    result = await s5_council.run(run, services)
+
+    assert result.proposals == [], (
+        "Proposal matching an already-filed issue should be killed by duplication"
     )
 
 

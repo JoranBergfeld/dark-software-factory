@@ -128,6 +128,7 @@ async def run(run: Run, services: Services) -> Run:
                 repo=product.github_repo,
                 title=proposal.title,
                 body=_issue_body(proposal, run),
+                problem=proposal.problem,
                 labels=_labels_for(proposal, product),
             )
             issues.append(issue)

@@ -75,9 +75,10 @@ async def test_duplication_vetoes_when_match_in_memory():
     services = build_services("local")
     run = make_run([make_evidence("error spike")])
     prop = make_proposal(run, title="Improve alpha latency", problem="alpha p99 latency elevated")
-    # Pre-put a matching proposal record into memory.
+    # Pre-put a matching *filed issue* record: the critic dedups against the
+    # filed-issue corpus (the same one S7 writes), keyed on title + problem.
     await services.memory.put_record(
-        {"kind": "proposal", "text": "Improve alpha latency alpha p99 latency elevated"}
+        {"kind": "issue", "text": "Improve alpha latency alpha p99 latency elevated"}
     )
     score = await duplication.evaluate(prop, run, services)
     assert score.veto is True

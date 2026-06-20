@@ -1,7 +1,8 @@
-"""Duplication/Prior-art critic — vetoes proposals already seen.
+"""Duplication/Prior-art critic — vetoes proposals already filed.
 
-Uses :func:`dsf.memory.dedup.is_duplicate` against the memory store's
-``proposal`` records. A near-duplicate is vetoed; otherwise scores 1.0.
+Uses :func:`dsf.memory.dedup.is_duplicate` against the filed-issue corpus
+(:data:`dsf.memory.dedup.FILED_ISSUE_KIND`, the same records S7 writes), keyed
+on title + problem. A near-duplicate is vetoed; otherwise scores 1.0.
 """
 
 from __future__ import annotations
@@ -9,7 +10,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from dsf.contracts.models import CriticScore
-from dsf.memory.dedup import is_duplicate
+from dsf.memory.dedup import FILED_ISSUE_KIND, dedup_key, is_duplicate
 
 if TYPE_CHECKING:
     from dsf.container import Services
@@ -17,13 +18,13 @@ if TYPE_CHECKING:
 
 NAME = "duplication"
 
-#: Memory record kind queried for prior proposals.
-RECORD_KIND = "proposal"
+#: Memory record kind queried for prior filed issues (shared with S7).
+RECORD_KIND = FILED_ISSUE_KIND
 
 
 async def evaluate(proposal: Proposal, run: Run, services: Services) -> CriticScore:
-    """Veto if a near-duplicate proposal already exists in memory."""
-    text = f"{proposal.title} {proposal.problem}"
+    """Veto if a near-duplicate of an already-filed issue exists in memory."""
+    text = dedup_key(proposal.title, proposal.problem)
     duplicate = await is_duplicate(text, services.memory, kind=RECORD_KIND)
 
     if duplicate:
@@ -31,14 +32,14 @@ async def evaluate(proposal: Proposal, run: Run, services: Services) -> CriticSc
             critic=NAME,
             score=0.0,
             veto=True,
-            rationale="Near-duplicate of an existing proposal in memory.",
+            rationale="Near-duplicate of an already-filed issue in memory.",
         )
 
     return CriticScore(
         critic=NAME,
         score=1.0,
         veto=False,
-        rationale="No matching prior proposal found.",
+        rationale="No matching prior filed issue found.",
     )
 
 

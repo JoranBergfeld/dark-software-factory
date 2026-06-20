@@ -217,5 +217,7 @@ class RoutedIssue(BaseModel):
     repo: str
     title: str
     body: str
+    #: The proposal's problem statement, carried for title+problem dedup at S7.
+    problem: str = ""
     labels: list[str] = Field(default_factory=list)
     filed_url: str | None = None

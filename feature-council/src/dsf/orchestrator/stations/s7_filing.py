@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 from dsf.config.flags import dry_run_global
 from dsf.contracts.enums import RunStatus, Verdict
 from dsf.memory.consolidation import consolidate_run
-from dsf.memory.dedup import is_duplicate
+from dsf.memory.dedup import FILED_ISSUE_KIND, dedup_key, is_duplicate
 from dsf.observability.tracing import span_attrs_for_run
 from dsf.orchestrator.blackboard import Blackboard
 
@@ -22,8 +22,9 @@ if TYPE_CHECKING:
 
 STATION = "S7:filing"
 
-#: Memory record-kind for filed issue titles (final dedup index).
-ISSUE_KIND = "issue"
+#: Memory record-kind for the filed-issue dedup index (shared with the
+#: duplication critic via :data:`dsf.memory.dedup.FILED_ISSUE_KIND`).
+ISSUE_KIND = FILED_ISSUE_KIND
 
 
 async def run(run: Run, services: Services) -> Run:
@@ -36,7 +37,8 @@ async def run(run: Run, services: Services) -> Run:
         dry = run.dry_run or dry_run_global(services.config)
 
         for issue in issues:
-            if await is_duplicate(issue.title, services.memory, kind=ISSUE_KIND):
+            key = dedup_key(issue.title, issue.problem)
+            if await is_duplicate(key, services.memory, kind=ISSUE_KIND):
                 run.audit.append(_audit(f"duplicate issue '{issue.title}' — not filing"))
                 continue
 
@@ -52,9 +54,9 @@ async def run(run: Run, services: Services) -> Run:
                 issue.filed_url = url
                 run.audit.append(_audit(f"filed issue '{issue.title}' to {issue.repo}: {url}"))
 
-            # Index the title so future runs dedup against it.
+            # Index the title+problem key so future runs dedup against it.
             await services.memory.put_record(
-                {"kind": ISSUE_KIND, "text": issue.title, "repo": issue.repo, "run_id": run.id}
+                {"kind": ISSUE_KIND, "text": key, "repo": issue.repo, "run_id": run.id}
             )
 
         await blackboard.save_issues(run.id, issues)

@@ -10,6 +10,20 @@ if TYPE_CHECKING:
 #: Default similarity threshold above which two texts count as duplicates.
 DEFAULT_DUP_THRESHOLD = 0.8
 
+#: Shared record-kind for the filed-issue dedup corpus. S7 writes filed issues
+#: under this kind and the duplication critic queries it, so a proposal is
+#: deduplicated against what the factory has actually filed.
+FILED_ISSUE_KIND = "issue"
+
+
+def dedup_key(title: str, problem: str) -> str:
+    """Build the canonical dedup text for an issue/proposal (title + problem).
+
+    Deduping on title alone misses reworded-title duplicates of the same
+    problem; including the problem makes the key carry the actual content.
+    """
+    return f"{title} {problem}".strip()
+
 
 async def is_duplicate(
     text: str,
@@ -29,4 +43,4 @@ async def is_duplicate(
     return float(top) >= threshold
 
 
-__all__ = ["DEFAULT_DUP_THRESHOLD", "is_duplicate"]
+__all__ = ["DEFAULT_DUP_THRESHOLD", "FILED_ISSUE_KIND", "dedup_key", "is_duplicate"]
