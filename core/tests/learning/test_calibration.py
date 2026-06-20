@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from dsf.container import build_services
 from dsf.learning.calibration import (
     MAX_WEIGHT,
     MIN_WEIGHT,
     proposed_weight_update,
     recompute_weights,
 )
+from dsf_testing import build_test_services
 
 
 def test_predictive_critic_outranks_noisy_critic():
@@ -58,7 +58,7 @@ def test_no_history_returns_neutral():
 
 
 async def test_proposed_update_returns_current_weights_without_history():
-    services = build_services("local")
+    services = build_test_services()
     proposed = await proposed_weight_update(services, ["grounding", "cost"])
     # No stored outcomes -> falls back to current configured weights.
     assert set(proposed) == {"grounding", "cost"}
@@ -67,7 +67,7 @@ async def test_proposed_update_returns_current_weights_without_history():
 
 
 async def test_proposed_update_uses_stored_scores():
-    services = build_services("local")
+    services = build_test_services()
     # Seed pr_outcome records carrying per-critic scores.
     await services.memory.put_record(
         {

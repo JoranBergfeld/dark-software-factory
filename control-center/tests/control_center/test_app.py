@@ -5,8 +5,8 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from dsf.container import build_services
 from dsf.control_center.app import create_app
+from dsf_testing import build_test_services
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -18,7 +18,7 @@ _TOKEN = "test-operator-token"
 @pytest.fixture
 def services():
     """A fresh local service bundle per test (deterministic fakes)."""
-    return build_services("local")
+    return build_test_services()
 
 
 @pytest.fixture

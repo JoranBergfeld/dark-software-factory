@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from dsf.container import build_services
 from dsf.contracts.enums import Verdict
 from dsf.contracts.models import CouncilVerdict, CriticScore
 from dsf.council.jury import convene_jury
-from dsf_testing import make_evidence, make_proposal, make_run
+from dsf_testing import build_test_services, make_evidence, make_proposal, make_run
 
 
 def _accept_recommendation(proposal_id: str) -> CouncilVerdict:
@@ -16,7 +15,7 @@ def _accept_recommendation(proposal_id: str) -> CouncilVerdict:
 
 
 async def test_jury_offline_echoes_accept_recommendation():
-    services = build_services("local")
+    services = build_test_services()
     run = make_run([make_evidence("x")])
     prop = make_proposal(run)
     rec = _accept_recommendation(prop.id)
@@ -30,7 +29,7 @@ async def test_jury_offline_echoes_accept_recommendation():
 
 
 async def test_jury_offline_echoes_kill_recommendation():
-    services = build_services("local")
+    services = build_test_services()
     run = make_run([make_evidence("x")])
     prop = make_proposal(run)
     rec = CouncilVerdict.from_scores(prop.id, [], threshold=0.6)  # no scores -> KILL
@@ -44,7 +43,7 @@ async def test_jury_offline_echoes_kill_recommendation():
 
 
 async def test_jury_splits_when_one_model_dissents():
-    services = build_services("local")
+    services = build_test_services()
     services.model.register("[jury:skeptic]", lambda system, prompt: "NO-GO: evidence too thin")
     run = make_run([make_evidence("x")])
     prop = make_proposal(run)

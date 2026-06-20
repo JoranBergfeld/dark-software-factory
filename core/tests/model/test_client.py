@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from dsf.model import DeterministicModelClient
 from dsf.ports import ModelClient
+from dsf_testing import DeterministicModelClient
 
 
 def test_deterministic_model_satisfies_protocol():

@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from dsf.contracts.enums import RunStatus, TriggerKind, Verdict
 from dsf.contracts.models import CouncilVerdict, CriticScore, Run
-from dsf.memory import InMemoryMemoryStore, Memory, consolidate_run, is_duplicate
+from dsf.memory import Memory, consolidate_run, is_duplicate
+from dsf_testing import InMemoryMemoryStore
 
 
 async def test_working_put_get():

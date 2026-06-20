@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from dsf.container import build_services
 from dsf.learning import handle_pr_event, parse_pr_event
+from dsf_testing import build_test_services
 
 
 def _merged_event() -> dict:
@@ -93,7 +93,7 @@ def test_parse_tolerates_empty_event():
 
 
 async def test_handle_approved_stores_lesson_and_record():
-    services = build_services("local")
+    services = build_test_services()
     outcome = await handle_pr_event(_merged_event(), services)
 
     assert outcome.verdict == "approved"
@@ -110,7 +110,7 @@ async def test_handle_approved_stores_lesson_and_record():
 
 
 async def test_handle_rejected_lesson_carries_negative_signal():
-    services = build_services("local")
+    services = build_test_services()
     outcome = await handle_pr_event(_closed_unmerged_event(), services)
 
     assert outcome.verdict == "rejected"

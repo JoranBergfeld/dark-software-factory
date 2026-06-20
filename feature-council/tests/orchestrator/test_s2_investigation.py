@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from dsf.config.registry import Product
-from dsf.container import build_services
 from dsf.contracts.enums import RunStatus, SourceKind, TriggerKind
 from dsf.contracts.models import Run
 from dsf.orchestrator.stations import s2_investigation
+from dsf_testing import build_test_services
 
 
 def _demo_registry() -> dict[str, Product]:
@@ -77,7 +77,7 @@ def test_live_azuremonitor_backend_resolves_scope_from_run_scope(monkeypatch) ->
 
 
 async def test_collects_evidence_from_enabled_agents() -> None:
-    services = build_services("local")
+    services = build_test_services()
     run = Run(
         trigger=TriggerKind.SIGNAL,
         scope_product_hints=["microbi"],
@@ -94,7 +94,7 @@ async def test_collects_evidence_from_enabled_agents() -> None:
 
 
 async def test_disabled_agent_contributes_nothing_and_is_audited() -> None:
-    services = build_services("local")
+    services = build_test_services()
     # Disable grafana; sentry stays enabled.
     services.config.set_flag(f"agent.{SourceKind.GRAFANA.value}", False)
 

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dsf.container import build_services
 from dsf.council.critics import (
     ALL_CRITICS,
     cost,
@@ -13,7 +12,7 @@ from dsf.council.critics import (
     strategic_fit,
     value,
 )
-from dsf_testing import make_evidence, make_proposal, make_run
+from dsf_testing import build_test_services, make_evidence, make_proposal, make_run
 
 
 def test_all_critics_registry_has_seven():
@@ -29,7 +28,7 @@ def test_all_critics_registry_has_seven():
 
 
 async def test_grounding_vetoes_empty_evidence_ids():
-    services = build_services("local")
+    services = build_test_services()
     run = make_run([make_evidence("error spike")])
     prop = make_proposal(run, evidence_ids=[])
     score = await grounding.evaluate(prop, run, services)
@@ -39,7 +38,7 @@ async def test_grounding_vetoes_empty_evidence_ids():
 
 
 async def test_grounding_vetoes_unknown_evidence_id():
-    services = build_services("local")
+    services = build_test_services()
     run = make_run([make_evidence("error spike")])
     prop = make_proposal(run, evidence_ids=["does-not-exist"])
     score = await grounding.evaluate(prop, run, services)
@@ -47,7 +46,7 @@ async def test_grounding_vetoes_unknown_evidence_id():
 
 
 async def test_grounding_passes_grounded_proposal():
-    services = build_services("local")
+    services = build_test_services()
     run = make_run([make_evidence("error spike")])
     prop = make_proposal(run)
     score = await grounding.evaluate(prop, run, services)
@@ -56,7 +55,7 @@ async def test_grounding_passes_grounded_proposal():
 
 
 async def test_value_scales_with_evidence_and_severity():
-    services = build_services("local")
+    services = build_test_services()
     few = make_run([make_evidence("minor glitch")])
     many = make_run(
         [
@@ -72,7 +71,7 @@ async def test_value_scales_with_evidence_and_severity():
 
 
 async def test_duplication_vetoes_when_match_in_memory():
-    services = build_services("local")
+    services = build_test_services()
     run = make_run([make_evidence("error spike")])
     prop = make_proposal(run, title="Improve alpha latency", problem="alpha p99 latency elevated")
     # Pre-put a matching *filed issue* record: the critic dedups against the
@@ -86,7 +85,7 @@ async def test_duplication_vetoes_when_match_in_memory():
 
 
 async def test_duplication_passes_when_no_match():
-    services = build_services("local")
+    services = build_test_services()
     run = make_run([make_evidence("error spike")])
     prop = make_proposal(run)
     score = await duplication.evaluate(prop, run, services)
@@ -95,7 +94,7 @@ async def test_duplication_passes_when_no_match():
 
 
 async def test_feasibility_penalizes_risky_scope():
-    services = build_services("local")
+    services = build_test_services()
     run = make_run([make_evidence("error spike")])
     small = make_proposal(run, proposed_change="Add a config flag.")
     big = make_proposal(
@@ -113,7 +112,7 @@ async def test_strategic_fit_default_and_supportive():
     from dsf.contracts.models import CouncilVerdict
     from dsf.memory.consolidation import consolidate_run
 
-    services = build_services("local")
+    services = build_test_services()
     run = make_run([make_evidence("feature ask")])
     prop = make_proposal(run, product="alpha")
     base = await strategic_fit.evaluate(prop, run, services)
@@ -134,7 +133,7 @@ async def test_strategic_fit_default_and_supportive():
 
 
 async def test_cost_inverse_to_effort():
-    services = build_services("local")
+    services = build_test_services()
     run = make_run([make_evidence("error spike")])
     cheap = make_proposal(run, proposed_change="Tweak a constant.")
     pricey = make_proposal(
@@ -151,7 +150,7 @@ async def test_cost_inverse_to_effort():
 
 
 async def test_security_vetoes_flagged_content():
-    services = build_services("local")
+    services = build_test_services()
     run = make_run([make_evidence("auth issue")])
     bad = make_proposal(
         run, proposed_change="To fix login we will store plaintext password in the db."
@@ -162,7 +161,7 @@ async def test_security_vetoes_flagged_content():
 
 
 async def test_security_passes_clean_content():
-    services = build_services("local")
+    services = build_test_services()
     run = make_run([make_evidence("auth issue")])
     score = await security.evaluate(make_proposal(run), run, services)
     assert score.veto is False

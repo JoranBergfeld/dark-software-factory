@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dsf.container import build_services
 from dsf.council.critics import ALL_CRITICS
 from dsf.council.deliberation import (
     GATE_NAMES,
@@ -10,7 +9,7 @@ from dsf.council.deliberation import (
     LensPosition,
     deliberate,
 )
-from dsf_testing import make_evidence, make_proposal, make_run
+from dsf_testing import build_test_services, make_evidence, make_proposal, make_run
 
 
 def test_lens_and_gate_partition():
@@ -22,7 +21,7 @@ def test_lens_and_gate_partition():
 
 
 async def test_offline_lens_scores_match_the_deterministic_critics():
-    services = build_services("local")
+    services = build_test_services()
     run = make_run(
         [
             make_evidence("CRITICAL outage", confidence=0.9),
@@ -45,7 +44,7 @@ async def test_offline_lens_scores_match_the_deterministic_critics():
 
 
 async def test_disabled_lens_is_excluded():
-    services = build_services("local")
+    services = build_test_services()
     services.config.set_flag("critic.cost", False)
     run = make_run([make_evidence("CRITICAL outage", confidence=0.9)])
     prop = make_proposal(run, proposed_change="Add a small cache.")
@@ -56,7 +55,7 @@ async def test_disabled_lens_is_excluded():
 
 
 async def test_security_lens_vetoes_offline():
-    services = build_services("local")
+    services = build_test_services()
     run = make_run([make_evidence("auth issue")])
     prop = make_proposal(
         run, proposed_change="store plaintext password to make login simpler"
@@ -67,7 +66,7 @@ async def test_security_lens_vetoes_offline():
 
 
 async def test_registered_lens_handler_overrides_the_fallback():
-    services = build_services("local")
+    services = build_test_services()
     # A scripted value lens returns a structured position; the parser must use it
     # instead of the deterministic critic fallback.
     services.model.register(
@@ -87,7 +86,7 @@ async def test_lens_falls_back_to_critic_when_the_model_raises():
     # A real model (azure mode) can raise: a validation error on an out-of-bounds
     # score, a strict-schema rejection, or a network error. The lens must degrade
     # to its deterministic critic, not crash the whole council run.
-    services = build_services("local")
+    services = build_test_services()
 
     def boom(system: str, prompt: str) -> LensPosition:
         raise ValueError("model returned an out-of-bounds score")
@@ -111,9 +110,10 @@ def _services_with_rounds(rounds: int):
     (not the boolean override path), so seed the store directly. ``Services`` is a
     mutable dataclass, so the config can be swapped after build.
     """
-    from dsf.config.store import InMemoryConfigStore, load_defaults
+    from dsf.config.store import load_defaults
+    from dsf_testing import InMemoryConfigStore
 
-    services = build_services("local")
+    services = build_test_services()
     services.config = InMemoryConfigStore(
         {**load_defaults(), "default_deliberation_rounds": rounds}
     )
@@ -122,7 +122,7 @@ def _services_with_rounds(rounds: int):
 
 async def test_runs_one_model_call_per_lens_per_round():
     # Default rounds is 2 (config/defaults.json), so no seeding needed.
-    services = build_services("local")
+    services = build_test_services()
     run = make_run([make_evidence("CRITICAL outage", confidence=0.9)])
     prop = make_proposal(run, proposed_change="Add a small cache.")
 
@@ -133,7 +133,7 @@ async def test_runs_one_model_call_per_lens_per_round():
 
 
 async def test_second_round_sees_peer_positions_and_revises():
-    services = build_services("local")  # default 2 rounds
+    services = build_test_services()  # default 2 rounds
 
     # The value lens scores 0.2 in round 1 (no peers in prompt) and 0.9 once it
     # sees peer positions in round 2. This proves peers are fed forward and the

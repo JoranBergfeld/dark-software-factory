@@ -2,20 +2,19 @@
 
 from __future__ import annotations
 
-from dsf.container import build_services
 from dsf.contracts.enums import ProposalKind
 from dsf.council.synthesizer import synthesize
-from dsf_testing import make_evidence, make_run
+from dsf_testing import build_test_services, make_evidence, make_run
 
 
 async def test_two_evidence_same_product_yields_proposal_with_default_fake_model():
     """A run with 2 evidence sharing a product hint -> >=1 grounded proposal.
 
-    Uses build_services("local") with the DEFAULT DeterministicModelClient (no handler
+    Uses build_test_services() with the DEFAULT DeterministicModelClient (no handler
     registered), proving the synthesizer never depends on structured model
     output.
     """
-    services = build_services("local")
+    services = build_test_services()
     ev1 = make_evidence("checkout error spike", product="alpha")
     ev2 = make_evidence("payment regression observed", product="alpha")
     run = make_run([ev1, ev2])
@@ -38,7 +37,7 @@ async def test_two_evidence_same_product_yields_proposal_with_default_fake_model
 
 
 async def test_distinct_product_hints_cluster_separately():
-    services = build_services("local")
+    services = build_test_services()
     run = make_run(
         [
             make_evidence("new dashboard request", product="alpha"),
@@ -55,6 +54,6 @@ async def test_distinct_product_hints_cluster_separately():
 
 
 async def test_empty_run_yields_no_proposals():
-    services = build_services("local")
+    services = build_test_services()
     run = make_run([])
     assert await synthesize(run, services) == []

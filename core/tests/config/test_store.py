@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from dsf.config.store import InMemoryConfigStore, load_defaults, resolve_flag_key
+from dsf.config.store import load_defaults, resolve_flag_key
 from dsf.ports import ConfigStore
+from dsf_testing import InMemoryConfigStore
 
 
 def test_resolve_flag_key_mapping():

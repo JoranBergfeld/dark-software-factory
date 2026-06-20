@@ -3,16 +3,20 @@
 from __future__ import annotations
 
 from dsf.config.flags import weights
-from dsf.config.store import InMemoryConfigStore
-from dsf.container import build_services
 from dsf.contracts.enums import Verdict
 from dsf.contracts.models import CouncilVerdict, CriticScore
 from dsf.council.decision import decide
-from dsf_testing import make_evidence, make_proposal, make_run
+from dsf_testing import (
+    InMemoryConfigStore,
+    build_test_services,
+    make_evidence,
+    make_proposal,
+    make_run,
+)
 
 
 async def test_veto_yields_kill():
-    services = build_services("local")
+    services = build_test_services()
     run = make_run([make_evidence("auth issue")])
     # Security veto via flagged content.
     prop = make_proposal(
@@ -24,7 +28,7 @@ async def test_veto_yields_kill():
 
 
 async def test_all_pass_high_scores_yields_accept():
-    services = build_services("local")
+    services = build_test_services()
     run = make_run(
         [
             make_evidence("CRITICAL outage", confidence=0.9),
@@ -39,7 +43,7 @@ async def test_all_pass_high_scores_yields_accept():
 
 
 async def test_disabling_a_critic_excludes_it_and_still_decides():
-    services = build_services("local")
+    services = build_test_services()
     run = make_run([make_evidence("auth issue")])
     prop = make_proposal(
         run, proposed_change="store plaintext password to make login simpler"
@@ -60,7 +64,7 @@ async def test_disabling_a_critic_excludes_it_and_still_decides():
 
 
 async def test_below_threshold_yields_kill():
-    services = build_services("local")
+    services = build_test_services()
     # A thin, costly, low-value (but non-vetoed) proposal should fall below the
     # default 0.6 threshold and be killed without any veto.
     run = make_run([make_evidence("cosmetic note", confidence=0.1)])
@@ -101,7 +105,7 @@ def test_seeded_weight_shifts_council_weighted_score():
 
 
 async def test_jury_dissent_escalates_under_supervised():
-    services = build_services("local")
+    services = build_test_services()
     services.model.register("[jury:skeptic]", lambda system, prompt: "NO-GO")
     run = make_run([make_evidence("CRITICAL outage", confidence=0.9)])
     prop = make_proposal(run, proposed_change="Add a small cache.")
@@ -113,7 +117,7 @@ async def test_jury_dissent_escalates_under_supervised():
 
 
 async def test_unanimous_jury_against_kills_a_strong_recommendation():
-    services = build_services("local")
+    services = build_test_services()
     for persona in ("pragmatist", "skeptic", "user_advocate"):
         services.model.register(f"[jury:{persona}]", lambda system, prompt: "NO-GO")
     run = make_run([make_evidence("CRITICAL outage", confidence=0.9)])
@@ -123,7 +127,7 @@ async def test_unanimous_jury_against_kills_a_strong_recommendation():
 
 
 async def test_accept_path_populates_the_jury():
-    services = build_services("local")
+    services = build_test_services()
     run = make_run([make_evidence("CRITICAL outage", confidence=0.9)])
     prop = make_proposal(run, proposed_change="Add a small cache.")
     verdict = await decide(prop, run, services)
@@ -140,7 +144,7 @@ async def test_recommendation_is_offline_identical_to_critic_scoring():
     from dsf.council.critics import ALL_CRITICS
     from dsf.council.decision import _recommend
 
-    services = build_services("local")
+    services = build_test_services()
     run = make_run(
         [
             make_evidence("CRITICAL outage", confidence=0.9),
@@ -173,7 +177,7 @@ async def test_recommendation_carries_gate_and_lens_scores():
     from dsf.council.decision import _recommend
     from dsf.council.deliberation import GATE_NAMES, LENS_NAMES
 
-    services = build_services("local")
+    services = build_test_services()
     run = make_run([make_evidence("CRITICAL outage", confidence=0.9)])
     prop = make_proposal(run, proposed_change="Add a small cache.")
 

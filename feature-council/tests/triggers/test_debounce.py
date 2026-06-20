@@ -4,17 +4,17 @@ from __future__ import annotations
 
 import time
 
-from dsf.container import build_services
 from dsf.triggers.debounce import (
     DEFAULT_DEBOUNCE_TTL,
     record_signal,
     should_suppress,
     signal_text,
 )
+from dsf_testing import build_test_services
 
 
 async def test_first_signal_not_suppressed_then_duplicate_suppressed() -> None:
-    services = build_services("local")
+    services = build_test_services()
     payload = {
         "fingerprint": "checkout-typeerror-id-spike",
         "text": "error spike in checkout flow",
@@ -32,7 +32,7 @@ async def test_first_signal_not_suppressed_then_duplicate_suppressed() -> None:
 
 
 async def test_distinct_signal_not_suppressed() -> None:
-    services = build_services("local")
+    services = build_test_services()
     first = {"fingerprint": "checkout-typeerror-id-spike", "text": "checkout error spike"}
     await record_signal(first, services)
 
@@ -48,7 +48,7 @@ def test_signal_text_prefers_fingerprint() -> None:
 
 async def test_debounce_ttl_expiry_allows_signal_again() -> None:
     """After the TTL window closes the same signal must be accepted again."""
-    services = build_services("local")
+    services = build_test_services()
     payload = {"text": "checkout regression spike"}
 
     # Record with a very short TTL.

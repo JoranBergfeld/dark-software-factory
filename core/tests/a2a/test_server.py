@@ -7,10 +7,9 @@ from fastapi.testclient import TestClient
 
 from dsf.a2a.auth import build_bearer_dependency
 from dsf.agents.base import SourceAgent
-from dsf.config.store import InMemoryConfigStore
 from dsf.contracts.enums import SourceKind
 from dsf.contracts.models import EvidenceItem, Provenance
-from dsf_testing import RecordingSourceBackend
+from dsf_testing import InMemoryConfigStore, RecordingSourceBackend
 
 
 def _seeded_evidence() -> EvidenceItem:

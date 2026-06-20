@@ -6,8 +6,6 @@ import json
 from pathlib import Path
 
 from dsf.config.flags import weights
-from dsf.config.store import InMemoryConfigStore
-from dsf.container import build_services
 from dsf.contracts.enums import Verdict
 from dsf.contracts.models import CouncilVerdict, CriticScore
 from dsf.council.critics import strategic_fit
@@ -17,7 +15,13 @@ from dsf.memory.consolidation import consolidate_run
 from dsf.memory.dedup import FILED_ISSUE_KIND, dedup_key
 from dsf.orchestrator.blackboard import Blackboard
 from dsf.orchestrator.stations import s5_council
-from dsf_testing import make_evidence, make_proposal, make_run
+from dsf_testing import (
+    InMemoryConfigStore,
+    build_test_services,
+    make_evidence,
+    make_proposal,
+    make_run,
+)
 
 # ---------------------------------------------------------------------------
 # Issue #2 — Learning loop: consolidate_run writes text; strategic_fit reads it
@@ -26,7 +30,7 @@ from dsf_testing import make_evidence, make_proposal, make_run
 
 async def test_consolidate_run_lesson_text_boosts_strategic_fit():
     """consolidate_run -> get_lessons -> strategic_fit boost — no hand-fed text key."""
-    services = build_services("local")
+    services = build_test_services()
     run = make_run([make_evidence("feature ask")])
     prop = make_proposal(run, product="alpha")
 
@@ -56,7 +60,7 @@ async def test_pr_outcome_lesson_text_boosts_strategic_fit():
     """outcome_to_lesson writes text; strategic_fit reads it (PR path)."""
     from dsf.learning.lessons import outcome_to_lesson
 
-    services = build_services("local")
+    services = build_test_services()
     run = make_run([make_evidence("pr feature")])
     prop = make_proposal(run, product="alpha")
 
@@ -87,7 +91,7 @@ async def test_proposal_matching_filed_issue_is_deduped():
     Dedup is keyed on the filed-issue corpus (written by S7), so this seeds a
     filed-issue record as a prior run would, then runs S5.
     """
-    services = build_services("local")
+    services = build_test_services()
     bb = Blackboard(services.memory)
 
     run = make_run([make_evidence("error spike")])
@@ -112,7 +116,7 @@ async def test_proposal_matching_filed_issue_is_deduped():
 
 async def test_calibration_weights_move_after_pr_outcomes_with_joined_scores():
     """S5 stores critic_scores; record_outcome joins them; predictive critic weight rises."""
-    services = build_services("local")
+    services = build_test_services()
 
     # Simulate S5 persisting per-critic scores for two proposals
     await services.memory.put_working(

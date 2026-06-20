@@ -16,8 +16,8 @@ from dsf.config.flags import (
     triggers_paused,
     weights,
 )
-from dsf.config.store import InMemoryConfigStore
 from dsf.contracts.enums import SourceKind, TriggerKind
+from dsf_testing import InMemoryConfigStore
 
 
 def test_critic_enabled_respects_disabled_flag():

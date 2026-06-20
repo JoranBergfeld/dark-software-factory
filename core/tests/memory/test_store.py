@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import time
 
-from dsf.memory import InMemoryMemoryStore
 from dsf.ports import MemoryStore
+from dsf_testing import InMemoryMemoryStore
 
 
 def test_inmemory_store_satisfies_protocol():

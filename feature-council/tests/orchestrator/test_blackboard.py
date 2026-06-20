@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from dsf.container import build_services
 from dsf.contracts.enums import TriggerKind
 from dsf.contracts.models import Run
 from dsf.orchestrator.blackboard import Blackboard
+from dsf_testing import build_test_services
 
 
 async def test_save_load_round_trip() -> None:
-    services = build_services("local")
+    services = build_test_services()
     bb = Blackboard(services.memory)
 
     run = Run(trigger=TriggerKind.SIGNAL, scope_product_hints=["microbi"])
@@ -23,13 +23,13 @@ async def test_save_load_round_trip() -> None:
 
 
 async def test_load_missing_returns_none() -> None:
-    services = build_services("local")
+    services = build_test_services()
     bb = Blackboard(services.memory)
     assert await bb.load("does-not-exist") is None
 
 
 async def test_checkpoint_is_done_idempotency() -> None:
-    services = build_services("local")
+    services = build_test_services()
     bb = Blackboard(services.memory)
     run = Run(trigger=TriggerKind.SIGNAL)
     await bb.save(run)
@@ -44,7 +44,7 @@ async def test_checkpoint_is_done_idempotency() -> None:
 
 
 async def test_append_audit_mutates_and_persists() -> None:
-    services = build_services("local")
+    services = build_test_services()
     bb = Blackboard(services.memory)
     run = Run(trigger=TriggerKind.SIGNAL)
     await bb.save(run)

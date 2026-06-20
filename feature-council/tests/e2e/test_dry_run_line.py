@@ -8,11 +8,11 @@ from pathlib import Path
 
 import pytest
 
-from dsf.container import build_services
 from dsf.contracts.enums import RunStatus
 from dsf.orchestrator.blackboard import Blackboard
 from dsf.orchestrator.conveyor import run_line
 from dsf.runtime.control import main, signal_to_run
+from dsf_testing import build_test_services
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SAMPLE_SIGNAL = REPO_ROOT / "tests" / "fixtures" / "sample_signal.json"
@@ -34,7 +34,7 @@ def payload() -> dict:
 
 
 async def test_dry_run_line_files_grounded_issue_without_network(payload: dict) -> None:
-    services = build_services("local")
+    services = build_test_services()
     run = signal_to_run(payload)
     run.dry_run = True
 
@@ -68,7 +68,7 @@ async def test_dry_run_line_files_grounded_issue_without_network(payload: dict) 
 async def test_line_files_real_issue_when_dry_run_off(payload: dict) -> None:
     """With both dry-run switches off, the wired line actually files via the
     GitHub port — regression for #13 (no code path could file a real issue)."""
-    services = build_services("local")  # github = RecordingGitHubClient
+    services = build_test_services()  # github = RecordingGitHubClient
     services.config.set_flag("dry_run", False)  # off the global kill switch
 
     run = signal_to_run(payload)

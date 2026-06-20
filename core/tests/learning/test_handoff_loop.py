@@ -9,13 +9,13 @@ faked here).
 
 from __future__ import annotations
 
-from dsf.container import build_services
 from dsf.contracts.enums import ProposalKind, TriggerKind
 from dsf.contracts.handoff import HANDOFF_LABEL
 from dsf.contracts.models import Proposal, Run
 from dsf.learning import handle_pr_event
 from dsf.orchestrator.blackboard import Blackboard
 from dsf.orchestrator.stations import s6_routing
+from dsf_testing import build_test_services
 
 PRODUCT = "microbi"  # present in config/products.json
 
@@ -37,7 +37,7 @@ def _merged_pr_event() -> dict:
 
 
 async def test_council_to_squad_loop_closes():
-    services = build_services("local")
+    services = build_test_services()
 
     run = Run(trigger=TriggerKind.SIGNAL, scope_product_hints=[PRODUCT])
     proposal = Proposal(

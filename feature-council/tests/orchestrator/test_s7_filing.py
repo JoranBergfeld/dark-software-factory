@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from dsf.container import build_services
 from dsf.contracts.enums import TriggerKind
 from dsf.contracts.models import RoutedIssue, Run
 from dsf.orchestrator.blackboard import Blackboard
 from dsf.orchestrator.stations import s7_filing
+from dsf_testing import build_test_services
 
 
 async def _file_once(services, title: str, problem: str) -> Run:
@@ -24,7 +24,7 @@ async def _file_once(services, title: str, problem: str) -> Run:
 
 
 async def test_s7_indexes_dedup_key_with_title_and_problem():
-    services = build_services("local")
+    services = build_test_services()
     problem = "checkout crashes on submit returning 500 errors"
 
     await _file_once(services, "Checkout returns 500", problem)
@@ -39,7 +39,7 @@ async def test_s7_indexes_dedup_key_with_title_and_problem():
 
 
 async def test_s7_dedups_reworded_title_with_semantic_embedder():
-    from dsf.memory.store import InMemoryMemoryStore
+    from dsf_testing import InMemoryMemoryStore
     from dsf_testing.azure_doubles import RecordingEmbeddingsGateway
 
     problem = "checkout crashes on submit returning 500 errors for many users"
@@ -48,7 +48,7 @@ async def test_s7_dedups_reworded_title_with_semantic_embedder():
     # Same problem -> same vector regardless of the (reworded) title.
     embedder = RecordingEmbeddingsGateway({key_a: [1.0, 0.0], key_b: [1.0, 0.0]}, dim=2)
 
-    services = build_services("local")
+    services = build_test_services()
     services.memory = InMemoryMemoryStore(embedder=embedder)
 
     await _file_once(services, "Checkout returns 500", problem)

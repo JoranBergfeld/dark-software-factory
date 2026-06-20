@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
-from dsf.container import build_services
 from dsf.orchestrator.blackboard import Blackboard
 from dsf.orchestrator.stations.s5_council import REVIEW_QUEUE_KIND
 from dsf.orchestrator.stations.s5_council import run as s5_run
-from dsf_testing import make_evidence, make_proposal, make_run
+from dsf_testing import build_test_services, make_evidence, make_proposal, make_run
 
 
 async def test_escalated_proposal_goes_to_review_queue_not_routed():
-    services = build_services("local")
+    services = build_test_services()
     # Force a 2-1 jury under the default supervised maturity -> ESCALATE.
     services.model.register("[jury:skeptic]", lambda system, prompt: "NO-GO")
 

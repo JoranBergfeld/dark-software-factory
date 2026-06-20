@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-from dsf.container import build_services
 from dsf.contracts.enums import RunStatus, TriggerKind
 from dsf.contracts.models import Run
 from dsf.orchestrator.blackboard import Blackboard
 from dsf.orchestrator.conveyor import STATIONS, run_line
 from dsf.orchestrator.stations.s1_triage import SIGNAL_KIND
+from dsf_testing import build_test_services
 
 
 async def test_full_line_reaches_filed_dry_run() -> None:
-    services = build_services("local")
+    services = build_test_services()
     run = Run(
         trigger=TriggerKind.SIGNAL,
         signal_payload={"product_hints": ["microbi"], "text": "checkout error spike"},
@@ -45,7 +45,7 @@ async def test_full_line_reaches_filed_dry_run() -> None:
 
 
 async def test_duplicate_signal_at_s1_kills_run() -> None:
-    services = build_services("local")
+    services = build_test_services()
     text = "checkout error spike"
 
     # Pre-seed an in-flight signal record so S1 debounce fires.
@@ -66,7 +66,7 @@ async def test_duplicate_signal_at_s1_kills_run() -> None:
 
 
 async def test_error_in_station_yields_error_status() -> None:
-    services = build_services("local")
+    services = build_test_services()
     run = Run(trigger=TriggerKind.SIGNAL, signal_payload={"product_hints": ["microbi"]})
 
     # Force S2 to blow up by removing the memory store's gather path indirectly:
@@ -98,7 +98,7 @@ async def test_killed_run_does_not_resume_past_s1() -> None:
     Before the fix, on resume the loop skipped S1 (already checkpointed) and
     bypassed the KILLED early-return, letting S2..S7 execute and file an issue.
     """
-    services = build_services("local")
+    services = build_test_services()
     text = "checkout error spike"
 
     # Pre-seed duplicate signal so S1 debounce fires and kills the run.

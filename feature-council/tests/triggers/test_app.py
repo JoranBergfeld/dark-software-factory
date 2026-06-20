@@ -7,14 +7,15 @@ from collections.abc import Iterator
 import pytest
 from fastapi.testclient import TestClient
 
-from dsf.container import Services, build_services
+from dsf.container import Services
 from dsf.triggers.app import app, get_services
+from dsf_testing import build_test_services
 
 
 @pytest.fixture
 def services() -> Services:
     """A fresh, isolated local services bundle for each test."""
-    return build_services("local")
+    return build_test_services()
 
 
 @pytest.fixture

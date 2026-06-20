@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 from dsf.agents.base import SourceAgent
-from dsf.config.store import InMemoryConfigStore
 from dsf.contracts.enums import SourceKind
 from dsf.contracts.models import EvidenceItem, Provenance
-from dsf_testing import RecordingSourceBackend
+from dsf_testing import InMemoryConfigStore, RecordingSourceBackend
 
 
 def _evidence() -> EvidenceItem:

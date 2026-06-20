@@ -8,7 +8,7 @@ deduplication catch reworded duplicates.
 from __future__ import annotations
 
 from dsf.memory.azure_store import CosmosMemoryStore
-from dsf.memory.store import InMemoryMemoryStore
+from dsf_testing import InMemoryMemoryStore
 from dsf_testing.azure_doubles import InMemoryCosmosGateway, RecordingEmbeddingsGateway
 
 # Query is lexically closest to the "tutorial" record (shares submit/checkout)

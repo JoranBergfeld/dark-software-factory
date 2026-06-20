@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dsf.config.flags import triggers_paused
-from dsf.container import build_services
 from dsf.contracts.enums import RunStatus, SourceKind, TriggerKind
 from dsf.triggers.scheduler import (
     PAUSED_MESSAGE,
@@ -11,10 +10,11 @@ from dsf.triggers.scheduler import (
     run_sweep,
     sweep,
 )
+from dsf_testing import build_test_services
 
 
 async def test_sweep_paused_returns_killed_run() -> None:
-    services = build_services("local")
+    services = build_test_services()
     services.config.set_flag("trigger.SCHEDULED.paused", True)
     assert triggers_paused(services.config, TriggerKind.SCHEDULED) is True
 
@@ -27,7 +27,7 @@ async def test_sweep_paused_returns_killed_run() -> None:
 
 
 async def test_sweep_scopes_to_enabled_source_kinds() -> None:
-    services = build_services("local")
+    services = build_test_services()
     # Disable one agent so we prove sweep filters by agent_enabled.
     services.config.set_flag("agent.TICKETS", False)
 
@@ -41,7 +41,7 @@ async def test_sweep_scopes_to_enabled_source_kinds() -> None:
 
 
 async def test_run_sweep_paused_does_not_run_line() -> None:
-    services = build_services("local")
+    services = build_test_services()
     services.config.set_flag("trigger.SCHEDULED.paused", True)
 
     run = await run_sweep(services)
@@ -51,7 +51,7 @@ async def test_run_sweep_paused_does_not_run_line() -> None:
 
 
 async def test_run_sweep_runs_line_when_enabled() -> None:
-    services = build_services("local")
+    services = build_test_services()
 
     run = await run_sweep(services)
 
@@ -62,20 +62,20 @@ async def test_run_sweep_runs_line_when_enabled() -> None:
 
 
 async def test_sweep_scopes_run_to_services_product() -> None:
-    services = build_services("local")
+    services = build_test_services()
     services.product = "microbi"
     run = await sweep(services)
     assert run.scope_product_hints == ["microbi"]
 
 
 async def test_sweep_unscoped_when_no_product() -> None:
-    services = build_services("local")
+    services = build_test_services()
     run = await sweep(services)
     assert run.scope_product_hints == []
 
 
 async def test_orchestrator_tick_sweeps() -> None:
-    services = build_services("local")
+    services = build_test_services()
 
     swept = await run_orchestrator_tick(services)
 

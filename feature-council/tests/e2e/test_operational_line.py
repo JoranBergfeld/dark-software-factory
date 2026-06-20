@@ -3,16 +3,16 @@ to a routed, grounded, squad:ready issue — offline, no real GitHub call."""
 
 from __future__ import annotations
 
-from dsf.container import build_services
 from dsf.contracts.enums import RunStatus, SourceKind
 from dsf.contracts.handoff import HANDOFF_LABEL
 from dsf.orchestrator.blackboard import Blackboard
 from dsf.orchestrator.conveyor import run_line
 from dsf.runtime.control import signal_to_run
+from dsf_testing import build_test_services
 
 
 async def test_incident_signal_flows_to_grounded_squad_issue() -> None:
-    services = build_services("local")
+    services = build_test_services()
     run = signal_to_run(
         {
             "id": "evt_incident_recurrence",
@@ -65,7 +65,7 @@ def _incident_signal() -> dict:
 async def test_incident_line_files_real_issue_then_dedups_on_recurrence() -> None:
     """With dry-run off, operational INCIDENTS evidence files a real issue via the
     GitHub port; an identical second run files nothing (deduped at S5/S7)."""
-    services = build_services("local")  # github = RecordingGitHubClient
+    services = build_test_services()  # github = RecordingGitHubClient
     services.config.set_flag("dry_run", False)  # off the global kill switch
     bb = Blackboard(services.memory)
 
