@@ -57,7 +57,8 @@ def test_plan_provision_azure_command_shape():
     assert az.command[:4] == ["az", "deployment", "group", "create"]
     assert az.command[az.command.index("-g") + 1] == "rg-dsf-demo"
     assert az.command[az.command.index("-n") + 1] == "dsf-demo"
-    assert az.command[az.command.index("-f") + 1].endswith("infra/main.bicep")
+    bicep_arg = az.command[az.command.index("-f") + 1].replace("\\", "/")
+    assert bicep_arg.endswith("infra/main.bicep")
     assert "namePrefix=dsf" in az.command
     assert "environmentName=dev" in az.command
     assert "location=swedencentral" in az.command
