@@ -36,6 +36,15 @@ resource aks 'Microsoft.ContainerService/managedClusters@2024-02-01' = {
         enabled: true
       }
     }
+    addonProfiles: {
+      azureKeyvaultSecretsProvider: {
+        enabled: true
+        config: {
+          enableSecretRotation: 'true'
+          rotationPollInterval: '5m'
+        }
+      }
+    }
     agentPoolProfiles: [
       {
         name: 'system'

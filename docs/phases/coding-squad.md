@@ -75,6 +75,12 @@ high maturity auto-merges it on green CI. Knowledge iteration is squad's own
 `.squad/` memory, which lives in git and compounds per run; the loop runs with a
 git-notes state backend so it survives the scale-to-zero pod.
 
+Ralph authenticates under AKS workload identity: the pod assumes a per-product
+ServiceAccount bound to a managed identity and reads its GitHub token from the
+product's Key Vault through the CSI driver, so no static credential lives in the
+cluster. DSF seeds that token from the operator's `gh auth token` when it provisions
+the instance; a repo-scoped GitHub App token is the recommended later hardening.
+
 ## Where it lives and how autonomous it is today
 
 The Squad is an external product that lives inside the product's own repository,

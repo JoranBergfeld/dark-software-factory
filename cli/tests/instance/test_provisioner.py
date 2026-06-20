@@ -390,6 +390,7 @@ def test_deploy_squad_ralph_renders_bundle_in_dry_run(tmp_path):
     spec = InstanceSpec(product="demo", owner="acme")
     InstanceProvisioner(spec, repo_root=tmp_path).apply(execute=False)
     squad_dir = tmp_path / "config" / "instances" / "demo.runtime" / "squad"
+    assert (squad_dir / "squad-identity.yaml").is_file()
     assert (squad_dir / "ralph-deployment.yaml").is_file()
     assert (squad_dir / "ralph-scaledobject.yaml").is_file()
     assert (squad_dir / "issue-exporter.yaml").is_file()
@@ -401,18 +402,33 @@ def test_deploy_squad_ralph_applies_manifests_on_execute(tmp_path):
     manifest = InstanceProvisioner(spec, run=run, repo_root=tmp_path).apply(execute=True)
     calls = [c.args[0] for c in run.call_args_list]
     assert any(cmd[:3] == ["az", "aks", "get-credentials"] for cmd in calls)
+    # The operator's GitHub credential is seeded into the per-product Key Vault
+    # so the CSI driver can project it into the squad pods (Option 2, ADR 0012).
+    assert any(cmd == ["gh", "auth", "token"] for cmd in calls)
+    seed_idx = next(
+        i
+        for i, cmd in enumerate(calls)
+        if cmd[:4] == ["az", "keyvault", "secret", "set"] and "github-token" in cmd
+    )
     applied = [
         Path(cmd[-1]).name
         for cmd in calls
         if cmd[:3] == ["kubectl", "apply", "-f"]
     ]
-    # Order is load-bearing: the exporter manifest carries the Namespace, so it
-    # must be applied before the namespaced Deployment and ScaledObject.
+    # Order is load-bearing: the identity manifest carries the Namespace,
+    # ServiceAccount, and SecretProviderClass, so it must be applied before the
+    # namespaced exporter, Deployment, and ScaledObject.
     assert applied == [
+        "squad-identity.yaml",
         "issue-exporter.yaml",
         "ralph-deployment.yaml",
         "ralph-scaledobject.yaml",
     ]
+    first_apply_idx = next(
+        i for i, cmd in enumerate(calls) if cmd[:3] == ["kubectl", "apply", "-f"]
+    )
+    # The secret must exist before any pod that mounts it starts.
+    assert seed_idx < first_apply_idx
     assert any(
         cmd[:5] == ["gh", "api", "--method", "PATCH", "repos/acme/demo"] for cmd in calls
     )

@@ -1,7 +1,8 @@
 # Coding Squad: Ralph Watch Loop on Per-Product AKS + KEDA (Design)
 
-**Status:** Accepted (2026-06-19); to be recorded as ADR 0012. Implementation is
-deferred to a follow-up session; this is the design charter, the plan follows.
+**Status:** Accepted (2026-06-19); recorded as ADR 0012 and implemented, including
+the live workload-identity wiring (AKS workload identity plus the Key Vault CSI
+driver). This is the design charter; the plan and the code followed.
 
 **Scope:** Define how the Coding Squad phase actually runs. Replace the one-shot
 `squad triage` provisioner step and the GitHub Copilot Cloud Agent auto-assignment
@@ -89,11 +90,19 @@ group, matching the dedicated-resource-group charter. On the cluster:
   read).
 
 **Identity and secrets.** Ralph needs GitHub credentials to read issues, run
-`gh copilot`, open pull requests, and push `.squad/` updates. The design uses a
-GitHub App installation token scoped to the product repo, not a long-lived personal
-access token, delivered through AKS workload identity and the Key Vault CSI driver.
-The token is never written to the pod's filesystem as a static secret; it is
-projected from the per-product Key Vault the provisioner already stamps.
+`gh copilot`, open pull requests, and push `.squad/` updates. The squad pods assume a
+per-product `squad-<product>` ServiceAccount bound to a dedicated managed identity
+through an AKS federated credential, and read the GitHub token from the per-product
+Key Vault the provisioner already stamps, projected by the Key Vault CSI driver. The
+token is never written to the pod's filesystem as a static in-cluster secret.
+
+The provisioner seeds that token by reading the operator's `gh auth token` and
+writing it to Key Vault as `github-token` at execute time. Because the renderer and
+the CSI `SecretProviderClass` reference the secret by name, swapping to a GitHub App
+installation token scoped to the product repo, which is the recommended security
+hardening, is a value change in Key Vault rather than a code rewrite. That App path
+is not automated here only because GitHub App creation requires a one-time
+interactive browser approval and has no headless REST equivalent.
 
 **Provisioning changes** (`cli/src/dsf/instance/provisioner.py`):
 
@@ -107,7 +116,9 @@ projected from the per-product Key Vault the provisioner already stamps.
 - Manifests render the same way the council's `containerapp.yaml` and
   `.env.orchestrator` render today: a pure render step that produces the YAML, then
   `az aks` / `kubectl apply` invoked under `--execute` through the injectable
-  runner.
+  runner. On `--execute` the provisioner first seeds the GitHub token into Key Vault,
+  then applies the identity manifest (Namespace, ServiceAccount, and the Key Vault
+  `SecretProviderClass`) before the namespaced exporter, Deployment, and ScaledObject.
 
 ## 5. Knowledge iteration
 
@@ -164,8 +175,7 @@ category, so the testing posture is stated honestly rather than borrowed wholesa
 - **The running harness is live-deployment-validated, not offline-proven.** Whether
   Ralph actually runs on a real cluster, picks up real issues, and opens real pull
   requests cannot be shown by the unit suite, and the design does not pretend it
-  can. That validation is a live deployment activity, which is the deferred
-  follow-up.
+  can. That validation is a live deployment activity, proven by deploying.
 
 ## 8. Out of scope
 
@@ -174,8 +184,6 @@ category, so the testing posture is stated honestly rather than borrowed wholesa
 - The SRE-to-squad path. Incident issues reach the squad through the same
   `squad:ready` label (ADR 0007), but the SRE phase is its own design (ADR 0008,
   ADR 0009).
-- Actually standing up the cluster. Implementation of the modules below is the
-  follow-up session, per the agreed deliverable.
 
 ## 9. What changes in this repo
 

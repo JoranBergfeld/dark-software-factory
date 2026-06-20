@@ -35,7 +35,7 @@ from dsf.instance.spec import (
     write_manifest,
 )
 from dsf.instance.squad_governance import governance_commands
-from dsf.instance.squad_render import render_squad_bundle
+from dsf.instance.squad_render import KV_SECRET_NAME, render_squad_bundle
 
 Runner = Callable[..., Any]
 
@@ -251,7 +251,9 @@ class InstanceProvisioner:
                             ],
                             check=True,
                         )
+                        self._seed_github_token(azure_result)
                         for manifest_file in (
+                            bundle.identity_path,
                             bundle.exporter_path,
                             bundle.deployment_path,
                             bundle.scaledobject_path,
@@ -347,4 +349,27 @@ class InstanceProvisioner:
             deployment_name=self.spec.deployment_name(),
             location=self.spec.location,
             outputs={k: str(val) for k, val in outputs.items() if val is not None},
+        )
+
+    def _seed_github_token(self, azure_result: AzureProvisionResult | None) -> None:
+        """Seed the operator's GitHub token into the per-product Key Vault.
+
+        The squad pods never hold a static in-cluster credential; the Key Vault
+        CSI driver projects this secret at runtime under AKS workload identity
+        (Option 2, ADR 0012). Swapping to a GitHub App installation token later is
+        a value change here, not a rewrite. Reads the vault name from the Azure
+        deployment outputs captured by the ``provision_azure`` step.
+        """
+        keyvault_name = azure_result.outputs.get("keyVaultName", "") if azure_result else ""
+        token = self._run(
+            ["gh", "auth", "token"], check=True, capture_output=True, text=True
+        )
+        self._run(
+            [
+                "az", "keyvault", "secret", "set",
+                "--vault-name", keyvault_name,
+                "--name", KV_SECRET_NAME,
+                "--value", getattr(token, "stdout", "").strip(),
+            ],
+            check=True,
         )
