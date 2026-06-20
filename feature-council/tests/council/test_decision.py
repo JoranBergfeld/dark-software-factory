@@ -6,6 +6,7 @@ from dsf.config.flags import weights
 from dsf.contracts.enums import Verdict
 from dsf.contracts.models import CouncilVerdict, CriticScore
 from dsf.council.decision import decide
+from dsf.council.jury import JurorDecision
 from dsf_testing import (
     InMemoryConfigStore,
     build_test_services,
@@ -106,7 +107,9 @@ def test_seeded_weight_shifts_council_weighted_score():
 
 async def test_jury_dissent_escalates_under_supervised():
     services = build_test_services()
-    services.model.register("[jury:skeptic]", lambda system, prompt: "NO-GO")
+    services.model.register(
+        "[jury:skeptic]", lambda system, prompt: JurorDecision(go=False)
+    )
     run = make_run([make_evidence("CRITICAL outage", confidence=0.9)])
     prop = make_proposal(run, proposed_change="Add a small cache.")
     verdict = await decide(prop, run, services)
@@ -119,7 +122,9 @@ async def test_jury_dissent_escalates_under_supervised():
 async def test_unanimous_jury_against_kills_a_strong_recommendation():
     services = build_test_services()
     for persona in ("pragmatist", "skeptic", "user_advocate"):
-        services.model.register(f"[jury:{persona}]", lambda system, prompt: "NO-GO")
+        services.model.register(
+            f"[jury:{persona}]", lambda system, prompt: JurorDecision(go=False)
+        )
     run = make_run([make_evidence("CRITICAL outage", confidence=0.9)])
     prop = make_proposal(run, proposed_change="Add a small cache.")
     verdict = await decide(prop, run, services)

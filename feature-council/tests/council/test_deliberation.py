@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from dsf.council.critics import ALL_CRITICS
 from dsf.council.deliberation import (
     GATE_NAMES,
@@ -82,10 +84,10 @@ async def test_registered_lens_handler_overrides_the_fallback():
     assert value.rationale == "scripted"
 
 
-async def test_lens_falls_back_to_critic_when_the_model_raises():
-    # A real model (azure mode) can raise: a validation error on an out-of-bounds
-    # score, a strict-schema rejection, or a network error. The lens must degrade
-    # to its deterministic critic, not crash the whole council run.
+async def test_lens_model_error_propagates():
+    # A real model can raise: a validation error on an out-of-bounds score, a
+    # strict-schema rejection, or a network error. The error is not swallowed;
+    # it propagates so the conveyor records the run as ERROR.
     services = build_test_services()
 
     def boom(system: str, prompt: str) -> LensPosition:
@@ -95,12 +97,8 @@ async def test_lens_falls_back_to_critic_when_the_model_raises():
     run = make_run([make_evidence("CRITICAL outage", confidence=0.9)])
     prop = make_proposal(run, proposed_change="Add a small cache.")
 
-    positions = await deliberate(prop, run, services)
-    value = next(s for s in positions if s.critic == "value")
-    expected = await ALL_CRITICS["value"](prop, run, services)
-    assert value.score == expected.score
-    assert value.veto == expected.veto
-    assert "model unavailable" in value.rationale
+    with pytest.raises(ValueError, match="out-of-bounds"):
+        await deliberate(prop, run, services)
 
 
 def _services_with_rounds(rounds: int):

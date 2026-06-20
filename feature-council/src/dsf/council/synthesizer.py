@@ -1,16 +1,17 @@
 """Synthesizer — cluster run evidence into candidate :class:`Proposal`s.
 
 Robustness contract: this MUST yield >=1 valid proposal for a run that
-carries evidence even when ``services.model`` is the default
-:class:`~dsf.model.DeterministicModelClient` (no registered handler). The model is
-therefore used *only* for prose (title/problem/proposed_change text). The
-load-bearing fields — ``evidence_ids``, ``product`` and ``kind`` — are derived
+carries evidence even when the model returns no structured prose. The model is
+therefore used *only* for the proposal title; everything else, including the
+load-bearing fields ``evidence_ids``, ``product`` and ``kind``, is derived
 deterministically by clustering evidence on shared ``product_hints``.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+
+from pydantic import BaseModel
 
 from dsf.contracts.enums import ProposalKind
 from dsf.contracts.models import EvidenceItem, Proposal
@@ -19,7 +20,14 @@ if TYPE_CHECKING:
     from dsf.container import Services
     from dsf.contracts.models import Run
 
-#: Synthesizer prompt tag — handlers may register against this in dry-run.
+
+class ProposalProse(BaseModel):
+    """The model-drafted prose for a proposal (only the title is load-bearing)."""
+
+    title: str
+
+
+#: Synthesizer prompt tag — handlers may register against this to script a title.
 SYNTH_TAG = "[synthesize]"
 
 #: Keywords in claims that bias a cluster toward a FIX (vs FEATURE) proposal.
@@ -76,15 +84,6 @@ def _mean_confidence(items: list[EvidenceItem]) -> float:
     return sum(i.confidence for i in items) / len(items)
 
 
-def _prose_or_fallback(result: object, fallback: str) -> str:
-    """Use model prose when it is a non-blank string, else the fallback."""
-    if isinstance(result, str):
-        text = result.strip()
-        if text and not text.startswith("[deterministic]"):
-            return text
-    return fallback
-
-
 async def synthesize(run: Run, services: Services) -> list[Proposal]:
     """Synthesize candidate proposals from a run's evidence.
 
@@ -122,11 +121,16 @@ async def synthesize(run: Run, services: Services) -> list[Proposal]:
         prose = await services.model.complete(
             system="You are the intake synthesizer.",
             prompt=prompt,
+            schema=ProposalProse,
         )
 
         verb = "Fix" if kind is ProposalKind.FIX else "Improve"
         scope = product or "the product"
         fallback_title = f"{verb} {scope}: {items[0].claim}"[:120]
+        if isinstance(prose, ProposalProse) and prose.title.strip():
+            title = prose.title
+        else:
+            title = fallback_title
         fallback_problem = (
             f"Evidence ({len(items)} item(s)) indicates: {claims}"
         )
@@ -139,7 +143,7 @@ async def synthesize(run: Run, services: Services) -> list[Proposal]:
             Proposal(
                 run_id=run.id,
                 kind=kind,
-                title=_prose_or_fallback(prose, fallback_title),
+                title=title,
                 problem=fallback_problem,
                 proposed_change=fallback_change,
                 product=product,
@@ -151,4 +155,4 @@ async def synthesize(run: Run, services: Services) -> list[Proposal]:
     return proposals
 
 
-__all__ = ["SYNTH_TAG", "FIX_KEYWORDS", "synthesize"]
+__all__ = ["FIX_KEYWORDS", "SYNTH_TAG", "ProposalProse", "synthesize"]

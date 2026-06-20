@@ -1,15 +1,12 @@
 """Deliberation council - role-persona lens agents that argue before scoring.
 
 The five substantive decision lenses (value, cost, feasibility, security,
-strategic fit) each state a position on a proposal through the model port. With
-real models registered they deliberate with genuine perspective diversity; with
-no handler registered the model echoes, so each lens falls back to its existing
-deterministic critic in :data:`~dsf.council.critics.ALL_CRITICS`. The offline
-positions are therefore identical to the critic scores that drive the golden
-suite, which keeps the synthesized recommendation byte-identical to the pre-slice
-behavior. A lens also falls back to its critic if the model call fails (a
-response-validation, strict-schema, or network error), so a flaky backend
-degrades the run rather than failing it.
+strategic fit) each state a position on a proposal through the model port. When
+the model returns a structured :class:`LensPosition` the lenses deliberate with
+genuine perspective diversity; when it returns anything else, each lens falls
+back to its deterministic critic in :data:`~dsf.council.critics.ALL_CRITICS`,
+which is the legitimate baseline. A model error is not swallowed: it propagates
+so the conveyor records the run as ``ERROR``.
 
 Grounding and duplication are *gates*, not lenses: they are matters of fact, run
 deterministically in the decision engine, and can veto. They are listed here as
@@ -30,7 +27,6 @@ from pydantic import BaseModel, Field
 from dsf.config.flags import critic_enabled, deliberation_rounds
 from dsf.contracts.models import CriticScore
 from dsf.council.critics import ALL_CRITICS
-from dsf.model.client import ECHO_PREFIX
 
 if TYPE_CHECKING:
     from dsf.container import Services
@@ -110,9 +106,9 @@ def _lens_prompt(
 def _parse_position(result: object, name: str, fallback: CriticScore) -> CriticScore:
     """Convert a model result into this lens's :class:`CriticScore`.
 
-    A structured :class:`LensPosition` is adopted; a deterministic echo or any
-    other shape falls back to the lens's critic score so the line stays green
-    offline.
+    A structured :class:`LensPosition` is adopted; any other shape falls back to
+    the lens's deterministic critic score (the legitimate baseline when the model
+    returns no structured position).
     """
     if isinstance(result, LensPosition):
         return CriticScore(
@@ -121,10 +117,6 @@ def _parse_position(result: object, name: str, fallback: CriticScore) -> CriticS
             veto=result.veto,
             rationale=result.rationale,
         )
-    if isinstance(result, str) and not result.startswith(ECHO_PREFIX):
-        # Free-text model answer with no structured position: keep the
-        # deterministic score but carry the prose for the audit log.
-        return fallback.model_copy(update={"rationale": result})
     return fallback
 
 
@@ -136,19 +128,16 @@ async def _lens_position(
     peers: dict[str, CriticScore],
     round_index: int,
 ) -> CriticScore:
-    """Ask one lens for its position, falling back to its deterministic critic."""
+    """Ask one lens for its position, falling back to its deterministic critic.
+
+    The critic baseline is computed first and used whenever the model returns a
+    non-:class:`LensPosition` result. A real model error is not caught here: it
+    propagates so the conveyor records the run as ``ERROR``.
+    """
     fallback = await ALL_CRITICS[name](proposal, run, services)
     persona = _PERSONAS.get(name, _DEFAULT_PERSONA)
     prompt = _lens_prompt(name, proposal, peers, round_index)
-    try:
-        result = await services.model.complete(system=persona, prompt=prompt, schema=LensPosition)
-    except Exception:
-        # A real model can fail (response validation, a strict-schema rejection, a
-        # network error). The deterministic critic is the safety net, so degrade to
-        # it rather than crash the whole council run, and note it for the audit log.
-        note = "[lens model unavailable; used deterministic critic]"
-        rationale = f"{fallback.rationale} {note}".strip() if fallback.rationale else note
-        return fallback.model_copy(update={"rationale": rationale})
+    result = await services.model.complete(system=persona, prompt=prompt, schema=LensPosition)
     return _parse_position(result, name, fallback)
 
 
@@ -158,8 +147,8 @@ async def deliberate(proposal: Proposal, run: Run, services: Services) -> list[C
     Each enabled lens states a position; over ``deliberation.rounds`` rounds it
     re-states after seeing the others' previous-round positions (see-and-revise).
     Only lenses whose ``critic.<name>`` flag is enabled for the proposal's product
-    participate. Offline (no model handler) every position is the lens's
-    deterministic critic score and is stable across rounds.
+    participate. When the model returns no structured position every position is
+    the lens's deterministic critic score and is stable across rounds.
     """
     product = proposal.product
     enabled = [
