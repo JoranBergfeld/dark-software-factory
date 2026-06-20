@@ -57,8 +57,10 @@ async def test_run_sweep_runs_line_when_enabled() -> None:
 
     # Scheduled run advanced through the conveyor (terminal, not OPEN).
     assert run.status != RunStatus.OPEN
-    # Dry-run default everywhere -> GitHub never called.
-    assert services.github.calls == []
+    # The system executes by default: a scheduled sweep that reaches FILED files
+    # for real (no system-initiated dry-run).
+    if run.status == RunStatus.FILED:
+        assert services.github.calls
 
 
 async def test_sweep_scopes_run_to_services_product() -> None:

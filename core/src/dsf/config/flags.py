@@ -6,7 +6,6 @@ callers never hardcode flag strings:
 * ``critic.<name>``           -> :func:`critic_enabled`
 * ``agent.<KIND>``            -> :func:`agent_enabled`
 * ``trigger.<KIND>.paused``   -> :func:`triggers_paused`
-* ``dry_run``                 -> :func:`dry_run_global`
 * ``threshold.<product>`` (default key ``default_threshold``) -> :func:`threshold`
 * ``weight.<critic>`` (default ``1.0``)                       -> :func:`weights`
 """
@@ -63,11 +62,6 @@ def triggers_paused(cfg: ConfigStore, trigger_kind: TriggerKind | str) -> bool:
     """Whether the ``trigger_kind`` trigger (SCHEDULED|SIGNAL) is paused."""
     key = trigger_kind.value if isinstance(trigger_kind, TriggerKind) else str(trigger_kind)
     return cfg.is_enabled(f"trigger.{key}.paused")
-
-
-def dry_run_global(cfg: ConfigStore) -> bool:
-    """Whether the global dry-run kill switch is on."""
-    return cfg.is_enabled("dry_run")
 
 
 def threshold(cfg: ConfigStore, product: str | None = None) -> float:
@@ -151,7 +145,6 @@ __all__ = [
     "consensus_bar",
     "critic_enabled",
     "deliberation_rounds",
-    "dry_run_global",
     "jury_roster",
     "maturity_level",
     "threshold",

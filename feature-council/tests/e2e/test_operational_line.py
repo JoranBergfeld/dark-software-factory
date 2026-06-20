@@ -21,9 +21,11 @@ async def test_incident_signal_flows_to_grounded_squad_issue() -> None:
             "source_kinds": ["INCIDENTS"],
             "title": "Recurring checkout 5xx",
             "text": "Checkout 5xx incident recurred several times this sprint.",
-            "dry_run": True,
         }
     )
+    # Dry-run is a user-invoked preview; set it explicitly (the system never
+    # defaults to dry-run).
+    run.dry_run = True
 
     final = await run_line(run, services)
 
@@ -58,15 +60,14 @@ def _incident_signal() -> dict:
         "source_kinds": ["INCIDENTS"],
         "title": "Recurring checkout 5xx",
         "text": "Checkout 5xx incident recurred several times this sprint.",
-        "dry_run": False,
     }
 
 
 async def test_incident_line_files_real_issue_then_dedups_on_recurrence() -> None:
-    """With dry-run off, operational INCIDENTS evidence files a real issue via the
-    GitHub port; an identical second run files nothing (deduped at S5/S7)."""
+    """The system executes by default: operational INCIDENTS evidence files a real
+    issue via the GitHub port; an identical second run files nothing (deduped at
+    S5/S7)."""
     services = build_test_services()  # github = RecordingGitHubClient
-    services.config.set_flag("dry_run", False)  # off the global kill switch
     bb = Blackboard(services.memory)
 
     first = await run_line(signal_to_run(_incident_signal()), services)

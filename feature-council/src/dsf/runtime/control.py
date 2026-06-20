@@ -59,7 +59,9 @@ def signal_to_run(payload: dict) -> Run:
     * ``scope_product_hints`` <- ``payload['product_hints']`` (or ``[]``).
     * ``source_kinds`` <- ``payload['source_kinds']`` mapped to
       :class:`SourceKind` (unknown kinds dropped; missing -> ``[]``).
-    * ``dry_run`` <- ``payload['dry_run']`` (default ``True``).
+
+    The run executes by default. Dry-run is a user-invoked preview only, set via
+    the ``dsfctl run --dry-run`` flag, not a payload field or system default.
     """
     payload = payload or {}
     return Run(
@@ -67,7 +69,7 @@ def signal_to_run(payload: dict) -> Run:
         signal_payload=dict(payload),
         scope_product_hints=_coerce_hints(payload),
         source_kinds=_coerce_source_kinds(payload),
-        dry_run=bool(payload.get("dry_run", True)),
+        dry_run=False,
     )
 
 
@@ -102,7 +104,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         return 1
     payload = json.loads(path.read_text(encoding="utf-8"))
     run = signal_to_run(payload)
-    if args.dry_run or services.config.is_enabled("dry_run"):
+    if args.dry_run:
         run.dry_run = True
     final = asyncio.run(run_line(run, services))
     _print_run_summary(final)

@@ -1,9 +1,9 @@
 """Control Center web UI (Phase 7) -- the WRITE surface for runtime toggles.
 
 The Grafana dashboard stays read-only; this FastAPI app is where an operator
-flips feature flags, pauses triggers, throws the global dry-run kill switch, and
-accepts calibration proposals -- all of which land in the
-:class:`~dsf.ports.ConfigStore` and take effect on the next run (no redeploy).
+flips feature flags, pauses triggers, and accepts calibration proposals -- all
+of which land in the :class:`~dsf.ports.ConfigStore` and take effect on the next
+run (no redeploy).
 
 Authentication
 --------------
@@ -218,7 +218,6 @@ def _state(services: Services) -> dict[str, Any]:
     calibration = _load_calibration(services, weights)
 
     return {
-        "dry_run": flags.dry_run_global(cfg),
         "critics": critics,
         "agents": agents,
         "triggers": triggers,

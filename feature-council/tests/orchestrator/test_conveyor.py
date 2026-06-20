@@ -10,7 +10,7 @@ from dsf.orchestrator.stations.s1_triage import SIGNAL_KIND
 from dsf_testing import build_test_services
 
 
-async def test_full_line_reaches_filed_dry_run() -> None:
+async def test_full_line_reaches_filed_and_files_for_real() -> None:
     services = build_test_services()
     run = Run(
         trigger=TriggerKind.SIGNAL,
@@ -26,9 +26,10 @@ async def test_full_line_reaches_filed_dry_run() -> None:
     issues = await Blackboard(services.memory).load_issues(result.id)
     assert len(issues) >= 1
 
-    # Dry-run default: GitHub create_issue was NOT called; no filed_url set.
-    assert services.github.calls == []
-    assert all(issue.filed_url is None for issue in issues)
+    # The system executes by default (no dry-run flag set): GitHub create_issue
+    # was called for every routed issue, each getting a filed_url back.
+    assert len(services.github.calls) == len(issues)
+    assert all(issue.filed_url is not None for issue in issues)
 
     # Grounding enforced: every routed issue's proposal had non-empty evidence_ids.
     proposals = await Blackboard(services.memory).load_proposals(result.id)

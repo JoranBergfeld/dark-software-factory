@@ -9,7 +9,6 @@ from dsf.config.flags import (
     consensus_bar,
     critic_enabled,
     deliberation_rounds,
-    dry_run_global,
     jury_roster,
     maturity_level,
     threshold,
@@ -49,13 +48,6 @@ def test_triggers_paused():
     assert triggers_paused(cfg, TriggerKind.SIGNAL) is False
     cfg.set_flag("trigger.SIGNAL.paused", True)
     assert triggers_paused(cfg, "SIGNAL") is True
-
-
-def test_dry_run_global():
-    cfg = InMemoryConfigStore.from_defaults()
-    assert dry_run_global(cfg) is True
-    cfg.set_flag("dry_run", False)
-    assert dry_run_global(cfg) is False
 
 
 def test_threshold_falls_back_to_default():

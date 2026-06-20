@@ -19,7 +19,8 @@ def test_new_parser_wiring():
     assert args.environment == "dev"
     assert args.location == "swedencentral"
     assert args.squad_maturity == "low"
-    assert args.execute is False
+    # Provisioning executes by default; --dry-run is the opt-in preview.
+    assert args.dry_run is False
     assert args.write_plan is False
 
 
@@ -27,7 +28,7 @@ def test_new_squad_maturity_high_flows_into_manifest(tmp_path):
     rc = main([
         "new", "--product", "demo", "--owner", "acme",
         "--name-prefix", "demopfx", "--squad-maturity", "high",
-        "--write-plan", "--config-root", str(tmp_path),
+        "--dry-run", "--write-plan", "--config-root", str(tmp_path),
     ])
     assert rc == 0
     assert read_manifest("demo", repo_root=tmp_path).spec.squad_maturity == "high"
@@ -49,7 +50,7 @@ def test_new_requires_name_prefix():
 def test_new_dry_run_prints_plan_without_side_effects(capsys, tmp_path):
     rc = main([
         "new", "--product", "demo", "--owner", "acme",
-        "--name-prefix", "demopfx", "--config-root", str(tmp_path),
+        "--name-prefix", "demopfx", "--dry-run", "--config-root", str(tmp_path),
     ])
     out = capsys.readouterr().out
     assert rc == 0
@@ -66,7 +67,8 @@ def test_new_dry_run_prints_plan_without_side_effects(capsys, tmp_path):
 def test_new_write_plan_writes_manifest(tmp_path):
     rc = main([
         "new", "--product", "demo", "--owner", "acme",
-        "--name-prefix", "demopfx", "--write-plan", "--config-root", str(tmp_path),
+        "--name-prefix", "demopfx", "--dry-run", "--write-plan",
+        "--config-root", str(tmp_path),
     ])
     assert rc == 0
     assert (tmp_path / "config" / "instances" / "demo.json").exists()
@@ -75,7 +77,8 @@ def test_new_write_plan_writes_manifest(tmp_path):
 def test_new_effective_prefix_is_stable_across_runs(tmp_path):
     argv = [
         "new", "--product", "demo", "--owner", "acme",
-        "--name-prefix", "acmebase", "--write-plan", "--config-root", str(tmp_path),
+        "--name-prefix", "acmebase", "--dry-run", "--write-plan",
+        "--config-root", str(tmp_path),
     ]
     assert main(argv) == 0
     first = read_manifest("demo", repo_root=tmp_path).spec.name_prefix

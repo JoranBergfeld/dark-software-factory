@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from dsf.config.flags import dry_run_global
 from dsf.contracts.enums import RunStatus, Verdict
 from dsf.memory.consolidation import consolidate_run
 from dsf.memory.dedup import FILED_ISSUE_KIND, dedup_key, is_duplicate
@@ -34,7 +33,7 @@ async def run(run: Run, services: Services) -> Run:
         issues = await blackboard.load_issues(run.id)
         verdicts = await blackboard.load_verdicts(run.id)
 
-        dry = run.dry_run or dry_run_global(services.config)
+        dry = run.dry_run
 
         for issue in issues:
             key = dedup_key(issue.title, issue.problem)

@@ -16,27 +16,6 @@
   </header>
 
   <main>
-    <!-- Global dry-run kill switch -->
-    <section class="card kill {% if state.dry_run %}kill-on{% else %}kill-off{% endif %}">
-      <div class="kill-head">
-        <h2>Global DRY-RUN kill switch</h2>
-        <span class="badge {% if state.dry_run %}badge-on{% else %}badge-off{% endif %}">
-          {% if state.dry_run %}DRY-RUN ENGAGED{% else %}LIVE — FILING ENABLED{% endif %}
-        </span>
-      </div>
-      <p class="muted">
-        When engaged, the full line runs but stops short of filing GitHub issues — a safe rehearsal mode.
-      </p>
-      <form method="post" action="/toggle">
-        {%- if csrf_token -%}<input type="hidden" name="csrf_token" value="{{ csrf_token }}" />{%- endif -%}
-        <input type="hidden" name="flag" value="dry_run" />
-        <input type="hidden" name="value" value="{{ 'false' if state.dry_run else 'true' }}" />
-        <button type="submit" class="btn {% if state.dry_run %}btn-danger{% else %}btn-primary{% endif %}">
-          {% if state.dry_run %}Disengage (go live){% else %}Engage dry-run{% endif %}
-        </button>
-      </form>
-    </section>
-
     <!-- Critics -->
     <section class="card">
       <h2>Critics <span class="count">{{ state.critics | length }}</span></h2>

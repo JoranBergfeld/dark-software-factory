@@ -3,7 +3,6 @@
 from dsf.config.flags import (
     agent_enabled,
     critic_enabled,
-    dry_run_global,
     threshold,
     triggers_paused,
     weights,
@@ -14,7 +13,6 @@ __all__ = [
     "Product",
     "agent_enabled",
     "critic_enabled",
-    "dry_run_global",
     "load_registry",
     "route_product",
     "threshold",

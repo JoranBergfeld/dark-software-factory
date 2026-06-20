@@ -49,13 +49,14 @@ def _cmd_new(args: argparse.Namespace) -> int:
         squad_maturity=args.squad_maturity,
     )
     prov = InstanceProvisioner(spec, repo_root=root)
-    if args.execute:
+    execute = not args.dry_run
+    if execute:
         plan = prov.apply(execute=True).plan
     elif args.write_plan:
         plan = prov.apply(execute=False).plan
     else:
         plan = prov.plan()
-    _print_plan(plan, execute=args.execute)
+    _print_plan(plan, execute=execute)
     return 0
 
 
@@ -106,14 +107,15 @@ def build_parser() -> argparse.ArgumentParser:
         "'high' auto-merges on green CI",
     )
     p_new.add_argument(
-        "--execute",
+        "--dry-run",
         action="store_true",
-        help="run executable steps (gh/squad/az + council bring-up & SRE onboarding)",
+        help="preview only: print the what-if plan without running any steps "
+        "(provisioning executes by default)",
     )
     p_new.add_argument(
         "--write-plan",
         action="store_true",
-        help="dry-run, but write the instance manifest to config/instances/",
+        help="with --dry-run, still write the instance manifest to config/instances/",
     )
     p_new.add_argument(
         "--config-root",

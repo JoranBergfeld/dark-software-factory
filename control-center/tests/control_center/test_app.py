@@ -51,14 +51,12 @@ def test_index_renders_flags(client):
     body = resp.text
     assert "text/html" in resp.headers["content-type"]
     assert "grounding" in body
-    assert "dry-run" in body.lower()
 
 
 def test_api_state_has_seeded_flags(client):
     resp = client.get("/api/state")
     assert resp.status_code == 200
     data = resp.json()
-    assert data["dry_run"] is True
     critic_names = {c["name"] for c in data["critics"]}
     assert "duplication" in critic_names
     assert all(c["enabled"] for c in data["critics"])
@@ -117,21 +115,6 @@ def test_toggle_disables_critic(services):
     assert resp.status_code == 303
     assert resp.headers["location"] == "/"
     assert services.config.is_enabled("critic.duplication") is False
-
-
-def test_toggle_dry_run_reflected_in_snapshot(services):
-    ac = TestClient(create_app(services, token=_TOKEN), follow_redirects=False)
-    csrf = _csrf(ac)
-    resp = ac.post(
-        "/toggle",
-        data={"flag": "dry_run", "value": "false", "csrf_token": csrf},
-        headers={"Authorization": f"Bearer {_TOKEN}"},
-    )
-    assert resp.status_code == 303
-    assert services.config.is_enabled("dry_run") is False
-
-    state = ac.get("/api/state").json()
-    assert state["dry_run"] is False
 
 
 def test_set_value_updates_threshold(services):
