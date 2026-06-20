@@ -19,6 +19,6 @@ COPY --from=builder /install /usr/local
 USER appuser
 
 # Per-product feature-council orchestrator (the dsfctl instance-control CLI).
-# Scope is supplied at runtime via DSF_PRODUCT (see .env.orchestrator). The
-# global --mode flag MUST precede the subcommand.
-CMD ["dsfctl", "--mode", "azure", "serve-orchestrator"]
+# Scope and endpoints are supplied at runtime via DSF_PRODUCT and the Azure
+# runtime env (see .env.orchestrator); build_services wires the real bundle.
+CMD ["dsfctl", "serve-orchestrator"]

@@ -1,56 +1,10 @@
-"""Tests for the service container + CLI skeleton (plan Task 0.4)."""
+"""Tests for the real-only service container fail-loud contract."""
 
 from __future__ import annotations
 
 import pytest
 
-from dsf.config.store import InMemoryConfigStore
-from dsf.container import AzureRuntimeSettings, Services, build_services
-from dsf.github_client import RealGitHubClient, RecordingGitHubClient
-from dsf.memory import InMemoryMemoryStore
-from dsf.model import DeterministicModelClient
-from dsf.observability.tracing import NoOpTracer
-from dsf.ports import ConfigStore, GitHubClient, MemoryStore, ModelClient, Tracer
-
-
-def test_build_services_local_wires_fakes():
-    services = build_services("local")
-    assert isinstance(services, Services)
-    assert services.mode == "local"
-    assert isinstance(services.model, DeterministicModelClient)
-    assert isinstance(services.memory, InMemoryMemoryStore)
-    assert isinstance(services.config, InMemoryConfigStore)
-    assert isinstance(services.github, RecordingGitHubClient)
-    assert isinstance(services.tracer, NoOpTracer)
-
-
-def test_azure_mode_wires_embedder_into_memory_store():
-    from dsf.model.azure_embeddings import AzureOpenAIEmbeddingClient
-
-    env = {
-        "DSF_PRODUCT": "demo",
-        "AZURE_OPENAI_ENDPOINT": "https://x.openai.azure.com",
-        "AZURE_OPENAI_EMBEDDING_DEPLOYMENT": "text-embedding-3-small",
-    }
-    services = build_services("azure", env=env)
-
-    assert isinstance(services.memory._embedder, AzureOpenAIEmbeddingClient)
-
-
-def test_azure_mode_without_embedding_deployment_has_no_embedder():
-    env = {"DSF_PRODUCT": "demo"}
-    services = build_services("azure", env=env)
-
-    assert services.memory._embedder is None
-
-
-def test_build_services_satisfy_protocols():
-    services = build_services("local")
-    assert isinstance(services.model, ModelClient)
-    assert isinstance(services.memory, MemoryStore)
-    assert isinstance(services.config, ConfigStore)
-    assert isinstance(services.github, GitHubClient)
-    assert isinstance(services.tracer, Tracer)
+from dsf.container import AzureRuntimeSettings, build_services
 
 
 def test_azure_runtime_settings_from_env_requires_product():
@@ -77,51 +31,40 @@ def test_azure_runtime_settings_from_env_reads_endpoints():
     assert settings.cosmos_endpoint == "https://cosmos.example"
 
 
-def test_azure_runtime_settings_endpoints_optional():
-    settings = AzureRuntimeSettings.from_env({"DSF_PRODUCT": "microbi"})
-    assert settings.product == "microbi"
-    assert settings.appconfig_endpoint == ""
-    assert settings.cosmos_endpoint == ""
-
-
-def test_services_has_product_and_azure_defaults_none():
-    services = build_services("local")
-    assert services.product is None
-    assert services.azure is None
-
-
-def test_build_services_gh_mode_uses_real_github_client():
-    services = build_services("gh")
-    assert isinstance(services, Services)
-    assert services.mode == "gh"
-    assert isinstance(services.github, RealGitHubClient)
-    # Satisfies the port protocol.
-    assert isinstance(services.github, GitHubClient)
-
-
-def test_build_services_unknown_mode_raises():
-    with pytest.raises(NotImplementedError):
-        build_services("gcp")
-
-
-def test_build_services_azure_wires_real_github_and_settings():
-    from dsf.github_client import RealGitHubClient
-
-    services = build_services("azure", env={"DSF_PRODUCT": "microbi"})
-    assert services.mode == "azure"
-    assert isinstance(services.github, RealGitHubClient)
-    assert services.product == "microbi"
-    assert services.azure is not None
-    assert services.azure.product == "microbi"
-    # without endpoints configured, the adapters fall back to the in-memory siblings:
-    assert isinstance(services.model, DeterministicModelClient)
-    assert isinstance(services.memory, InMemoryMemoryStore)
-    assert isinstance(services.config, InMemoryConfigStore)
-    # tracer comes from build_tracer("azure") and still satisfies the port:
-    assert isinstance(services.tracer, Tracer)
-
-
-def test_build_services_azure_missing_product_raises_value_error():
+def test_build_services_requires_product():
     with pytest.raises(ValueError):
-        build_services("azure", env={})
+        build_services(env={})
 
+
+def test_build_services_missing_endpoints_names_every_missing_var():
+    with pytest.raises(ValueError) as exc:
+        build_services(env={"DSF_PRODUCT": "microbi"})
+
+    message = str(exc.value)
+    for var in (
+        "AZURE_APPCONFIG_ENDPOINT",
+        "AZURE_COSMOS_ENDPOINT",
+        "AZURE_OPENAI_ENDPOINT",
+        "AZURE_OPENAI_DEPLOYMENT",
+        "AZURE_OPENAI_EMBEDDING_DEPLOYMENT",
+    ):
+        assert var in message
+
+
+def test_build_services_partial_endpoints_names_only_the_missing():
+    env = {
+        "DSF_PRODUCT": "microbi",
+        "AZURE_APPCONFIG_ENDPOINT": "https://ac.example",
+        "AZURE_COSMOS_ENDPOINT": "https://cosmos.example",
+        "AZURE_OPENAI_ENDPOINT": "https://x.openai.azure.com",
+        # deployment + embedding deployment still missing
+    }
+    with pytest.raises(ValueError) as exc:
+        build_services(env=env)
+
+    message = str(exc.value)
+    assert "AZURE_OPENAI_DEPLOYMENT" in message
+    assert "AZURE_OPENAI_EMBEDDING_DEPLOYMENT" in message
+    # The ones that are set must not be reported as missing.
+    assert "AZURE_APPCONFIG_ENDPOINT" not in message
+    assert "AZURE_COSMOS_ENDPOINT" not in message

@@ -1,8 +1,10 @@
 """``dsfctl`` — operate a running instance's feature-council runtime.
 
-``run``/``sweep`` execute the conveyor in-process (local in-memory implementations by default, fully
-dry-run safe). ``serve-agent``/``serve-orchestrator`` launch the respective ASGI services via
-uvicorn. The global ``--mode`` flag selects the service bundle (``local``/``gh``/``azure``).
+``run``/``sweep`` execute the conveyor in-process. ``serve-agent``/
+``serve-orchestrator`` launch the respective ASGI services via uvicorn. Every
+command wires the real per-product service bundle via
+:func:`dsf.container.build_services`, which requires the Azure runtime
+environment (``DSF_PRODUCT`` plus the data-plane endpoints).
 
 The Control Center web UI ships as its own ``dsf-control-center`` console script
 (the ``dsf-control-center`` package), not as a ``dsfctl`` subcommand.
@@ -77,11 +79,11 @@ def _print_run_summary(run) -> None:
         print(f"[dsf]   audit[{rec.station}] {rec.message}")
 
 
-def _get_services(mode: str):
-    """Build a services bundle or exit cleanly on unsupported/misconfigured modes."""
+def _get_services():
+    """Build the real services bundle or exit cleanly on misconfiguration."""
     try:
-        return build_services(mode)
-    except (NotImplementedError, ValueError) as exc:
+        return build_services()
+    except ValueError as exc:
         print(f"[dsf] error: {exc}", file=sys.stderr)
         sys.exit(1)
 
@@ -90,7 +92,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     """Run the intake line for one signal JSON file."""
     from dsf.orchestrator.conveyor import run_line
 
-    services = _get_services(args.mode)
+    services = _get_services()
     if not args.signal:
         print("--signal <path> is required for `run`", file=sys.stderr)
         return 1
@@ -111,7 +113,7 @@ def _cmd_sweep(args: argparse.Namespace) -> int:
     """Run a scheduled sweep across enabled sources."""
     from dsf.triggers.scheduler import run_sweep
 
-    services = _get_services(args.mode)
+    services = _get_services()
     final = asyncio.run(run_sweep(services))
     _print_run_summary(final)
     return 0
@@ -125,7 +127,7 @@ def _cmd_serve_orchestrator(args: argparse.Namespace) -> int:
     """
     from dsf.triggers.scheduler import run_orchestrator_tick
 
-    services = _get_services(args.mode)
+    services = _get_services()
     swept = asyncio.run(run_orchestrator_tick(services))
     _print_run_summary(swept)
     return 0
@@ -151,15 +153,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="dsfctl",
         description="Dark Software Factory — instance control CLI (feature-council runtime)",
-    )
-    parser.add_argument(
-        "--mode",
-        default="local",
-        help=(
-            "service mode: 'local' (in-memory implementations, default), 'gh' (real GitHub "
-            "client via gh CLI), or 'azure' (per-product runtime; requires "
-            "DSF_PRODUCT). Other modes are not yet supported."
-        ),
     )
     sub = parser.add_subparsers(dest="command", required=True)
 

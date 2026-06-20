@@ -236,26 +236,23 @@ def create_app(services: Services | None = None, *, token: str | None = None) ->
     Parameters
     ----------
     services:
-        Defaults to :func:`dsf.container.build_services` in ``local`` mode.
-        Pass an explicit instance (and hold a reference) to assert against the
-        same :class:`~dsf.ports.ConfigStore` after a toggle.
+        Defaults to a lazily built real :func:`dsf.container.build_services`
+        bundle. Pass an explicit instance (and hold a reference) to assert
+        against the same :class:`~dsf.ports.ConfigStore` after a toggle.
     token:
         Bearer token for write-route authentication.  ``None`` reads
         ``CC_BEARER_TOKEN`` from the environment.  ``""`` disables enforcement
         (local/test mode only -- raises in non-local mode).  A non-empty string
         always enforces.
     """
-    svc = services if services is not None else build_services("local")
+    svc = services if services is not None else build_services()
 
-    # Resolve the effective mode directly from the environment (avoids a
-    # circular import through dsf.agents).
-    effective_mode = (os.environ.get("DSF_MODE") or "local").strip().lower()
     _raw_token = token if token is not None else os.environ.get(CC_BEARER_TOKEN_ENV, "")
     expected_token = (_raw_token or "").strip()
 
     # build_bearer_dependency raises immediately if token is empty outside local
     # mode -- fail CLOSED at startup.
-    auth_dep = build_bearer_dependency(expected_token, mode=effective_mode)
+    auth_dep = build_bearer_dependency(expected_token)
     csrf_required = bool(expected_token)
 
     app = FastAPI(title="dsf-control-center")
@@ -323,8 +320,19 @@ def create_app(services: Services | None = None, *, token: str | None = None) ->
     return app
 
 
-#: Module-level app for ``uvicorn dsf.control_center.app:app``.
-app = create_app()
+#: Lazily built module-level app for ``uvicorn dsf.control_center.app:app``.
+#: Built on first attribute access so importing this module needs no Azure env.
+_app: FastAPI | None = None
+
+
+def __getattr__(name: str) -> object:
+    """Build the real module-level ``app`` on first access (PEP 562)."""
+    if name == "app":
+        global _app
+        if _app is None:
+            _app = create_app()
+        return _app
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -351,7 +359,6 @@ __all__ = [
     "CC_BEARER_TOKEN_ENV",
     "CRITICS",
     "TRIGGERS",
-    "app",
     "create_app",
     "main",
 ]

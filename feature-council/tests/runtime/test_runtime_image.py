@@ -28,7 +28,8 @@ def test_runtime_dockerfile_is_two_stage_nonroot_pinned():
     assert "--uid 1001" in text
 
 
-def test_runtime_dockerfile_cmd_runs_azure_sweep_worker():
+def test_runtime_dockerfile_cmd_runs_sweep_worker():
     text = DOCKERFILE.read_text(encoding="utf-8")
-    # the global --mode flag MUST precede the subcommand:
-    assert 'CMD ["dsfctl", "--mode", "azure", "serve-orchestrator"]' in text
+    # build_services wires the real per-product bundle from the runtime env;
+    # there is no --mode flag any more.
+    assert 'CMD ["dsfctl", "serve-orchestrator"]' in text

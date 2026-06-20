@@ -37,7 +37,6 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from dsf.container import build_services
 from dsf.contracts.enums import TriggerKind
 from dsf.contracts.models import Run
 from dsf.evals.evaluators import groundedness, routing_accuracy, verdict_match, veto_accuracy
@@ -62,7 +61,7 @@ GATE_THRESHOLDS: dict[str, float] = {
     "veto_accuracy": 0.95,    # adversarial duplicate veto case
 }
 
-ServicesFactory = Callable[[str], "Services"]
+ServicesFactory = Callable[[], "Services"]
 
 
 def load_cases(path: str | Path | None = None) -> list[dict[str, Any]]:
@@ -99,7 +98,7 @@ async def _apply_setup(
     services: Services,
     case: dict[str, Any],
     run: Run,
-    services_factory: ServicesFactory = build_services,
+    services_factory: ServicesFactory,
 ) -> None:
     """Apply optional test scaffolding declared on the case.
 
@@ -172,7 +171,7 @@ async def _seed_duplicate_proposal(
     from dsf.orchestrator.blackboard import Blackboard
     from dsf.orchestrator.stations import s1_triage, s2_investigation, s3_synthesis
 
-    mini_services = services_factory("local")
+    mini_services = services_factory()
     _apply_config_overrides(mini_services, case)
     mini_run = _build_run(case)
     mini_run = await s1_triage.run(mini_run, mini_services)
@@ -190,13 +189,13 @@ async def _seed_duplicate_proposal(
 
 async def run_case(
     case: dict[str, Any],
-    services_factory: ServicesFactory = build_services,
+    services_factory: ServicesFactory,
 ) -> dict[str, Any]:
     """Run one golden case through the dry-run line and score it.
 
     Returns ``{"id", "name", "status", "metrics": {<3 keys>}}``.
     """
-    services = services_factory("local")
+    services = services_factory()
     _apply_config_overrides(services, case)
 
     run = _build_run(case)
@@ -243,8 +242,8 @@ def _aggregate(case_results: list[dict[str, Any]]) -> dict[str, float]:
 
 
 async def run_suite(
-    path: str | Path | None = None,
-    services_factory: ServicesFactory = build_services,
+    path: str | Path | None,
+    services_factory: ServicesFactory,
 ) -> dict[str, Any]:
     """Run every golden case and aggregate mean metrics.
 
@@ -308,8 +307,22 @@ def _gate_failures(result: dict[str, Any]) -> list[str]:
     ]
 
 
-def main(argv: list[str] | None = None) -> int:
-    """CLI entrypoint. With ``--gate``, exit non-zero on metric regression."""
+def main(
+    argv: list[str] | None = None,
+    services_factory: ServicesFactory | None = None,
+) -> int:
+    """CLI entrypoint. With ``--gate``, exit non-zero on metric regression.
+
+    ``services_factory`` builds the bundle each case runs against. It defaults
+    to the real :func:`dsf.container.build_services` (imported lazily so this
+    module needs no Azure env to import); tests inject ``build_test_services``.
+    """
+    if services_factory is None:
+        from dsf.container import build_services
+
+        def services_factory() -> Services:
+            return build_services()
+
     parser = argparse.ArgumentParser(prog="dsf.evals.runner")
     parser.add_argument(
         "--gate",
@@ -323,7 +336,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    result = asyncio.run(run_suite(args.golden))
+    result = asyncio.run(run_suite(args.golden, services_factory))
     failures = _gate_failures(result)
     print(_format_summary(result, failures))
 

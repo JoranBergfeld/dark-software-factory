@@ -7,17 +7,31 @@ import json
 import pytest
 
 from dsf.runtime.control import build_parser, main
+from dsf_testing import build_test_services
 
 
-def test_cli_azure_mode_without_product_exits_cleanly(capsys, monkeypatch):
+@pytest.fixture
+def _real_services(monkeypatch):
+    """Swap the real Azure-backed bundle for the in-memory test bundle.
+
+    ``dsfctl`` builds real services via :func:`dsf.container.build_services`,
+    which needs the Azure runtime env. The CLI plumbing tests only exercise the
+    wiring, so we point the runtime at a test bundle instead.
+    """
+    monkeypatch.setattr(
+        "dsf.runtime.control.build_services", lambda: build_test_services()
+    )
+
+
+def test_cli_sweep_without_product_exits_cleanly(capsys, monkeypatch):
     monkeypatch.delenv("DSF_PRODUCT", raising=False)
     with pytest.raises(SystemExit) as exc_info:
-        main(["--mode", "azure", "sweep"])
+        main(["sweep"])
     assert exc_info.value.code == 1
     assert "DSF_PRODUCT" in capsys.readouterr().err
 
 
-def test_cli_run_dry_run_with_signal(tmp_path, capsys):
+def test_cli_run_dry_run_with_signal(tmp_path, capsys, _real_services):
     signal = tmp_path / "signal.json"
     signal.write_text(json.dumps({"alert": "boom", "level": "error"}), encoding="utf-8")
     rc = main(["run", "--dry-run", "--signal", str(signal)])
@@ -27,7 +41,7 @@ def test_cli_run_dry_run_with_signal(tmp_path, capsys):
     assert "dry_run=True" in out
 
 
-def test_cli_run_missing_signal_returns_error(capsys):
+def test_cli_run_missing_signal_returns_error(capsys, _real_services):
     rc = main(["run", "--signal", "does-not-exist.json"])
     assert rc == 1
 
@@ -45,7 +59,7 @@ def test_cli_sre_sweep_removed():
         parser.parse_args(["sre-sweep"])
 
 
-def test_cli_sweep_runs_line(capsys):
+def test_cli_sweep_runs_line(capsys, _real_services):
     assert main(["sweep"]) == 0
     assert "status=" in capsys.readouterr().out
 
@@ -80,14 +94,10 @@ def test_cli_control_center_subcommand_removed():
         parser.parse_args(["control-center"])
 
 
-def test_cli_unsupported_mode_exits_cleanly(capsys):
-    """An unsupported --mode must exit non-zero with a clear message, no traceback."""
-    with pytest.raises(SystemExit) as exc_info:
-        main(["--mode", "gcp", "sweep"])
-    assert exc_info.value.code == 1
-    err = capsys.readouterr().err
-    assert "not yet supported" in err
-    assert "gcp" in err
+def test_cli_no_longer_accepts_mode_flag():
+    """The ``--mode`` flag is gone — build_services is real-only, no mode."""
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["--mode", "azure", "sweep"])
 
 
 def test_control_parser_rejects_new_command():

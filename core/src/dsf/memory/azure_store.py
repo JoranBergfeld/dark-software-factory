@@ -4,8 +4,8 @@ Talks to a narrow :class:`CosmosGateway` (``upsert`` + single-field equality
 ``query``). The default gateway wraps ``azure-cosmos`` (aio) and is built
 lazily. ``query_similar`` ranks by embedding cosine similarity when an
 :class:`~dsf.ports.EmbeddingClient` is injected (record texts are embedded on
-write), falling back to the same token-overlap scorer as ``InMemoryMemoryStore``
-when no embedder is configured.
+write), falling back to a shared token-overlap scorer when no embedder is
+configured.
 """
 
 from __future__ import annotations

@@ -1,5 +1,5 @@
-"""Model clients — deterministic offline implementation of the ModelClient port."""
+"""Model clients — real Azure OpenAI implementation of the ModelClient port."""
 
-from dsf.model.client import ECHO_PREFIX, DeterministicModelClient
+from dsf.model.azure_client import AzureOpenAIModelClient
 
-__all__ = ["ECHO_PREFIX", "DeterministicModelClient"]
+__all__ = ["AzureOpenAIModelClient"]

@@ -65,29 +65,4 @@ class RealGitHubClient:
         return result.stdout.strip()
 
 
-class RecordingGitHubClient:
-    """In-memory GitHub client for local/offline mode.
-
-    Records issue-creation calls in ``self.calls`` and returns deterministic
-    ``local://issue/<n>`` URLs. Never touches the network — used by local mode and
-    as a recording double in tests.
-    """
-
-    def __init__(self) -> None:
-        self.calls: list[dict] = []
-
-    async def create_issue(
-        self,
-        repo: str,
-        title: str,
-        body: str,
-        labels: list[str],
-    ) -> str:
-        """Record the call and return a deterministic local URL."""
-        self.calls.append(
-            {"repo": repo, "title": title, "body": body, "labels": list(labels)}
-        )
-        return f"local://issue/{len(self.calls)}"
-
-
-__all__ = ["RealGitHubClient", "RecordingGitHubClient"]
+__all__ = ["RealGitHubClient"]

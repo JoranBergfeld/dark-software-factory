@@ -1,10 +1,12 @@
-"""Tests for tracing wiring: tracer factory + conveyor span emission."""
+"""Tests for tracing wiring: real tracer factory + conveyor span emission."""
 
 from __future__ import annotations
 
+import pytest
+
 from dsf.contracts.enums import TriggerKind
 from dsf.contracts.models import Run
-from dsf.observability.tracing import NoOpTracer, build_tracer, span_attrs_for_run
+from dsf.observability.tracing import build_tracer, span_attrs_for_run
 from dsf.orchestrator.conveyor import run_line
 from dsf_testing import build_test_services
 
@@ -20,24 +22,25 @@ STATION_SPANS = {
 }
 
 
-def test_build_tracer_local_returns_noop() -> None:
-    tracer = build_tracer("local")
-    assert isinstance(tracer, NoOpTracer)
+def _otel_installed() -> bool:
+    try:
+        import opentelemetry.trace  # noqa: F401
+    except ImportError:
+        return False
+    return True
 
 
-def test_noop_tracer_satisfies_protocol() -> None:
-    from dsf.ports import Tracer
-
-    assert isinstance(NoOpTracer(), Tracer)
-
-
-def test_build_tracer_azure_does_not_raise() -> None:
-    # Without opentelemetry installed this falls back to NoOpTracer; either way
-    # it returns a usable tracer and never raises.
-    tracer = build_tracer("azure")
-    assert tracer is not None
-    with tracer.span("probe", run_id="r1"):
-        pass
+def test_build_tracer_is_real_only() -> None:
+    """build_tracer constructs the real OTel tracer; it fails loud without OTel."""
+    if _otel_installed():
+        # OTel present: a usable tracer that records spans without raising.
+        tracer = build_tracer()
+        with tracer.span("probe", run_id="r1"):
+            pass
+    else:
+        # OTel absent (the case here): fail loud rather than degrade to a no-op.
+        with pytest.raises(RuntimeError):
+            build_tracer()
 
 
 def test_span_attrs_for_run_flattens_enums() -> None:

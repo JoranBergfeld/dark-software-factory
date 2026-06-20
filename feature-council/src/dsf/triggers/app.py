@@ -4,8 +4,9 @@ DSF is pull-only: the orchestrator gets work by sweeping source agents on its ow
 schedule (see :func:`dsf.triggers.scheduler.sweep`). There is no inbound signal
 inbox, so this app exposes only a liveness probe.
 
-The app builds a module-level local :class:`~dsf.container.Services` at import
-time. Tests can override it via FastAPI's dependency system
+The app builds its real :class:`~dsf.container.Services` bundle lazily on first
+request and caches it (so importing this module needs no Azure environment).
+Tests override it via FastAPI's dependency system
 (``app.dependency_overrides[get_services] = ...``) so each test gets a fresh,
 isolated services bundle - keeping the app testable without global state.
 """
@@ -21,17 +22,20 @@ from dsf.container import build_services
 if TYPE_CHECKING:
     from dsf.container import Services
 
-#: Module-level local services bundle, shared across requests by default.
-_LOCAL_SERVICES: Services = build_services("local")
+#: Lazily built real services bundle, shared across requests once constructed.
+_services: Services | None = None
 
 
 def get_services() -> Services:
     """Dependency provider for the request-scoped services bundle.
 
-    Returns the module-level local bundle by default; override in tests via
-    ``app.dependency_overrides[get_services]``.
+    Builds the real services bundle on first use and caches it; override in
+    tests via ``app.dependency_overrides[get_services]``.
     """
-    return _LOCAL_SERVICES
+    global _services
+    if _services is None:
+        _services = build_services()
+    return _services
 
 
 app = FastAPI(title="dsf-triggers", version="1.0.0")

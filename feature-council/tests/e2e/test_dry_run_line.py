@@ -91,15 +91,22 @@ async def test_line_files_real_issue_when_dry_run_off(payload: dict) -> None:
     assert filed == {(issue.repo, issue.title) for issue in issues}
 
 
-def test_cli_run_dry_run_exits_zero(capsys) -> None:
+def test_cli_run_dry_run_exits_zero(capsys, monkeypatch) -> None:
+    # dsfctl builds the real bundle; point it at the in-memory test bundle.
+    monkeypatch.setattr(
+        "dsf.runtime.control.build_services", lambda: build_test_services()
+    )
     code = main(["run", "--dry-run", "--signal", str(SAMPLE_SIGNAL)])
     out = capsys.readouterr().out
     assert code == 0
     assert "status=filed" in out.lower()
 
 
-def test_cli_serve_orchestrator_exits_zero(capsys) -> None:
+def test_cli_serve_orchestrator_exits_zero(capsys, monkeypatch) -> None:
     # The orchestrator tick runs the source sweep (DSF is pull-only).
+    monkeypatch.setattr(
+        "dsf.runtime.control.build_services", lambda: build_test_services()
+    )
     code = main(["serve-orchestrator"])
     out = capsys.readouterr().out
     assert code == 0

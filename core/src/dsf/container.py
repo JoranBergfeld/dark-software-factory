@@ -1,4 +1,4 @@
-"""Service container — wires ports to implementations by mode."""
+"""Service container — wires ports to their real Azure-backed implementations."""
 
 from __future__ import annotations
 
@@ -8,14 +8,8 @@ from dataclasses import dataclass
 
 from pydantic import BaseModel
 
-from dsf.config.store import InMemoryConfigStore
-from dsf.github_client import RecordingGitHubClient
-from dsf.memory.store import InMemoryMemoryStore
-from dsf.model import DeterministicModelClient
-from dsf.observability.tracing import NoOpTracer
 from dsf.ports import (
     ConfigStore,
-    EmbeddingClient,
     GitHubClient,
     MemoryStore,
     ModelClient,
@@ -24,12 +18,13 @@ from dsf.ports import (
 
 
 class AzureRuntimeSettings(BaseModel):
-    """Runtime configuration for ``azure`` mode, resolved from the environment.
+    """Per-product runtime configuration resolved from the environment.
 
-    Only ``product`` (``DSF_PRODUCT``) is required — it scopes the factory to a
-    single product. The endpoints are optional: they are carried for the real
-    service adapters (Cosmos/App Config/App Insights) that land in SP3b, and are
-    rendered into the per-product runtime bundle today.
+    ``product`` (``DSF_PRODUCT``) scopes the factory to a single product and is
+    required. The data-plane endpoints (App Configuration / Cosmos / Azure
+    OpenAI) are required too — :func:`build_services` validates them before it
+    wires any adapter. ``keyvault_uri`` and ``appinsights_connection_string``
+    are carried for the adapters that use them but are not validated here.
     """
 
     product: str
@@ -44,11 +39,11 @@ class AzureRuntimeSettings(BaseModel):
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> AzureRuntimeSettings:
         """Resolve settings from ``env``. Raises ``ValueError`` if ``DSF_PRODUCT``
-        is missing or blank — azure mode is meaningless without a product scope."""
+        is missing or blank — the runtime is meaningless without a product scope."""
         product = (env.get("DSF_PRODUCT") or "").strip()
         if not product:
             raise ValueError(
-                "azure mode requires DSF_PRODUCT to scope the factory runtime "
+                "DSF_PRODUCT is required to scope the factory runtime "
                 "(set DSF_PRODUCT=<product>)."
             )
         return cls(
@@ -69,9 +64,8 @@ class AzureRuntimeSettings(BaseModel):
 
 @dataclass
 class Services:
-    """Bundle of every port instance, selected per mode."""
+    """Bundle of every port instance for a running product factory."""
 
-    mode: str
     model: ModelClient
     memory: MemoryStore
     config: ConfigStore
@@ -81,106 +75,64 @@ class Services:
     azure: AzureRuntimeSettings | None = None
 
 
-def build_services(
-    mode: str = "local", *, env: Mapping[str, str] | None = None
-) -> Services:
-    """Build a wired :class:`Services` bundle.
+#: Required endpoint settings paired with the env var that supplies each one.
+_REQUIRED_ENDPOINTS: tuple[tuple[str, str], ...] = (
+    ("appconfig_endpoint", "AZURE_APPCONFIG_ENDPOINT"),
+    ("cosmos_endpoint", "AZURE_COSMOS_ENDPOINT"),
+    ("openai_endpoint", "AZURE_OPENAI_ENDPOINT"),
+    ("openai_deployment", "AZURE_OPENAI_DEPLOYMENT"),
+    ("openai_embedding_deployment", "AZURE_OPENAI_EMBEDDING_DEPLOYMENT"),
+)
 
-    Supported modes
-    ---------------
-    ``local``
-        Fully in-memory local implementations — deterministic, no network calls, no credentials
-        required.  All filing is dry-run unless explicitly overridden per-run.
-    ``gh``
-        Same in-memory implementations for model/memory/config/tracer, but with a real
-        :class:`~dsf.github_client.RealGitHubClient` that calls the ``gh`` CLI.
-        Requires ``gh`` to be authenticated in the environment.
-    ``azure``
-        Per-product runtime mode. Resolves :class:`AzureRuntimeSettings` from
-        ``env`` (defaults to ``os.environ``; only ``DSF_PRODUCT`` is required),
-        wires the real GitHub client and the OpenTelemetry tracer
-        (:func:`dsf.observability.tracing.build_tracer`, which degrades to the
-        NoOpTracer when OpenTelemetry is not installed), and wires the real
-        Azure data adapters (App Configuration / Cosmos / Azure OpenAI) for each
-        configured endpoint, falling back to the in-memory sibling when an
-        endpoint is unset (SP3b).
-        The resolved ``product``/``azure`` settings are carried on the bundle.
+
+def build_services(*, env: Mapping[str, str] | None = None) -> Services:
+    """Build a wired :class:`Services` bundle backed by real Azure adapters.
+
+    Resolves :class:`AzureRuntimeSettings` from ``env`` (defaults to
+    ``os.environ``), then **requires** every data-plane endpoint to be set. A
+    missing ``DSF_PRODUCT`` or any blank endpoint raises ``ValueError`` naming
+    the missing env vars — there is no offline/in-memory fallback. The Azure SDK
+    imports are deferred so this module imports cleanly without them; they are
+    only needed when ``build_services`` actually runs.
     """
-    if mode == "local":
-        return Services(
-            mode=mode,
-            model=DeterministicModelClient(),
-            memory=InMemoryMemoryStore(),
-            config=InMemoryConfigStore.from_defaults(),
-            github=RecordingGitHubClient(),
-            tracer=NoOpTracer(),
+    settings = AzureRuntimeSettings.from_env(env if env is not None else os.environ)
+
+    missing = [
+        var for attr, var in _REQUIRED_ENDPOINTS if not getattr(settings, attr)
+    ]
+    if missing:
+        raise ValueError(
+            "missing required Azure runtime configuration: "
+            + ", ".join(missing)
         )
-    if mode == "gh":
-        from dsf.github_client import RealGitHubClient
 
-        return Services(
-            mode=mode,
-            model=DeterministicModelClient(),
-            memory=InMemoryMemoryStore(),
-            config=InMemoryConfigStore.from_defaults(),
-            github=RealGitHubClient(),
-            tracer=NoOpTracer(),
-        )
-    if mode == "azure":
-        from dsf.github_client import RealGitHubClient
-        from dsf.observability.tracing import build_tracer
+    from dsf.config.azure_store import AppConfigStore
+    from dsf.github_client import RealGitHubClient
+    from dsf.memory.azure_store import CosmosMemoryStore
+    from dsf.model.azure_client import AzureOpenAIModelClient
+    from dsf.model.azure_embeddings import AzureOpenAIEmbeddingClient
+    from dsf.observability.tracing import build_tracer
 
-        settings = AzureRuntimeSettings.from_env(env if env is not None else os.environ)
+    embedder = AzureOpenAIEmbeddingClient.from_endpoint(
+        settings.openai_endpoint,
+        deployment=settings.openai_embedding_deployment,
+    )
+    config = AppConfigStore.from_endpoint(settings.appconfig_endpoint)
+    memory = CosmosMemoryStore.from_endpoint(
+        settings.cosmos_endpoint,
+        database=settings.product,
+        embedder=embedder,
+    )
+    model = AzureOpenAIModelClient.from_endpoint(
+        settings.openai_endpoint, deployment=settings.openai_deployment
+    )
 
-        config: ConfigStore
-        if settings.appconfig_endpoint:
-            from dsf.config.azure_store import AppConfigStore
-
-            config = AppConfigStore.from_endpoint(settings.appconfig_endpoint)
-        else:
-            config = InMemoryConfigStore.from_defaults()
-
-        embedder: EmbeddingClient | None = None
-        if settings.openai_endpoint and settings.openai_embedding_deployment:
-            from dsf.model.azure_embeddings import AzureOpenAIEmbeddingClient
-
-            embedder = AzureOpenAIEmbeddingClient.from_endpoint(
-                settings.openai_endpoint,
-                deployment=settings.openai_embedding_deployment,
-            )
-
-        memory: MemoryStore
-        if settings.cosmos_endpoint:
-            from dsf.memory.azure_store import CosmosMemoryStore
-
-            memory = CosmosMemoryStore.from_endpoint(
-                settings.cosmos_endpoint,
-                database=settings.product,
-                embedder=embedder,
-            )
-        else:
-            memory = InMemoryMemoryStore(embedder=embedder)
-
-        model: ModelClient
-        if settings.openai_endpoint and settings.openai_deployment:
-            from dsf.model.azure_client import AzureOpenAIModelClient
-
-            model = AzureOpenAIModelClient.from_endpoint(
-                settings.openai_endpoint, deployment=settings.openai_deployment
-            )
-        else:
-            model = DeterministicModelClient()
-
-        return Services(
-            mode=mode,
-            model=model,
-            memory=memory,
-            config=config,
-            github=RealGitHubClient(),
-            tracer=build_tracer("azure"),
-            product=settings.product,
-            azure=settings,
-        )
-    raise NotImplementedError(
-        f"mode {mode!r} is not yet supported (available: 'local', 'gh', 'azure')."
+    return Services(
+        model=model,
+        memory=memory,
+        config=config,
+        github=RealGitHubClient(),
+        tracer=build_tracer(),
+        product=settings.product,
+        azure=settings,
     )

@@ -30,7 +30,6 @@ def build_test_services(
     in-memory double.
     """
     return Services(
-        mode="local",
         model=model or DeterministicModelClient(),
         memory=memory or InMemoryMemoryStore(),
         config=config or InMemoryConfigStore.from_defaults(),
