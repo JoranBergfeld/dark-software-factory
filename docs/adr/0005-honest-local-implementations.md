@@ -1,8 +1,15 @@
 # ADR 0005: Honest local implementations (no "fakes" in `src/`)
 
-- Status: Accepted
+- Status: Superseded by ADR 0014
 - Date: 2026-06-18
 - Supersedes (in part): ADR 0001 §2 ("Ports + in-memory fakes")
+- Superseded by: ADR 0014 (real-only `src/`, doubles in `dsf_testing`)
+
+> **Superseded.** ADR 0014 keeps this ADR's naming rule (no `Fake*`; the doubles
+> stay honest `InMemory*`/`Deterministic*`/`Recording*`/`NoOp*`) but moves them
+> out of `src/` into the `dsf_testing` test package. `src/` now ships only real
+> implementations, there is no in-process `local`/`gh` mode, and DSF is
+> pull-only. See ADR 0014.
 
 ## Context
 

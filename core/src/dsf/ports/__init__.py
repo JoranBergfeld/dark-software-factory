@@ -1,9 +1,10 @@
 """Port protocols — the seams every external dependency hides behind.
 
 Each port is a :class:`typing.Protocol`. I/O-bearing methods are async so the
-real Azure/MCP implementations can do network calls; the honest local
-implementations (``InMemory*`` / ``NoOp*`` / ``Recording*`` / ``Deterministic*``)
-satisfy the same signatures deterministically for offline runs.
+real Azure/MCP implementations can do network calls. ``src/`` ships only those
+real implementations; deterministic doubles that satisfy the same signatures
+(``InMemory*`` / ``NoOp*`` / ``Recording*`` / ``Deterministic*``) live in the
+``dsf_testing`` package and are used by tests only.
 """
 
 from __future__ import annotations

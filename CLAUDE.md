@@ -22,12 +22,9 @@ Uses `uv`. Run everything through `uv run`. `make install` is `uv sync --all-pac
 - Import boundaries: `make lint-imports` (`uv run lint-imports`) — enforces the
   architectural contracts in `pyproject.toml` `[tool.importlinter]`. Run this after any
   cross-member import change; it gates CI.
-- Eval gate: `make evals` (`uv run python -m dsf.evals.runner --gate`) — also gates CI.
-- Dry run the conveyor: `make dryrun` (runs one signal through the line, files nothing)
-- Stamp a demo instance: `make new-demo`
 
-CI (`.github/workflows/ci.yml`) runs, in order: ruff → lint-imports → pytest → evals gate.
-All four must pass.
+CI (`.github/workflows/ci.yml`) runs, in order: ruff → lint-imports → pytest. All three
+must pass.
 
 ## Workspace layout
 
@@ -35,7 +32,7 @@ A `uv` workspace (`pyproject.toml` `[tool.uv.workspace]`) with four members, all
 one PEP 420 namespace package `dsf` (no member ships its own top-level package):
 
 - **core/** (`dsf-core`) — shared base: `contracts`, `ports`, `config`, `memory`, `model`,
-  `observability`, `a2a`, `container`, `learning`, `signals`, `github_client`. Imports no
+  `observability`, `a2a`, `container`, `learning`, `github_client`. Imports no
   application member.
 - **feature-council/** (`dsf-feature-council`) — the runtime: `agents`, `council`,
   `orchestrator`, `triggers`, `evals`, `runtime`. Console script `dsfctl`.
@@ -81,36 +78,38 @@ config, not code.
 
 ### Source agents (A2A)
 
-`agents/` has one subpackage per `SourceKind` (sentry, grafana, foundryiq, webiq, tickets,
+`agents/` has one subpackage per `SourceKind` (sentry, grafana, foundryiq, webiq,
 incidents, azuremonitor). They're served over A2A (`core/dsf/a2a`) and discovered via
 `agents/registry.py` (`DEPLOYABLE_AGENTS`, keyed on `SourceKind.value.lower()`). The
 registry holds **path strings only** so importing it has no side effects.
 
-### Ports + honest implementations (DI)
+### Ports + real-only `src/` (DI)
 
 External dependencies are `typing.Protocol` ports in `core/src/dsf/ports/` (`ModelClient`,
-`MemoryStore`, `ConfigStore`, `GitHubClient`, `Tracer`, `SignalBuffer`, `EmbeddingClient`).
-`core/src/dsf/container.py` `build_services(mode)` wires a `Services` bundle per mode:
+`MemoryStore`, `ConfigStore`, `GitHubClient`, `Tracer`, `EmbeddingClient`).
+`core/src/dsf/container.py` `build_services()` wires a `Services` bundle of the **real**
+Azure adapters only (App Configuration, Cosmos, Azure OpenAI, the OTel tracer, the real
+GitHub client). There is **no `mode`**: it requires `DSF_PRODUCT` plus every Azure endpoint
+and raises (naming what is unset) if anything is missing. It never falls back to a stub.
 
-- `local` — fully in-memory, deterministic, no network/credentials; filing is dry-run.
-- `gh` — in-memory everything except a real `RealGitHubClient` (shells out to the `gh` CLI).
-- `azure` — per-product runtime; requires `DSF_PRODUCT`. Wires real Azure adapters
-  (App Configuration, Cosmos, Azure OpenAI) per configured endpoint, falling back to the
-  in-memory sibling when an endpoint is unset.
-
-**Naming (ADR 0005):** the in-memory implementations are *honest offline implementations*,
-not test "fakes". Do not introduce `Fake*` names or a `dsf.fakes` package — name them
-`InMemory*` / `Deterministic*` / `Recording*` and keep them in `src/`.
+**Real-only rule (ADR 0014, supersedes 0005):** `src/` ships only real implementations.
+The deterministic doubles (`InMemory*` / `Deterministic*` / `Recording*` / `NoOp*`) live in
+the `testing/dsf_testing/` package; tests build a bundle with
+`dsf_testing.build_test_services()`. Do not put stubs, fixtures, offline fallbacks, or
+`Fake*` names in `src/`. Out-of-scope work is removed and tracked as a GitHub issue, never
+left as a stub (e.g. the tickets agent → issues #60/#61). `InMemoryConfigStore` is the one
+double still in `src/` (the source agents default to it) and is on its way out under #61.
 
 ### Entry points
 
-- `dsfctl` (`runtime/control.py`) — operate a running instance: `run --signal <json>`,
-  `sweep`, `serve-orchestrator` (one tick: drain signal buffer, then sweep sources),
-  `serve-agent --kind <kind>`. Global `--mode local|gh|azure`.
+- `dsfctl` (`runtime/control.py`) — operate a running instance: `run --signal <json>`
+  (executes for real; `--dry-run` previews), `sweep`, `serve-orchestrator` (one tick:
+  sweep sources), `serve-agent --kind <kind>`. DSF is pull-only: it gets work by sweeping
+  source agents, not from a pushed signal inbox (a durable push queue is future scope).
 - `dsf new` (`cli/factory.py`) — provision an isolated product factory (GitHub repo +
-  Coding Squad, Azure resource group, ACA-hosted runtime). Plan-by-default; `--execute`
-  to apply, `--write-plan` to persist the manifest under `config/instances/`. Provisioning
-  logic is in `cli/src/dsf/instance/`.
+  Coding Squad, Azure resource group, ACA-hosted runtime). Executes by default; `--dry-run`
+  produces a what-if preview, `--write-plan` persists the manifest under `config/instances/`.
+  Provisioning logic is in `cli/src/dsf/instance/`.
 
 ## Testing conventions
 
@@ -127,6 +126,6 @@ not test "fakes". Do not introduce `Fake*` names or a `dsf.fakes` package — na
 - ruff: line length 100, target py312, rules `E,F,I,UP,B`.
 - All I/O-bearing port methods are `async`.
 - Architecture decisions are recorded in `docs/adr/`; read the relevant ADR before
-  reworking a subsystem (e.g. 0005 honest impls, 0007 council↔squad handoff, 0010 uv
-  workspace, 0011 deliberative council). Phase write-ups are in `docs/phases/`; the
+  reworking a subsystem (e.g. 0014 real-only `src/` + pull-only, 0007 council↔squad handoff,
+  0010 uv workspace, 0011 deliberative council). Phase write-ups are in `docs/phases/`; the
   operational runbook is `docs/RUNBOOK.md`.
