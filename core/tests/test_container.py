@@ -26,6 +26,26 @@ def test_build_services_local_wires_fakes():
     assert isinstance(services.signals, InMemorySignalBuffer)
 
 
+def test_azure_mode_wires_embedder_into_memory_store():
+    from dsf.model.azure_embeddings import AzureOpenAIEmbeddingClient
+
+    env = {
+        "DSF_PRODUCT": "demo",
+        "AZURE_OPENAI_ENDPOINT": "https://x.openai.azure.com",
+        "AZURE_OPENAI_EMBEDDING_DEPLOYMENT": "text-embedding-3-small",
+    }
+    services = build_services("azure", env=env)
+
+    assert isinstance(services.memory._embedder, AzureOpenAIEmbeddingClient)
+
+
+def test_azure_mode_without_embedding_deployment_has_no_embedder():
+    env = {"DSF_PRODUCT": "demo"}
+    services = build_services("azure", env=env)
+
+    assert services.memory._embedder is None
+
+
 def test_build_services_satisfy_protocols():
     services = build_services("local")
     assert isinstance(services.model, ModelClient)

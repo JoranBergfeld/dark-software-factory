@@ -36,6 +36,20 @@ class ModelClient(Protocol):
 
 
 @runtime_checkable
+class EmbeddingClient(Protocol):
+    """Text embedding port for semantic similarity / deduplication.
+
+    Returns one dense vector per input text (order-preserving). The real
+    implementation is Azure OpenAI embeddings; record texts are embedded on
+    write and ranked by cosine similarity in the memory store.
+    """
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        """Return one embedding vector per input text."""
+        ...
+
+
+@runtime_checkable
 class MemoryStore(Protocol):
     """Unified institutional memory (working + long-term + retrieval)."""
 
@@ -138,6 +152,7 @@ class SignalBuffer(Protocol):
 
 __all__ = [
     "ConfigStore",
+    "EmbeddingClient",
     "GitHubClient",
     "MemoryStore",
     "ModelClient",

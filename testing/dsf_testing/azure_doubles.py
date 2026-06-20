@@ -62,3 +62,28 @@ class RecordingChatGateway:
             {"system": system, "prompt": prompt, "json_schema": json_schema}
         )
         return self.response
+
+
+class RecordingEmbeddingsGateway:
+    """EmbeddingsGateway double: records calls, returns canned vectors.
+
+    ``vectors`` may be a fixed list returned verbatim for every call, or a
+    ``{text: vector}`` map resolved per input text (missing texts -> a zero
+    vector of ``dim`` length) so tests can model semantic closeness directly.
+    """
+
+    def __init__(
+        self,
+        vectors: list[list[float]] | dict[str, list[float]] | None = None,
+        *,
+        dim: int = 0,
+    ) -> None:
+        self.vectors = vectors if vectors is not None else []
+        self.dim = dim
+        self.calls: list[dict] = []
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        self.calls.append({"texts": list(texts)})
+        if isinstance(self.vectors, dict):
+            return [self.vectors.get(t, [0.0] * self.dim) for t in texts]
+        return list(self.vectors)

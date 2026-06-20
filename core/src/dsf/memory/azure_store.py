@@ -2,15 +2,20 @@
 
 Talks to a narrow :class:`CosmosGateway` (``upsert`` + single-field equality
 ``query``). The default gateway wraps ``azure-cosmos`` (aio) and is built
-lazily. Ranking for ``query_similar`` reuses the same token-overlap scorer as
-``InMemoryMemoryStore`` (native vector search is deferred -- see ADR 0006).
+lazily. ``query_similar`` ranks by embedding cosine similarity when an
+:class:`~dsf.ports.EmbeddingClient` is injected (record texts are embedded on
+write), falling back to the same token-overlap scorer as ``InMemoryMemoryStore``
+when no embedder is configured.
 """
 
 from __future__ import annotations
 
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
-from dsf.memory.store import _overlap
+from dsf.memory.store import _cosine, _overlap
+
+if TYPE_CHECKING:
+    from dsf.ports import EmbeddingClient
 
 _WORKING = "working"
 _RECORDS = "records"
@@ -27,14 +32,25 @@ class CosmosGateway(Protocol):
 class CosmosMemoryStore:
     """:class:`~dsf.ports.MemoryStore` backed by Cosmos DB (one DB per product)."""
 
-    def __init__(self, gateway: CosmosGateway) -> None:
+    def __init__(
+        self, gateway: CosmosGateway, embedder: EmbeddingClient | None = None
+    ) -> None:
         self._gw = gateway
         self._seq = 0
+        # When present, record texts are embedded on write and query_similar
+        # ranks by cosine similarity; otherwise it falls back to token overlap.
+        self._embedder = embedder
 
     @classmethod
-    def from_endpoint(cls, endpoint: str, *, database: str) -> CosmosMemoryStore:
+    def from_endpoint(
+        cls,
+        endpoint: str,
+        *,
+        database: str,
+        embedder: EmbeddingClient | None = None,
+    ) -> CosmosMemoryStore:
         """Build a store backed by the real Cosmos SDK gateway."""
-        return cls(_SdkCosmosGateway(endpoint, database))
+        return cls(_SdkCosmosGateway(endpoint, database), embedder)
 
     def _next_seq(self) -> int:
         self._seq += 1
@@ -57,15 +73,27 @@ class CosmosMemoryStore:
         item["_seq"] = seq
         if ttl is not None:
             item["ttl"] = int(ttl)
+        if self._embedder is not None:
+            vectors = await self._embedder.embed([str(record.get("text", ""))])
+            item["_vector"] = vectors[0] if vectors else None
         await self._gw.upsert(_RECORDS, item)
 
     async def query_similar(self, text: str, kind: str, k: int = 5) -> list[dict]:
         rows = await self._gw.query(_RECORDS, "kind", kind)
-        scored = sorted(
-            ((_overlap(text, str(r.get("text", ""))), r) for r in rows),
-            key=lambda pair: pair[0],
-            reverse=True,
-        )
+        if self._embedder is not None:
+            qvecs = await self._embedder.embed([text])
+            qv = qvecs[0] if qvecs else None
+            scored = sorted(
+                ((_cosine(qv, r.get("_vector")), r) for r in rows),
+                key=lambda pair: pair[0],
+                reverse=True,
+            )
+        else:
+            scored = sorted(
+                ((_overlap(text, str(r.get("text", ""))), r) for r in rows),
+                key=lambda pair: pair[0],
+                reverse=True,
+            )
         return [
             {rk: rv for rk, rv in r.items() if not rk.startswith("_") and rk != "ttl"}
             | {"similarity": sim}

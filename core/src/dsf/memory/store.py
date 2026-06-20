@@ -1,22 +1,24 @@
 """MemoryStore implementations plus the ergonomic :class:`Memory` wrapper.
 
 ``InMemoryMemoryStore`` is the deterministic, offline
-:class:`~dsf.ports.MemoryStore` implementation (dicts + token-overlap
-similarity) used by local mode and the ``azure`` seam until a real backend
-lands.  ``Memory`` is a thin layer over the port that adds a couple of
+:class:`~dsf.ports.MemoryStore` implementation (dict-backed) used by local mode.
+``query_similar`` ranks by embedding cosine similarity when an
+:class:`~dsf.ports.EmbeddingClient` is injected, and falls back to token-overlap
+when none is configured (offline).  ``Memory`` is a thin layer over the port that adds a couple of
 conveniences (record serialization, named tier helpers) without hiding the
 underlying async semantics.
 """
 
 from __future__ import annotations
 
+import math
 import time
 from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
 
 if TYPE_CHECKING:
-    from dsf.ports import MemoryStore
+    from dsf.ports import EmbeddingClient, MemoryStore
 
 
 class Memory:
@@ -80,6 +82,18 @@ def _overlap(a: str, b: str) -> float:
     return len(inter) / len(union)
 
 
+def _cosine(a: list[float] | None, b: list[float] | None) -> float:
+    """Cosine similarity of two equal-length vectors; 0.0 if either is empty."""
+    if not a or not b:
+        return 0.0
+    dot = sum(x * y for x, y in zip(a, b, strict=True))
+    na = math.sqrt(sum(x * x for x in a))
+    nb = math.sqrt(sum(y * y for y in b))
+    if na == 0.0 or nb == 0.0:
+        return 0.0
+    return dot / (na * nb)
+
+
 class InMemoryMemoryStore:
     """In-memory memory store.
 
@@ -89,12 +103,19 @@ class InMemoryMemoryStore:
     * lessons: list of dicts keyed by ``product``.
     """
 
-    def __init__(self, max_records: int = 1000) -> None:
+    def __init__(
+        self,
+        max_records: int = 1000,
+        embedder: EmbeddingClient | None = None,
+    ) -> None:
         # working: key -> (value, ttl_seconds | None, inserted_at)
         self._working: dict[str, tuple[Any, float | None, float]] = {}
         self._records: list[dict] = []
         self._lessons: list[dict] = []
         self._max_records = max_records
+        # When present, record texts are embedded on write and query_similar
+        # ranks by cosine similarity; otherwise it falls back to token overlap.
+        self._embedder = embedder
 
     async def put_working(self, key: str, value: Any, ttl: float | None = None) -> None:
         """Store a working-tier value, optionally expiring after ``ttl`` seconds."""
@@ -121,15 +142,22 @@ class InMemoryMemoryStore:
         entry["_inserted_at"] = time.monotonic()
         if ttl is not None:
             entry["_ttl"] = ttl
+        if self._embedder is not None:
+            vectors = await self._embedder.embed([str(record.get("text", ""))])
+            entry["_vector"] = vectors[0] if vectors else None
         self._records.append(entry)
         # Evict oldest entries if over the cap.
         if len(self._records) > self._max_records:
             self._records = self._records[-self._max_records :]
 
     async def query_similar(self, text: str, kind: str, k: int = 5) -> list[dict]:
-        """Rank non-expired records of ``kind`` by token-overlap with ``text``."""
+        """Rank non-expired records of ``kind`` similar to ``text``.
+
+        Uses embedding cosine similarity when an embedder is configured;
+        otherwise falls back to token-overlap.
+        """
         now = time.monotonic()
-        scored: list[tuple[float, dict]] = []
+        candidates: list[dict] = []
         for rec in self._records:
             if rec.get("kind") != kind:
                 continue
@@ -137,8 +165,17 @@ class InMemoryMemoryStore:
             rec_ttl = rec.get("_ttl")
             if rec_ttl is not None and (now - inserted_at) >= rec_ttl:
                 continue  # expired
-            sim = _overlap(text, str(rec.get("text", "")))
-            scored.append((sim, rec))
+            candidates.append(rec)
+
+        if self._embedder is not None:
+            qvecs = await self._embedder.embed([text])
+            qv = qvecs[0] if qvecs else None
+            scored = [(_cosine(qv, rec.get("_vector")), rec) for rec in candidates]
+        else:
+            scored = [
+                (_overlap(text, str(rec.get("text", ""))), rec) for rec in candidates
+            ]
+
         scored.sort(key=lambda pair: pair[0], reverse=True)
         return [
             {rk: rv for rk, rv in rec.items() if not rk.startswith("_")} | {"similarity": sim}

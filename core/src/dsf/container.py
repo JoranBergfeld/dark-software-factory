@@ -15,6 +15,7 @@ from dsf.model import DeterministicModelClient
 from dsf.observability.tracing import NoOpTracer
 from dsf.ports import (
     ConfigStore,
+    EmbeddingClient,
     GitHubClient,
     MemoryStore,
     ModelClient,
@@ -40,6 +41,7 @@ class AzureRuntimeSettings(BaseModel):
     cosmos_endpoint: str = ""
     openai_endpoint: str = ""
     openai_deployment: str = ""
+    openai_embedding_deployment: str = ""
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> AzureRuntimeSettings:
@@ -61,6 +63,9 @@ class AzureRuntimeSettings(BaseModel):
             cosmos_endpoint=(env.get("AZURE_COSMOS_ENDPOINT") or "").strip(),
             openai_endpoint=(env.get("AZURE_OPENAI_ENDPOINT") or "").strip(),
             openai_deployment=(env.get("AZURE_OPENAI_DEPLOYMENT") or "").strip(),
+            openai_embedding_deployment=(
+                env.get("AZURE_OPENAI_EMBEDDING_DEPLOYMENT") or ""
+            ).strip(),
         )
 
 
@@ -140,15 +145,26 @@ def build_services(
         else:
             config = InMemoryConfigStore.from_defaults()
 
+        embedder: EmbeddingClient | None = None
+        if settings.openai_endpoint and settings.openai_embedding_deployment:
+            from dsf.model.azure_embeddings import AzureOpenAIEmbeddingClient
+
+            embedder = AzureOpenAIEmbeddingClient.from_endpoint(
+                settings.openai_endpoint,
+                deployment=settings.openai_embedding_deployment,
+            )
+
         memory: MemoryStore
         if settings.cosmos_endpoint:
             from dsf.memory.azure_store import CosmosMemoryStore
 
             memory = CosmosMemoryStore.from_endpoint(
-                settings.cosmos_endpoint, database=settings.product
+                settings.cosmos_endpoint,
+                database=settings.product,
+                embedder=embedder,
             )
         else:
-            memory = InMemoryMemoryStore()
+            memory = InMemoryMemoryStore(embedder=embedder)
 
         model: ModelClient
         if settings.openai_endpoint and settings.openai_deployment:
