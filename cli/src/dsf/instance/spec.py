@@ -127,6 +127,7 @@ class ProvisionStep(BaseModel):
     deferred: bool = False
     executed: bool = False
     result: str = ""
+    error: str = ""
 
 
 class InstancePlan(BaseModel):

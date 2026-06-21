@@ -42,6 +42,10 @@ from dsf.instance.squad_render import KV_SECRET_NAME, render_squad_bundle
 
 Runner = Callable[..., Any]
 
+#: Progress callback: ``(phase, index, total, step, error)`` where ``phase`` is
+#: ``"start"`` / ``"done"`` / ``"error"``. ``error`` is set only on ``"error"``.
+StepEvent = Callable[[str, int, int, ProvisionStep, "BaseException | None"], None]
+
 
 def _label_commands(spec: InstanceSpec) -> list[list[str]]:
     """Build idempotent ``gh label create --force`` commands for an instance.
@@ -199,131 +203,56 @@ class InstanceProvisioner:
         ]
         return InstancePlan(product=s.product, steps=steps)
 
-    def apply(self, *, execute: bool = False) -> InstanceManifest:
+    def apply(
+        self,
+        *,
+        execute: bool = False,
+        on_event: StepEvent | None = None,
+    ) -> InstanceManifest:
         """Apply the plan. ``execute=False`` is a side-effect-free dry-run that
         still writes the manifest; ``execute=True`` runs the non-deferred,
         commanded steps via the injected runner.
 
-        The manifest is always persisted — even if a step raises — so the
-        randomized ``name_prefix`` survives a failed Azure deployment and a retry
-        reuses the same resource names instead of orphaning the first attempt.
-        Non-executing runs carry prior provisioning state forward so a preview or
-        ``--write-plan`` never blanks recorded Azure outputs.
+        ``on_event`` is an optional progress callback invoked as
+        ``on_event(phase, index, total, step, error)`` — ``phase`` is ``"start"``
+        before a step runs, ``"done"`` after it succeeds, and ``"error"`` if it
+        fails — so a caller can surface live per-step status.
+
+        A step that raises is recorded on that step (``result="failed"``,
+        ``error=<message>``) and STOPS the run (later steps are left unrun);
+        ``apply`` does not propagate the exception. The manifest is always
+        persisted — even on failure — so the randomized ``name_prefix`` survives
+        and a retry reuses the same resource names instead of orphaning the first
+        attempt. Non-executing runs carry prior provisioning state forward so a
+        preview or ``--write-plan`` never blanks recorded Azure outputs.
         """
+        emit = on_event or (lambda *_a: None)
         plan = self.plan()
         path = manifest_path(self.spec.product, self._repo_root)
         prior = self._existing_manifest()
         azure_result = prior.azure if (prior and not execute) else None
         executed = execute or bool(prior and prior.executed)
+        # write_config is finalized after the manifest is built, not run in-loop.
+        steps = [s for s in plan.steps if s.name != "write_config"]
+        total = len(steps)
         try:
-            for step in plan.steps:
-                if step.name == "write_config":
-                    continue  # finalized after the manifest is built
-                if step.deferred:
-                    step.result = "deferred"
-                elif step.name == "register_product":
-                    render_product_registration(
-                        InstanceManifest(
-                            spec=self.spec, plan=plan, executed=executed, azure=azure_result
-                        ),
-                        repo_root=self._repo_root,
+            for index, step in enumerate(steps, 1):
+                emit("start", index, total, step, None)
+                try:
+                    azure_result = self._execute_step(
+                        step,
+                        execute=execute,
+                        executed=executed,
+                        azure_result=azure_result,
+                        plan=plan,
                     )
-                    step.executed = execute
-                    step.result = "registered" if execute else "registered (dry-run)"
-                elif step.name == "deploy_council":
-                    provisional = InstanceManifest(
-                        spec=self.spec, plan=plan, executed=executed, azure=azure_result
-                    )
-                    render_runtime_bundle(provisional, repo_root=self._repo_root)
-                    if not execute:
-                        step.result = "rendered (dry-run)"
-                    else:
-                        self._run(
-                            [
-                                "az", "containerapp", "update",
-                                "--resource-group", self.spec.resource_group(),
-                                "--name", f"dsf-orchestrator-{self.spec.product}",
-                                "--image", self.spec.runtime_image,
-                            ],
-                            check=True,
-                        )
-                        step.executed, step.result = True, "deployed"
-                elif step.name == "deploy_squad_ralph":
-                    provisional = InstanceManifest(
-                        spec=self.spec, plan=plan, executed=executed, azure=azure_result
-                    )
-                    bundle = render_squad_bundle(provisional, repo_root=self._repo_root)
-                    if not execute:
-                        step.result = "rendered (dry-run)"
-                    else:
-                        self._run(
-                            [
-                                "az", "aks", "get-credentials",
-                                "--resource-group", self.spec.resource_group(),
-                                "--name", f"aks-dsf-{self.spec.product}",
-                                "--overwrite-existing",
-                            ],
-                            check=True,
-                        )
-                        self._seed_github_token(azure_result)
-                        for manifest_file in (
-                            bundle.identity_path,
-                            bundle.exporter_path,
-                            bundle.deployment_path,
-                            bundle.scaledobject_path,
-                        ):
-                            self._run(
-                                ["kubectl", "apply", "-f", str(manifest_file)],
-                                check=True,
-                            )
-                        step.executed, step.result = True, "deployed"
-                elif step.name == "deploy_sre_agent":
-                    provisional = InstanceManifest(
-                        spec=self.spec, plan=plan, executed=executed, azure=azure_result
-                    )
-                    render_sre_summary(provisional, repo_root=self._repo_root)
-                    if not execute:
-                        step.result = "deployed (dry-run)"
-                    else:
-                        outputs = azure_result.outputs if azure_result else {}
-                        self._run(
-                            self._sre_deploy_command(outputs), check=True
-                        )
-                        note = self._connect_repo(azure_result)
-                        step.executed = True
-                        step.result = note or "deployed"
-                elif not execute:
-                    step.result = "dry-run"
-                elif step.commands:
-                    kwargs = {"cwd": step.cwd} if step.cwd else {}
-                    for cmd in step.commands:
-                        self._run(cmd, check=True, **kwargs)
-                    step.executed, step.result = True, "executed"
-                elif not step.command:
-                    step.result = "noop"
-                elif step.name == "create_repo" and self._repo_exists():
-                    step.executed = True
-                    repo_dir = self.spec.resolved_repo()
-                    if Path(repo_dir).is_dir():
-                        step.result = "exists"
-                    else:
-                        # Repo exists remotely but isn't cloned here; the squad
-                        # steps need a local working copy, so clone it.
-                        self._run(
-                            ["gh", "repo", "clone", self.spec.github_repo(), repo_dir],
-                            check=True,
-                        )
-                        step.result = "cloned"
-                elif step.name == "provision_azure":
-                    proc = self._run(
-                        step.command, check=True, capture_output=True, text=True
-                    )
-                    azure_result = self._azure_result(proc)
-                    step.executed, step.result = True, "executed"
-                else:
-                    kwargs = {"cwd": step.cwd} if step.cwd else {}
-                    self._run(step.command, check=True, **kwargs)
-                    step.executed, step.result = True, "executed"
+                except Exception as exc:  # noqa: BLE001 - reported via on_event, not swallowed
+                    step.executed = False
+                    step.result = "failed"
+                    step.error = str(exc)
+                    emit("error", index, total, step, exc)
+                    break
+                emit("done", index, total, step, None)
         finally:
             for step in plan.steps:
                 if step.name == "write_config":
@@ -333,6 +262,123 @@ class InstanceProvisioner:
             )
             write_manifest(manifest, self._repo_root)
         return manifest
+
+    def _execute_step(
+        self,
+        step: ProvisionStep,
+        *,
+        execute: bool,
+        executed: bool,
+        azure_result: AzureProvisionResult | None,
+        plan: InstancePlan,
+    ) -> AzureProvisionResult | None:
+        """Run one provisioning step, mutating ``step.result``/``executed``.
+
+        Returns the (possibly updated) ``azure_result``: ``provision_azure``
+        captures the deployment outputs that the council/SRE steps consume.
+        """
+        if step.deferred:
+            step.result = "deferred"
+        elif step.name == "register_product":
+            render_product_registration(
+                InstanceManifest(
+                    spec=self.spec, plan=plan, executed=executed, azure=azure_result
+                ),
+                repo_root=self._repo_root,
+            )
+            step.executed = execute
+            step.result = "registered" if execute else "registered (dry-run)"
+        elif step.name == "deploy_council":
+            provisional = InstanceManifest(
+                spec=self.spec, plan=plan, executed=executed, azure=azure_result
+            )
+            render_runtime_bundle(provisional, repo_root=self._repo_root)
+            if not execute:
+                step.result = "rendered (dry-run)"
+            else:
+                self._run(
+                    [
+                        "az", "containerapp", "update",
+                        "--resource-group", self.spec.resource_group(),
+                        "--name", f"dsf-orchestrator-{self.spec.product}",
+                        "--image", self.spec.runtime_image,
+                    ],
+                    check=True,
+                )
+                step.executed, step.result = True, "deployed"
+        elif step.name == "deploy_squad_ralph":
+            provisional = InstanceManifest(
+                spec=self.spec, plan=plan, executed=executed, azure=azure_result
+            )
+            bundle = render_squad_bundle(provisional, repo_root=self._repo_root)
+            if not execute:
+                step.result = "rendered (dry-run)"
+            else:
+                self._run(
+                    [
+                        "az", "aks", "get-credentials",
+                        "--resource-group", self.spec.resource_group(),
+                        "--name", f"aks-dsf-{self.spec.product}",
+                        "--overwrite-existing",
+                    ],
+                    check=True,
+                )
+                self._seed_github_token(azure_result)
+                for manifest_file in (
+                    bundle.identity_path,
+                    bundle.exporter_path,
+                    bundle.deployment_path,
+                    bundle.scaledobject_path,
+                ):
+                    self._run(
+                        ["kubectl", "apply", "-f", str(manifest_file)],
+                        check=True,
+                    )
+                step.executed, step.result = True, "deployed"
+        elif step.name == "deploy_sre_agent":
+            provisional = InstanceManifest(
+                spec=self.spec, plan=plan, executed=executed, azure=azure_result
+            )
+            render_sre_summary(provisional, repo_root=self._repo_root)
+            if not execute:
+                step.result = "deployed (dry-run)"
+            else:
+                outputs = azure_result.outputs if azure_result else {}
+                self._run(self._sre_deploy_command(outputs), check=True)
+                note = self._connect_repo(azure_result)
+                step.executed = True
+                step.result = note or "deployed"
+        elif not execute:
+            step.result = "dry-run"
+        elif step.commands:
+            kwargs = {"cwd": step.cwd} if step.cwd else {}
+            for cmd in step.commands:
+                self._run(cmd, check=True, **kwargs)
+            step.executed, step.result = True, "executed"
+        elif not step.command:
+            step.result = "noop"
+        elif step.name == "create_repo" and self._repo_exists():
+            step.executed = True
+            repo_dir = self.spec.resolved_repo()
+            if Path(repo_dir).is_dir():
+                step.result = "exists"
+            else:
+                # Repo exists remotely but isn't cloned here; the squad steps
+                # need a local working copy, so clone it.
+                self._run(
+                    ["gh", "repo", "clone", self.spec.github_repo(), repo_dir],
+                    check=True,
+                )
+                step.result = "cloned"
+        elif step.name == "provision_azure":
+            proc = self._run(step.command, check=True, capture_output=True, text=True)
+            azure_result = self._azure_result(proc)
+            step.executed, step.result = True, "executed"
+        else:
+            kwargs = {"cwd": step.cwd} if step.cwd else {}
+            self._run(step.command, check=True, **kwargs)
+            step.executed, step.result = True, "executed"
+        return azure_result
 
     def _existing_manifest(self) -> InstanceManifest | None:
         """Return the persisted manifest for this product, or ``None`` if absent."""

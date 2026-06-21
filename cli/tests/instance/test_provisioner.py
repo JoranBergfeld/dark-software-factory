@@ -6,8 +6,6 @@ import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock
 
-import pytest
-
 from dsf.config.registry import load_registry, route_product
 from dsf.contracts.handoff import HANDOFF_LABEL, HANDOFF_LABEL_COLOR, INCIDENT_LABEL
 from dsf.instance.provisioner import InstanceProvisioner
@@ -304,7 +302,7 @@ def test_apply_dry_run_leaves_azure_unset(tmp_path):
     assert results["provision_azure"] == "dry-run"
 
 
-def test_apply_execute_persists_manifest_even_when_azure_deployment_fails(tmp_path):
+def test_apply_execute_records_failure_and_stops_without_raising(tmp_path):
     def fake_run(cmd, **kwargs):
         if cmd[:3] == ["gh", "repo", "view"]:
             return MagicMock(returncode=1)
@@ -314,13 +312,66 @@ def test_apply_execute_persists_manifest_even_when_azure_deployment_fails(tmp_pa
 
     spec = InstanceSpec(product="demo", owner="acme", name_prefix="demox123")
     prov = InstanceProvisioner(spec, run=fake_run, repo_root=tmp_path)
-    with pytest.raises(subprocess.CalledProcessError):
-        prov.apply(execute=True)
+
+    # apply records the failure on the step and STOPS — it does not raise.
+    manifest = prov.apply(execute=True)
+    steps = {s.name: s for s in manifest.plan.steps}
+    assert steps["provision_azure"].result == "failed"
+    assert steps["provision_azure"].error  # carries the error message
+    assert steps["provision_azure"].executed is False
+    # Steps after the failure are left unrun.
+    assert steps["deploy_council"].result == ""
+    assert steps["deploy_sre_agent"].result == ""
 
     # The randomized prefix must survive a failed deployment so a retry reuses the
     # same (globally-unique) resource names instead of orphaning the first attempt.
-    manifest = read_manifest("demo", repo_root=tmp_path)
-    assert manifest.spec.name_prefix == "demox123"
+    persisted = read_manifest("demo", repo_root=tmp_path)
+    assert persisted.spec.name_prefix == "demox123"
+
+
+def test_apply_execute_emits_start_and_done_events_per_step(tmp_path):
+    def fake_run(cmd, **kwargs):
+        if cmd[:3] == ["gh", "repo", "view"]:
+            return MagicMock(returncode=1)
+        return MagicMock(returncode=0, stdout="{}")
+
+    events: list[tuple] = []
+    spec = InstanceSpec(product="demo", owner="acme", name_prefix="demox123")
+    prov = InstanceProvisioner(spec, run=fake_run, repo_root=tmp_path)
+    prov.apply(execute=True, on_event=lambda *a: events.append(a))
+
+    phases = [(phase, step.name) for phase, _i, _t, step, _err in events]
+    assert ("start", "create_repo") in phases
+    assert ("done", "create_repo") in phases
+    assert ("start", "deploy_sre_agent") in phases
+    assert ("done", "deploy_sre_agent") in phases
+    assert not any(phase == "error" for phase, *_ in events)
+    # 1-based index, stable total = the 10 non-write_config steps.
+    starts = [e for e in events if e[0] == "start"]
+    assert starts[0][1] == 1
+    assert all(total == 10 for _p, _i, total, _s, _e in starts)
+
+
+def test_apply_execute_emits_error_event_on_failure(tmp_path):
+    def fake_run(cmd, **kwargs):
+        if cmd[:3] == ["gh", "repo", "view"]:
+            return MagicMock(returncode=1)
+        if cmd[:4] == ["az", "deployment", "group", "create"]:
+            raise subprocess.CalledProcessError(1, cmd)
+        return MagicMock(returncode=0, stdout="")
+
+    events: list[tuple] = []
+    spec = InstanceSpec(product="demo", owner="acme", name_prefix="demox123")
+    prov = InstanceProvisioner(spec, run=fake_run, repo_root=tmp_path)
+    prov.apply(execute=True, on_event=lambda *a: events.append(a))
+
+    errors = [e for e in events if e[0] == "error"]
+    assert len(errors) == 1
+    phase, _index, _total, step, err = errors[0]
+    assert step.name == "provision_azure"
+    assert isinstance(err, subprocess.CalledProcessError)
+    # No "done" emitted for the failed step, and no events after it.
+    assert ("done", "provision_azure") not in [(p, s.name) for p, _i, _t, s, _e in events]
 
 
 def test_apply_dry_run_preserves_prior_azure_outputs(tmp_path):

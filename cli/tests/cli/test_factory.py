@@ -93,3 +93,38 @@ def test_factory_parser_rejects_runtime_command():
     # the factory CLI must NOT expose runtime ops — those live in dsfctl
     with pytest.raises(SystemExit):
         build_parser().parse_args(["run"])
+
+
+def test_new_execute_surfaces_step_failure_and_exits_nonzero(capsys, tmp_path, monkeypatch):
+    # An executing run whose provisioner reports a failed step must surface the
+    # error (not a traceback) and return a non-zero exit code.
+    from dsf.instance import provisioner as prov_mod
+    from dsf.instance.spec import InstanceManifest, InstancePlan, ProvisionStep
+
+    class _FailingProvisioner:
+        def __init__(self, spec, repo_root=None):
+            self.spec = spec
+
+        def apply(self, *, execute=False, on_event=None):
+            step = ProvisionStep(
+                name="provision_azure",
+                description="deploy backing services",
+                result="failed",
+                error="az deployment failed: boom",
+            )
+            if on_event is not None:
+                on_event("start", 5, 11, step, None)
+                on_event("error", 5, 11, step, RuntimeError("boom"))
+            plan = InstancePlan(product=self.spec.product, steps=[step])
+            return InstanceManifest(spec=self.spec, plan=plan, executed=True)
+
+    monkeypatch.setattr(prov_mod, "InstanceProvisioner", _FailingProvisioner)
+    rc = main([
+        "new", "--product", "demo", "--owner", "acme",
+        "--name-prefix", "demopfx", "--config-root", str(tmp_path),
+    ])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "FAILED" in out  # live per-step error line
+    assert "STOPPED at 'provision_azure'" in out  # final surfaced summary
+    assert "boom" in out

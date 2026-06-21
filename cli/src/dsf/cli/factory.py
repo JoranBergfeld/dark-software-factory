@@ -21,6 +21,18 @@ def _print_plan(plan, *, execute: bool = False) -> None:
         print(f"[dsf]  {i}. {step.name:14s} [{status}] {step.description}")
         if step.command:
             print(f"[dsf]       $ {' '.join(step.command)}")
+        if step.error:
+            print(f"[dsf]       ! {step.error}")
+
+
+def _print_step_event(phase, index, total, step, error) -> None:
+    """Live per-step progress for an executing ``dsf new`` run."""
+    if phase == "start":
+        print(f"[dsf] ▶ [{index}/{total}] {step.name}: {step.description}", flush=True)
+    elif phase == "done":
+        print(f"[dsf]   ✓ {step.name}: {step.result}", flush=True)
+    elif phase == "error":
+        print(f"[dsf]   ✗ {step.name} FAILED: {error}", flush=True)
 
 
 def _cmd_new(args: argparse.Namespace) -> int:
@@ -51,12 +63,17 @@ def _cmd_new(args: argparse.Namespace) -> int:
     prov = InstanceProvisioner(spec, repo_root=root)
     execute = not args.dry_run
     if execute:
-        plan = prov.apply(execute=True).plan
+        plan = prov.apply(execute=True, on_event=_print_step_event).plan
+        print()  # separate the live progress from the final summary
     elif args.write_plan:
         plan = prov.apply(execute=False).plan
     else:
         plan = prov.plan()
     _print_plan(plan, execute=execute)
+    failed = next((s for s in plan.steps if s.result == "failed"), None)
+    if failed:
+        print(f"[dsf] provisioning STOPPED at '{failed.name}': {failed.error}")
+        return 1
     return 0
 
 
