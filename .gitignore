@@ -12,3 +12,8 @@ dist/
 local_state/
 
 config/instances/*.runtime/
+
+# Bicep build artifacts (az bicep build output); keep *.parameters.json
+infra/*.json
+infra/modules/*.json
+!infra/*.parameters.json
