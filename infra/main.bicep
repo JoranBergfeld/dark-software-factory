@@ -415,3 +415,9 @@ output keyVaultName string = keyVault.name
 
 @description('Entra tenant ID (for the squad SecretProviderClass).')
 output tenantId string = subscription().tenantId
+
+@description('Application Insights resource id (consumed by the SRE agent connector + RBAC).')
+output appInsightsId string = appInsights.id
+
+@description('Log Analytics workspace resource id (consumed by the SRE agent connector + RBAC).')
+output logAnalyticsId string = logAnalytics.id
