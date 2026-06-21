@@ -107,13 +107,12 @@ resource sreAgent 'Microsoft.App/agents@2026-01-01' = {
     }
 
     defaultModel: {
-      // TODO(confirm): verify the exact model id string accepted by the RP for the
-      // default Azure-hosted model. The ARM reference shows provider + name as free
-      // strings; check the SRE Agent portal or `az sre-agent model list` for valid
-      // values. 'MicrosoftFoundry' / 'gpt-4o' is shown in the MS Learn DefaultModel
-      // description examples but is not authoritatively confirmed for this RP version.
+      // Confirmed by a live deploy: a specific model id ('gpt-4o') is rejected when it
+      // is not offered in the agent's region. 'Automatic' lets the RP pick an available
+      // model per region, so it deploys everywhere. Region-specific model ids seen in
+      // Sweden Central: Automatic, gpt-5.3-codex, gpt-5.4.
       provider: 'MicrosoftFoundry'
-      name: 'gpt-4o'
+      name: 'Automatic'
     }
   }
 }
@@ -170,10 +169,9 @@ output principalId string = agentIdentity.properties.principalId
 @description('ARM resource id of the SRE agent.')
 output agentId string = sreAgent.id
 
-@description('Data-plane endpoint URL for the SRE agent (constructed from name + location).')
-// TODO(confirm): agentEndpoint is NOT a first-class ARM output property in the 2026-01-01
-// schema (the MS Learn reference does not list it under AgentProperties read-only outputs).
-// The endpoint pattern https://{name}.{location}.azuresre.ai is confirmed from the
-// microsoft/sre-agent agent-core.bicep template which computes it client-side.
-// Verify against actual deployment or `az rest --method get` on the resource.
-output agentEndpoint string = 'https://${agentName}.${location}.azuresre.ai'
+@description('Data-plane endpoint URL for the SRE agent.')
+// Confirmed by a live deploy: agentEndpoint IS a read-only ARM property and carries a
+// per-agent infix the constructed pattern misses, e.g.
+// https://dsf-sre-demo--66161fbc.f83faa4a.swedencentral.azuresre.ai. Read it from the
+// resource rather than computing https://{name}.{location}.azuresre.ai.
+output agentEndpoint string = sreAgent.properties.agentEndpoint
