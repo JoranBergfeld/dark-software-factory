@@ -41,7 +41,8 @@ two-plane REST API, and a `targetRGs` RBAC parameter.
    OAuth.
 4. Permission level defaults to `Reader` (read-only; agent requests elevation per action).
    `Privileged` is a later opt-in.
-5. The agent lives in its own resource group (`{name_prefix}-sre-{product}`) in a supported
+5. The agent lives in its own resource group (`rg-dsf-sre-{product}`, matching the repo's
+   `rg-dsf-{product}` convention) in a supported
    region (`sre_agent_location`, default `swedencentral`), independent of the product's
    region. Sweden Central is the only EU region among the three the agent supports, so it is
    the EU-data-residency default.
@@ -104,7 +105,7 @@ writes the manifest, runs no `az`.
   `[resource_group(), *monitored_resource_groups]` deduped, so single-RG products work with
   no extra config and a separate app RG is opt-in.
 - A helper `sre_agent_name()` -> `dsf-sre-<product>` and `sre_resource_group()` ->
-  `{name_prefix}-sre-<product>`.
+  `rg-dsf-sre-<product>`.
 
 ### 4. ADR + docs
 
