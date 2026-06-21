@@ -49,10 +49,12 @@ written, no `az` calls run.
 
 ## Region constraint
 
-The `Microsoft.App/agents` resource is only available in Sweden Central, East US 2, and
-Australia East. `InstanceSpec.sre_agent_location` (default `swedencentral`) is validated
-against this set at spec-construction time. Sweden Central is the only EU region among the
-three, so it is the EU-data-residency default. Once deployed, the agent can monitor resource
+The `Microsoft.App/agents` resource is only available in some regions. The live provider
+list (2026-06) is Sweden Central, UK South, East US 2, Australia East, France Central,
+Canada Central, and Korea Central (verify with `az provider show --namespace Microsoft.App`,
+since the set grows). `InstanceSpec.sre_agent_location` (default `swedencentral`) is
+validated against this set at spec-construction time. Sweden Central is the EU-data-residency
+default. Once deployed, the agent can monitor resource
 groups in any region.
 
 ## Subscription-level RBAC prerequisite

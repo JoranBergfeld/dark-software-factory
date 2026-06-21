@@ -139,6 +139,20 @@ def test_sre_agent_location_rejects_unsupported_region():
         _spec(sre_agent_location="westeurope")
 
 
+def test_sre_agent_location_accepts_all_offered_regions():
+    # The live Microsoft.App/agents provider offers 7 regions (issue #63).
+    for region in (
+        "swedencentral",
+        "uksouth",
+        "eastus2",
+        "australiaeast",
+        "francecentral",
+        "canadacentral",
+        "koreacentral",
+    ):
+        assert _spec(sre_agent_location=region).sre_agent_location == region
+
+
 def test_sre_agent_name_and_rg():
     s = _spec()
     assert s.sre_agent_name() == "dsf-sre-microbi"

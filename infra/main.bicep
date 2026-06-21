@@ -2,11 +2,12 @@
 // Dark Software Factory — Azure resources for one product factory instance.
 //
 // Provisions the backing services the intake line depends on (Log Analytics +
-// Application Insights, Key Vault, App Configuration with seeded flags, Cosmos DB,
-// Event Grid -> Service Bus ingestion) AND the runtime that consumes them: an
-// Azure Container Apps environment + a single no-ingress orchestrator Container
-// App. The runtime authenticates to the data plane with a user-assigned managed
-// identity (ADR 0004); there is no service principal and nothing inbound.
+// Application Insights, Key Vault, App Configuration with seeded flags, Cosmos DB)
+// AND the runtime that consumes them: an Azure Container Apps environment + a single
+// no-ingress orchestrator Container App. DSF is pull-only (ADR 0014): the orchestrator
+// sweeps source agents on a schedule, so there is no inbound signal ingestion here.
+// The runtime authenticates to the data plane with a user-assigned managed identity
+// (ADR 0004); there is no service principal and nothing inbound.
 //
 // Validate (no deploy):  az deployment group what-if -g <rg> -f infra/main.bicep -p @infra/main.parameters.json
 
@@ -169,6 +170,14 @@ resource appConfig 'Microsoft.AppConfiguration/configurationStores@2024-05-01' =
   }
   properties: {
     disableLocalAuth: true
+    // ARM auth mode for managing key-values during deployment. With local auth off,
+    // ARM cannot seed key-values via access keys; Pass-through routes the data-plane
+    // writes through the deployer's AAD identity (granted Data Owner below), which is
+    // the supported way to seed config when disableLocalAuth is true.
+    dataPlaneProxy: {
+      authenticationMode: 'Pass-through'
+      privateLinkDelegation: 'Disabled'
+    }
   }
 }
 
@@ -192,13 +201,14 @@ resource appConfigAdminAssignment 'Microsoft.Authorization/roleAssignments@2022-
   }
 }
 
-// Global dry-run kill switch (design §7.1): full line, stop short of filing.
-resource flagDryRun 'Microsoft.AppConfiguration/configurationStores/keyValues@2024-05-01' = {
-  parent: appConfig
-  name: '.appconfig.featureflag~2Fdry_run'
+// The principal running the deployment gets App Configuration Data Owner so it can
+// seed the key-values below under Pass-through ARM auth (local auth is disabled).
+resource appConfigDeployerAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(appConfig.id, deployer().objectId, appConfigDataOwnerRoleId)
+  scope: appConfig
   properties: {
-    contentType: 'application/vnd.microsoft.appconfig.ff+json;charset=utf-8'
-    value: '{"id":"dry_run","description":"Global dry-run: run the full line but never file issues.","enabled":true,"conditions":{"client_filters":[]}}'
+    principalId: deployer().objectId
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', appConfigDataOwnerRoleId)
   }
 }
 
@@ -210,6 +220,7 @@ resource flagPauseScheduled 'Microsoft.AppConfiguration/configurationStores/keyV
     contentType: 'application/vnd.microsoft.appconfig.ff+json;charset=utf-8'
     value: '{"id":"triggers_scheduled_paused","description":"Pause scheduled sweeps.","enabled":false,"conditions":{"client_filters":[]}}'
   }
+  dependsOn: [appConfigDeployerAssignment]
 }
 
 resource flagPauseSignal 'Microsoft.AppConfiguration/configurationStores/keyValues@2024-05-01' = {
@@ -219,6 +230,7 @@ resource flagPauseSignal 'Microsoft.AppConfiguration/configurationStores/keyValu
     contentType: 'application/vnd.microsoft.appconfig.ff+json;charset=utf-8'
     value: '{"id":"triggers_signal_paused","description":"Pause autonomous signal interrupts.","enabled":false,"conditions":{"client_filters":[]}}'
   }
+  dependsOn: [appConfigDeployerAssignment]
 }
 
 // A plain (non-flag) seed value: default per-product confidence threshold.
@@ -228,6 +240,7 @@ resource kvDefaultThreshold 'Microsoft.AppConfiguration/configurationStores/keyV
   properties: {
     value: '0.65'
   }
+  dependsOn: [appConfigDeployerAssignment]
 }
 
 // ---------------------------------------------------------------------------
@@ -242,24 +255,6 @@ module cosmos 'modules/cosmos.bicep' = {
     tags: tags
     // Grant the runtime identity Cosmos data-plane access (account-scoped SQL role).
     dataPlanePrincipalId: runtimeIdentity.properties.principalId
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Signal ingestion buffer: Event Grid custom topic -> Service Bus queue
-// (the orchestrator polls the queue; nothing is pushed into the runtime)
-// ---------------------------------------------------------------------------
-
-module ingestion 'modules/ingestion.bicep' = {
-  name: 'ingestion'
-  params: {
-    namePrefix: namePrefix
-    suffix: suffix
-    location: location
-    tags: tags
-    // Grant the runtime identity Service Bus Data Receiver on the queue.
-    receiverPrincipalId: runtimeIdentity.properties.principalId
-    allowPublicNetworkAccess: allowPublicNetworkAccess
   }
 }
 
@@ -353,7 +348,6 @@ resource orchestratorApp 'Microsoft.App/containerApps@2024-03-01' = {
             memory: '1Gi'
           }
           env: [
-            { name: 'DSF_MODE', value: 'azure' }
             { name: 'DSF_PRODUCT', value: product }
             { name: 'AZURE_CLIENT_ID', value: runtimeIdentity.properties.clientId }
             { name: 'AZURE_APPCONFIG_ENDPOINT', value: appConfig.properties.endpoint }
@@ -389,15 +383,6 @@ output keyVaultUri string = keyVault.properties.vaultUri
 
 @description('Application Insights connection string.')
 output appInsightsConnectionString string = appInsights.properties.ConnectionString
-
-@description('Event Grid ingestion topic endpoint (where external signal sources publish).')
-output eventGridTopicEndpoint string = ingestion.outputs.topicEndpoint
-
-@description('Service Bus namespace hostname (the orchestrator polls the signals queue here).')
-output serviceBusNamespace string = ingestion.outputs.namespaceHostname
-
-@description('Service Bus signals queue name.')
-output signalsQueueName string = ingestion.outputs.queueName
 
 @description('Principal ID of the runtime user-assigned identity (data-plane RBAC holder).')
 output runtimePrincipalId string = runtimeIdentity.properties.principalId

@@ -10,11 +10,10 @@ exposure — it is a worker that reaches its sources over their authenticated en
 
 > **COST WARNING.** Provisioning creates **billable** Azure resources: Cosmos DB
 > (NoSQL + vector, autoscale to 1000 RU/s), App Configuration (Standard), Key
-> Vault, Log Analytics, Application Insights, a Service Bus namespace (Standard),
-> an Event Grid topic, and a **Container Apps environment + orchestrator app**.
-> Cosmos + Log Analytics ingestion dominate ongoing cost. Azure OpenAI / Foundry is
-> **referenced by the runtime, not created here.** Tear down with `az group delete`
-> when done.
+> Vault, Log Analytics, Application Insights, an **AKS cluster** (coding squad), and a
+> **Container Apps environment + orchestrator app**. Cosmos + AKS + Log Analytics
+> ingestion dominate ongoing cost. Azure OpenAI / Foundry is **referenced by the
+> runtime, not created here.** Tear down with `az group delete` when done.
 
 ## What gets provisioned (`main.bicep`)
 
@@ -25,41 +24,36 @@ exposure — it is a worker that reaches its sources over their authenticated en
 | Key Vault (RBAC, soft-delete + purge protection) | Secrets; the runtime identity gets **Key Vault Secrets User** |
 | App Configuration (Standard) | Control Center backend; seeded feature flags |
 | Cosmos DB (NoSQL + `EnableNoSQLVectorSearch`) | Unified memory; `dsf` db + TTL `memory` container w/ vector index |
-| Service Bus (Standard) + `signals` queue | Ingestion buffer the orchestrator polls **outbound** |
-| Event Grid custom topic | Where external signal sources publish; delivered into the queue via the topic's identity |
 | User-assigned managed identity | The runtime's identity; holds all data-plane roles below |
 | Container Apps environment + `dsf-orchestrator-<product>` app | The feature-council orchestrator worker (no ingress) |
 
 **Runtime identity & roles.** A **user-assigned managed identity** is created and
 attached to the orchestrator Container App; it holds the data-plane roles: Cosmos
-Data Contributor, App Configuration Data Reader, Key Vault Secrets User, Service Bus
-Data Receiver. (A user-assigned — not system-assigned — identity has a stable
+Data Contributor, App Configuration Data Reader, Key Vault Secrets User. (A
+user-assigned — not system-assigned — identity has a stable
 principalId known before the app, avoiding a dependency cycle between the app's env
 and the resources it references; see ADR 0004.) `DefaultAzureCredential` selects it
 via the `AZURE_CLIENT_ID` env the Bicep wires in. The `product` and `runtimeImage`
 params name the app (`dsf-orchestrator-<product>`) and choose its image.
 
-**Seeded feature flags** (App Configuration): `dry_run` (enabled = global kill
-switch ON), `triggers_scheduled_paused`, `triggers_signal_paused`, plus
-`dsf:default_confidence_threshold = 0.65`.
+**Seeded feature flags** (App Configuration): `triggers_scheduled_paused`,
+`triggers_signal_paused`, plus `dsf:default_confidence_threshold = 0.65`. App Config
+runs with local auth disabled and ARM **Pass-through** auth mode, so the deploying
+principal is granted App Configuration Data Owner to seed these key-values.
 
 ### Modules
 - `modules/cosmos.bicep` — Cosmos account + db + vector/TTL container + the
   conditional data-plane SQL role assignment.
-- `modules/ingestion.bicep` — Service Bus namespace + `signals` queue + Event Grid
-  custom topic (system-assigned identity) + the topic's Service Bus Data Sender
-  role + the conditional receiver role.
-- `ingestion-subscription.bicep` — **phase 2**, applied *after* `main.bicep`: the
-  Event Grid → queue event subscription (identity-based delivery). Split out because
-  Event Grid validates managed-identity delivery synchronously at creation, racing
-  RBAC propagation of the sender role (aka.ms/egmsivalidation). Run it once the main
-  deploy finishes and the role has propagated.
+- `modules/aks.bicep` — per-product AKS cluster running the coding-squad Ralph watch
+  loop (ADR 0012).
+
+The Azure SRE Agent (Phase 3) is a separate subscription-scoped deployment in
+`sre-agent.bicep` (+ `modules/sre-*.bicep`), not part of `main.bicep`. See ADR 0015.
 
 ### Outputs
-`cosmosEndpoint`, `appConfigEndpoint`, `keyVaultUri`,
-`appInsightsConnectionString`, `eventGridTopicEndpoint`, `serviceBusNamespace`,
-`signalsQueueName` — these feed the runtime's `azure`-mode config — plus
-`runtimePrincipalId` (the managed identity) and `orchestratorAppName`
+`cosmosEndpoint`, `appConfigEndpoint`, `keyVaultUri`, `appInsightsConnectionString`,
+`appInsightsId`, `logAnalyticsId` — these feed the runtime config and the SRE agent
+connectors — plus `runtimePrincipalId` (the managed identity) and `orchestratorAppName`
 (`dsf-orchestrator-<product>`, used for `az containerapp` image rolls).
 
 ## CI pipelines
@@ -111,16 +105,7 @@ az group create -n rg-dsf -l swedencentral
 az deployment group what-if -g rg-dsf -f infra/main.bicep -p @infra/main.parameters.json
 az deployment group create  -g rg-dsf -f infra/main.bicep -p @infra/main.parameters.json \
   -p enablePurgeProtection=false -p product=<product> -p runtimeImage=<ghcr.io/...>
-
-# 2) Phase 2 — wire Event Grid -> the Service Bus queue (after step 1 completes;
-#    use the resource name suffix from step 1's outputs):
-az deployment group create -g rg-dsf -f infra/ingestion-subscription.bicep \
-  -p topicName=<dsf-egt-...> namespaceName=<dsf-sb-...>
 ```
-
-> The `az eventgrid` CLI extension is currently broken on Windows
-> (`_validate_subscription_id_matches_default_subscription_id` → `NoneType`), so
-> create/list the subscription via the **ARM template above**, not `az eventgrid`.
 
 `azd provision` works too (`azure.yaml` is infra-only — there is no `azd up`
 service deployment, by design). Tear down: `az group delete -n rg-dsf`.
@@ -128,10 +113,10 @@ service deployment, by design). Tear down: `az group delete -n rg-dsf`.
 ## Runtime (Azure Container Apps)
 
 The orchestrator runs as the `dsf-orchestrator-<product>` Container App created by
-`main.bicep`, with the user-assigned identity attached and `DSF_MODE=azure`. It reads
-its endpoints from the template outputs (wired into the app's env) and consumes signal
-interrupts by **polling the Service Bus `signals` queue outbound** — there is no
-ingress. The agent images are published to GHCR by the `agents-images` pipeline.
+`main.bicep`, with the user-assigned identity attached. It reads its endpoints from
+the template outputs (wired into the app's env) and gets work by **sweeping the source
+agents on a schedule** (pull-only, ADR 0014) — there is no ingress. The agent images
+are published to GHCR by the `agents-images` pipeline.
 
 ### Per-product council runtime (rendered by `dsf new`)
 
@@ -150,5 +135,3 @@ instance*.
   hard-deleted for 90 days after a soft delete.
 - Cosmos `defaultTtl: -1` enables TTL with no blanket expiry; the working-memory
   tier sets per-item `ttl`.
-- Event Grid → Service Bus delivery uses the topic's system-assigned identity
-  (no SAS keys); the role assignment is created before the subscription.

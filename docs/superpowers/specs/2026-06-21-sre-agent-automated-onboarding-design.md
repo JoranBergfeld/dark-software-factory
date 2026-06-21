@@ -99,8 +99,9 @@ writes the manifest, runs no `az`.
 
 ### 3. `InstanceSpec` additions (`cli/src/dsf/instance/spec.py`)
 
-- `sre_agent_location: str = "swedencentral"` validated against
-  `{"swedencentral", "eastus2", "australiaeast"}` (Sweden Central is the EU default).
+- `sre_agent_location: str = "swedencentral"` validated against the live provider region
+  set (2026-06: swedencentral, uksouth, eastus2, australiaeast, francecentral,
+  canadacentral, koreacentral). Sweden Central is the EU default. (Issue #63.)
 - `monitored_resource_groups: list[str] = []`; the effective monitored set is
   `[resource_group(), *monitored_resource_groups]` deduped, so single-RG products work with
   no extra config and a separate app RG is opt-in.

@@ -61,7 +61,6 @@ def _render_env(product: str, outputs: dict[str, str]) -> str:
         "# Endpoints come from the product's Azure deployment outputs. Secrets are",
         "# read at runtime from Key Vault via the ACA managed identity (ADR 0004),",
         "# never rendered here.",
-        "DSF_MODE=azure",
         f"DSF_PRODUCT={product}",
     ]
     lines.extend(f"{var}={outputs.get(key, '')}" for var, key in _ENDPOINT_MAP)
@@ -87,8 +86,6 @@ def _render_containerapp(*, app: str, container: str, product: str, image: str, 
         f"      - name: {container}\n"
         f"        image: {image}\n"
         "        env:\n"
-        "          - name: DSF_MODE\n"
-        "            value: azure\n"
         "          - name: DSF_PRODUCT\n"
         f"            value: {product}\n"
         "    scale:\n"

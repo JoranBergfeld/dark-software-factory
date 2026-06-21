@@ -46,7 +46,18 @@ class InstanceSpec(BaseModel):
     @field_validator("sre_agent_location")
     @classmethod
     def _validate_sre_agent_location(cls, value: str) -> str:
-        supported = {"swedencentral", "eastus2", "australiaeast"}
+        # Regions where Microsoft.App/agents is offered (live provider list, 2026-06):
+        # az provider show --namespace Microsoft.App
+        #   --query "resourceTypes[?resourceType=='agents'].locations"
+        supported = {
+            "swedencentral",
+            "uksouth",
+            "eastus2",
+            "australiaeast",
+            "francecentral",
+            "canadacentral",
+            "koreacentral",
+        }
         if value not in supported:
             raise ValueError(
                 f"sre_agent_location must be one of {sorted(supported)}, got {value!r}"

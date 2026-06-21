@@ -1,0 +1,487 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.43.8.12551",
+      "templateHash": "1146723739709736781"
+    }
+  },
+  "parameters": {
+    "product": {
+      "type": "string",
+      "metadata": {
+        "description": "Short product key (e.g. \"microbi\"). Used to name the agent and its RG."
+      }
+    },
+    "agentName": {
+      "type": "string",
+      "metadata": {
+        "description": "Full SRE Agent resource name (e.g. \"dsf-sre-microbi\")."
+      }
+    },
+    "sreAgentLocation": {
+      "type": "string",
+      "defaultValue": "swedencentral",
+      "allowedValues": [
+        "swedencentral",
+        "eastus2",
+        "australiaeast"
+      ],
+      "metadata": {
+        "description": "Azure region for the SRE Agent. Must be swedencentral, eastus2, or australiaeast."
+      }
+    },
+    "agentResourceGroup": {
+      "type": "string",
+      "metadata": {
+        "description": "Name of the dedicated resource group that will host the SRE agent."
+      }
+    },
+    "targetResourceGroups": {
+      "type": "array",
+      "metadata": {
+        "description": "Resource groups the agent monitors (factory RG + any monitored-app RGs)."
+      }
+    },
+    "appInsightsId": {
+      "type": "string",
+      "metadata": {
+        "description": "Application Insights resource id (consumed by the SRE agent connector + RBAC)."
+      }
+    },
+    "logAnalyticsId": {
+      "type": "string",
+      "metadata": {
+        "description": "Log Analytics workspace resource id (consumed by the SRE agent connector + RBAC)."
+      }
+    },
+    "appInsightsAppId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Application Insights \"Application ID\" GUID (shown in portal Overview, not the ARM resource id). Optional — leave empty to skip agent-side App Insights log configuration."
+      }
+    },
+    "appInsightsConnectionString": {
+      "type": "securestring",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Application Insights connection string (instrumentation key URI). Optional — leave empty to skip agent-side App Insights log configuration."
+      }
+    },
+    "permissionLevel": {
+      "type": "string",
+      "defaultValue": "Reader",
+      "allowedValues": [
+        "Reader",
+        "Privileged"
+      ],
+      "metadata": {
+        "description": "Permission level granted to the SRE agent. \"Reader\" is the default and only wired level.\n\"Privileged\" is accepted by the deploy command but additional role wiring is future work\n(the RBAC assignments below only cover the Reader surface regardless of this value).\n"
+      }
+    },
+    "tags": {
+      "type": "object",
+      "defaultValue": {
+        "project": "dark-software-factory",
+        "component": "sre-agent"
+      },
+      "metadata": {
+        "description": "Tags applied to all resources in this deployment."
+      }
+    }
+  },
+  "variables": {
+    "monitoringContributorRoleId": "749f88d5-cbae-40b8-bcfc-e573ddc772fa"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Resources/resourceGroups",
+      "apiVersion": "2024-03-01",
+      "name": "[parameters('agentResourceGroup')]",
+      "location": "[parameters('sreAgentLocation')]",
+      "tags": "[parameters('tags')]"
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "[format('sre-agent-{0}', parameters('product'))]",
+      "resourceGroup": "[parameters('agentResourceGroup')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "agentName": {
+            "value": "[parameters('agentName')]"
+          },
+          "location": {
+            "value": "[parameters('sreAgentLocation')]"
+          },
+          "targetResourceGroups": {
+            "value": "[parameters('targetResourceGroups')]"
+          },
+          "appInsightsId": {
+            "value": "[parameters('appInsightsId')]"
+          },
+          "appInsightsAppId": {
+            "value": "[parameters('appInsightsAppId')]"
+          },
+          "appInsightsConnectionString": {
+            "value": "[parameters('appInsightsConnectionString')]"
+          },
+          "logAnalyticsId": {
+            "value": "[parameters('logAnalyticsId')]"
+          },
+          "permissionLevel": {
+            "value": "[parameters('permissionLevel')]"
+          },
+          "tags": {
+            "value": "[parameters('tags')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.43.8.12551",
+              "templateHash": "6546496901142834339"
+            }
+          },
+          "parameters": {
+            "agentName": {
+              "type": "string",
+              "metadata": {
+                "description": "SRE Agent resource name."
+              }
+            },
+            "location": {
+              "type": "string",
+              "metadata": {
+                "description": "Azure region. Must be one of swedencentral, eastus2, australiaeast."
+              }
+            },
+            "targetResourceGroups": {
+              "type": "array",
+              "metadata": {
+                "description": "Resource groups the agent monitors; wired into knowledgeGraphConfiguration.managedResources."
+              }
+            },
+            "appInsightsId": {
+              "type": "string",
+              "metadata": {
+                "description": "Application Insights resource id (for the log connector)."
+              }
+            },
+            "appInsightsAppId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Application Insights app id (the GUID from portal, not the resource id). Optional — leave empty to skip agent-side App Insights log configuration."
+              }
+            },
+            "appInsightsConnectionString": {
+              "type": "securestring",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Application Insights connection string (sensitive). Optional — leave empty to skip agent-side App Insights log configuration."
+              }
+            },
+            "logAnalyticsId": {
+              "type": "string",
+              "metadata": {
+                "description": "Log Analytics workspace resource id."
+              }
+            },
+            "permissionLevel": {
+              "type": "string",
+              "defaultValue": "Reader",
+              "allowedValues": [
+                "Reader",
+                "Privileged"
+              ],
+              "metadata": {
+                "description": "Permission level; only \"Reader\" RBAC is wired today. \"Privileged\" accepted for future use."
+              }
+            },
+            "tags": {
+              "type": "object",
+              "defaultValue": {},
+              "metadata": {
+                "description": "Tags applied to the resources."
+              }
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
+              "apiVersion": "2023-01-31",
+              "name": "[format('{0}-id', parameters('agentName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]"
+            },
+            {
+              "type": "Microsoft.App/agents",
+              "apiVersion": "2026-01-01",
+              "name": "[parameters('agentName')]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "identity": {
+                "type": "UserAssigned",
+                "userAssignedIdentities": {
+                  "[format('{0}', resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-id', parameters('agentName'))))]": {}
+                }
+              },
+              "properties": {
+                "upgradeChannel": "Stable",
+                "actionConfiguration": {
+                  "accessLevel": "Low",
+                  "mode": "ReadOnly",
+                  "identity": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-id', parameters('agentName')))]"
+                },
+                "knowledgeGraphConfiguration": {
+                  "copy": [
+                    {
+                      "name": "managedResources",
+                      "count": "[length(parameters('targetResourceGroups'))]",
+                      "input": "[subscriptionResourceId('Microsoft.Resources/resourceGroups', parameters('targetResourceGroups')[copyIndex('managedResources')])]"
+                    }
+                  ],
+                  "identity": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-id', parameters('agentName')))]"
+                },
+                "logConfiguration": "[if(empty(parameters('appInsightsAppId')), null(), createObject('applicationInsightsConfiguration', createObject('appId', parameters('appInsightsAppId'), 'connectionString', parameters('appInsightsConnectionString'))))]",
+                "defaultModel": {
+                  "provider": "MicrosoftFoundry",
+                  "name": "Automatic"
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-id', parameters('agentName')))]"
+              ]
+            },
+            {
+              "type": "Microsoft.App/agents/connectors",
+              "apiVersion": "2026-01-01",
+              "name": "[format('{0}/{1}', parameters('agentName'), 'loganalytics')]",
+              "properties": {
+                "dataConnectorType": "LogAnalytics",
+                "dataSource": "[parameters('logAnalyticsId')]",
+                "identity": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-id', parameters('agentName')))]"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-id', parameters('agentName')))]",
+                "[resourceId('Microsoft.App/agents', parameters('agentName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.App/agents/connectors",
+              "apiVersion": "2026-01-01",
+              "name": "[format('{0}/{1}', parameters('agentName'), 'appinsights')]",
+              "properties": {
+                "dataConnectorType": "AppInsights",
+                "dataSource": "[parameters('appInsightsId')]",
+                "identity": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-id', parameters('agentName')))]"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-id', parameters('agentName')))]",
+                "[resourceId('Microsoft.App/agents', parameters('agentName'))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "principalId": {
+              "type": "string",
+              "metadata": {
+                "description": "Object (principal) ID of the SRE agent UAMI — used for RBAC assignments."
+              },
+              "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-id', parameters('agentName'))), '2023-01-31').principalId]"
+            },
+            "agentId": {
+              "type": "string",
+              "metadata": {
+                "description": "ARM resource id of the SRE agent."
+              },
+              "value": "[resourceId('Microsoft.App/agents', parameters('agentName'))]"
+            },
+            "agentEndpoint": {
+              "type": "string",
+              "metadata": {
+                "description": "Data-plane endpoint URL for the SRE agent."
+              },
+              "value": "[reference(resourceId('Microsoft.App/agents', parameters('agentName')), '2026-01-01').agentEndpoint]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[subscriptionResourceId('Microsoft.Resources/resourceGroups', parameters('agentResourceGroup'))]"
+      ]
+    },
+    {
+      "copy": {
+        "name": "rgRoles",
+        "count": "[length(parameters('targetResourceGroups'))]"
+      },
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "[format('sre-roles-{0}', parameters('targetResourceGroups')[copyIndex()])]",
+      "resourceGroup": "[parameters('targetResourceGroups')[copyIndex()]]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "principalId": {
+            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('agentResourceGroup')), 'Microsoft.Resources/deployments', format('sre-agent-{0}', parameters('product'))), '2025-04-01').outputs.principalId.value]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.43.8.12551",
+              "templateHash": "15484848998785184770"
+            }
+          },
+          "parameters": {
+            "principalId": {
+              "type": "string",
+              "metadata": {
+                "description": "Principal (object) id of the SRE agent user-assigned managed identity."
+              }
+            }
+          },
+          "variables": {
+            "readerRoleId": "acdd72a7-3385-48ef-bd42-f606fba81ae7",
+            "monitoringReaderRoleId": "43d0d8ad-25c7-4714-9337-8ba259a9fe05",
+            "logAnalyticsReaderRoleId": "73c42c96-874c-492b-b04d-ab87d138a893",
+            "roleIds": [
+              "[variables('readerRoleId')]",
+              "[variables('monitoringReaderRoleId')]",
+              "[variables('logAnalyticsReaderRoleId')]"
+            ]
+          },
+          "resources": [
+            {
+              "copy": {
+                "name": "roleAssignments",
+                "count": "[length(variables('roleIds'))]"
+              },
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "name": "[guid(resourceGroup().id, parameters('principalId'), variables('roleIds')[copyIndex()])]",
+              "properties": {
+                "principalId": "[parameters('principalId')]",
+                "principalType": "ServicePrincipal",
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('roleIds')[copyIndex()])]"
+              }
+            }
+          ]
+        }
+      },
+      "dependsOn": [
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('agentResourceGroup')), 'Microsoft.Resources/deployments', format('sre-agent-{0}', parameters('product')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "[format('sre-sub-role-{0}', parameters('product'))]",
+      "location": "[deployment().location]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "principalId": {
+            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('agentResourceGroup')), 'Microsoft.Resources/deployments', format('sre-agent-{0}', parameters('product'))), '2025-04-01').outputs.principalId.value]"
+          },
+          "agentName": {
+            "value": "[parameters('agentName')]"
+          },
+          "roleId": {
+            "value": "[variables('monitoringContributorRoleId')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.43.8.12551",
+              "templateHash": "17508780024249043423"
+            }
+          },
+          "parameters": {
+            "principalId": {
+              "type": "string",
+              "metadata": {
+                "description": "Principal (object) id of the SRE agent user-assigned managed identity."
+              }
+            },
+            "agentName": {
+              "type": "string",
+              "metadata": {
+                "description": "SRE Agent resource name — used to derive a stable role-assignment name."
+              }
+            },
+            "roleId": {
+              "type": "string",
+              "metadata": {
+                "description": "Built-in role definition GUID to assign."
+              }
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "name": "[guid(subscription().id, parameters('agentName'), parameters('roleId'))]",
+              "properties": {
+                "principalId": "[parameters('principalId')]",
+                "principalType": "ServicePrincipal",
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', parameters('roleId'))]"
+              }
+            }
+          ]
+        }
+      },
+      "dependsOn": [
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('agentResourceGroup')), 'Microsoft.Resources/deployments', format('sre-agent-{0}', parameters('product')))]"
+      ]
+    }
+  ],
+  "outputs": {
+    "agentId": {
+      "type": "string",
+      "metadata": {
+        "description": "ARM resource id of the SRE agent."
+      },
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('agentResourceGroup')), 'Microsoft.Resources/deployments', format('sre-agent-{0}', parameters('product'))), '2025-04-01').outputs.agentId.value]"
+    },
+    "agentEndpoint": {
+      "type": "string",
+      "metadata": {
+        "description": "Data-plane endpoint URL (https://<name>.<location>.azuresre.ai)."
+      },
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('agentResourceGroup')), 'Microsoft.Resources/deployments', format('sre-agent-{0}', parameters('product'))), '2025-04-01').outputs.agentEndpoint.value]"
+    },
+    "agentPrincipalId": {
+      "type": "string",
+      "metadata": {
+        "description": "Object (principal) ID of the SRE agent user-assigned managed identity."
+      },
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('agentResourceGroup')), 'Microsoft.Resources/deployments', format('sre-agent-{0}', parameters('product'))), '2025-04-01').outputs.principalId.value]"
+    }
+  }
+}

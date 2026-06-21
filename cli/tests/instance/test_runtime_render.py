@@ -45,7 +45,7 @@ def test_render_writes_app_config_and_env_under_runtime_dir(tmp_path):
 def test_render_env_scopes_product_and_maps_endpoints(tmp_path):
     bundle = render_runtime_bundle(_manifest(tmp_path), repo_root=tmp_path)
     env = bundle.env_path.read_text(encoding="utf-8")
-    assert "DSF_MODE=azure" in env
+    assert "DSF_MODE" not in env  # no mode concept anymore (ADR 0014)
     assert "DSF_PRODUCT=microbi" in env
     assert "AZURE_APPCONFIG_ENDPOINT=https://ac.example" in env
     assert "AZURE_KEYVAULT_URI=https://kv.example" in env
