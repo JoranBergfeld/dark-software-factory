@@ -91,6 +91,9 @@ def test_render_sre_summary_writes_post_deploy_summary(tmp_path):
     assert "containerapp" not in body   # no Container App deploy
     assert "wizard" not in body.lower()  # no interactive wizard framing
     assert "oauth" not in body.lower()   # no OAuth framing
+    # Verify that {product} placeholder is interpolated in verify command
+    assert "dsf-sre-microbi" in body
+    assert "{product}" not in body
 
 
 def test_sre_summary_instructs_incident_label(tmp_path):

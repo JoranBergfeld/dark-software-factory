@@ -139,7 +139,7 @@ def _render_sre_summary_md(
         f"- Product repo connected: `{repo}`\n"
         f"- Monitored resource groups:\n{rgs_list}\n\n"
         "## Verify (one-time)\n\n"
-        "Run `az deployment sub show -n dsf-sre-{product}` to confirm the deployment\n"
+        f"Run `az deployment sub show -n dsf-sre-{product}` to confirm the deployment\n"
         "completed cleanly. Check the agent portal at <https://sre.azure.com> to see\n"
         "the agent is active and the repo connection shows green.\n\n"
         "## Labels (keep these)\n\n"
