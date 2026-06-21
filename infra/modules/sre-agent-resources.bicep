@@ -16,15 +16,26 @@ param targetResourceGroups array
 @description('Application Insights resource id (for the log connector).')
 param appInsightsId string
 
-@description('Application Insights app id (the GUID from portal, not the resource id).')
-param appInsightsAppId string
+@description('Application Insights app id (the GUID from portal, not the resource id). Optional — leave empty to skip agent-side App Insights log configuration.')
+// TODO(confirm): appInsightsAppId is a distinct GUID from the resource id, shown in portal
+// > App Insights > Overview > "Application ID". main.bicep does not yet output this value;
+// until it does, leave this param empty and the logConfiguration block will be omitted.
+param appInsightsAppId string = ''
 
-@description('Application Insights connection string (sensitive).')
+@description('Application Insights connection string (sensitive). Optional — leave empty to skip agent-side App Insights log configuration.')
 @secure()
-param appInsightsConnectionString string
+param appInsightsConnectionString string = ''
 
 @description('Log Analytics workspace resource id.')
 param logAnalyticsId string
+
+@description('Permission level; only "Reader" RBAC is wired today. "Privileged" accepted for future use.')
+@allowed(['Reader', 'Privileged'])
+// Intentionally declared but not yet used to drive RBAC logic — the deploy command supplies
+// it so this param must exist. TODO(future): wire Privileged-tier role assignments (e.g.
+// Monitoring Contributor on the agent's own RG) when the Privileged level is productionised.
+#disable-next-line no-unused-params
+param permissionLevel string = 'Reader'
 
 @description('Tags applied to the resources.')
 param tags object = {}
@@ -85,10 +96,10 @@ resource sreAgent 'Microsoft.App/agents@2026-01-01' = {
       managedResources: [for rg in targetResourceGroups: subscriptionResourceId('Microsoft.Resources/resourceGroups', rg)]
     }
 
-    logConfiguration: {
-      // Application Insights telemetry for the agent itself.
-      // appId is the "Application ID" GUID shown in portal > App Insights > Overview.
-      // connectionString is the InstrumentationKey/... connection string.
+    // TODO(confirm): logConfiguration is omitted when appInsightsAppId is empty (provisioner
+    // does not supply it today). Set appInsightsAppId + appInsightsConnectionString once
+    // main.bicep outputs the App Insights Application ID GUID.
+    logConfiguration: empty(appInsightsAppId) ? null : {
       applicationInsightsConfiguration: {
         appId: appInsightsAppId
         connectionString: appInsightsConnectionString

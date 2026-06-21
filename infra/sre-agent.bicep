@@ -8,9 +8,10 @@
 // Deployed with:
 //   az deployment sub create -l <sreAgentLocation> -f infra/sre-agent.bicep -p ...
 //
-// Parameters appInsightsId / logAnalyticsId / appInsightsAppId /
-// appInsightsConnectionString come from main.bicep outputs (added in this
-// same task). The provisioner (Task 3) threads them through.
+// Required params: product, agentName, sreAgentLocation, agentResourceGroup,
+// targetResourceGroups, appInsightsId, logAnalyticsId, permissionLevel.
+// Optional: appInsightsAppId, appInsightsConnectionString (agent-side log config;
+// omit these if main.bicep does not yet output appInsightsAppId).
 targetScope = 'subscription'
 
 // ---------------------------------------------------------------------------
@@ -36,15 +37,23 @@ param targetResourceGroups array
 @description('Application Insights resource id (consumed by the SRE agent connector + RBAC).')
 param appInsightsId string
 
-@description('Application Insights "Application ID" GUID (shown in portal Overview, not the ARM resource id).')
-param appInsightsAppId string
-
-@description('Application Insights connection string (instrumentation key URI).')
-@secure()
-param appInsightsConnectionString string
-
 @description('Log Analytics workspace resource id (consumed by the SRE agent connector + RBAC).')
 param logAnalyticsId string
+
+@description('Application Insights "Application ID" GUID (shown in portal Overview, not the ARM resource id). Optional — leave empty to skip agent-side App Insights log configuration.')
+param appInsightsAppId string = ''
+
+@description('Application Insights connection string (instrumentation key URI). Optional — leave empty to skip agent-side App Insights log configuration.')
+@secure()
+param appInsightsConnectionString string = ''
+
+@description('''
+Permission level granted to the SRE agent. "Reader" is the default and only wired level.
+"Privileged" is accepted by the deploy command but additional role wiring is future work
+(the RBAC assignments below only cover the Reader surface regardless of this value).
+''')
+@allowed(['Reader', 'Privileged'])
+param permissionLevel string = 'Reader'
 
 @description('Tags applied to all resources in this deployment.')
 param tags object = {
@@ -85,6 +94,7 @@ module agentResources 'modules/sre-agent-resources.bicep' = {
     appInsightsAppId: appInsightsAppId
     appInsightsConnectionString: appInsightsConnectionString
     logAnalyticsId: logAnalyticsId
+    permissionLevel: permissionLevel
     tags: tags
   }
 }
