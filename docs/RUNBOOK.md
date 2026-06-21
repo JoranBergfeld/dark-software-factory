@@ -62,11 +62,10 @@ uv run uvicorn dsf.triggers.app:app --port 8082
 `dsf new` scaffolds an isolated product factory. `--name-prefix` is **required**;
 it is sanitized and randomized into a <=12-char Azure resource prefix (persisted in
 the manifest and reused on re-runs). Under `--execute`, repo creation + Coding Squad
-init, **the dedicated Azure resource group + Bicep deployment**, and **rendering +
-deploying the product's feature-council runtime** (an Azure Container App) are all
-real. The SRE corner is **onboarded interactively** against the managed Azure SRE
-Agent product (ADR 0009): the `onboard_sre_agent` step renders a per-product
-runbook (`onboard_sre_agent` is render-only — no Container App is deployed).
+init, **the dedicated Azure resource group + Bicep deployment**, **rendering +
+deploying the product's feature-council runtime** (an Azure Container App), and
+**provisioning the SRE Agent** via `deploy_sre_agent` are all real. No interactive
+wizard, no OAuth flow (ADR 0015 supersedes ADR 0009's render-only approach).
 
 ```bash
 # Preview the plan (no side effects):
@@ -155,43 +154,48 @@ next council run
 ## SRE agent (Azure SRE Agent product)
 
 The production-watching corner of the factory is the managed **Azure SRE Agent**
-product (ADR 0009), not a bespoke runtime. Onboarding is interactive — a wizard at
-[sre.azure.com](https://sre.azure.com) plus browser-OAuth GitHub and Azure
-resource-access grants — so `dsf new` renders a per-product runbook instead of
-deploying anything:
+product, not a bespoke runtime. `dsf new` provisions it fully via the `deploy_sre_agent`
+step (no interactive wizard, no OAuth). See ADR 0015 for the full decision.
 
-- The provisioner's `onboard_sre_agent` step writes
-  `config/instances/<product>.runtime/sre-onboarding.md` scoped to the product's
-  resource group, region, and repo.
-- Follow that runbook to create the agent (`dsf-sre-<product>`), connect the repo,
-  and grant Reader on the product resource group.
+The step runs `az deployment sub create` with `infra/sre-agent.bicep`
+(subscription-scoped). That Bicep creates:
 
-The handoff is preserved: the Azure SRE Agent investigates incidents (Azure
-Monitor / App Insights) and files GitHub issues/PRs carrying the `squad:ready`
-label, so the **same** Ralph watch loop picks them up.
+- a dedicated resource group `rg-dsf-sre-<product>` in a supported region (Sweden
+  Central by default, the only EU option; also East US 2 and Australia East)
+- a user-assigned managed identity bound to the `Microsoft.App/agents` resource
+- Reader + Monitoring Reader + Log Analytics Reader on the factory resource group and
+  any extra monitored-app resource groups, plus Monitoring Contributor at subscription
+  scope for alert lifecycle management
+- Azure Monitor connectors (Log Analytics + App Insights) wired as ARM sub-resources
+
+After the ARM deploy returns, the step does a best-effort Phase-2 repo connect via
+`az rest`. If the agent endpoint or GitHub token is missing at provision time, it
+records a skip and succeeds anyway — the agent comes up Azure-Monitor-connected, and
+the repo can be connected manually later.
+
+**Prerequisite:** the principal running `dsf new --execute` needs Owner, or Contributor
++ User Access Administrator, on the subscription (required for the cross-RG role
+assignments).
+
+After provisioning, `dsf new` writes a short `sre-agent.md` summary alongside the
+other runtime artifacts: what got created, the agent portal link, and a one-time
+`what-if`/verify note.
+
+The handoff is the same as the rest of the loop. The agent investigates incidents
+(Azure Monitor / App Insights) and files GitHub issues/PRs carrying `squad:ready`,
+so the Ralph watch loop picks them up. Incident issues also get the `incident` label,
+which the council's `incidents` and `azuremonitor` sources pull on the council's own
+schedule — so recurring production faults become systemic hardening proposals rather
+than one-off fixes (ADR 0013).
 
 ```
 prod telemetry → Azure SRE Agent → investigate → issue/PR (squad:ready)
 → KEDA wakes Ralph loop → squad watch → PR
 ```
 
-The loop also closes back to the council (the slow path, ADR 0013). The SRE Agent
-additionally stamps each incident issue with the `incident` label, and the
-council's `incidents` and `azuremonitor` sources pull those incidents plus
-Application Insights telemetry on the council's own schedule — so recurring
-production faults become validated, systemic hardening proposals rather than
-one-off fixes:
-
 ```
 prod incidents/telemetry → issue (incident) + Azure Monitor
 → council incidents/azuremonitor sources → S1-S7 → squad:ready proposal
-```
-
-Render the onboarding runbook (offline; part of the normal plan):
-
-```bash
-uv run dsf new --product microbi --owner acme --name-prefix microbi \
-  --execute   # writes sre-onboarding.md alongside the other runtime artifacts
 ```
 
 ## The learning loop
