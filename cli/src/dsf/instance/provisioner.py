@@ -24,7 +24,7 @@ from dsf.contracts.handoff import (
 from dsf.instance.runtime_render import (
     render_product_registration,
     render_runtime_bundle,
-    render_sre_onboarding,
+    render_sre_summary,
 )
 from dsf.instance.spec import (
     AzureProvisionResult,
@@ -281,7 +281,7 @@ class InstanceProvisioner:
                     provisional = InstanceManifest(
                         spec=self.spec, plan=plan, executed=executed, azure=azure_result
                     )
-                    render_sre_onboarding(provisional, repo_root=self._repo_root)
+                    render_sre_summary(provisional, repo_root=self._repo_root)
                     if not execute:
                         step.result = "deployed (dry-run)"
                     else:

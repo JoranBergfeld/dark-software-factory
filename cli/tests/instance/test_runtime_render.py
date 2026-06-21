@@ -5,7 +5,7 @@ from __future__ import annotations
 from dsf.instance.provisioner import InstanceProvisioner
 from dsf.instance.runtime_render import (
     render_runtime_bundle,
-    render_sre_onboarding,
+    render_sre_summary,
     runtime_dir,
 )
 from dsf.instance.spec import AzureProvisionResult, InstanceManifest, InstanceSpec
@@ -79,31 +79,30 @@ def test_render_tolerates_missing_azure_outputs(tmp_path):
     assert "AZURE_APPCONFIG_ENDPOINT=" in env
     assert "AZURE_COSMOS_ENDPOINT=" in env
 
-def test_render_sre_onboarding_writes_guided_runbook(tmp_path):
-    onb = render_sre_onboarding(_manifest(tmp_path), repo_root=tmp_path)
-    assert onb.runtime_dir == runtime_dir("microbi", tmp_path)
-    assert onb.onboarding_path.name == "sre-onboarding.md"
-    body = onb.onboarding_path.read_text(encoding="utf-8")
-    assert "sre.azure.com" in body
-    assert "rg-dsf-microbi" in body      # product resource group
-    assert "swedencentral" in body       # region
-    assert "acme/microbi" in body        # product repo
-    assert "squad:ready" in body         # handoff label preserved
-    assert "containerapp" not in body    # no Container App deploy
+def test_render_sre_summary_writes_post_deploy_summary(tmp_path):
+    summ = render_sre_summary(_manifest(tmp_path), repo_root=tmp_path)
+    assert summ.runtime_dir == runtime_dir("microbi", tmp_path)
+    assert summ.summary_path.name == "sre-agent.md"
+    body = summ.summary_path.read_text(encoding="utf-8")
+    assert "dsf-sre-microbi" in body     # agent name
+    assert "rg-dsf-microbi" in body     # monitored RG
+    assert "acme/microbi" in body       # product repo
+    assert "squad:ready" in body        # handoff label preserved
+    assert "containerapp" not in body   # no Container App deploy
+    assert "wizard" not in body.lower()  # no interactive wizard framing
+    assert "oauth" not in body.lower()   # no OAuth framing
 
 
-def test_sre_onboarding_instructs_incident_label(tmp_path):
+def test_sre_summary_instructs_incident_label(tmp_path):
     from dsf.contracts.handoff import INCIDENT_LABEL
-    from dsf.instance.runtime_render import _render_sre_onboarding_md
+    from dsf.instance.runtime_render import _render_sre_summary_md
 
-    md = _render_sre_onboarding_md(
+    md = _render_sre_summary_md(
         product="microbi",
-        resource_group="rg-microbi",
-        location="westeurope",
+        agent_name="dsf-sre-microbi",
+        monitored_rgs=["rg-dsf-microbi", "rg-app"],
         repo="example/microbi",
     )
-    # The agent must stamp the incident marker so the council's incidents source
-    # pulls it, and the runbook must explain the council now learns from incidents.
     assert f"`{INCIDENT_LABEL}`" in md
     assert "council" in md.lower()
 

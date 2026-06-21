@@ -359,7 +359,7 @@ def test_apply_execute_aca_updates_container_app(tmp_path):
     runtime = tmp_path / "config" / "instances" / "demo.runtime"
     assert (runtime / "containerapp.yaml").is_file()
     assert (runtime / ".env.orchestrator").is_file()
-    assert (runtime / "sre-onboarding.md").is_file()
+    assert (runtime / "sre-agent.md").is_file()
     update = next(
         c for c in calls
         if c[:3] == ["az", "containerapp", "update"]
