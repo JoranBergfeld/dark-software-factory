@@ -1,11 +1,15 @@
 # ADR 0009: Leverage the Azure SRE Agent product (supersede the bespoke SP5 agent)
 
-- Status: Accepted
+- Status: Superseded by ADR 0015
 - Date: 2026-06-18
 - Issue: [#30](https://github.com/JoranBergfeld/dark-software-factory/issues/30)
 - Supersedes: **ADR 0008** (the bespoke SRE agent runtime). Builds on ADR 0004
   (ACA runtime / per-product Azure), ADR 0005 (no `src/` fakes), ADR 0007
   (council→squad handoff).
+
+> Superseded by [ADR 0015](0015-sre-agent-automated-onboarding.md): Microsoft shipped
+> `Microsoft.App/agents` as an ARM resource, making headless provisioning via Bicep possible.
+> The render-only `onboard_sre_agent` step is replaced by a real `deploy_sre_agent` step.
 
 ## Context
 
