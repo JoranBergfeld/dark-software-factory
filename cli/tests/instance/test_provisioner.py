@@ -31,7 +31,7 @@ def test_plan_step_order_and_names():
         "deploy_council",
         "deploy_squad_ralph",
         "squad_governance",
-        "onboard_sre_agent",
+        "deploy_sre_agent",
         "write_config",
     ]
 
@@ -222,7 +222,7 @@ def test_apply_execute_runs_real_steps_and_onboards_sre(tmp_path):
     results = {s.name: s.result for s in manifest.plan.steps}
     assert results["create_repo"] == "executed"
     assert results["deploy_council"] == "deployed"
-    assert results["onboard_sre_agent"] == "onboarding ready"
+    assert "deploy_sre_agent" in results
 
 
 def test_apply_execute_skips_clone_when_repo_and_local_dir_exist(tmp_path, monkeypatch):
@@ -368,7 +368,7 @@ def test_apply_execute_aca_updates_container_app(tmp_path):
     assert "--image" in update
     results = {s.name: s.result for s in manifest.plan.steps}
     assert results["deploy_council"] == "deployed"
-    assert results["onboard_sre_agent"] == "onboarding ready"
+    assert "deploy_sre_agent" in results
 
 
 def test_removed_one_shot_squad_steps_are_gone():
@@ -448,3 +448,135 @@ def test_plan_create_labels_includes_incident_marker():
     assert incident_cmd[:3] == ["gh", "label", "create"]
     assert "--force" in incident_cmd
     assert incident_cmd[incident_cmd.index("--repo") + 1] == spec.github_repo()
+
+
+def test_deploy_sre_agent_dry_run_records_plan(tmp_path):
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return MagicMock(returncode=0)
+
+    prov = InstanceProvisioner(_spec(), run=fake_run, repo_root=tmp_path)
+    manifest = prov.apply(execute=False)
+
+    # dry-run must shell out to nothing
+    assert calls == []
+    step = next(s for s in manifest.plan.steps if s.name == "deploy_sre_agent")
+    assert "dry-run" in step.result
+    assert step.executed is False
+
+
+def test_deploy_sre_agent_executes_sub_deployment(tmp_path):
+    outputs_json = (
+        '{"appInsightsId": {"type": "String", "value": "/sub/ai"},'
+        ' "logAnalyticsId": {"type": "String", "value": "/sub/law"},'
+        ' "keyVaultName": {"type": "String", "value": "kv1"}}'
+    )
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[:3] == ["gh", "repo", "view"]:
+            return MagicMock(returncode=1)
+        if cmd[:4] == ["az", "deployment", "group", "create"]:
+            return MagicMock(returncode=0, stdout=outputs_json)
+        if cmd == ["gh", "auth", "token"]:
+            return MagicMock(returncode=0, stdout="")
+        return MagicMock(returncode=0, stdout="")
+
+    prov = InstanceProvisioner(_spec(), run=fake_run, repo_root=tmp_path)
+    prov.apply(execute=True)
+
+    sub = next(c for c in calls if c[:4] == ["az", "deployment", "sub", "create"])
+    joined = " ".join(sub)
+    assert "infra/sre-agent.bicep" in joined
+    assert f"agentName={_spec().sre_agent_name()}" in sub
+    assert f"sreAgentLocation={_spec().sre_agent_location}" in sub
+    assert any("targetResourceGroups=" in part for part in sub)
+    assert "appInsightsId=/sub/ai" in sub
+    assert "logAnalyticsId=/sub/law" in sub
+
+
+def test_deploy_sre_agent_connect_repo_skipped_when_no_endpoint(tmp_path):
+    outputs_json = (
+        '{"appInsightsId": {"type": "String", "value": "/sub/ai"},'
+        ' "logAnalyticsId": {"type": "String", "value": "/sub/law"},'
+        ' "keyVaultName": {"type": "String", "value": "kv1"}}'
+    )
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[:3] == ["gh", "repo", "view"]:
+            return MagicMock(returncode=1)
+        if cmd[:4] == ["az", "deployment", "group", "create"]:
+            return MagicMock(returncode=0, stdout=outputs_json)
+        return MagicMock(returncode=0, stdout="")
+
+    prov = InstanceProvisioner(_spec(), run=fake_run, repo_root=tmp_path)
+    manifest = prov.apply(execute=True)
+
+    # No agentEndpoint in outputs -> repo connect is skipped cleanly
+    step = next(s for s in manifest.plan.steps if s.name == "deploy_sre_agent")
+    assert "skipped" in step.result
+    # az rest must not have been called
+    assert not any(cmd[:2] == ["az", "rest"] for cmd in calls)
+
+
+def test_deploy_sre_agent_connect_repo_skipped_when_no_gh_token(tmp_path):
+    outputs_json = (
+        '{"appInsightsId": {"type": "String", "value": "/sub/ai"},'
+        ' "logAnalyticsId": {"type": "String", "value": "/sub/law"},'
+        ' "agentEndpoint": {"type": "String", "value": "https://sre.example.com"},'
+        ' "keyVaultName": {"type": "String", "value": "kv1"}}'
+    )
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[:3] == ["gh", "repo", "view"]:
+            return MagicMock(returncode=1)
+        if cmd[:4] == ["az", "deployment", "group", "create"]:
+            return MagicMock(returncode=0, stdout=outputs_json)
+        if cmd == ["gh", "auth", "token"]:
+            return MagicMock(returncode=0, stdout="")  # empty token -> skip
+        return MagicMock(returncode=0, stdout="")
+
+    prov = InstanceProvisioner(_spec(), run=fake_run, repo_root=tmp_path)
+    manifest = prov.apply(execute=True)
+
+    step = next(s for s in manifest.plan.steps if s.name == "deploy_sre_agent")
+    assert "skipped" in step.result
+    assert not any(cmd[:2] == ["az", "rest"] for cmd in calls)
+
+
+def test_deploy_sre_agent_connect_repo_calls_az_rest_when_token_present(tmp_path):
+    outputs_json = (
+        '{"appInsightsId": {"type": "String", "value": "/sub/ai"},'
+        ' "logAnalyticsId": {"type": "String", "value": "/sub/law"},'
+        ' "agentEndpoint": {"type": "String", "value": "https://sre.example.com"},'
+        ' "keyVaultName": {"type": "String", "value": "kv1"}}'
+    )
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[:3] == ["gh", "repo", "view"]:
+            return MagicMock(returncode=1)
+        if cmd[:4] == ["az", "deployment", "group", "create"]:
+            return MagicMock(returncode=0, stdout=outputs_json)
+        if cmd == ["gh", "auth", "token"]:
+            return MagicMock(returncode=0, stdout="ghp_fake_token")
+        return MagicMock(returncode=0, stdout="")
+
+    prov = InstanceProvisioner(_spec(), run=fake_run, repo_root=tmp_path)
+    manifest = prov.apply(execute=True)
+
+    step = next(s for s in manifest.plan.steps if s.name == "deploy_sre_agent")
+    assert step.result == "deployed; repo connected"
+    rest_calls = [cmd for cmd in calls if cmd[:2] == ["az", "rest"]]
+    assert len(rest_calls) == 1
+    rest_cmd = rest_calls[0]
+    assert "--method" in rest_cmd and "post" in rest_cmd
+    assert any("https://sre.example.com/repositories" in part for part in rest_cmd)

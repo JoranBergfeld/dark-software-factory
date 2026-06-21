@@ -186,9 +186,10 @@ class InstanceProvisioner:
                 commands=governance_commands(s),
             ),
             ProvisionStep(
-                name="onboard_sre_agent",
+                name="deploy_sre_agent",
                 description=(
-                    f"Render the Azure SRE Agent onboarding runbook for {s.product}"
+                    f"Provision the Azure SRE Agent for {s.product} "
+                    f"(agent + RBAC on {', '.join(s.monitored_rgs())} + Azure Monitor)"
                 ),
             ),
             ProvisionStep(
@@ -276,17 +277,21 @@ class InstanceProvisioner:
                                 check=True,
                             )
                         step.executed, step.result = True, "deployed"
-                elif step.name == "onboard_sre_agent":
+                elif step.name == "deploy_sre_agent":
                     provisional = InstanceManifest(
                         spec=self.spec, plan=plan, executed=executed, azure=azure_result
                     )
                     render_sre_onboarding(provisional, repo_root=self._repo_root)
                     if not execute:
-                        step.result = "rendered (dry-run)"
+                        step.result = "deployed (dry-run)"
                     else:
-                        # The Azure SRE Agent is onboarded interactively (wizard +
-                        # OAuth, ADR 0009); there is no Container App to deploy.
-                        step.result = "onboarding ready"
+                        outputs = azure_result.outputs if azure_result else {}
+                        self._run(
+                            self._sre_deploy_command(outputs), check=True
+                        )
+                        note = self._connect_repo(azure_result)
+                        step.executed = True
+                        step.result = note or "deployed"
                 elif not execute:
                     step.result = "dry-run"
                 elif step.commands:
@@ -363,6 +368,54 @@ class InstanceProvisioner:
             location=self.spec.location,
             outputs={k: str(val) for k, val in outputs.items() if val is not None},
         )
+
+    def _sre_deploy_command(self, outputs: dict[str, str]) -> list[str]:
+        """`az deployment sub create` for the SRE agent, from provision_azure outputs."""
+        s = self.spec
+        bicep = str((self._repo_root or _default_repo_root()) / "infra" / "sre-agent.bicep")
+        target_rgs = json.dumps(s.monitored_rgs())
+        return [
+            "az", "deployment", "sub", "create",
+            "-l", s.sre_agent_location,
+            "-n", f"dsf-sre-{s.product}",
+            "-f", bicep,
+            "-p",
+            f"product={s.product}",
+            f"agentName={s.sre_agent_name()}",
+            f"sreAgentLocation={s.sre_agent_location}",
+            f"agentResourceGroup={s.sre_resource_group()}",
+            f"targetResourceGroups={target_rgs}",
+            f"appInsightsId={outputs.get('appInsightsId', '')}",
+            f"logAnalyticsId={outputs.get('logAnalyticsId', '')}",
+            "permissionLevel=Reader",
+            "--query", "properties.outputs", "-o", "json",
+        ]
+
+    def _connect_repo(self, azure_result: AzureProvisionResult | None) -> str:
+        """Best-effort Phase-2 data-plane repo connect via `az rest`.
+
+        Returns a short skip note when the agent endpoint or a GitHub token is
+        unavailable, so a missing data-plane path never fails the whole provision.
+        """
+        endpoint = azure_result.outputs.get("agentEndpoint", "") if azure_result else ""
+        if not endpoint:
+            return "deployed; repo connect skipped (no agent endpoint)"
+        token = self._run(["gh", "auth", "token"], check=False, capture_output=True, text=True)
+        gh_token = getattr(token, "stdout", "").strip()
+        if not gh_token:
+            return "deployed; repo connect skipped (no GitHub token)"
+        body = json.dumps({"repository": self.spec.github_repo(), "token": gh_token})
+        self._run(
+            [
+                "az", "rest", "--method", "post",
+                "--url", f"{endpoint}/repositories",
+                "--resource", "https://azuresre.dev",
+                "--headers", "Content-Type=application/json",
+                "--body", body,
+            ],
+            check=False,
+        )
+        return "deployed; repo connected"
 
     def _seed_github_token(self, azure_result: AzureProvisionResult | None) -> None:
         """Seed the operator's GitHub token into the per-product Key Vault.
