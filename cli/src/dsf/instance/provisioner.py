@@ -46,6 +46,30 @@ Runner = Callable[..., Any]
 #: ``"start"`` / ``"done"`` / ``"error"``. ``error`` is set only on ``"error"``.
 StepEvent = Callable[[str, int, int, ProvisionStep, "BaseException | None"], None]
 
+#: Cap captured stderr/stdout folded into a step error so a runaway tool log
+#: doesn't flood the summary.
+_MAX_ERROR_DETAIL = 2000
+
+
+def _format_step_error(exc: BaseException) -> str:
+    """Build a readable error message for a failed step.
+
+    Subprocess steps that capture output (e.g. ``provision_azure``) raise a
+    :class:`subprocess.CalledProcessError` whose ``str()`` is only
+    ``"Command ... returned non-zero exit status N"`` — the real reason lives in
+    the captured ``stderr``/``stdout``. Fold those in so the surfaced error names
+    the actual failure (a quota error, an RBAC denial, a bad parameter).
+    """
+    parts = [str(exc)]
+    for attr in ("stderr", "stdout"):
+        detail = getattr(exc, attr, None)
+        if isinstance(detail, bytes):
+            detail = detail.decode(errors="replace")
+        detail = (detail or "").strip() if isinstance(detail, str) else ""
+        if detail:
+            parts.append(detail[:_MAX_ERROR_DETAIL])
+    return "\n".join(parts)
+
 
 def _label_commands(spec: InstanceSpec) -> list[list[str]]:
     """Build idempotent ``gh label create --force`` commands for an instance.
@@ -249,7 +273,7 @@ class InstanceProvisioner:
                 except Exception as exc:  # noqa: BLE001 - reported via on_event, not swallowed
                     step.executed = False
                     step.result = "failed"
-                    step.error = str(exc)
+                    step.error = _format_step_error(exc)
                     emit("error", index, total, step, exc)
                     break
                 emit("done", index, total, step, None)

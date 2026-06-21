@@ -302,6 +302,26 @@ def test_apply_dry_run_leaves_azure_unset(tmp_path):
     assert results["provision_azure"] == "dry-run"
 
 
+def test_apply_execute_surfaces_captured_stderr_in_step_error(tmp_path):
+    # provision_azure captures output, so the real az error lives in the
+    # CalledProcessError's stderr — it must be folded into step.error, not lost.
+    quota = "ErrCode_InsufficientVCPUQuota: remaining 0 for family standardDSv5Family"
+
+    def fake_run(cmd, **kwargs):
+        if cmd[:3] == ["gh", "repo", "view"]:
+            return MagicMock(returncode=1)
+        if cmd[:4] == ["az", "deployment", "group", "create"]:
+            raise subprocess.CalledProcessError(1, cmd, stderr=quota)
+        return MagicMock(returncode=0, stdout="")
+
+    spec = InstanceSpec(product="demo", owner="acme", name_prefix="demox123")
+    prov = InstanceProvisioner(spec, run=fake_run, repo_root=tmp_path)
+    manifest = prov.apply(execute=True)
+    failed = next(s for s in manifest.plan.steps if s.result == "failed")
+    assert failed.name == "provision_azure"
+    assert quota in failed.error  # the real reason, not just "exit status 1"
+
+
 def test_apply_execute_records_failure_and_stops_without_raising(tmp_path):
     def fake_run(cmd, **kwargs):
         if cmd[:3] == ["gh", "repo", "view"]:
