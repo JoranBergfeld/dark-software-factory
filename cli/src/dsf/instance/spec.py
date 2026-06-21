@@ -40,6 +40,18 @@ class InstanceSpec(BaseModel):
     environment: str = "dev"
     location: str = "swedencentral"
     label_taxonomy: dict[str, list[str]] = Field(default_factory=default_label_taxonomy)
+    sre_agent_location: str = "swedencentral"
+    monitored_resource_groups: list[str] = Field(default_factory=list)
+
+    @field_validator("sre_agent_location")
+    @classmethod
+    def _validate_sre_agent_location(cls, value: str) -> str:
+        supported = {"swedencentral", "eastus2", "australiaeast"}
+        if value not in supported:
+            raise ValueError(
+                f"sre_agent_location must be one of {sorted(supported)}, got {value!r}"
+            )
+        return value
 
     @field_validator("name_prefix")
     @classmethod
@@ -72,6 +84,25 @@ class InstanceSpec(BaseModel):
     def deployment_name(self) -> str:
         """ARM deployment name for this instance's Azure provisioning."""
         return f"dsf-{self.product}"
+
+    def sre_agent_name(self) -> str:
+        """Azure SRE Agent resource name for this instance."""
+        return f"dsf-sre-{self.product}"
+
+    def sre_resource_group(self) -> str:
+        """Dedicated resource group that hosts the SRE agent."""
+        return f"rg-dsf-sre-{self.product}"
+
+    def monitored_rgs(self) -> list[str]:
+        """Resource groups the agent monitors: the factory RG plus any extras, deduped."""
+        ordered = [self.resource_group(), *self.monitored_resource_groups]
+        seen: set[str] = set()
+        out: list[str] = []
+        for rg in ordered:
+            if rg not in seen:
+                seen.add(rg)
+                out.append(rg)
+        return out
 
 
 class ProvisionStep(BaseModel):

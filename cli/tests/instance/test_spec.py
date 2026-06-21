@@ -121,3 +121,34 @@ def test_squad_maturity_accepts_high():
 def test_squad_maturity_rejects_unknown_value():
     with pytest.raises(ValidationError):
         InstanceSpec(product="demo", owner="acme", squad_maturity="medium")
+
+
+# --- SRE agent spec tests ---
+
+
+def _spec(**kw):
+    return InstanceSpec(product="microbi", owner="acme", **kw)
+
+
+def test_sre_agent_location_defaults_to_sweden_central():
+    assert _spec().sre_agent_location == "swedencentral"
+
+
+def test_sre_agent_location_rejects_unsupported_region():
+    with pytest.raises(ValueError, match="sre_agent_location"):
+        _spec(sre_agent_location="westeurope")
+
+
+def test_sre_agent_name_and_rg():
+    s = _spec()
+    assert s.sre_agent_name() == "dsf-sre-microbi"
+    assert s.sre_resource_group() == "rg-dsf-sre-microbi"
+
+
+def test_monitored_rgs_defaults_to_factory_rg():
+    assert _spec().monitored_rgs() == ["rg-dsf-microbi"]
+
+
+def test_monitored_rgs_appends_and_dedupes():
+    s = _spec(monitored_resource_groups=["rg-app", "rg-dsf-microbi", "rg-app"])
+    assert s.monitored_rgs() == ["rg-dsf-microbi", "rg-app"]
