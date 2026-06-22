@@ -69,6 +69,22 @@ def test_exchange_manifest_code_posts_to_conversions_and_parses_credentials():
     )
 
 
+def test_app_credentials_repr_hides_secrets():
+    creds = AppCredentials(
+        app_id="42",
+        slug="s",
+        pem="-----BEGIN PRIVATE KEY-----",
+        webhook_secret="whs",
+        client_id="cid",
+        client_secret="csec",
+    )
+    text = repr(creds)
+    assert "BEGIN PRIVATE KEY" not in text
+    assert "whs" not in text
+    assert "csec" not in text
+    assert "42" in text
+
+
 def test_discover_installation_id_polls_until_present():
     creds = AppCredentials(app_id="42", slug="s", pem=_rsa_pem(), webhook_secret="",
                            client_id="", client_secret="")

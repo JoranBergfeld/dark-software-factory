@@ -9,8 +9,9 @@ glue is validated by a real bootstrap, not the unit suite (ADR 0014 framing).
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
 import httpx
@@ -30,10 +31,10 @@ class AppCredentials:
 
     app_id: str
     slug: str
-    pem: str
-    webhook_secret: str
+    pem: str = field(repr=False)
+    webhook_secret: str = field(repr=False)
     client_id: str
-    client_secret: str
+    client_secret: str = field(repr=False)
 
 
 def app_manifest(*, name: str, callback_url: str) -> dict:
@@ -88,7 +89,7 @@ def discover_installation_id(
     *,
     transport: httpx.BaseTransport | None = None,
     clock: Callable[[], datetime] = lambda: datetime.now(UTC),
-    sleep: Callable[[float], None] = lambda _s: None,
+    sleep: Callable[[float], None] = time.sleep,
     max_attempts: int = 60,
     poll_seconds: float = 5.0,
 ) -> str:
