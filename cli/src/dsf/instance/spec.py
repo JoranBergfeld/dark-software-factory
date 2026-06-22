@@ -153,6 +153,20 @@ class AzureProvisionResult(BaseModel):
     outputs: dict[str, str] = Field(default_factory=dict)
 
 
+class GitHubAppBinding(BaseModel):
+    """The DSF GitHub App binding captured for one product at provision time.
+
+    ``app_id`` and ``installation_id`` are owner-level (shared across products);
+    ``repository_id`` is this product's repo, added to that single installation.
+    ``private_key_secret`` is the product Key Vault secret name the runtime reads.
+    """
+
+    app_id: str
+    installation_id: str
+    repository_id: int
+    private_key_secret: str = "github-app-private-key"
+
+
 class InstanceManifest(BaseModel):
     """Persisted record of an instance: spec + plan + execution status."""
 
@@ -160,6 +174,7 @@ class InstanceManifest(BaseModel):
     plan: InstancePlan
     executed: bool = False
     azure: AzureProvisionResult | None = None
+    github_app: GitHubAppBinding | None = None
 
 
 def _default_repo_root() -> Path:

@@ -7,6 +7,7 @@ from pydantic import ValidationError
 
 from dsf.instance.spec import (
     AzureProvisionResult,
+    GitHubAppBinding,
     InstanceManifest,
     InstancePlan,
     InstanceSpec,
@@ -116,6 +117,26 @@ def test_squad_maturity_defaults_to_low():
 def test_squad_maturity_accepts_high():
     spec = InstanceSpec(product="demo", owner="acme", squad_maturity="high")
     assert spec.squad_maturity == "high"
+
+
+def test_manifest_round_trips_github_app_binding():
+    spec = InstanceSpec(product="demo", owner="acme")
+    plan = InstancePlan(product="demo", steps=[])
+    binding = GitHubAppBinding(app_id="123", installation_id="456", repository_id=789)
+    manifest = InstanceManifest(spec=spec, plan=plan, github_app=binding)
+
+    loaded = InstanceManifest.model_validate_json(manifest.model_dump_json())
+    assert loaded.github_app is not None
+    assert loaded.github_app.app_id == "123"
+    assert loaded.github_app.installation_id == "456"
+    assert loaded.github_app.repository_id == 789
+    assert loaded.github_app.private_key_secret == "github-app-private-key"
+
+
+def test_manifest_github_app_defaults_to_none():
+    spec = InstanceSpec(product="demo", owner="acme")
+    plan = InstancePlan(product="demo", steps=[])
+    assert InstanceManifest(spec=spec, plan=plan).github_app is None
 
 
 def test_squad_maturity_rejects_unknown_value():
