@@ -407,10 +407,12 @@ class InstanceProvisioner:
                 self._seed_app_key(azure_result)
                 step.executed, step.result = True, "seeded"
         elif step.name == "install_app":
-            if not self._github_installation_id:
+            if not self._owner_keyvault_uri:
                 step.result = "skipped (no owner App configured)"
             elif not execute:
                 step.result = "installed (dry-run)"
+            elif not self._github_installation_id:
+                step.result = "skipped (owner App pointer unavailable)"
             else:
                 self._app_binding = self._install_app()
                 step.executed, step.result = True, "installed"

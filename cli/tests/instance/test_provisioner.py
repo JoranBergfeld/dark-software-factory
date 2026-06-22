@@ -974,6 +974,29 @@ def test_install_app_step_is_dry_run_safe(tmp_path):
     assert "9001" in install.description
 
 
+def test_install_app_dry_run_preview_consistent_when_owner_kv_set(tmp_path):
+    # In dry-run, factory.py does not read the owner-KV pointers, so installation_id is
+    # empty even though an owner App IS configured (owner_keyvault_uri is set). The two App
+    # steps must preview consistently: install_app must not claim "no owner App configured"
+    # while seed_app_key previews a seed.
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return MagicMock(returncode=0)
+
+    prov = InstanceProvisioner(
+        _spec(), run=fake_run, repo_root=tmp_path,
+        owner_keyvault_uri="https://kv-dsf-app.vault.azure.net/",
+    )
+    manifest = prov.apply(execute=False)
+
+    assert calls == []  # dry-run shells out to nothing
+    results = {s.name: s.result for s in manifest.plan.steps}
+    assert results["install_app"] == "installed (dry-run)"
+    assert results["seed_app_key"] == "seeded (dry-run)"
+
+
 def test_apply_preserves_prior_github_app_binding_when_install_skips(tmp_path):
     # A binding recorded by an earlier App install must survive a later run that
     # skips install_app (preview / --write-plan / execute retry without the pointer),
@@ -990,6 +1013,7 @@ def test_apply_preserves_prior_github_app_binding_when_install_skips(tmp_path):
 
     InstanceProvisioner(
         _spec(), run=fake_run, repo_root=tmp_path,
+        owner_keyvault_uri="https://kv-dsf-app.vault.azure.net/",
         github_app_id="42", github_installation_id="9001",
     ).apply(execute=True)
 
