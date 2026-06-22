@@ -319,6 +319,9 @@ class InstanceProvisioner:
         path = manifest_path(self.spec.product, self._repo_root)
         prior = self._existing_manifest()
         azure_result = prior.azure if (prior and not execute) else None
+        # Carry a previously recorded App binding forward so a skip/preview/--write-plan
+        # never blanks it; install_app overwrites self._app_binding only when it installs.
+        self._app_binding = prior.github_app if prior else None
         executed = execute or bool(prior and prior.executed)
         # write_config is finalized after the manifest is built, not run in-loop.
         steps = [s for s in plan.steps if s.name != "write_config"]

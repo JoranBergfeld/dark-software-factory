@@ -897,3 +897,32 @@ def test_install_app_step_is_dry_run_safe(tmp_path):
     plan = prov.plan()
     install = next(s for s in plan.steps if s.name == "install_app")
     assert "9001" in install.description
+
+
+def test_apply_preserves_prior_github_app_binding_when_install_skips(tmp_path):
+    # A binding recorded by an earlier App install must survive a later run that
+    # skips install_app (preview / --write-plan / execute retry without the pointer),
+    # mirroring how prior Azure outputs are carried forward.
+    def fake_run(cmd, **kwargs):
+        if cmd[:3] == ["gh", "repo", "view"]:
+            return MagicMock(returncode=1)
+        if cmd[:3] == ["gh", "api", "/repos/acme/demo"]:
+            return MagicMock(returncode=0, stdout="555\n")
+        hit = _az_deploy(cmd, _AZURE_OUTPUTS_JSON)
+        if hit is not None:
+            return hit
+        return MagicMock(returncode=0, stdout="")
+
+    InstanceProvisioner(
+        _spec(), run=fake_run, repo_root=tmp_path,
+        github_app_id="42", github_installation_id="9001",
+    ).apply(execute=True)
+
+    # Re-run WITHOUT the owner pointer: install_app skips, but the binding must persist.
+    manifest = InstanceProvisioner(_spec(), repo_root=tmp_path).apply(execute=False)
+    assert manifest.github_app is not None
+    assert manifest.github_app.installation_id == "9001"
+    on_disk = read_manifest("demo", repo_root=tmp_path)
+    assert on_disk.github_app is not None
+    assert on_disk.github_app.app_id == "42"
+    assert on_disk.github_app.repository_id == 555
