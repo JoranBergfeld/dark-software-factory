@@ -2,8 +2,8 @@
 
 ``dsf new`` provisions an isolated product factory: its own GitHub repo + Coding
 Squad, a dedicated Azure resource group, and the per-product feature-council runtime
-deployed to Azure Container Apps. Future lifecycle verbs (``status``/``upgrade``/
-``destroy``, SP7) will live here too.
+deployed to Azure Container Apps. ``dsf offboard`` is the inverse teardown that keeps
+the repo but removes Azure/runtime/registry artifacts.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ def _print_plan(plan, *, execute: bool = False) -> None:
 
 
 def _print_step_event(phase, index, total, step, error) -> None:
-    """Live per-step progress for an executing ``dsf new`` run."""
+    """Live per-step progress for an executing lifecycle run."""
     if phase == "start":
         print(f"[dsf] ▶ [{index}/{total}] {step.name}: {step.description}", flush=True)
     elif phase == "done":
@@ -73,6 +73,35 @@ def _cmd_new(args: argparse.Namespace) -> int:
     failed = next((s for s in plan.steps if s.result == "failed"), None)
     if failed:
         print(f"[dsf] provisioning STOPPED at '{failed.name}': {failed.error}")
+        return 1
+    return 0
+
+
+def _cmd_offboard(args: argparse.Namespace) -> int:
+    """Remove Azure/runtime/registry artifacts for one product."""
+    from dsf.instance.provisioner import InstanceOffboarder
+
+    root = Path(args.config_root) if args.config_root else None
+    execute = not args.dry_run
+    if execute and not args.yes:
+        confirmation = input(
+            f"[dsf] Offboard '{args.product}'? This deletes Azure resources and local instance "
+            f"artifacts but keeps the GitHub repo. Type '{args.product}' to confirm: "
+        )
+        if confirmation.strip() != args.product:
+            print("[dsf] offboard aborted (confirmation mismatch)")
+            return 1
+
+    offboarder = InstanceOffboarder(
+        args.product,
+        repo_root=root,
+        purge=args.purge,
+    )
+    plan = offboarder.apply(execute=execute, on_event=_print_step_event)
+    _print_plan(plan, execute=execute)
+    failed = next((s for s in plan.steps if s.result == "failed"), None)
+    if failed:
+        print(f"[dsf] offboard STOPPED at '{failed.name}': {failed.error}")
         return 1
     return 0
 
@@ -140,6 +169,30 @@ def build_parser() -> argparse.ArgumentParser:
         help="override repo root where config/instances/ is written (tests/CI)",
     )
     p_new.set_defaults(func=_cmd_new)
+
+    p_offboard = sub.add_parser("offboard", help="remove Azure/runtime artifacts for a product")
+    p_offboard.add_argument("product", help="product key to offboard (e.g. 'microbi')")
+    p_offboard.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="preview only: print the teardown plan without side effects",
+    )
+    p_offboard.add_argument(
+        "--yes",
+        action="store_true",
+        help="skip interactive confirmation for destructive delete steps",
+    )
+    p_offboard.add_argument(
+        "--purge",
+        action="store_true",
+        help="also purge soft-deleted Key Vault/Foundry resources for name reuse",
+    )
+    p_offboard.add_argument(
+        "--config-root",
+        default=None,
+        help="override repo root where config/instances/ and config/products.json live",
+    )
+    p_offboard.set_defaults(func=_cmd_offboard)
 
     return parser
 
