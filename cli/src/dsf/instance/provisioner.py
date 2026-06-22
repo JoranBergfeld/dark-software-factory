@@ -41,7 +41,6 @@ from dsf.instance.spec import (
     write_manifest,
 )
 from dsf.instance.squad_governance import governance_commands
-from dsf.instance.squad_render import KV_SECRET_NAME, render_squad_bundle
 
 Runner = Callable[..., Any]
 
@@ -260,12 +259,6 @@ class InstanceProvisioner:
                 ),
             ),
             ProvisionStep(
-                name="deploy_squad_ralph",
-                description=(
-                    f"Render + apply the Ralph watch loop (AKS + KEDA) for {s.product}"
-                ),
-            ),
-            ProvisionStep(
                 name="squad_governance",
                 description=(
                     f"Apply the '{s.squad_maturity}' squad maturity dial to "
@@ -400,35 +393,6 @@ class InstanceProvisioner:
                     ],
                     check=True,
                 )
-                step.executed, step.result = True, "deployed"
-        elif step.name == "deploy_squad_ralph":
-            provisional = InstanceManifest(
-                spec=self.spec, plan=plan, executed=executed, azure=azure_result
-            )
-            bundle = render_squad_bundle(provisional, repo_root=self._repo_root)
-            if not execute:
-                step.result = "rendered (dry-run)"
-            else:
-                self._run(
-                    [
-                        "az", "aks", "get-credentials",
-                        "--resource-group", self.spec.resource_group(),
-                        "--name", f"aks-dsf-{self.spec.product}",
-                        "--overwrite-existing",
-                    ],
-                    check=True,
-                )
-                self._seed_github_token(azure_result)
-                for manifest_file in (
-                    bundle.identity_path,
-                    bundle.exporter_path,
-                    bundle.deployment_path,
-                    bundle.scaledobject_path,
-                ):
-                    self._run(
-                        ["kubectl", "apply", "-f", str(manifest_file)],
-                        check=True,
-                    )
                 step.executed, step.result = True, "deployed"
         elif step.name == "deploy_sre_agent":
             provisional = InstanceManifest(
@@ -596,26 +560,3 @@ class InstanceProvisioner:
                     self._sleep(_SEED_RETRY_DELAY)
         assert last_error is not None  # loop ran at least once
         raise last_error
-
-    def _seed_github_token(self, azure_result: AzureProvisionResult | None) -> None:
-        """Seed the operator's GitHub token into the per-product Key Vault.
-
-        The squad pods never hold a static in-cluster credential; the Key Vault
-        CSI driver projects this secret at runtime under AKS workload identity
-        (Option 2, ADR 0012). Swapping to a GitHub App installation token later is
-        a value change here, not a rewrite. Reads the vault name from the Azure
-        deployment outputs captured by the ``provision_azure`` step.
-        """
-        keyvault_name = azure_result.outputs.get("keyVaultName", "") if azure_result else ""
-        token = self._run(
-            ["gh", "auth", "token"], check=True, capture_output=True, text=True
-        )
-        self._run(
-            [
-                "az", "keyvault", "secret", "set",
-                "--vault-name", keyvault_name,
-                "--name", KV_SECRET_NAME,
-                "--value", getattr(token, "stdout", "").strip(),
-            ],
-            check=True,
-        )

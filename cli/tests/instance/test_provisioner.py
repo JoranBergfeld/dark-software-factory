@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import subprocess
-from pathlib import Path
 from unittest.mock import MagicMock
 
 from dsf.config.registry import load_registry, route_product
@@ -76,7 +75,6 @@ def test_plan_step_order_and_names():
         "seed_appconfig",
         "register_product",
         "deploy_council",
-        "deploy_squad_ralph",
         "squad_governance",
         "deploy_sre_agent",
         "write_config",
@@ -454,10 +452,10 @@ def test_apply_execute_emits_start_and_done_events_per_step(tmp_path):
     assert ("start", "deploy_sre_agent") in phases
     assert ("done", "deploy_sre_agent") in phases
     assert not any(phase == "error" for phase, *_ in events)
-    # 1-based index, stable total = the 11 non-write_config steps.
+    # 1-based index, stable total = the 10 non-write_config steps.
     starts = [e for e in events if e[0] == "start"]
     assert starts[0][1] == 1
-    assert all(total == 11 for _p, _i, total, _s, _e in starts)
+    assert all(total == 10 for _p, _i, total, _s, _e in starts)
 
 
 def test_apply_execute_emits_error_event_on_failure(tmp_path):
@@ -568,10 +566,10 @@ def test_apply_execute_aca_updates_container_app(tmp_path):
 
 
 def test_removed_one_shot_squad_steps_are_gone():
-    """The pre-Ralph Cloud Agent steps (squad_copilot, squad_triage) are gone."""
+    """The retired squad steps (Cloud Agent + AKS/Ralph harness) are gone."""
     plan = InstanceProvisioner(_spec()).plan()
     names = {s.name for s in plan.steps}
-    assert not names & {"squad_copilot", "squad_triage"}
+    assert not names & {"squad_copilot", "squad_triage", "deploy_squad_ralph"}
 
 
 def test_squad_governance_low_maturity_disables_auto_merge():
@@ -581,64 +579,6 @@ def test_squad_governance_low_maturity_disables_auto_merge():
     assert gov.commands == [
         ["gh", "api", "--method", "PATCH", "repos/acme/demo", "-F", "allow_auto_merge=false"]
     ]
-
-
-def test_deploy_squad_ralph_renders_bundle_in_dry_run(tmp_path):
-    spec = InstanceSpec(product="demo", owner="acme")
-    InstanceProvisioner(spec, repo_root=tmp_path).apply(execute=False)
-    squad_dir = tmp_path / "config" / "instances" / "demo.runtime" / "squad"
-    assert (squad_dir / "squad-identity.yaml").is_file()
-    assert (squad_dir / "ralph-deployment.yaml").is_file()
-    assert (squad_dir / "ralph-scaledobject.yaml").is_file()
-    assert (squad_dir / "issue-exporter.yaml").is_file()
-
-
-def test_deploy_squad_ralph_applies_manifests_on_execute(tmp_path):
-    spec = InstanceSpec(product="demo", owner="acme")
-
-    def run(cmd, **kwargs):
-        hit = _az_deploy(cmd, _AZURE_OUTPUTS_JSON)
-        if hit is not None:
-            return hit
-        return subprocess.CompletedProcess([], 0, stdout="{}", stderr="")
-
-    run = MagicMock(side_effect=run)
-    manifest = InstanceProvisioner(spec, run=run, repo_root=tmp_path).apply(execute=True)
-    calls = [c.args[0] for c in run.call_args_list]
-    assert any(cmd[:3] == ["az", "aks", "get-credentials"] for cmd in calls)
-    # The operator's GitHub credential is seeded into the per-product Key Vault
-    # so the CSI driver can project it into the squad pods (Option 2, ADR 0012).
-    assert any(cmd == ["gh", "auth", "token"] for cmd in calls)
-    seed_idx = next(
-        i
-        for i, cmd in enumerate(calls)
-        if cmd[:4] == ["az", "keyvault", "secret", "set"] and "github-token" in cmd
-    )
-    applied = [
-        Path(cmd[-1]).name
-        for cmd in calls
-        if cmd[:3] == ["kubectl", "apply", "-f"]
-    ]
-    # Order is load-bearing: the identity manifest carries the Namespace,
-    # ServiceAccount, and SecretProviderClass, so it must be applied before the
-    # namespaced exporter, Deployment, and ScaledObject.
-    assert applied == [
-        "squad-identity.yaml",
-        "issue-exporter.yaml",
-        "ralph-deployment.yaml",
-        "ralph-scaledobject.yaml",
-    ]
-    first_apply_idx = next(
-        i for i, cmd in enumerate(calls) if cmd[:3] == ["kubectl", "apply", "-f"]
-    )
-    # The secret must exist before any pod that mounts it starts.
-    assert seed_idx < first_apply_idx
-    assert any(
-        cmd[:5] == ["gh", "api", "--method", "PATCH", "repos/acme/demo"] for cmd in calls
-    )
-    # The kubectl loop must not clobber the manifest path reported by write_config.
-    write_config = next(s for s in manifest.plan.steps if s.name == "write_config")
-    assert write_config.result.endswith("demo.json")
 
 
 def test_plan_create_labels_includes_incident_marker():
