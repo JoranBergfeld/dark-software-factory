@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -29,6 +30,38 @@ _APPCONFIG_OUTPUT = (
     f'"appConfigEndpoint": {{"type": "String", "value": "{_APPCONFIG_ENDPOINT}"}}'
 )
 _AZURE_OUTPUTS_JSON = "{" + _APPCONFIG_OUTPUT + "}"
+
+
+def _az_deploy(cmd, outputs_json, *, state="Succeeded", ops_json=None):
+    """Respond to the no-wait create + poll + show calls; ``None`` for other cmds.
+
+    Lets each execute-path test delegate the provision_azure az-sequence to one
+    place: the ``create`` accepts (no output), the operation-list returns ``ops_json``
+    (a single Succeeded App Config op by default), and ``show`` returns ``state`` for
+    the provisioningState query and ``outputs_json`` for the outputs query.
+    """
+    if cmd[:4] == ["az", "deployment", "group", "create"]:
+        return MagicMock(returncode=0, stdout="")
+    if cmd[:5] == ["az", "deployment", "operation", "group", "list"]:
+        default_ops = json.dumps([
+            {"properties": {
+                "provisioningState": "Succeeded",
+                "duration": "PT5S",
+                "targetResource": {
+                    "resourceType": "Microsoft.AppConfiguration/configurationStores",
+                    "resourceName": "demo-appconfig",
+                },
+            }}
+        ])
+        return MagicMock(returncode=0, stdout=ops_json if ops_json is not None else default_ops)
+    if cmd[:4] == ["az", "deployment", "group", "show"]:
+        query = cmd[cmd.index("--query") + 1] if "--query" in cmd else ""
+        if query == "properties.provisioningState":
+            return MagicMock(returncode=0, stdout=state)
+        if query == "properties.outputs":
+            return MagicMock(returncode=0, stdout=outputs_json)
+        return MagicMock(returncode=0, stdout="")
+    return None
 
 
 def test_plan_step_order_and_names():
@@ -78,8 +111,8 @@ def test_plan_provision_azure_command_shape():
     assert "location=swedencentral" in az.command
     assert "product=demo" in az.command
     assert any(c.startswith("runtimeImage=") for c in az.command)
-    assert az.command[az.command.index("--query") + 1] == "properties.outputs"
-    assert az.command[-2:] == ["-o", "json"]
+    assert "--no-wait" in az.command
+    assert "--query" not in az.command  # outputs are fetched post-deploy via `show`
 
 
 def test_plan_create_repo_command():
@@ -125,6 +158,9 @@ def test_apply_execute_creates_labels(tmp_path):
     def fake_run(cmd, **kwargs):
         calls.append((cmd, kwargs.get("cwd")))
         returncode = 1 if cmd[:3] == ["gh", "repo", "view"] else 0
+        hit = _az_deploy(cmd, _AZURE_OUTPUTS_JSON)
+        if hit is not None:
+            return hit
         return MagicMock(returncode=returncode)
 
     prov = InstanceProvisioner(_spec(), run=fake_run, repo_root=tmp_path)
@@ -177,8 +213,9 @@ def test_apply_execute_registers_product_into_routing_registry(tmp_path):
     def fake_run(cmd, **kwargs):
         if cmd[:3] == ["gh", "repo", "view"]:
             return MagicMock(returncode=1)
-        if cmd[:4] == ["az", "deployment", "group", "create"]:
-            return MagicMock(returncode=0, stdout=_AZURE_OUTPUTS_JSON)
+        hit = _az_deploy(cmd, _AZURE_OUTPUTS_JSON)
+        if hit is not None:
+            return hit
         return MagicMock(returncode=0)
 
     prov = InstanceProvisioner(_spec(), run=fake_run, repo_root=tmp_path)
@@ -214,8 +251,9 @@ def test_apply_execute_runs_real_steps_and_onboards_sre(tmp_path):
         calls.append((cmd, kwargs.get("cwd")))
         if cmd[:3] == ["gh", "repo", "view"]:
             return MagicMock(returncode=1)
-        if cmd[:4] == ["az", "deployment", "group", "create"]:
-            return MagicMock(returncode=0, stdout=_AZURE_OUTPUTS_JSON)
+        hit = _az_deploy(cmd, _AZURE_OUTPUTS_JSON)
+        if hit is not None:
+            return hit
         return MagicMock(returncode=0)
 
     prov = InstanceProvisioner(_spec(), run=fake_run, repo_root=tmp_path)
@@ -252,6 +290,9 @@ def test_apply_execute_skips_clone_when_repo_and_local_dir_exist(tmp_path, monke
 
     def fake_run(cmd, **kwargs):
         calls.append(cmd)
+        hit = _az_deploy(cmd, _AZURE_OUTPUTS_JSON)
+        if hit is not None:
+            return hit
         return MagicMock(returncode=0)  # gh repo view -> exists
 
     prov = InstanceProvisioner(_spec(), run=fake_run, repo_root=tmp_path)
@@ -271,6 +312,9 @@ def test_apply_execute_clones_when_repo_exists_but_not_local(tmp_path, monkeypat
 
     def fake_run(cmd, **kwargs):
         calls.append(cmd)
+        hit = _az_deploy(cmd, _AZURE_OUTPUTS_JSON)
+        if hit is not None:
+            return hit
         return MagicMock(returncode=0)  # gh repo view -> exists
 
     prov = InstanceProvisioner(_spec(), run=fake_run, repo_root=tmp_path)
@@ -294,8 +338,9 @@ def test_apply_execute_captures_azure_outputs(tmp_path):
     def fake_run(cmd, **kwargs):
         if cmd[:3] == ["gh", "repo", "view"]:
             return MagicMock(returncode=1)
-        if cmd[:4] == ["az", "deployment", "group", "create"]:
-            return MagicMock(returncode=0, stdout=outputs_json)
+        hit = _az_deploy(cmd, outputs_json)
+        if hit is not None:
+            return hit
         return MagicMock(returncode=0, stdout="")
 
     prov = InstanceProvisioner(_spec(), run=fake_run, repo_root=tmp_path)
@@ -325,20 +370,31 @@ def test_apply_dry_run_leaves_azure_unset(tmp_path):
     assert results["provision_azure"] == "dry-run"
 
 
-def test_apply_execute_surfaces_captured_stderr_in_step_error(tmp_path):
-    # provision_azure captures output, so the real az error lives in the
-    # CalledProcessError's stderr — it must be folded into step.error, not lost.
+def test_apply_execute_surfaces_failed_operation_reason(tmp_path):
+    # The deployment now runs --no-wait; the real failure reason comes from the
+    # failed operation's statusMessage, surfaced via DeploymentFailedError.__str__.
     quota = "ErrCode_InsufficientVCPUQuota: remaining 0 for family standardDSv5Family"
+    failed_ops = json.dumps([
+        {"properties": {
+            "provisioningState": "Failed",
+            "statusMessage": {"error": {"code": "QuotaExceeded", "message": quota}},
+            "targetResource": {
+                "resourceType": "Microsoft.App/containerApps",
+                "resourceName": "dsf-orchestrator-demo",
+            },
+        }}
+    ])
 
     def fake_run(cmd, **kwargs):
         if cmd[:3] == ["gh", "repo", "view"]:
             return MagicMock(returncode=1)
-        if cmd[:4] == ["az", "deployment", "group", "create"]:
-            raise subprocess.CalledProcessError(1, cmd, stderr=quota)
-        return MagicMock(returncode=0, stdout="")
+        hit = _az_deploy(cmd, "{}", state="Failed", ops_json=failed_ops)
+        if hit is not None:
+            return hit
+        return MagicMock(returncode=0, stdout="{}")
 
     spec = InstanceSpec(product="demo", owner="acme", name_prefix="demox123")
-    prov = InstanceProvisioner(spec, run=fake_run, repo_root=tmp_path)
+    prov = InstanceProvisioner(spec, run=fake_run, repo_root=tmp_path, sleep=lambda *_a: None)
     manifest = prov.apply(execute=True)
     failed = next(s for s in manifest.plan.steps if s.result == "failed")
     assert failed.name == "provision_azure"
@@ -349,12 +405,18 @@ def test_apply_execute_records_failure_and_stops_without_raising(tmp_path):
     def fake_run(cmd, **kwargs):
         if cmd[:3] == ["gh", "repo", "view"]:
             return MagicMock(returncode=1)
-        if cmd[:4] == ["az", "deployment", "group", "create"]:
-            raise subprocess.CalledProcessError(1, cmd)
+        failed_ops = json.dumps([{"properties": {
+            "provisioningState": "Failed",
+            "targetResource": {"resourceType": "Microsoft.App/containerApps",
+                               "resourceName": "dsf-orchestrator-demo"},
+        }}])
+        hit = _az_deploy(cmd, "{}", state="Failed", ops_json=failed_ops)
+        if hit is not None:
+            return hit
         return MagicMock(returncode=0, stdout="")
 
     spec = InstanceSpec(product="demo", owner="acme", name_prefix="demox123")
-    prov = InstanceProvisioner(spec, run=fake_run, repo_root=tmp_path)
+    prov = InstanceProvisioner(spec, run=fake_run, repo_root=tmp_path, sleep=lambda *_a: None)
 
     # apply records the failure on the step and STOPS — it does not raise.
     manifest = prov.apply(execute=True)
@@ -376,8 +438,9 @@ def test_apply_execute_emits_start_and_done_events_per_step(tmp_path):
     def fake_run(cmd, **kwargs):
         if cmd[:3] == ["gh", "repo", "view"]:
             return MagicMock(returncode=1)
-        if cmd[:4] == ["az", "deployment", "group", "create"]:
-            return MagicMock(returncode=0, stdout=_AZURE_OUTPUTS_JSON)
+        hit = _az_deploy(cmd, _AZURE_OUTPUTS_JSON)
+        if hit is not None:
+            return hit
         return MagicMock(returncode=0, stdout="{}")
 
     events: list[tuple] = []
@@ -401,22 +464,51 @@ def test_apply_execute_emits_error_event_on_failure(tmp_path):
     def fake_run(cmd, **kwargs):
         if cmd[:3] == ["gh", "repo", "view"]:
             return MagicMock(returncode=1)
-        if cmd[:4] == ["az", "deployment", "group", "create"]:
-            raise subprocess.CalledProcessError(1, cmd)
+        failed_ops = json.dumps([{"properties": {
+            "provisioningState": "Failed",
+            "targetResource": {"resourceType": "Microsoft.App/containerApps",
+                               "resourceName": "dsf-orchestrator-demo"},
+        }}])
+        hit = _az_deploy(cmd, "{}", state="Failed", ops_json=failed_ops)
+        if hit is not None:
+            return hit
         return MagicMock(returncode=0, stdout="")
 
     events: list[tuple] = []
     spec = InstanceSpec(product="demo", owner="acme", name_prefix="demox123")
-    prov = InstanceProvisioner(spec, run=fake_run, repo_root=tmp_path)
+    prov = InstanceProvisioner(spec, run=fake_run, repo_root=tmp_path, sleep=lambda *_a: None)
     prov.apply(execute=True, on_event=lambda *a: events.append(a))
 
     errors = [e for e in events if e[0] == "error"]
     assert len(errors) == 1
     phase, _index, _total, step, err = errors[0]
     assert step.name == "provision_azure"
-    assert isinstance(err, subprocess.CalledProcessError)
+    from dsf.instance.deploy_progress import DeploymentFailedError
+    assert isinstance(err, DeploymentFailedError)
     # No "done" emitted for the failed step, and no events after it.
     assert ("done", "provision_azure") not in [(p, s.name) for p, _i, _t, s, _e in events]
+
+
+def test_apply_execute_forwards_provision_progress_lines(tmp_path):
+    # provision_azure streams per-resource lines through the on_progress channel.
+    ops = json.dumps([{"properties": {
+        "provisioningState": "Running",
+        "targetResource": {"resourceType": "Microsoft.DocumentDB/databaseAccounts",
+                           "resourceName": "cosmos-demo"},
+    }}])
+
+    def fake_run(cmd, **kwargs):
+        if cmd[:3] == ["gh", "repo", "view"]:
+            return MagicMock(returncode=1)
+        hit = _az_deploy(cmd, _AZURE_OUTPUTS_JSON, ops_json=ops)
+        if hit is not None:
+            return hit
+        return MagicMock(returncode=0, stdout="{}")
+
+    lines: list[str] = []
+    prov = InstanceProvisioner(_spec(), run=fake_run, repo_root=tmp_path)
+    prov.apply(execute=True, on_progress=lines.append)
+    assert any("cosmos-demo" in line for line in lines)
 
 
 def test_apply_dry_run_preserves_prior_azure_outputs(tmp_path):
@@ -428,8 +520,9 @@ def test_apply_dry_run_preserves_prior_azure_outputs(tmp_path):
     def exec_run(cmd, **kwargs):
         if cmd[:3] == ["gh", "repo", "view"]:
             return MagicMock(returncode=1)
-        if cmd[:4] == ["az", "deployment", "group", "create"]:
-            return MagicMock(returncode=0, stdout=outputs_json)
+        hit = _az_deploy(cmd, outputs_json)
+        if hit is not None:
+            return hit
         return MagicMock(returncode=0, stdout="")
 
     InstanceProvisioner(_spec(), run=exec_run, repo_root=tmp_path).apply(execute=True)
@@ -450,8 +543,9 @@ def test_apply_execute_aca_updates_container_app(tmp_path):
         calls.append(cmd)
         if cmd[:3] == ["gh", "repo", "view"]:
             return MagicMock(returncode=1, stdout="{}")
-        if cmd[:4] == ["az", "deployment", "group", "create"]:
-            return MagicMock(returncode=0, stdout=_AZURE_OUTPUTS_JSON)
+        hit = _az_deploy(cmd, _AZURE_OUTPUTS_JSON)
+        if hit is not None:
+            return hit
         return MagicMock(returncode=0, stdout="{}")
 
     spec = InstanceSpec(product="demo", owner="acme")  # runtime_target defaults to aca
@@ -503,8 +597,9 @@ def test_deploy_squad_ralph_applies_manifests_on_execute(tmp_path):
     spec = InstanceSpec(product="demo", owner="acme")
 
     def run(cmd, **kwargs):
-        if cmd[:4] == ["az", "deployment", "group", "create"]:
-            return subprocess.CompletedProcess([], 0, stdout=_AZURE_OUTPUTS_JSON, stderr="")
+        hit = _az_deploy(cmd, _AZURE_OUTPUTS_JSON)
+        if hit is not None:
+            return hit
         return subprocess.CompletedProcess([], 0, stdout="{}", stderr="")
 
     run = MagicMock(side_effect=run)
@@ -588,8 +683,9 @@ def test_deploy_sre_agent_executes_sub_deployment(tmp_path):
         calls.append(cmd)
         if cmd[:3] == ["gh", "repo", "view"]:
             return MagicMock(returncode=1)
-        if cmd[:4] == ["az", "deployment", "group", "create"]:
-            return MagicMock(returncode=0, stdout=outputs_json)
+        hit = _az_deploy(cmd, outputs_json)
+        if hit is not None:
+            return hit
         if cmd == ["gh", "auth", "token"]:
             return MagicMock(returncode=0, stdout="")
         return MagicMock(returncode=0, stdout="")
@@ -620,8 +716,9 @@ def test_deploy_sre_agent_connect_repo_skipped_when_no_endpoint(tmp_path):
         calls.append(cmd)
         if cmd[:3] == ["gh", "repo", "view"]:
             return MagicMock(returncode=1)
-        if cmd[:4] == ["az", "deployment", "group", "create"]:
-            return MagicMock(returncode=0, stdout=outputs_json)
+        hit = _az_deploy(cmd, outputs_json)
+        if hit is not None:
+            return hit
         return MagicMock(returncode=0, stdout="")
 
     prov = InstanceProvisioner(_spec(), run=fake_run, repo_root=tmp_path)
@@ -648,8 +745,9 @@ def test_deploy_sre_agent_connect_repo_skipped_when_no_gh_token(tmp_path):
         calls.append(cmd)
         if cmd[:3] == ["gh", "repo", "view"]:
             return MagicMock(returncode=1)
-        if cmd[:4] == ["az", "deployment", "group", "create"]:
-            return MagicMock(returncode=0, stdout=outputs_json)
+        hit = _az_deploy(cmd, outputs_json)
+        if hit is not None:
+            return hit
         if cmd == ["gh", "auth", "token"]:
             return MagicMock(returncode=0, stdout="")  # empty token -> skip
         return MagicMock(returncode=0, stdout="")
@@ -676,8 +774,9 @@ def test_deploy_sre_agent_connect_repo_calls_az_rest_when_token_present(tmp_path
         calls.append(cmd)
         if cmd[:3] == ["gh", "repo", "view"]:
             return MagicMock(returncode=1)
-        if cmd[:4] == ["az", "deployment", "group", "create"]:
-            return MagicMock(returncode=0, stdout=outputs_json)
+        hit = _az_deploy(cmd, outputs_json)
+        if hit is not None:
+            return hit
         if cmd == ["gh", "auth", "token"]:
             return MagicMock(returncode=0, stdout="ghp_fake_token")
         return MagicMock(returncode=0, stdout="")
@@ -723,8 +822,9 @@ def test_seed_appconfig_seeds_from_deployment_endpoint_on_execute(tmp_path):
         calls.append(cmd)
         if cmd[:3] == ["gh", "repo", "view"]:
             return MagicMock(returncode=1)
-        if cmd[:4] == ["az", "deployment", "group", "create"]:
-            return MagicMock(returncode=0, stdout=_AZURE_OUTPUTS_JSON)
+        hit = _az_deploy(cmd, _AZURE_OUTPUTS_JSON)
+        if hit is not None:
+            return hit
         return MagicMock(returncode=0, stdout="")
 
     prov = InstanceProvisioner(_spec(), run=fake_run, repo_root=tmp_path)
@@ -764,8 +864,9 @@ def test_seed_appconfig_retries_until_rbac_propagates(tmp_path):
     def fake_run(cmd, **kwargs):
         if cmd[:3] == ["gh", "repo", "view"]:
             return MagicMock(returncode=1)
-        if cmd[:4] == ["az", "deployment", "group", "create"]:
-            return MagicMock(returncode=0, stdout=_AZURE_OUTPUTS_JSON)
+        hit = _az_deploy(cmd, _AZURE_OUTPUTS_JSON)
+        if hit is not None:
+            return hit
         if cmd[:4] == ["az", "appconfig", "kv", "set"]:
             if state["denials"] > 0:
                 state["denials"] -= 1
@@ -789,12 +890,9 @@ def test_seed_appconfig_fails_when_no_endpoint_in_outputs(tmp_path):
     def fake_run(cmd, **kwargs):
         if cmd[:3] == ["gh", "repo", "view"]:
             return MagicMock(returncode=1)
-        if cmd[:4] == ["az", "deployment", "group", "create"]:
-            # A deployment whose outputs omit appConfigEndpoint cannot be seeded.
-            return MagicMock(
-                returncode=0,
-                stdout='{"cosmosEndpoint": {"type": "String", "value": "x"}}',
-            )
+        hit = _az_deploy(cmd, '{"cosmosEndpoint": {"type": "String", "value": "x"}}')
+        if hit is not None:
+            return hit
         return MagicMock(returncode=0, stdout="")
 
     prov = InstanceProvisioner(_spec(), run=fake_run, repo_root=tmp_path)

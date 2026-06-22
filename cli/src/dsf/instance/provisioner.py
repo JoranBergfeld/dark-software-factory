@@ -23,6 +23,7 @@ from dsf.contracts.handoff import (
     INCIDENT_LABEL_COLOR,
     INCIDENT_LABEL_DESCRIPTION,
 )
+from dsf.instance.deploy_progress import DeploymentProgressPoller
 from dsf.instance.runtime_render import (
     render_product_registration,
     render_runtime_bundle,
@@ -235,7 +236,7 @@ class InstanceProvisioner:
                     f"location={s.location}",
                     f"product={s.product}",
                     f"runtimeImage={s.runtime_image}",
-                    "--query", "properties.outputs", "-o", "json",
+                    "--no-wait",
                 ],
             ),
             ProvisionStep(
@@ -291,6 +292,7 @@ class InstanceProvisioner:
         *,
         execute: bool = False,
         on_event: StepEvent | None = None,
+        on_progress: Callable[[str], None] | None = None,
     ) -> InstanceManifest:
         """Apply the plan. ``execute=False`` is a side-effect-free dry-run that
         still writes the manifest; ``execute=True`` runs the non-deferred,
@@ -300,6 +302,8 @@ class InstanceProvisioner:
         ``on_event(phase, index, total, step, error)`` — ``phase`` is ``"start"``
         before a step runs, ``"done"`` after it succeeds, and ``"error"`` if it
         fails — so a caller can surface live per-step status.
+        ``on_progress`` receives live per-resource lines while
+        ``provision_azure`` polls its deployment.
 
         A step that raises is recorded on that step (``result="failed"``,
         ``error=<message>``) and STOPS the run (later steps are left unrun);
@@ -328,6 +332,7 @@ class InstanceProvisioner:
                         executed=executed,
                         azure_result=azure_result,
                         plan=plan,
+                        on_progress=on_progress,
                     )
                 except Exception as exc:  # noqa: BLE001 - reported via on_event, not swallowed
                     step.executed = False
@@ -354,6 +359,7 @@ class InstanceProvisioner:
         executed: bool,
         azure_result: AzureProvisionResult | None,
         plan: InstancePlan,
+        on_progress: Callable[[str], None] | None = None,
     ) -> AzureProvisionResult | None:
         """Run one provisioning step, mutating ``step.result``/``executed``.
 
@@ -460,8 +466,14 @@ class InstanceProvisioner:
                 )
                 step.result = "cloned"
         elif step.name == "provision_azure":
-            proc = self._run(step.command, check=True, capture_output=True, text=True)
-            azure_result = self._azure_result(proc)
+            # Kick off the deployment asynchronously, then poll its operations so
+            # each resource streams to the console; outputs are read post-deploy.
+            self._run(step.command, check=True, capture_output=True, text=True)
+            poller = DeploymentProgressPoller(
+                run=self._run, sleep=self._sleep, emit=on_progress
+            )
+            outputs = poller.stream(self.spec.resource_group(), self.spec.deployment_name())
+            azure_result = self._azure_result_from_outputs(outputs)
             step.executed, step.result = True, "executed"
         else:
             kwargs = {"cwd": step.cwd} if step.cwd else {}
@@ -488,10 +500,12 @@ class InstanceProvisioner:
         )
         return getattr(result, "returncode", 1) == 0
 
-    def _azure_result(self, proc: Any) -> AzureProvisionResult:
-        """Parse ``az deployment group create --query properties.outputs`` JSON."""
-        raw = getattr(proc, "stdout", None)
-        parsed = json.loads(raw) if isinstance(raw, str) and raw.strip() else {}
+    def _azure_result_from_outputs(self, parsed: Any) -> AzureProvisionResult:
+        """Map an ``az deployment ... --query properties.outputs`` dict to a result.
+
+        Unwraps each ``{"type": ..., "value": ...}`` envelope to its value; fed by the
+        ``provision_azure`` poller's post-deploy ``show`` outputs.
+        """
         if not isinstance(parsed, dict):
             parsed = {}
         outputs = {
