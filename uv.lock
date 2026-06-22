@@ -400,6 +400,7 @@ dependencies = [
     { name = "fastapi" },
     { name = "httpx" },
     { name = "pydantic" },
+    { name = "pyjwt", extra = ["crypto"] },
 ]
 
 [package.optional-dependencies]
@@ -419,6 +420,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.27" },
     { name = "openai", marker = "extra == 'azure'", specifier = ">=1.30" },
     { name = "pydantic", specifier = ">=2.6" },
+    { name = "pyjwt", extras = ["crypto"], specifier = ">=2.8" },
 ]
 provides-extras = ["azure"]
 
