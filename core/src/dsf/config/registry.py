@@ -144,5 +144,21 @@ def route_product(hints: list[str], registry: dict[str, Product]) -> Product | N
     return None
 
 
+def deregister_product(key: str, *, path: str | Path | None = None) -> Path:
+    """Remove the product with ``key`` from ``config/products.json``.
 
-__all__ = ["Product", "load_registry", "register_product", "route_product", "unregister_product"]
+    Idempotent — silently no-ops if the key is not present or the file does not
+    exist. The canonical ``{"products": [...]}`` shape is always preserved.
+    ``path`` overrides the default location.
+    """
+    return unregister_product(key, path=path)
+
+
+__all__ = [
+    "Product",
+    "deregister_product",
+    "load_registry",
+    "register_product",
+    "route_product",
+    "unregister_product",
+]

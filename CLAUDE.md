@@ -9,7 +9,7 @@ plus tooling that stamps out an isolated "software factory" per product: softwar
 decides what to build (Feature Council), builds it (Coding Squad), and operates it (SRE
 Agent), with people governing from outside the loop. This repo mostly implements the
 **Feature Council** phase plus the provisioning CLI and Control Center; Coding Squad and
-SRE Agent are specced in `docs/phases/` and `docs/adr/` and partly delegated to Azure.
+SRE Agent are specced in `docs/site/concept/` and `docs/adr/` and partly delegated to Azure.
 
 ## Commands
 
@@ -127,5 +127,5 @@ double still in `src/` (the source agents default to it) and is on its way out u
 - All I/O-bearing port methods are `async`.
 - Architecture decisions are recorded in `docs/adr/`; read the relevant ADR before
   reworking a subsystem (e.g. 0014 real-only `src/` + pull-only, 0007 council↔squad handoff,
-  0010 uv workspace, 0011 deliberative council). Phase write-ups are in `docs/phases/`; the
-  operational runbook is `docs/RUNBOOK.md`.
+  0010 uv workspace, 0011 deliberative council). Phase write-ups are in `docs/site/concept/`; the
+  operational runbook is `docs/site/get-started/operate.md`.

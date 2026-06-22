@@ -85,6 +85,6 @@ provisioner step that runs it. After provisioning, `dsf new` writes a short
 `incident` marker plus the `incidents` and `azuremonitor` sources (ADR 0013; ADR
 0015 supersedes ADR 0009's render-only approach).
 
-**See also:** the [loop overview](../../README.md#the-loop), the
+**See also:** the [loop overview](the-loop.md), the
 [Coding Squad](coding-squad.md) it fixes forward into, and the
 [Feature Council](feature-council.md) it feeds.

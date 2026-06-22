@@ -5,6 +5,7 @@ from __future__ import annotations
 from dsf.config.registry import (
     _MIN_KEY_LEN,
     Product,
+    deregister_product,
     load_registry,
     register_product,
     route_product,
@@ -184,3 +185,43 @@ def test_product_has_azure_monitor_scope_default():
         azure_monitor_scope="app-123",
     )
     assert scoped.azure_monitor_scope == "app-123"
+
+
+# ---------------------------------------------------------------------------
+# Tests for deregister_product
+# ---------------------------------------------------------------------------
+
+def test_deregister_product_removes_entry(tmp_path):
+    """Deregistering a product removes it from the registry."""
+    path = tmp_path / "config" / "products.json"
+    register_product(Product(key="alpha", github_repo="o/alpha"), path=path)
+    register_product(Product(key="beta", github_repo="o/beta"), path=path)
+    deregister_product("alpha", path=path)
+    registry = load_registry(path)
+    assert "alpha" not in registry
+    assert "beta" in registry
+
+
+def test_deregister_product_is_idempotent_for_missing_key(tmp_path):
+    """Deregistering a non-existent key is a silent no-op."""
+    path = tmp_path / "config" / "products.json"
+    register_product(Product(key="alpha", github_repo="o/alpha"), path=path)
+    deregister_product("nonexistent", path=path)
+    registry = load_registry(path)
+    assert "alpha" in registry
+
+
+def test_deregister_product_is_idempotent_when_file_missing(tmp_path):
+    """Deregistering when the file does not exist is a silent no-op."""
+    path = tmp_path / "config" / "products.json"
+    deregister_product("alpha", path=path)  # must not raise
+
+
+def test_deregister_product_preserves_remaining_order(tmp_path):
+    """Removing an entry preserves the insertion order of remaining entries."""
+    path = tmp_path / "config" / "products.json"
+    for key in ("alpha", "beta", "gamma"):
+        register_product(Product(key=key, github_repo=f"o/{key}"), path=path)
+    deregister_product("beta", path=path)
+    registry = load_registry(path)
+    assert list(registry) == ["alpha", "gamma"]

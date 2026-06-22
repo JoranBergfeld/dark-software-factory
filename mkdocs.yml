@@ -1,0 +1,63 @@
+site_name: Dark Software Factory
+site_description: >-
+  An autonomous software factory: software that decides what to build, builds it,
+  and keeps it running, with people governing from outside the loop.
+site_url: https://joranbergfeld.github.io/dark-software-factory/
+repo_url: https://github.com/JoranBergfeld/dark-software-factory
+repo_name: JoranBergfeld/dark-software-factory
+
+docs_dir: docs/site
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.instant
+    - content.code.copy
+    - search.suggest
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: black
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: black
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.highlight
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+
+plugins:
+  - search
+
+nav:
+  - Home: index.md
+  - Concept:
+      - The loop: concept/the-loop.md
+      - Feature Council: concept/feature-council.md
+      - Coding Squad: concept/coding-squad.md
+      - SRE Agent: concept/sre-agent.md
+      - The harness: concept/the-harness.md
+  - Get started:
+      - Quickstart: get-started/quickstart.md
+      - Provision a factory: get-started/provision-a-factory.md
+      - Operate it: get-started/operate.md

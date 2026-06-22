@@ -1,4 +1,4 @@
-# Dark Software Factory — Runbook
+# Operate the factory
 
 The intake line turns operational/market signals into grounded, deduplicated, labeled
 GitHub issues. This runbook covers running it **locally** (no Azure, no LLM, no network)
@@ -16,16 +16,18 @@ make evals          # run the golden-set eval gate
 
 ## What runs locally vs. what needs the cloud
 
-Everything runs locally against **in-memory fakes** selected by `DSF_MODE=local`
-(the default). The entire conveyor — investigation → synthesis → grounding gate →
-council → routing → filing — executes deterministically with **no LLM and no network**.
+The test suite runs the entire conveyor — investigation → synthesis → grounding gate →
+council → routing → filing — deterministically against in-memory doubles (from
+`testing/dsf_testing/`), with **no LLM and no network**. The runtime itself
+(`build_services()`) is real-only: it requires `DSF_PRODUCT` plus the Azure endpoints
+and never falls back to a stub (ADR 0014).
 `DSF_DRY_RUN=true` (default) means the filing station records the issue it *would*
 file but never calls GitHub.
 
 Azure implementations and IaC are authored but **not invoked** by the *local* flow.
-The Azure paths are reached deliberately: `dsf new <product> --execute` provisions a
-per-product RG (SP2) and `--mode azure` runs the orchestrator against that product's
-deployment outputs (SP3). Both require your subscription, credentials, and explicit opt-in.
+The Azure paths are reached deliberately: `dsf new <product>` provisions a
+per-product RG (SP2) and the orchestrator then runs against that product's deployment
+outputs (SP3). Both require your subscription, credentials, and explicit opt-in.
 
 | Capability | Local (now) | Azure (when you deploy) |
 |---|---|---|
@@ -57,46 +59,28 @@ uv run dsf-control-center --port 8081
 uv run uvicorn dsf.triggers.app:app --port 8082
 ```
 
-## Creating a product instance (SP1-SP5)
+## The per-product council runtime
 
-`dsf new` scaffolds an isolated product factory. `--name-prefix` is **required**;
-it is sanitized and randomized into a <=12-char Azure resource prefix (persisted in
-the manifest and reused on re-runs). Under `--execute`, repo creation + Coding Squad
-init, **the dedicated Azure resource group + Bicep deployment**, **rendering +
-deploying the product's feature-council runtime** (an Azure Container App), and
-**provisioning the SRE Agent** via `deploy_sre_agent` are all real. No interactive
-wizard, no OAuth flow (ADR 0015 supersedes ADR 0009's render-only approach).
-
-```bash
-# Preview the plan (no side effects):
-uv run dsf new --product microbi --owner your-org --name-prefix microbi
-
-# Preview AND write the instance manifest to config/instances/microbi.json:
-uv run dsf new --product microbi --owner your-org --name-prefix microbi --write-plan
-
-# Execute: create repo + init Squad + provision Azure + render/deploy council
-# (needs gh, @bradygaster/squad-cli, and az for the Container App council):
-uv run dsf new --product microbi --owner your-org --name-prefix microbi --execute
-```
-
-### The rendered per-product council runtime
+Provisioning a factory with `dsf new` is covered in
+[Provision a factory](provision-a-factory.md); this section is about the runtime it
+deploys, which you then operate.
 
 `deploy_council` renders an Azure Container Apps descriptor to
 `config/instances/<product>.runtime/` (a `containerapp.yaml` plus a resolved
 `.env.orchestrator` populated from the product's Azure deployment outputs — endpoints
 only; **secrets stay in Key Vault**, fetched at runtime via the user-assigned managed
 identity, ADR 0004). The orchestrator Container App itself is created by `main.bicep`;
-under `--execute`, `dsf new` rolls its image with
+during provisioning, `dsf new` rolls its image with
 `az containerapp update --name dsf-orchestrator-<product> --image <runtimeImage>`.
 
-The runtime image is `feature-council/src/dsf/runtime/Dockerfile`; its entrypoint is the orchestrator in
-**azure mode**, which reads endpoints from the rendered env and emits traces to
-Application Insights (the OTel tracer is wired automatically when `DSF_MODE=azure`; it
-degrades to a no-op fake if OpenTelemetry isn't importable). To run it by hand:
+The runtime image is `feature-council/src/dsf/runtime/Dockerfile`; its entrypoint is the orchestrator,
+which reads endpoints from the rendered env and emits traces to Application Insights
+(the OTel tracer is wired automatically by `build_services()`; it degrades to a no-op
+if OpenTelemetry isn't importable). To run it by hand:
 
 ```bash
-# global --mode MUST precede the subcommand:
-DSF_PRODUCT=microbi uv run dsfctl --mode azure serve-orchestrator
+# the runtime reads DSF_PRODUCT and the Azure endpoints from its env:
+DSF_PRODUCT=microbi uv run dsfctl serve-orchestrator
 ```
 
 ## The Control Center
@@ -127,7 +111,7 @@ populated at provisioning time rather than hand-maintained; `create_labels`
 idempotently creates the product's taxonomy labels + `squad:ready` in the repo
 (so filing never fails on a missing label), and `deploy_squad_ralph` brings up
 the per-product Ralph watch loop on AKS (`squad watch --execute`), which KEDA
-scales 0→1 on the open `squad:ready` issue count (ADR 0012). Under `--execute`,
+scales 0→1 on the open `squad:ready` issue count (ADR 0012). During provisioning,
 that step seeds the operator's `gh auth token` into the product's Key Vault as
 `github-token`, then applies the identity manifest (Namespace + ServiceAccount +
 Key Vault CSI `SecretProviderClass`) before the exporter, Deployment, and
@@ -173,7 +157,7 @@ After the ARM deploy returns, the step does a best-effort Phase-2 repo connect v
 records a skip and succeeds anyway — the agent comes up Azure-Monitor-connected, and
 the repo can be connected manually later.
 
-**Prerequisite:** the principal running `dsf new --execute` needs Owner, or Contributor
+**Prerequisite:** the principal running `dsf new` needs Owner, or Contributor
 + User Access Administrator, on the subscription (required for the cross-RG role
 assignments).
 
@@ -234,9 +218,9 @@ to GHCR, then update the Container App in place:
 az containerapp update -g rg-dsf-dev -n dsf-orchestrator-microbi \
   --image ghcr.io/<owner>/dsf-runtime:latest
 ```
-The app runs in **azure mode** with `DSF_MODE=azure` and `AZURE_CLIENT_ID` set to the
-identity, reading endpoints from its env and polling the Service Bus `signals` queue
-outbound for real-time interrupts; scheduled sweeps need nothing inbound.
+The app runs with `AZURE_CLIENT_ID` set to the identity, reading endpoints from its env
+and polling the Service Bus `signals` queue outbound for real-time interrupts; scheduled
+sweeps need nothing inbound.
 
 **4. Go live carefully:** keep `dry_run` ON in the Control Center until you trust a few
 real runs, then turn it off to begin live filing.
