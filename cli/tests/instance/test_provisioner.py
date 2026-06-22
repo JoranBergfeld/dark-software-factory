@@ -23,12 +23,13 @@ def _spec() -> InstanceSpec:
 #: The bicep emits ``appConfigEndpoint``; the ``seed_appconfig`` step reads it to
 #: seed config/defaults.json into App Configuration. Execute-path tests must surface
 #: it in the provision_azure outputs or the seed step (correctly) fails for want of
-#: an endpoint.
+#: an endpoint. It also emits ``keyVaultName`` for the optional App-key seed.
 _APPCONFIG_ENDPOINT = "https://demo.azconfig.io"
 _APPCONFIG_OUTPUT = (
     f'"appConfigEndpoint": {{"type": "String", "value": "{_APPCONFIG_ENDPOINT}"}}'
 )
-_AZURE_OUTPUTS_JSON = "{" + _APPCONFIG_OUTPUT + "}"
+_KEYVAULT_OUTPUT = '"keyVaultName": {"type": "String", "value": "kv-demo-xyz"}'
+_AZURE_OUTPUTS_JSON = "{" + _APPCONFIG_OUTPUT + "," + _KEYVAULT_OUTPUT + "}"
 
 
 def _az_deploy(cmd, outputs_json, *, state="Succeeded", ops_json=None):
@@ -63,6 +64,15 @@ def _az_deploy(cmd, outputs_json, *, state="Succeeded", ops_json=None):
     return None
 
 
+def _azure_result_with(tmp_path, **outputs):
+    from dsf.instance.spec import AzureProvisionResult
+
+    return AzureProvisionResult(
+        resource_group="rg-dsf-demo", deployment_name="dsf-demo",
+        location="swedencentral", outputs={k: str(v) for k, v in outputs.items()},
+    )
+
+
 def test_plan_step_order_and_names():
     plan = InstanceProvisioner(_spec()).plan()
     assert plan.product == "demo"
@@ -73,6 +83,7 @@ def test_plan_step_order_and_names():
         "create_resource_group",
         "provision_azure",
         "seed_appconfig",
+        "seed_app_key",
         "register_product",
         "deploy_council",
         "squad_governance",
@@ -442,10 +453,10 @@ def test_apply_execute_emits_start_and_done_events_per_step(tmp_path):
     assert ("start", "deploy_sre_agent") in phases
     assert ("done", "deploy_sre_agent") in phases
     assert not any(phase == "error" for phase, *_ in events)
-    # 1-based index, stable total = the 10 non-write_config steps.
+    # 1-based index, stable total = the 11 non-write_config steps.
     starts = [e for e in events if e[0] == "start"]
     assert starts[0][1] == 1
-    assert all(total == 10 for _p, _i, total, _s, _e in starts)
+    assert all(total == 11 for _p, _i, total, _s, _e in starts)
 
 
 def test_apply_execute_emits_error_event_on_failure(tmp_path):
@@ -833,6 +844,70 @@ def test_seed_appconfig_fails_when_no_endpoint_in_outputs(tmp_path):
     assert "appConfigEndpoint" in steps["seed_appconfig"].error
     # The line stops at the failed step — later steps are left unrun.
     assert steps["deploy_council"].result == ""
+
+
+def test_seed_app_key_copies_owner_pem_into_product_vault(tmp_path):
+    spec = InstanceSpec(product="demo", owner="acme")
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+
+        class R:
+            returncode = 0
+            stdout = "555\n" if "/repos/" in " ".join(cmd) else "-----PEM-----\n"
+
+        return R()
+
+    prov = InstanceProvisioner(
+        spec, run=fake_run, repo_root=tmp_path, sleep=lambda _s: None,
+        owner_keyvault_uri="https://kv-dsf-app.vault.azure.net/",
+        github_app_id="42", github_installation_id="9001",
+    )
+    prov._seed_app_key(_azure_result_with(tmp_path, keyVaultName="kv-demo-xyz"))
+
+    show = next(c for c in calls if c[:4] == ["az", "keyvault", "secret", "show"])
+    assert "kv-dsf-app" in show  # read from owner vault
+    setc = next(c for c in calls if c[:4] == ["az", "keyvault", "secret", "set"])
+    assert "kv-demo-xyz" in setc and "--file" in setc  # written to product vault from a file
+
+
+def test_seed_app_key_raises_without_owner_keyvault(tmp_path):
+    import pytest
+
+    prov = InstanceProvisioner(InstanceSpec(product="demo", owner="acme"), repo_root=tmp_path)
+    with pytest.raises(RuntimeError, match="owner Key Vault"):
+        prov._seed_app_key(_azure_result_with(tmp_path, keyVaultName="kv-demo-xyz"))
+
+
+def test_provision_azure_passes_github_app_params(tmp_path):
+    prov = InstanceProvisioner(
+        InstanceSpec(product="demo", owner="acme"),
+        repo_root=tmp_path, github_app_id="42", github_installation_id="9001",
+    )
+    azure_step = next(s for s in prov.plan().steps if s.name == "provision_azure")
+    joined = " ".join(azure_step.command)
+    assert "githubAppId=42" in joined
+    assert "githubInstallationId=9001" in joined
+
+
+def test_seed_app_key_step_skips_when_no_owner_app_configured(tmp_path):
+    # Backward-compat: dsf new without an owner App must still complete; seed_app_key
+    # skips gracefully instead of raising and failing the line.
+    def fake_run(cmd, **kwargs):
+        if cmd[:3] == ["gh", "repo", "view"]:
+            return MagicMock(returncode=1)
+        hit = _az_deploy(cmd, _AZURE_OUTPUTS_JSON)
+        if hit is not None:
+            return hit
+        return MagicMock(returncode=0, stdout="")
+
+    prov = InstanceProvisioner(_spec(), run=fake_run, repo_root=tmp_path)
+    manifest = prov.apply(execute=True)
+    seed = next(s for s in manifest.plan.steps if s.name == "seed_app_key")
+    assert "skip" in seed.result.lower()
+    # the line did NOT stop at seed_app_key — later steps still ran
+    assert next(s for s in manifest.plan.steps if s.name == "deploy_sre_agent").executed is True
 
 
 def test_install_app_adds_repo_to_owner_installation_and_records_binding(tmp_path):

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import tempfile
 import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -243,6 +244,8 @@ class InstanceProvisioner:
                     f"location={s.location}",
                     f"product={s.product}",
                     f"runtimeImage={s.runtime_image}",
+                    f"githubAppId={self._github_app_id}",
+                    f"githubInstallationId={self._github_installation_id}",
                     "--no-wait",
                 ],
             ),
@@ -251,6 +254,13 @@ class InstanceProvisioner:
                 description=(
                     "Seed the canonical config/defaults.json into App Configuration "
                     f"for {s.product} (critic/agent flags + thresholds)"
+                ),
+            ),
+            ProvisionStep(
+                name="seed_app_key",
+                description=(
+                    "Seed the DSF App private key from the owner Key Vault into the "
+                    f"product Key Vault for {s.product}"
                 ),
             ),
             ProvisionStep(
@@ -387,6 +397,14 @@ class InstanceProvisioner:
                 step.result = "seeded (dry-run)"
             else:
                 self._seed_appconfig(azure_result)
+                step.executed, step.result = True, "seeded"
+        elif step.name == "seed_app_key":
+            if not self._owner_keyvault_uri:
+                step.result = "skipped (no owner App configured)"
+            elif not execute:
+                step.result = "seeded (dry-run)"
+            else:
+                self._seed_app_key(azure_result)
                 step.executed, step.result = True, "seeded"
         elif step.name == "install_app":
             if not self._github_installation_id:
@@ -602,3 +620,56 @@ class InstanceProvisioner:
                     self._sleep(_SEED_RETRY_DELAY)
         assert last_error is not None  # loop ran at least once
         raise last_error
+
+    def _seed_app_key(self, azure_result: AzureProvisionResult | None) -> None:
+        """Copy the App private key from the owner KV into the product KV (with retry).
+
+        Mirrors ``_seed_appconfig``: the product Key Vault's Secrets User/Officer role
+        grant and this data-plane write would otherwise race, so the (idempotent) set
+        is retried until the grant propagates. The PEM is materialized to a 0600 temp
+        file only long enough to push it in, then unlinked; the owner-vault read and the
+        product-vault write both capture output so the key is never echoed.
+        """
+        if not self._owner_keyvault_uri:
+            raise RuntimeError(
+                "no owner Key Vault configured; set DSF_OWNER_KEYVAULT_URI or "
+                "--owner-keyvault-uri (run `dsf bootstrap` first)"
+            )
+        product_kv = azure_result.outputs.get("keyVaultName", "") if azure_result else ""
+        if not product_kv:
+            raise RuntimeError("provision_azure returned no keyVaultName; cannot seed App key")
+        owner_kv = self._owner_keyvault_uri.split("//", 1)[-1].split(".", 1)[0]
+
+        pem = self._run(
+            [
+                "az", "keyvault", "secret", "show", "--vault-name", owner_kv,
+                "--name", "github-app-private-key", "--query", "value", "-o", "tsv",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        fd, pem_path = tempfile.mkstemp(
+            prefix="dsf-app-", suffix=".pem", dir=self._repo_root or _default_repo_root()
+        )
+        try:
+            with open(fd, "w", encoding="utf-8") as fh:
+                fh.write(getattr(pem, "stdout", ""))
+            Path(pem_path).chmod(0o600)
+            cmd = [
+                "az", "keyvault", "secret", "set", "--vault-name", product_kv,
+                "--name", "github-app-private-key", "--file", pem_path,
+            ]
+            last_error: subprocess.CalledProcessError | None = None
+            for attempt in range(1, _SEED_MAX_ATTEMPTS + 1):
+                try:
+                    self._run(cmd, check=True, capture_output=True, text=True)
+                    return
+                except subprocess.CalledProcessError as exc:
+                    last_error = exc
+                    if attempt < _SEED_MAX_ATTEMPTS:
+                        self._sleep(_SEED_RETRY_DELAY)
+            assert last_error is not None
+            raise last_error
+        finally:
+            Path(pem_path).unlink(missing_ok=True)
