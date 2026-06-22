@@ -6,6 +6,8 @@ import json
 import subprocess
 from unittest.mock import MagicMock
 
+import pytest
+
 from dsf.config.registry import load_registry
 from dsf.instance.deprovisioner import InstanceDeprovisioner
 from dsf.instance.provisioner import InstanceProvisioner
@@ -349,7 +351,6 @@ def test_from_product_loads_manifest(tmp_path):
 
 
 def test_from_product_raises_when_manifest_missing(tmp_path):
-    import pytest
     with pytest.raises(FileNotFoundError):
         InstanceDeprovisioner.from_product("nonexistent", repo_root=tmp_path)
 

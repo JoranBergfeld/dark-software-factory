@@ -40,17 +40,7 @@ def _print_teardown_plan(plan, *, execute: bool = False) -> None:
 
 
 def _print_step_event(phase, index, total, step, error) -> None:
-    """Live per-step progress for an executing ``dsf new`` run."""
-    if phase == "start":
-        print(f"[dsf] ▶ [{index}/{total}] {step.name}: {step.description}", flush=True)
-    elif phase == "done":
-        print(f"[dsf]   ✓ {step.name}: {step.result}", flush=True)
-    elif phase == "error":
-        print(f"[dsf]   ✗ {step.name} FAILED: {error}", flush=True)
-
-
-def _print_delete_step_event(phase, index, total, step, error) -> None:
-    """Live per-step progress for an executing ``dsf delete`` run."""
+    """Live per-step progress for an executing ``dsf`` run."""
     if phase == "start":
         print(f"[dsf] ▶ [{index}/{total}] {step.name}: {step.description}", flush=True)
     elif phase == "done":
@@ -151,7 +141,7 @@ def _cmd_delete(args: argparse.Namespace) -> int:
         return 1
 
     if execute:
-        plan = deprv.apply(execute=True, on_event=_print_delete_step_event)
+        plan = deprv.apply(execute=True, on_event=_print_step_event)
         print()  # separate live progress from final summary
     else:
         plan = deprv.apply(execute=False)
