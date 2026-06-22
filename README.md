@@ -87,6 +87,9 @@ Council scoped to just that product, an SRE Agent on its production, and a dedic
 resource group behind them, all wired into the loop above. The template and CLI are how
 you instantiate it. The factory itself is the loop.
 
+New here? The [Getting started guide](docs/GETTING_STARTED.md) walks you from a fresh clone
+to your first provisioned factory.
+
 ## Where this is going
 
 The work ahead is to push each phase further toward running on its own, as far as it can
@@ -95,6 +98,6 @@ phases sit at different points along that path.
 
 **Read more:** the
 [charter](docs/superpowers/specs/2026-06-17-dark-software-factory-template-charter-design.md)
-covers the north-star and roadmap, each phase has a deeper write-up under
-[`docs/phases/`](docs/phases/), and architecture decisions live in
-[`docs/adr/`](docs/adr/).
+covers the north-star and roadmap, the [Getting started guide](docs/GETTING_STARTED.md) gets
+you running, each phase has a deeper write-up under [`docs/phases/`](docs/phases/), and
+architecture decisions live in [`docs/adr/`](docs/adr/).

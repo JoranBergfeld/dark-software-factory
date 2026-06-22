@@ -51,21 +51,37 @@ def _print_step_event(phase, index, total, step, error) -> None:
 
 def _cmd_new(args: argparse.Namespace) -> int:
     """Create (or preview) a new isolated product factory instance."""
+    from dsf.instance.github_identity import OwnerResolutionError, resolve_owner
     from dsf.instance.naming import make_name_prefix
     from dsf.instance.provisioner import InstanceProvisioner
     from dsf.instance.spec import InstanceSpec, manifest_path, read_manifest
 
+    try:
+        owner = resolve_owner(args.owner)
+    except OwnerResolutionError as exc:
+        print(f"[dsf] error: {exc}")
+        return 1
+
     root = Path(args.config_root) if args.config_root else None
     # Idempotent effective prefix: reuse the persisted one if the instance exists,
-    # otherwise derive a fresh randomized prefix from the supplied base.
+    # otherwise derive a fresh randomized prefix. The base defaults to the product
+    # key when --name-prefix is omitted.
     if manifest_path(args.product, root).exists():
         name_prefix = read_manifest(args.product, repo_root=root).spec.name_prefix
     else:
-        name_prefix = make_name_prefix(args.name_prefix)
+        prefix_base = args.name_prefix or args.product
+        try:
+            name_prefix = make_name_prefix(prefix_base)
+        except ValueError as exc:
+            print(
+                f"[dsf] error: cannot derive an Azure name prefix from "
+                f"{prefix_base!r}: {exc} Pass --name-prefix explicitly."
+            )
+            return 1
 
     spec = InstanceSpec(
         product=args.product,
-        owner=args.owner,
+        owner=owner,
         repo=args.repo or "",
         visibility=args.visibility,
         runtime_target=args.runtime_target,
@@ -165,7 +181,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_new = sub.add_parser("new", help="create a new isolated product factory instance")
     p_new.add_argument("--product", required=True, help="product key (e.g. 'microbi')")
-    p_new.add_argument("--owner", required=True, help="GitHub owner/org for the product repo")
+    p_new.add_argument(
+        "--owner",
+        default="",
+        help="GitHub owner/org for the product repo "
+        "(default: the gh-authenticated account, resolved via `gh api user`)",
+    )
     p_new.add_argument("--repo", default="", help="repo name (defaults to product key)")
     p_new.add_argument(
         "--visibility",
@@ -181,8 +202,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_new.add_argument(
         "--name-prefix",
-        required=True,
-        help="base Azure resource name prefix (sanitized + randomized to <=12 lowercase chars)",
+        default="",
+        help="base Azure resource name prefix, sanitized + randomized to <=12 "
+        "lowercase chars (default: derived from --product)",
     )
     p_new.add_argument(
         "--environment",

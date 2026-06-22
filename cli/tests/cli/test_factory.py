@@ -58,9 +58,60 @@ def test_new_rejects_unknown_squad_maturity():
         ])
 
 
-def test_new_requires_name_prefix():
+def test_new_owner_and_name_prefix_are_optional():
+    # Both are now inferred (owner from gh, name-prefix from the product key) and
+    # default to "" when omitted — only --product is required.
+    args = build_parser().parse_args(["new", "--product", "demo"])
+    assert args.owner == ""
+    assert args.name_prefix == ""
+
+
+def test_new_requires_product():
     with pytest.raises(SystemExit):
-        build_parser().parse_args(["new", "--product", "demo", "--owner", "acme"])
+        build_parser().parse_args(["new", "--owner", "acme", "--name-prefix", "demopfx"])
+
+
+def test_new_infers_owner_from_gh_when_owner_omitted(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "dsf.instance.github_identity.resolve_owner",
+        lambda supplied, **_: supplied or "octocat",
+    )
+    rc = main([
+        "new", "--product", "demo", "--name-prefix", "demopfx",
+        "--dry-run", "--write-plan", "--config-root", str(tmp_path),
+    ])
+    assert rc == 0
+    assert read_manifest("demo", repo_root=tmp_path).spec.owner == "octocat"
+
+
+def test_new_derives_name_prefix_from_product_when_omitted(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "dsf.instance.github_identity.resolve_owner",
+        lambda supplied, **_: supplied or "octocat",
+    )
+    rc = main([
+        "new", "--product", "microbi", "--owner", "acme",
+        "--dry-run", "--write-plan", "--config-root", str(tmp_path),
+    ])
+    assert rc == 0
+    pfx = read_manifest("microbi", repo_root=tmp_path).spec.name_prefix
+    assert pfx.startswith("microbi")  # derived from the product key
+    assert 3 <= len(pfx) <= 12
+
+
+def test_new_owner_resolution_failure_exits_nonzero(tmp_path, monkeypatch, capsys):
+    from dsf.instance.github_identity import OwnerResolutionError
+
+    def _boom(supplied, **_):
+        if supplied:
+            return supplied
+        raise OwnerResolutionError("gh is not authenticated")
+
+    monkeypatch.setattr("dsf.instance.github_identity.resolve_owner", _boom)
+    rc = main(["new", "--product", "demo", "--dry-run", "--config-root", str(tmp_path)])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "gh is not authenticated" in out
 
 
 def test_new_dry_run_prints_plan_without_side_effects(capsys, tmp_path):

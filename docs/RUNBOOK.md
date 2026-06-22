@@ -16,16 +16,18 @@ make evals          # run the golden-set eval gate
 
 ## What runs locally vs. what needs the cloud
 
-Everything runs locally against **in-memory fakes** selected by `DSF_MODE=local`
-(the default). The entire conveyor — investigation → synthesis → grounding gate →
-council → routing → filing — executes deterministically with **no LLM and no network**.
+The test suite runs the entire conveyor — investigation → synthesis → grounding gate →
+council → routing → filing — deterministically against in-memory doubles (from
+`testing/dsf_testing/`), with **no LLM and no network**. The runtime itself
+(`build_services()`) is real-only: it requires `DSF_PRODUCT` plus the Azure endpoints
+and never falls back to a stub (ADR 0014).
 `DSF_DRY_RUN=true` (default) means the filing station records the issue it *would*
 file but never calls GitHub.
 
 Azure implementations and IaC are authored but **not invoked** by the *local* flow.
 The Azure paths are reached deliberately: `dsf new <product> --execute` provisions a
-per-product RG (SP2) and `--mode azure` runs the orchestrator against that product's
-deployment outputs (SP3). Both require your subscription, credentials, and explicit opt-in.
+per-product RG (SP2) and the orchestrator then runs against that product's deployment
+outputs (SP3). Both require your subscription, credentials, and explicit opt-in.
 
 | Capability | Local (now) | Azure (when you deploy) |
 |---|---|---|
@@ -89,14 +91,14 @@ identity, ADR 0004). The orchestrator Container App itself is created by `main.b
 under `--execute`, `dsf new` rolls its image with
 `az containerapp update --name dsf-orchestrator-<product> --image <runtimeImage>`.
 
-The runtime image is `feature-council/src/dsf/runtime/Dockerfile`; its entrypoint is the orchestrator in
-**azure mode**, which reads endpoints from the rendered env and emits traces to
-Application Insights (the OTel tracer is wired automatically when `DSF_MODE=azure`; it
-degrades to a no-op fake if OpenTelemetry isn't importable). To run it by hand:
+The runtime image is `feature-council/src/dsf/runtime/Dockerfile`; its entrypoint is the orchestrator,
+which reads endpoints from the rendered env and emits traces to Application Insights
+(the OTel tracer is wired automatically by `build_services()`; it degrades to a no-op
+if OpenTelemetry isn't importable). To run it by hand:
 
 ```bash
-# global --mode MUST precede the subcommand:
-DSF_PRODUCT=microbi uv run dsfctl --mode azure serve-orchestrator
+# the runtime reads DSF_PRODUCT and the Azure endpoints from its env:
+DSF_PRODUCT=microbi uv run dsfctl serve-orchestrator
 ```
 
 ## The Control Center
@@ -234,9 +236,9 @@ to GHCR, then update the Container App in place:
 az containerapp update -g rg-dsf-dev -n dsf-orchestrator-microbi \
   --image ghcr.io/<owner>/dsf-runtime:latest
 ```
-The app runs in **azure mode** with `DSF_MODE=azure` and `AZURE_CLIENT_ID` set to the
-identity, reading endpoints from its env and polling the Service Bus `signals` queue
-outbound for real-time interrupts; scheduled sweeps need nothing inbound.
+The app runs with `AZURE_CLIENT_ID` set to the identity, reading endpoints from its env
+and polling the Service Bus `signals` queue outbound for real-time interrupts; scheduled
+sweeps need nothing inbound.
 
 **4. Go live carefully:** keep `dry_run` ON in the Control Center until you trust a few
 real runs, then turn it off to begin live filing.

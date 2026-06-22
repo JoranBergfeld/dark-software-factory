@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import json
 import subprocess
-from collections.abc import Callable
+import time
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
+from dsf.config.store import load_defaults
 from dsf.contracts.handoff import (
     HANDOFF_LABEL,
     HANDOFF_LABEL_COLOR,
@@ -49,6 +51,54 @@ StepEvent = Callable[[str, int, int, ProvisionStep, "BaseException | None"], Non
 #: Cap captured stderr/stdout folded into a step error so a runaway tool log
 #: doesn't flood the summary.
 _MAX_ERROR_DETAIL = 2000
+
+#: App Configuration seeding (``seed_appconfig`` step) retries the batch to absorb
+#: the role-assignment (Data Owner) RBAC propagation lag right after deployment:
+#: the first ``az appconfig kv set`` fails fast with ``Forbidden`` until the grant
+#: lands, then the whole batch succeeds. Bound: ~2 min of propagation tolerance.
+_SEED_MAX_ATTEMPTS = 8
+_SEED_RETRY_DELAY = 15.0
+
+
+def _flatten_config(node: Any, prefix: str = "") -> Iterator[tuple[str, Any]]:
+    """Yield ``(dotted_key, value)`` leaves of a nested config ``dict``.
+
+    Mirrors how :class:`dsf.config.azure_store.AppConfigStore` reads config: a
+    flat App Configuration key equals the dotted path the in-memory store walks
+    (``critics.security.enabled``), and lists (e.g. ``jury.roster``) are leaves.
+    """
+    if isinstance(node, dict):
+        for key, value in node.items():
+            child = f"{prefix}.{key}" if prefix else key
+            yield from _flatten_config(value, child)
+    else:
+        yield prefix, node
+
+
+def _appconfig_seed_commands(endpoint: str) -> list[list[str]]:
+    """Build ``az appconfig kv set`` commands seeding the canonical defaults.
+
+    Seeds the flattened ``config/defaults.json`` into App Configuration so the
+    Azure runtime resolves the same critic/agent/threshold config the in-memory
+    store does (an empty store would read every ``critic.*``/``agent.*`` flag as
+    disabled). Values are JSON-encoded because the store ``json.loads`` them;
+    keys are unlabelled (the baseline that per-product labels override). Uses
+    ``--auth-mode login`` so the deployer's AAD identity (granted Data Owner)
+    writes the values under ``disableLocalAuth``.
+    """
+    commands: list[list[str]] = []
+    for key, value in _flatten_config(load_defaults()):
+        commands.append(
+            [
+                "az", "appconfig", "kv", "set",
+                "--endpoint", endpoint,
+                "--auth-mode", "login",
+                "--key", key,
+                "--value", json.dumps(value),
+                "--yes",
+            ]
+        )
+    return commands
 
 
 def _format_step_error(exc: BaseException) -> str:
@@ -126,10 +176,12 @@ class InstanceProvisioner:
         *,
         run: Runner | None = None,
         repo_root: Path | None = None,
+        sleep: Callable[[float], None] | None = None,
     ) -> None:
         self.spec = spec
         self._run = run or subprocess.run
         self._repo_root = repo_root
+        self._sleep = sleep or time.sleep
 
     def plan(self) -> InstancePlan:
         """Return the ordered provisioning plan (pure — no side effects)."""
@@ -185,6 +237,13 @@ class InstanceProvisioner:
                     f"runtimeImage={s.runtime_image}",
                     "--query", "properties.outputs", "-o", "json",
                 ],
+            ),
+            ProvisionStep(
+                name="seed_appconfig",
+                description=(
+                    "Seed the canonical config/defaults.json into App Configuration "
+                    f"for {s.product} (critic/agent flags + thresholds)"
+                ),
             ),
             ProvisionStep(
                 name="register_product",
@@ -312,6 +371,12 @@ class InstanceProvisioner:
             )
             step.executed = execute
             step.result = "registered" if execute else "registered (dry-run)"
+        elif step.name == "seed_appconfig":
+            if not execute:
+                step.result = "seeded (dry-run)"
+            else:
+                self._seed_appconfig(azure_result)
+                step.executed, step.result = True, "seeded"
         elif step.name == "deploy_council":
             provisional = InstanceManifest(
                 spec=self.spec, plan=plan, executed=executed, azure=azure_result
@@ -486,6 +551,37 @@ class InstanceProvisioner:
             check=False,
         )
         return "deployed; repo connected"
+
+    def _seed_appconfig(self, azure_result: AzureProvisionResult | None) -> None:
+        """Seed the canonical config defaults into App Configuration (with retry).
+
+        Bicep provisions App Configuration control-plane only (``disableLocalAuth``
+        + a Data Owner grant to the deployer); the key-values are written here,
+        post-deploy, from the deployer's AAD identity. Because that role grant and
+        these writes would otherwise race in a single ARM deployment, the batch is
+        retried: the first ``az appconfig kv set`` fails fast with ``Forbidden``
+        until the grant propagates, then the whole (idempotent) batch succeeds.
+
+        Reads the App Configuration endpoint from the ``provision_azure`` outputs.
+        """
+        endpoint = azure_result.outputs.get("appConfigEndpoint", "") if azure_result else ""
+        if not endpoint:
+            raise RuntimeError(
+                "provision_azure returned no appConfigEndpoint; cannot seed App Configuration"
+            )
+        commands = _appconfig_seed_commands(endpoint)
+        last_error: subprocess.CalledProcessError | None = None
+        for attempt in range(1, _SEED_MAX_ATTEMPTS + 1):
+            try:
+                for cmd in commands:
+                    self._run(cmd, check=True, capture_output=True, text=True)
+                return
+            except subprocess.CalledProcessError as exc:
+                last_error = exc
+                if attempt < _SEED_MAX_ATTEMPTS:
+                    self._sleep(_SEED_RETRY_DELAY)
+        assert last_error is not None  # loop ran at least once
+        raise last_error
 
     def _seed_github_token(self, azure_result: AzureProvisionResult | None) -> None:
         """Seed the operator's GitHub token into the per-product Key Vault.

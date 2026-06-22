@@ -24,6 +24,9 @@ def _manifest(tmp_path, *, with_azure: bool = True) -> InstanceManifest:
                 "keyVaultUri": "https://kv.example",
                 "appInsightsConnectionString": "InstrumentationKey=abc;IngestionEndpoint=https://i.example",
                 "cosmosEndpoint": "https://cosmos.example",
+                "openaiEndpoint": "https://oai.example",
+                "openaiDeployment": "gpt-4o",
+                "openaiEmbeddingDeployment": "text-embedding-3-small",
             },
         )
         if with_azure
@@ -51,6 +54,9 @@ def test_render_env_scopes_product_and_maps_endpoints(tmp_path):
     assert "AZURE_KEYVAULT_URI=https://kv.example" in env
     assert "AZURE_COSMOS_ENDPOINT=https://cosmos.example" in env
     assert "APPLICATIONINSIGHTS_CONNECTION_STRING=InstrumentationKey=abc" in env
+    assert "AZURE_OPENAI_ENDPOINT=https://oai.example" in env
+    assert "AZURE_OPENAI_DEPLOYMENT=gpt-4o" in env
+    assert "AZURE_OPENAI_EMBEDDING_DEPLOYMENT=text-embedding-3-small" in env
 
 
 def test_render_app_config_scopes_product(tmp_path):

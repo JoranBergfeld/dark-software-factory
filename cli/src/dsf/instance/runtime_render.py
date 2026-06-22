@@ -30,6 +30,9 @@ _ENDPOINT_MAP: tuple[tuple[str, str], ...] = (
     ("AZURE_KEYVAULT_URI", "keyVaultUri"),
     ("APPLICATIONINSIGHTS_CONNECTION_STRING", "appInsightsConnectionString"),
     ("AZURE_COSMOS_ENDPOINT", "cosmosEndpoint"),
+    ("AZURE_OPENAI_ENDPOINT", "openaiEndpoint"),
+    ("AZURE_OPENAI_DEPLOYMENT", "openaiDeployment"),
+    ("AZURE_OPENAI_EMBEDDING_DEPLOYMENT", "openaiEmbeddingDeployment"),
 )
 
 

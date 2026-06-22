@@ -8,12 +8,27 @@ from unittest.mock import MagicMock
 
 from dsf.config.registry import load_registry, route_product
 from dsf.contracts.handoff import HANDOFF_LABEL, HANDOFF_LABEL_COLOR, INCIDENT_LABEL
-from dsf.instance.provisioner import InstanceProvisioner
+from dsf.instance.provisioner import (
+    _SEED_RETRY_DELAY,
+    InstanceProvisioner,
+    _appconfig_seed_commands,
+)
 from dsf.instance.spec import InstanceSpec, read_manifest
 
 
 def _spec() -> InstanceSpec:
     return InstanceSpec(product="demo", owner="acme")
+
+
+#: The bicep emits ``appConfigEndpoint``; the ``seed_appconfig`` step reads it to
+#: seed config/defaults.json into App Configuration. Execute-path tests must surface
+#: it in the provision_azure outputs or the seed step (correctly) fails for want of
+#: an endpoint.
+_APPCONFIG_ENDPOINT = "https://demo.azconfig.io"
+_APPCONFIG_OUTPUT = (
+    f'"appConfigEndpoint": {{"type": "String", "value": "{_APPCONFIG_ENDPOINT}"}}'
+)
+_AZURE_OUTPUTS_JSON = "{" + _APPCONFIG_OUTPUT + "}"
 
 
 def test_plan_step_order_and_names():
@@ -25,6 +40,7 @@ def test_plan_step_order_and_names():
         "squad_init",
         "create_resource_group",
         "provision_azure",
+        "seed_appconfig",
         "register_product",
         "deploy_council",
         "deploy_squad_ralph",
@@ -159,8 +175,11 @@ def test_apply_dry_run_writes_manifest_and_runs_nothing(tmp_path):
 
 def test_apply_execute_registers_product_into_routing_registry(tmp_path):
     def fake_run(cmd, **kwargs):
-        returncode = 1 if cmd[:3] == ["gh", "repo", "view"] else 0
-        return MagicMock(returncode=returncode)
+        if cmd[:3] == ["gh", "repo", "view"]:
+            return MagicMock(returncode=1)
+        if cmd[:4] == ["az", "deployment", "group", "create"]:
+            return MagicMock(returncode=0, stdout=_AZURE_OUTPUTS_JSON)
+        return MagicMock(returncode=0)
 
     prov = InstanceProvisioner(_spec(), run=fake_run, repo_root=tmp_path)
     manifest = prov.apply(execute=True)
@@ -193,8 +212,11 @@ def test_apply_execute_runs_real_steps_and_onboards_sre(tmp_path):
 
     def fake_run(cmd, **kwargs):
         calls.append((cmd, kwargs.get("cwd")))
-        returncode = 1 if cmd[:3] == ["gh", "repo", "view"] else 0
-        return MagicMock(returncode=returncode)
+        if cmd[:3] == ["gh", "repo", "view"]:
+            return MagicMock(returncode=1)
+        if cmd[:4] == ["az", "deployment", "group", "create"]:
+            return MagicMock(returncode=0, stdout=_AZURE_OUTPUTS_JSON)
+        return MagicMock(returncode=0)
 
     prov = InstanceProvisioner(_spec(), run=fake_run, repo_root=tmp_path)
     manifest = prov.apply(execute=True)
@@ -264,7 +286,8 @@ def test_apply_execute_clones_when_repo_exists_but_not_local(tmp_path, monkeypat
 
 def test_apply_execute_captures_azure_outputs(tmp_path):
     outputs_json = (
-        '{"cosmosEndpoint": {"type": "String", "value": "https://demo.documents.azure.com"},'
+        "{" + _APPCONFIG_OUTPUT + ","
+        ' "cosmosEndpoint": {"type": "String", "value": "https://demo.documents.azure.com"},'
         ' "keyVaultUri": {"type": "String", "value": "https://demovault.vault.azure.net"}}'
     )
 
@@ -353,6 +376,8 @@ def test_apply_execute_emits_start_and_done_events_per_step(tmp_path):
     def fake_run(cmd, **kwargs):
         if cmd[:3] == ["gh", "repo", "view"]:
             return MagicMock(returncode=1)
+        if cmd[:4] == ["az", "deployment", "group", "create"]:
+            return MagicMock(returncode=0, stdout=_AZURE_OUTPUTS_JSON)
         return MagicMock(returncode=0, stdout="{}")
 
     events: list[tuple] = []
@@ -366,10 +391,10 @@ def test_apply_execute_emits_start_and_done_events_per_step(tmp_path):
     assert ("start", "deploy_sre_agent") in phases
     assert ("done", "deploy_sre_agent") in phases
     assert not any(phase == "error" for phase, *_ in events)
-    # 1-based index, stable total = the 10 non-write_config steps.
+    # 1-based index, stable total = the 11 non-write_config steps.
     starts = [e for e in events if e[0] == "start"]
     assert starts[0][1] == 1
-    assert all(total == 10 for _p, _i, total, _s, _e in starts)
+    assert all(total == 11 for _p, _i, total, _s, _e in starts)
 
 
 def test_apply_execute_emits_error_event_on_failure(tmp_path):
@@ -395,7 +420,10 @@ def test_apply_execute_emits_error_event_on_failure(tmp_path):
 
 
 def test_apply_dry_run_preserves_prior_azure_outputs(tmp_path):
-    outputs_json = '{"kv": {"type": "String", "value": "https://v.vault.azure.net"}}'
+    outputs_json = (
+        "{" + _APPCONFIG_OUTPUT + ","
+        ' "kv": {"type": "String", "value": "https://v.vault.azure.net"}}'
+    )
 
     def exec_run(cmd, **kwargs):
         if cmd[:3] == ["gh", "repo", "view"]:
@@ -420,8 +448,11 @@ def test_apply_execute_aca_updates_container_app(tmp_path):
 
     def fake_run(cmd, **kwargs):
         calls.append(cmd)
-        returncode = 1 if cmd[:3] == ["gh", "repo", "view"] else 0
-        return MagicMock(returncode=returncode, stdout="{}")
+        if cmd[:3] == ["gh", "repo", "view"]:
+            return MagicMock(returncode=1, stdout="{}")
+        if cmd[:4] == ["az", "deployment", "group", "create"]:
+            return MagicMock(returncode=0, stdout=_AZURE_OUTPUTS_JSON)
+        return MagicMock(returncode=0, stdout="{}")
 
     spec = InstanceSpec(product="demo", owner="acme")  # runtime_target defaults to aca
     prov = InstanceProvisioner(spec, run=fake_run, repo_root=tmp_path)
@@ -470,7 +501,13 @@ def test_deploy_squad_ralph_renders_bundle_in_dry_run(tmp_path):
 
 def test_deploy_squad_ralph_applies_manifests_on_execute(tmp_path):
     spec = InstanceSpec(product="demo", owner="acme")
-    run = MagicMock(return_value=subprocess.CompletedProcess([], 0, stdout="{}", stderr=""))
+
+    def run(cmd, **kwargs):
+        if cmd[:4] == ["az", "deployment", "group", "create"]:
+            return subprocess.CompletedProcess([], 0, stdout=_AZURE_OUTPUTS_JSON, stderr="")
+        return subprocess.CompletedProcess([], 0, stdout="{}", stderr="")
+
+    run = MagicMock(side_effect=run)
     manifest = InstanceProvisioner(spec, run=run, repo_root=tmp_path).apply(execute=True)
     calls = [c.args[0] for c in run.call_args_list]
     assert any(cmd[:3] == ["az", "aks", "get-credentials"] for cmd in calls)
@@ -540,7 +577,8 @@ def test_deploy_sre_agent_dry_run_records_plan(tmp_path):
 
 def test_deploy_sre_agent_executes_sub_deployment(tmp_path):
     outputs_json = (
-        '{"appInsightsId": {"type": "String", "value": "/sub/ai"},'
+        "{" + _APPCONFIG_OUTPUT + ","
+        ' "appInsightsId": {"type": "String", "value": "/sub/ai"},'
         ' "logAnalyticsId": {"type": "String", "value": "/sub/law"},'
         ' "keyVaultName": {"type": "String", "value": "kv1"}}'
     )
@@ -571,7 +609,8 @@ def test_deploy_sre_agent_executes_sub_deployment(tmp_path):
 
 def test_deploy_sre_agent_connect_repo_skipped_when_no_endpoint(tmp_path):
     outputs_json = (
-        '{"appInsightsId": {"type": "String", "value": "/sub/ai"},'
+        "{" + _APPCONFIG_OUTPUT + ","
+        ' "appInsightsId": {"type": "String", "value": "/sub/ai"},'
         ' "logAnalyticsId": {"type": "String", "value": "/sub/law"},'
         ' "keyVaultName": {"type": "String", "value": "kv1"}}'
     )
@@ -597,7 +636,8 @@ def test_deploy_sre_agent_connect_repo_skipped_when_no_endpoint(tmp_path):
 
 def test_deploy_sre_agent_connect_repo_skipped_when_no_gh_token(tmp_path):
     outputs_json = (
-        '{"appInsightsId": {"type": "String", "value": "/sub/ai"},'
+        "{" + _APPCONFIG_OUTPUT + ","
+        ' "appInsightsId": {"type": "String", "value": "/sub/ai"},'
         ' "logAnalyticsId": {"type": "String", "value": "/sub/law"},'
         ' "agentEndpoint": {"type": "String", "value": "https://sre.example.com"},'
         ' "keyVaultName": {"type": "String", "value": "kv1"}}'
@@ -624,7 +664,8 @@ def test_deploy_sre_agent_connect_repo_skipped_when_no_gh_token(tmp_path):
 
 def test_deploy_sre_agent_connect_repo_calls_az_rest_when_token_present(tmp_path):
     outputs_json = (
-        '{"appInsightsId": {"type": "String", "value": "/sub/ai"},'
+        "{" + _APPCONFIG_OUTPUT + ","
+        ' "appInsightsId": {"type": "String", "value": "/sub/ai"},'
         ' "logAnalyticsId": {"type": "String", "value": "/sub/law"},'
         ' "agentEndpoint": {"type": "String", "value": "https://sre.example.com"},'
         ' "keyVaultName": {"type": "String", "value": "kv1"}}'
@@ -651,3 +692,116 @@ def test_deploy_sre_agent_connect_repo_calls_az_rest_when_token_present(tmp_path
     rest_cmd = rest_calls[0]
     assert "--method" in rest_cmd and "post" in rest_cmd
     assert any("https://sre.example.com/repositories" in part for part in rest_cmd)
+
+
+def test_appconfig_seed_commands_flatten_defaults():
+    cmds = _appconfig_seed_commands("https://x.azconfig.io")
+    # Every command writes one key under the deployer's AAD identity, no label
+    # (the unlabelled baseline that per-product labels override), idempotently.
+    for cmd in cmds:
+        assert cmd[:4] == ["az", "appconfig", "kv", "set"]
+        assert cmd[cmd.index("--endpoint") + 1] == "https://x.azconfig.io"
+        assert cmd[cmd.index("--auth-mode") + 1] == "login"
+        assert "--label" not in cmd
+        assert "--yes" in cmd
+    pairs = {cmd[cmd.index("--key") + 1]: cmd[cmd.index("--value") + 1] for cmd in cmds}
+    # The flags an empty App Config would otherwise read as disabled:
+    assert pairs["critics.security.enabled"] == "true"
+    assert pairs["agents.SENTRY.enabled"] == "true"
+    # Pause flags + scalar defaults, JSON-encoded so the store can json.loads them:
+    assert pairs["triggers.SCHEDULED.paused"] == "false"
+    assert pairs["default_threshold"] == "0.6"
+    assert pairs["default_maturity"] == '"supervised"'
+    # A list leaf (jury roster) is seeded whole, not exploded into keys:
+    assert pairs["jury.roster"] == '["pragmatist", "skeptic", "user_advocate"]'
+
+
+def test_seed_appconfig_seeds_from_deployment_endpoint_on_execute(tmp_path):
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[:3] == ["gh", "repo", "view"]:
+            return MagicMock(returncode=1)
+        if cmd[:4] == ["az", "deployment", "group", "create"]:
+            return MagicMock(returncode=0, stdout=_AZURE_OUTPUTS_JSON)
+        return MagicMock(returncode=0, stdout="")
+
+    prov = InstanceProvisioner(_spec(), run=fake_run, repo_root=tmp_path)
+    manifest = prov.apply(execute=True)
+
+    seed = next(s for s in manifest.plan.steps if s.name == "seed_appconfig")
+    assert seed.result == "seeded"
+    assert seed.executed is True
+    kv_sets = [c for c in calls if c[:4] == ["az", "appconfig", "kv", "set"]]
+    assert kv_sets, "the defaults must be seeded into App Configuration"
+    # The endpoint is threaded from the provision_azure outputs, not hardcoded.
+    assert all(c[c.index("--endpoint") + 1] == _APPCONFIG_ENDPOINT for c in kv_sets)
+    keys = {c[c.index("--key") + 1] for c in kv_sets}
+    assert {"critics.grounding.enabled", "agents.WEBIQ.enabled"} <= keys
+
+
+def test_seed_appconfig_dry_run_records_without_calls(tmp_path):
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return MagicMock(returncode=0)
+
+    prov = InstanceProvisioner(_spec(), run=fake_run, repo_root=tmp_path)
+    manifest = prov.apply(execute=False)
+
+    seed = next(s for s in manifest.plan.steps if s.name == "seed_appconfig")
+    assert seed.result == "seeded (dry-run)"
+    assert seed.executed is False
+    assert not any(c[:4] == ["az", "appconfig", "kv", "set"] for c in calls)
+
+
+def test_seed_appconfig_retries_until_rbac_propagates(tmp_path):
+    sleeps: list[float] = []
+    state = {"denials": 2}  # the Data Owner grant lands after two Forbidden replies
+
+    def fake_run(cmd, **kwargs):
+        if cmd[:3] == ["gh", "repo", "view"]:
+            return MagicMock(returncode=1)
+        if cmd[:4] == ["az", "deployment", "group", "create"]:
+            return MagicMock(returncode=0, stdout=_AZURE_OUTPUTS_JSON)
+        if cmd[:4] == ["az", "appconfig", "kv", "set"]:
+            if state["denials"] > 0:
+                state["denials"] -= 1
+                raise subprocess.CalledProcessError(1, cmd, stderr="ERROR: ... Forbidden")
+            return MagicMock(returncode=0, stdout="")
+        return MagicMock(returncode=0, stdout="")
+
+    prov = InstanceProvisioner(
+        _spec(), run=fake_run, repo_root=tmp_path, sleep=sleeps.append
+    )
+    manifest = prov.apply(execute=True)
+
+    seed = next(s for s in manifest.plan.steps if s.name == "seed_appconfig")
+    assert seed.result == "seeded"
+    assert seed.executed is True
+    # Two Forbidden denials -> two backoff sleeps before the batch broke through.
+    assert sleeps == [_SEED_RETRY_DELAY, _SEED_RETRY_DELAY]
+
+
+def test_seed_appconfig_fails_when_no_endpoint_in_outputs(tmp_path):
+    def fake_run(cmd, **kwargs):
+        if cmd[:3] == ["gh", "repo", "view"]:
+            return MagicMock(returncode=1)
+        if cmd[:4] == ["az", "deployment", "group", "create"]:
+            # A deployment whose outputs omit appConfigEndpoint cannot be seeded.
+            return MagicMock(
+                returncode=0,
+                stdout='{"cosmosEndpoint": {"type": "String", "value": "x"}}',
+            )
+        return MagicMock(returncode=0, stdout="")
+
+    prov = InstanceProvisioner(_spec(), run=fake_run, repo_root=tmp_path)
+    manifest = prov.apply(execute=True)
+
+    steps = {s.name: s for s in manifest.plan.steps}
+    assert steps["seed_appconfig"].result == "failed"
+    assert "appConfigEndpoint" in steps["seed_appconfig"].error
+    # The line stops at the failed step — later steps are left unrun.
+    assert steps["deploy_council"].result == ""
