@@ -91,6 +91,6 @@ product's own (ADR 0007, ADR 0012). How far the loop runs unattended is the
 maturity dial: low keeps a human on every merge, high lets green pull requests
 land on their own.
 
-**See also:** the [loop overview](../../README.md#the-loop), the upstream
+**See also:** the [loop overview](the-loop.md), the upstream
 [Feature Council](feature-council.md), and the [SRE Agent](sre-agent.md) that
 watches what ships.

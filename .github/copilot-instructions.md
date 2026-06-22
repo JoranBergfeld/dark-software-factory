@@ -4,7 +4,7 @@ DSF is a **blueprint**, not a running factory: a template plus tooling that stam
 isolated "software factory" per product (decide what to build → build it → operate it), with
 people governing from outside the loop. This repo mainly implements the **Feature Council**
 phase plus the provisioning CLI and Control Center; Coding Squad and SRE Agent are specced in
-`docs/phases/` and `docs/adr/` and partly delegated to Azure.
+`docs/site/concept/` and `docs/adr/` and partly delegated to Azure.
 
 ## Commands
 
@@ -121,5 +121,5 @@ issue, never left as a stub.
 - ruff: line length 100, target py312, rules `E,F,I,UP,B`.
 - Read the relevant ADR in `docs/adr/` before reworking a subsystem (e.g. 0014 real-only
   `src/` + pull-only, 0007 council↔squad handoff, 0010 uv workspace, 0011 deliberative
-  council). Phase write-ups are in `docs/phases/`; the operational runbook is
-  `docs/RUNBOOK.md`.
+  council). Phase write-ups are in `docs/site/concept/`; the operational runbook is
+  `docs/site/get-started/operate.md`.

@@ -172,7 +172,8 @@ literature and designed in ADR 0011 and its spec. Architecture decisions for thi
 phase live in ADR 0006 (data adapters), ADR 0007 (the squad handoff), and ADR 0011
 (the deliberative redesign).
 
-**See also:** the [loop overview](../../README.md#the-loop), the next phase
+**See also:** the [loop overview](the-loop.md), the next phase
 [Coding Squad](coding-squad.md), and the decision-path redesign in
-[ADR 0011](../adr/0011-feature-council-deliberative-redesign.md) and its
-[design spec](../superpowers/specs/2026-06-19-feature-council-deliberative-redesign-design.md).
+[ADR 0011](https://github.com/JoranBergfeld/dark-software-factory/blob/main/docs/adr/0011-feature-council-deliberative-redesign.md)
+and its
+[design spec](https://github.com/JoranBergfeld/dark-software-factory/blob/main/docs/superpowers/specs/2026-06-19-feature-council-deliberative-redesign-design.md).

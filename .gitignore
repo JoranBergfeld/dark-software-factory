@@ -11,6 +11,9 @@ dist/
 .azure/
 local_state/
 
+# MkDocs build output (docs site)
+/site/
+
 config/instances/*.runtime/
 
 # Bicep build artifacts (az bicep build output); keep *.parameters.json

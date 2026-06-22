@@ -167,10 +167,10 @@ resource kvSecretsUserAssignment 'Microsoft.Authorization/roleAssignments@2022-0
   }
 }
 
-// Admin (human/operator) gets Secrets Officer so `dsf new --execute` can seed the
+// Admin (human/operator) gets Secrets Officer so `dsf new` can seed the
 // squad GitHub token into the vault (ADR 0012), mirroring the App Config admin grant.
 // Data-plane reachability still requires allowPublicNetworkAccess=true (or running
-// provisioning from inside the vault's network); see docs/RUNBOOK.md.
+// provisioning from inside the vault's network); see docs/site/get-started/operate.md.
 resource keyVaultAdminAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(adminPrincipalId)) {
   name: guid(keyVault.id, adminPrincipalId, keyVaultSecretsOfficerRoleId)
   scope: keyVault

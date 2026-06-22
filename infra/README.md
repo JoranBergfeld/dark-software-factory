@@ -156,9 +156,9 @@ to `config/instances/<product>.runtime/` — a generated `containerapp.yaml` for
 `feature-council/src/dsf/runtime/Dockerfile` plus a resolved `.env.orchestrator` whose endpoints come
 straight from that deployment's Bicep outputs (App Config, Key Vault URI, App
 Insights, Cosmos). **Only endpoints are rendered; secrets stay in Key Vault** and are
-fetched at runtime via the managed identity. Under `--execute` `dsf new` rolls the app
-image with `az containerapp update`. See `docs/RUNBOOK.md` → *Creating a product
-instance*.
+fetched at runtime via the managed identity. `dsf new` rolls the app image with
+`az containerapp update` (use `--dry-run` to preview without executing). See
+`docs/site/get-started/operate.md` → *The per-product council runtime*.
 
 Step 5 (`provision_azure`) deploys with `--no-wait` and streams per-resource progress to the
 console while it polls; set `DSF_DEPLOY_POLL_INTERVAL` (seconds, default 5) to tune the cadence.
