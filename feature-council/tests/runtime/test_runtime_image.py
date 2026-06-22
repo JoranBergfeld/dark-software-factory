@@ -31,5 +31,6 @@ def test_runtime_dockerfile_is_two_stage_nonroot_pinned():
 def test_runtime_dockerfile_cmd_runs_sweep_worker():
     text = DOCKERFILE.read_text(encoding="utf-8")
     # build_services wires the real per-product bundle from the runtime env;
-    # there is no --mode flag any more.
-    assert 'CMD ["dsfctl", "serve-orchestrator"]' in text
+    # there is no --mode flag any more. --loop keeps the deployed container alive,
+    # sweeping the enabled sources on an interval (so the ACA revision stays healthy).
+    assert 'CMD ["dsfctl", "serve-orchestrator", "--loop"]' in text

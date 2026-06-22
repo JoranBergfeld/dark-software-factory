@@ -1,31 +1,27 @@
 name: agents-images
 
-# Build each source agent as its own container image and push to the GitHub
-# Container Registry (GHCR). Change-detection: an agent rebuilds only when its
-# own code/config changes; a change to shared core (contracts/ports/a2a/base/
-# container or pyproject) rebuilds ALL agents. Images are pushed on main; pull
+# Build each source agent — and the feature-council runtime — as its own container
+# image and push to the GitHub Container Registry (GHCR). Change-detection: an agent
+# rebuilds only when its own code/config changes; a change to shared core
+# (contracts/ports/a2a/base/container or pyproject) rebuilds ALL agents. The runtime
+# image (dsf-runtime, the orchestrator worker) rebuilds on any core/ or
+# feature-council/ source or pyproject change. Images are pushed on main; pull
 # requests build only (validation, no push). Hosting/deployment is out of scope.
 
 on:
   push:
     branches: [main]
     paths:
-      - 'feature-council/src/dsf/agents/**'
-      - 'core/src/dsf/contracts/**'
-      - 'core/src/dsf/ports/**'
-      - 'core/src/dsf/a2a/**'
-      - 'core/src/dsf/container.py'
+      - 'core/src/**'
+      - 'feature-council/src/**'
       - 'pyproject.toml'
       - 'core/pyproject.toml'
       - 'feature-council/pyproject.toml'
       - '.github/workflows/agents-images.yml'
   pull_request:
     paths:
-      - 'feature-council/src/dsf/agents/**'
-      - 'core/src/dsf/contracts/**'
-      - 'core/src/dsf/ports/**'
-      - 'core/src/dsf/a2a/**'
-      - 'core/src/dsf/container.py'
+      - 'core/src/**'
+      - 'feature-council/src/**'
       - 'pyproject.toml'
       - 'core/pyproject.toml'
       - 'feature-council/pyproject.toml'
@@ -41,6 +37,7 @@ jobs:
     outputs:
       matrix: ${{ steps.set.outputs.matrix }}
       any: ${{ steps.set.outputs.any }}
+      runtime: ${{ steps.set.outputs.runtime }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -67,8 +64,12 @@ jobs:
               - 'feature-council/src/dsf/agents/foundryiq/**'
             webiq:
               - 'feature-council/src/dsf/agents/webiq/**'
-            tickets:
-              - 'feature-council/src/dsf/agents/tickets/**'
+            runtime:
+              - 'core/src/**'
+              - 'feature-council/src/**'
+              - 'pyproject.toml'
+              - 'core/pyproject.toml'
+              - 'feature-council/pyproject.toml'
 
       - id: set
         env:
@@ -77,19 +78,18 @@ jobs:
           GRAFANA: ${{ steps.filter.outputs.grafana }}
           FOUNDRYIQ: ${{ steps.filter.outputs.foundryiq }}
           WEBIQ: ${{ steps.filter.outputs.webiq }}
-          TICKETS: ${{ steps.filter.outputs.tickets }}
+          RUNTIME: ${{ steps.filter.outputs.runtime }}
           DISPATCH: ${{ github.event_name == 'workflow_dispatch' }}
         run: |
           set -euo pipefail
           agents=()
           if [ "$CORE" = "true" ] || [ "$DISPATCH" = "true" ]; then
-            agents=(sentry grafana foundryiq webiq tickets)
+            agents=(sentry grafana foundryiq webiq)
           else
             [ "$SENTRY" = "true" ] && agents+=(sentry) || true
             [ "$GRAFANA" = "true" ] && agents+=(grafana) || true
             [ "$FOUNDRYIQ" = "true" ] && agents+=(foundryiq) || true
             [ "$WEBIQ" = "true" ] && agents+=(webiq) || true
-            [ "$TICKETS" = "true" ] && agents+=(tickets) || true
           fi
           if [ ${#agents[@]} -eq 0 ]; then
             echo "matrix=[]" >> "$GITHUB_OUTPUT"
@@ -99,7 +99,12 @@ jobs:
             echo "matrix=$json" >> "$GITHUB_OUTPUT"
             echo "any=true" >> "$GITHUB_OUTPUT"
           fi
-          echo "Selected agents: ${agents[*]:-none}"
+          if [ "$RUNTIME" = "true" ] || [ "$DISPATCH" = "true" ]; then
+            echo "runtime=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "runtime=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Selected agents: ${agents[*]:-none}; runtime: ${RUNTIME:-false}"
 
   build:
     needs: detect
@@ -161,6 +166,68 @@ jobs:
         with:
           context: .
           file: feature-council/src/dsf/agents/${{ matrix.agent }}/Dockerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  build-runtime:
+    needs: detect
+    if: needs.detect.outputs.runtime == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image metadata
+        id: meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/dsf-runtime
+          tags: |
+            type=sha,format=long
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=pr
+
+      - name: Build (load for scanning)
+        id: build-scan
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: feature-council/src/dsf/runtime/Dockerfile
+          load: true
+          tags: dsf-runtime:scan
+          cache-from: type=gha
+
+      - name: Scan image with Trivy
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: dsf-runtime:scan
+          format: table
+          exit-code: '0'
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+
+      - name: Build and push
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: feature-council/src/dsf/runtime/Dockerfile
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

@@ -15,12 +15,19 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
+import time
+from collections.abc import Callable
 from pathlib import Path
 
 from dsf.container import build_services
 from dsf.contracts.enums import SourceKind, TriggerKind
 from dsf.contracts.models import Run
+
+#: Default seconds between sweeps when ``serve-orchestrator --loop`` runs without
+#: an explicit ``--interval`` or ``DSF_SWEEP_INTERVAL``.
+_DEFAULT_SWEEP_INTERVAL = 300
 
 
 def _coerce_hints(payload: dict) -> list[str]:
@@ -121,15 +128,79 @@ def _cmd_sweep(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_serve_orchestrator(args: argparse.Namespace) -> int:
-    """One-shot orchestrator worker: sweep the enabled source agents.
+def _resolve_sweep_interval(explicit: int | None) -> int:
+    """Resolve the loop sweep interval: explicit ``--interval`` > ``DSF_SWEEP_INTERVAL``
+    env > 300s. Never below 1 second."""
+    if explicit is not None:
+        return max(1, explicit)
+    raw = os.environ.get("DSF_SWEEP_INTERVAL", "").strip()
+    if raw:
+        try:
+            return max(1, int(raw))
+        except ValueError:
+            pass
+    return _DEFAULT_SWEEP_INTERVAL
 
-    A real deployment loops this on the council's schedule. DSF is pull-only, so
-    each tick just runs the source-kind sweep.
+
+def run_orchestrator_loop(
+    services,
+    *,
+    interval: float,
+    sleep: Callable[[float], None] = time.sleep,
+    run_tick: Callable[[], Run] | None = None,
+    max_iterations: int | None = None,
+) -> int:
+    """Continuously run orchestrator sweep ticks, sleeping ``interval`` seconds
+    between them.
+
+    A single tick's exception is logged and swallowed so one bad sweep never
+    tears down the long-lived worker (the deployed Container App keeps running
+    and retries on the next interval). Returns the number of ticks attempted.
+    ``max_iterations`` bounds the loop for tests; production passes ``None`` (run
+    until the process is signalled).
     """
+    if run_tick is None:
+        from dsf.triggers.scheduler import run_orchestrator_tick
+
+        def _tick() -> Run:
+            return asyncio.run(run_orchestrator_tick(services))
+
+        tick = _tick
+    else:
+        tick = run_tick
+
+    count = 0
+    while max_iterations is None or count < max_iterations:
+        try:
+            _print_run_summary(tick())
+        except KeyboardInterrupt:
+            break
+        except Exception as exc:  # noqa: BLE001 - keep the worker alive across ticks
+            print(f"[dsf] orchestrator tick failed: {exc}", file=sys.stderr, flush=True)
+        count += 1
+        if max_iterations is not None and count >= max_iterations:
+            break
+        try:
+            sleep(interval)
+        except KeyboardInterrupt:
+            break
+    return count
+
+
+def _cmd_serve_orchestrator(args: argparse.Namespace) -> int:
+    """Orchestrator worker: sweep the enabled source agents (DSF is pull-only).
+
+    Without ``--loop`` this runs a single tick and exits (handy for local/dev and
+    CI). With ``--loop`` (how the deployed Container App runs) it sweeps forever,
+    sleeping ``--interval`` seconds (or ``DSF_SWEEP_INTERVAL``, default 300)
+    between ticks and surviving per-tick errors.
+    """
+    services = _get_services()
+    if getattr(args, "loop", False):
+        run_orchestrator_loop(services, interval=_resolve_sweep_interval(args.interval))
+        return 0
     from dsf.triggers.scheduler import run_orchestrator_tick
 
-    services = _get_services()
     swept = asyncio.run(run_orchestrator_tick(services))
     _print_run_summary(swept)
     return 0
@@ -169,7 +240,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_orch = sub.add_parser(
         "serve-orchestrator",
-        help="run the orchestrator worker (one tick: sweep the enabled sources)",
+        help="run the orchestrator worker (sweep enabled sources; --loop to run continuously)",
+    )
+    p_orch.add_argument(
+        "--loop",
+        action="store_true",
+        help="sweep continuously (the deployed runtime mode) instead of a single tick",
+    )
+    p_orch.add_argument(
+        "--interval",
+        type=int,
+        default=None,
+        help="seconds between sweeps in --loop mode (default: DSF_SWEEP_INTERVAL env, else 300)",
     )
     p_orch.set_defaults(func=_cmd_serve_orchestrator)
 

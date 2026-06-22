@@ -21,4 +21,6 @@ USER appuser
 # Per-product feature-council orchestrator (the dsfctl instance-control CLI).
 # Scope and endpoints are supplied at runtime via DSF_PRODUCT and the Azure
 # runtime env (see .env.orchestrator); build_services wires the real bundle.
-CMD ["dsfctl", "serve-orchestrator"]
+# --loop keeps the container alive, sweeping the enabled sources every
+# DSF_SWEEP_INTERVAL seconds (default 300) and surviving per-tick errors.
+CMD ["dsfctl", "serve-orchestrator", "--loop"]
