@@ -40,7 +40,7 @@ class GitHubAppClient:
 
     app_id: str
     installation_id: str
-    private_key_pem: str
+    private_key_pem: str = field(repr=False)
     repository_ids: list[int] | None = None
     transport: httpx.BaseTransport | None = None
     clock: Callable[[], datetime] = _utcnow

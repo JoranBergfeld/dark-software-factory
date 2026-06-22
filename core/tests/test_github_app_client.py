@@ -25,6 +25,13 @@ def _fixed_clock(moment: datetime):
     return lambda: moment
 
 
+def test_repr_does_not_leak_private_key():
+    pem, _ = _rsa_pem()
+    client = GitHubAppClient(app_id="1", installation_id="2", private_key_pem=pem)
+    assert "BEGIN PRIVATE KEY" not in repr(client)
+    assert pem not in repr(client)
+
+
 def test_installation_token_mints_repo_scoped_token_and_signs_valid_jwt():
     pem, public_key = _rsa_pem()
     now = datetime(2026, 6, 22, 12, 0, tzinfo=UTC)
