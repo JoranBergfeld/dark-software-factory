@@ -114,6 +114,26 @@ def _cmd_new(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_bootstrap(args: argparse.Namespace) -> int:
+    """Create the one-time owner-level DSF GitHub App and store it in the owner KV."""
+    from dsf.instance.app_bootstrap import BootstrapConfig, _browser_capture_code, bootstrap_app
+
+    cfg = BootstrapConfig(
+        app_name=args.app_name,
+        resource_group=args.resource_group,
+        keyvault_name=args.keyvault_name,
+        location=args.location,
+    )
+    result = bootstrap_app(cfg, capture_code=_browser_capture_code)
+    print(
+        f"[dsf] DSF GitHub App created: app_id={result.app_id} "
+        f"installation_id={result.installation_id}"
+    )
+    print(f"[dsf] master credentials stored in owner Key Vault {result.keyvault_name}")
+    print(f"[dsf] now export DSF_OWNER_KEYVAULT_URI={result.keyvault_uri} for `dsf new`")
+    return 0
+
+
 def _cmd_delete(args: argparse.Namespace) -> int:
     """Tear down (or preview tearing down) an existing product factory instance.
 
@@ -247,6 +267,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="override repo root where config/instances/ is written (tests/CI)",
     )
     p_new.set_defaults(func=_cmd_new)
+
+    p_boot = sub.add_parser(
+        "bootstrap",
+        help="one-time: create the DSF GitHub App and store it in the owner Key Vault",
+    )
+    p_boot.add_argument("--app-name", required=True, help="GitHub App name (globally unique)")
+    p_boot.add_argument(
+        "--keyvault-name", required=True, help="owner Key Vault name for App credentials"
+    )
+    p_boot.add_argument(
+        "--resource-group", default="rg-dsf-app", help="resource group for the owner Key Vault"
+    )
+    p_boot.add_argument(
+        "--location", default="swedencentral", help="Azure region for the owner Key Vault"
+    )
+    p_boot.set_defaults(func=_cmd_bootstrap)
 
     p_delete = sub.add_parser(
         "delete",

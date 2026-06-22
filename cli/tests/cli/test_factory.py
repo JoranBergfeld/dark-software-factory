@@ -40,6 +40,25 @@ def test_new_parser_wiring():
     assert args.write_plan is False
 
 
+def test_bootstrap_subcommand_is_wired():
+    from dsf.cli.factory import build_parser
+
+    args = build_parser().parse_args(
+        [
+            "bootstrap",
+            "--app-name",
+            "dsf-acme",
+            "--keyvault-name",
+            "kv-dsf-app",
+            "--resource-group",
+            "rg-dsf-app",
+        ]
+    )
+    assert args.command == "bootstrap"
+    assert args.app_name == "dsf-acme"
+    assert args.keyvault_name == "kv-dsf-app"
+
+
 def test_new_squad_maturity_high_flows_into_manifest(tmp_path):
     rc = main([
         "new", "--product", "demo", "--owner", "acme",
@@ -378,4 +397,3 @@ def test_delete_execute_failure_exits_nonzero(capsys, tmp_path, monkeypatch):
     assert rc == 1
     assert "FAILED" in out
     assert "STOPPED at 'delete_resource_group'" in out
-

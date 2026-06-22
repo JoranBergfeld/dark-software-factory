@@ -9,10 +9,17 @@ glue is validated by a real bootstrap, not the unit suite (ADR 0014 framing).
 
 from __future__ import annotations
 
+import http.server
+import json
+import subprocess
+import tempfile
 import time
+import urllib.parse
+import webbrowser
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import httpx
 import jwt
@@ -150,3 +157,132 @@ def owner_kv_store_commands(
         ["az", "keyvault", "secret", "set", "--vault-name", keyvault_name,
          "--name", _PRIVATE_KEY_SECRET, "--file", pem_path],
     ]
+
+
+Runner = Callable[..., object]
+
+
+@dataclass(frozen=True)
+class BootstrapConfig:
+    """Operator inputs for a one-time `dsf bootstrap`."""
+
+    app_name: str
+    resource_group: str
+    keyvault_name: str
+    location: str = "swedencentral"
+
+
+@dataclass(frozen=True)
+class BootstrapResult:
+    """What the operator needs after bootstrap: the App identity + owner-KV pointer."""
+
+    app_id: str
+    installation_id: str
+    keyvault_name: str
+    keyvault_uri: str
+
+
+def _default_write_pem(pem: str) -> str:
+    """Write the PEM to a private (0600) temp file; caller unlinks it."""
+    fd, path = tempfile.mkstemp(prefix="dsf-app-", suffix=".pem", dir=Path.cwd())
+    with open(fd, "w", encoding="utf-8") as fh:
+        fh.write(pem)
+    Path(path).chmod(0o600)
+    return path
+
+
+def bootstrap_app(
+    cfg: BootstrapConfig,
+    *,
+    run: Runner | None = None,
+    capture_code: Callable[[dict], str],
+    exchange: Callable[..., AppCredentials] = exchange_manifest_code,
+    discover: Callable[..., str] = discover_installation_id,
+    write_pem: Callable[[str], str] = _default_write_pem,
+) -> BootstrapResult:
+    """Drive the one-time App bootstrap end to end.
+
+    ``capture_code`` performs the interactive manifest submission (browser + local
+    callback) and returns the temporary code; it is injected so the rest is unit-
+    testable. The PEM is materialized to a 0600 temp file only long enough to push
+    it into the owner Key Vault, then unlinked.
+    """
+    runner = run or subprocess.run
+
+    def _capture(cmd: list[str]) -> str:
+        res = runner(cmd, check=True, capture_output=True, text=True)
+        return getattr(res, "stdout", "").strip()
+
+    manifest = app_manifest(name=cfg.app_name, callback_url="http://127.0.0.1:8765/callback")
+    code = capture_code(manifest)
+    creds = exchange(code)
+    installation_id = discover(creds)
+
+    subscription = _capture(["az", "account", "show", "--query", "id", "-o", "tsv"])
+    operator_oid = _capture(
+        ["az", "ad", "signed-in-user", "show", "--query", "id", "-o", "tsv"]
+    )
+
+    for cmd in owner_kv_ensure_commands(
+        resource_group=cfg.resource_group,
+        keyvault_name=cfg.keyvault_name,
+        location=cfg.location,
+        operator_object_id=operator_oid,
+    ):
+        cmd = [part.replace("{subscription}", subscription) for part in cmd]
+        runner(cmd, check=True)
+
+    pem_path = write_pem(creds.pem)
+    try:
+        for cmd in owner_kv_store_commands(
+            keyvault_name=cfg.keyvault_name,
+            app_id=creds.app_id,
+            installation_id=installation_id,
+            pem_path=pem_path,
+        ):
+            runner(cmd, check=True)
+    finally:
+        Path(pem_path).unlink(missing_ok=True)
+
+    return BootstrapResult(
+        app_id=creds.app_id,
+        installation_id=installation_id,
+        keyvault_name=cfg.keyvault_name,
+        keyvault_uri=f"https://{cfg.keyvault_name}.vault.azure.net/",
+    )
+
+
+def _browser_capture_code(manifest: dict) -> str:
+    """Open GitHub's App-create page and capture the redirect code."""
+    captured: dict[str, str] = {}
+
+    class _Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802 - stdlib signature
+            query = urllib.parse.urlparse(self.path).query
+            captured["code"] = urllib.parse.parse_qs(query).get("code", [""])[0]
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"DSF App created. You can close this tab.")
+
+        def log_message(self, *_a):
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 8765), _Handler)
+    page = (
+        "<form action='https://github.com/settings/apps/new' method='post'>"
+        f"<input type='hidden' name='manifest' value='{json.dumps(manifest)}'>"
+        "</form><script>document.forms[0].submit()</script>"
+    )
+    fd, html_name = tempfile.mkstemp(prefix="dsf-app-", suffix=".html", dir=Path.cwd())
+    with open(fd, "w", encoding="utf-8") as fh:
+        fh.write(page)
+    html_path = Path(html_name)
+    webbrowser.open(html_path.as_uri())
+    try:
+        server.handle_request()
+    finally:
+        server.server_close()
+        html_path.unlink(missing_ok=True)
+    if not captured.get("code"):
+        raise RuntimeError("App-manifest callback returned no code")
+    return captured["code"]

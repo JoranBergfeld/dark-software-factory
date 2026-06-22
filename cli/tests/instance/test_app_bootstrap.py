@@ -10,7 +10,9 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 
 from dsf.instance.app_bootstrap import (
     AppCredentials,
+    BootstrapConfig,
     app_manifest,
+    bootstrap_app,
     discover_installation_id,
     exchange_manifest_code,
     owner_kv_ensure_commands,
@@ -143,3 +145,53 @@ def test_owner_kv_store_commands_set_id_installation_and_keyfile():
     keyset = next(c for c in cmds if "github-app-private-key" in c)
     assert "--file" in keyset and "/tmp/app.pem" in keyset
     assert "--value" not in keyset
+
+
+def test_bootstrap_app_runs_ensure_then_store_with_resolved_scope(tmp_path):
+    creds = AppCredentials(
+        app_id="42",
+        slug="dsf-acme",
+        pem="PEMDATA",
+        webhook_secret="",
+        client_id="",
+        client_secret="",
+    )
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+
+        class R:
+            stdout = ""
+            returncode = 0
+
+        if cmd[:3] == ["az", "account", "show"]:
+            R.stdout = "sub-123\n"
+        if cmd[:4] == ["az", "ad", "signed-in-user", "show"]:
+            R.stdout = "oid-1\n"
+        return R()
+
+    cfg = BootstrapConfig(
+        app_name="dsf-acme",
+        resource_group="rg-dsf-app",
+        keyvault_name="kv-dsf-app",
+        location="swedencentral",
+    )
+    result = bootstrap_app(
+        cfg,
+        run=fake_run,
+        capture_code=lambda manifest: "tempcode",
+        exchange=lambda code, **_: creds,
+        discover=lambda c, **_: "9001",
+        write_pem=lambda pem: str(tmp_path / "app.pem"),
+    )
+
+    assert result.app_id == "42"
+    assert result.installation_id == "9001"
+    assert "kv-dsf-app" in result.keyvault_uri
+    # Secrets Officer scope had its subscription id substituted before running.
+    grant = next(c for c in calls if c[:4] == ["az", "role", "assignment", "create"])
+    assert "/subscriptions/sub-123/resourceGroups/rg-dsf-app/" in " ".join(grant)
+    # The private key was stored from a file, not as a CLI value.
+    keyset = next(c for c in calls if "github-app-private-key" in c)
+    assert "--file" in keyset and "--value" not in keyset
