@@ -13,6 +13,23 @@ import sys
 from pathlib import Path
 
 
+def _read_owner_app_pointers(owner_keyvault_uri: str) -> tuple[str, str]:
+    """Read the (non-secret) App id + installation id from the owner Key Vault."""
+    import subprocess
+
+    name = owner_keyvault_uri.split("//", 1)[-1].split(".", 1)[0]
+
+    def _secret(secret_name: str) -> str:
+        res = subprocess.run(
+            ["az", "keyvault", "secret", "show", "--vault-name", name,
+             "--name", secret_name, "--query", "value", "-o", "tsv"],
+            check=True, capture_output=True, text=True,
+        )
+        return res.stdout.strip()
+
+    return _secret("github-app-id"), _secret("github-app-installation-id")
+
+
 def _print_plan(plan, *, execute: bool = False) -> None:
     """Print an instance provisioning plan in a compact, readable form."""
     mode = "EXECUTE" if execute else "DRY-RUN"
@@ -56,6 +73,8 @@ def _print_step_progress(line: str) -> None:
 
 def _cmd_new(args: argparse.Namespace) -> int:
     """Create (or preview) a new isolated product factory instance."""
+    import os
+
     from dsf.instance.github_identity import OwnerResolutionError, resolve_owner
     from dsf.instance.naming import make_name_prefix
     from dsf.instance.provisioner import InstanceProvisioner
@@ -95,7 +114,17 @@ def _cmd_new(args: argparse.Namespace) -> int:
         location=args.location,
         squad_maturity=args.squad_maturity,
     )
-    prov = InstanceProvisioner(spec, repo_root=root)
+    owner_kv = args.owner_keyvault_uri or os.environ.get("DSF_OWNER_KEYVAULT_URI", "")
+    app_id, installation_id = "", ""
+    if owner_kv and not args.dry_run:
+        app_id, installation_id = _read_owner_app_pointers(owner_kv)
+    prov = InstanceProvisioner(
+        spec,
+        repo_root=root,
+        owner_keyvault_uri=owner_kv,
+        github_app_id=app_id,
+        github_installation_id=installation_id,
+    )
     execute = not args.dry_run
     if execute:
         plan = prov.apply(
@@ -265,6 +294,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--config-root",
         default=None,
         help="override repo root where config/instances/ is written (tests/CI)",
+    )
+    p_new.add_argument(
+        "--owner-keyvault-uri",
+        default="",
+        help="owner Key Vault holding the DSF App credentials "
+        "(default: $DSF_OWNER_KEYVAULT_URI; required to install the App)",
     )
     p_new.set_defaults(func=_cmd_new)
 

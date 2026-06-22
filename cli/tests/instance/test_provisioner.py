@@ -69,6 +69,7 @@ def test_plan_step_order_and_names():
     assert [s.name for s in plan.steps] == [
         "create_repo",
         "create_labels",
+        "install_app",
         "create_resource_group",
         "provision_azure",
         "seed_appconfig",
@@ -441,10 +442,10 @@ def test_apply_execute_emits_start_and_done_events_per_step(tmp_path):
     assert ("start", "deploy_sre_agent") in phases
     assert ("done", "deploy_sre_agent") in phases
     assert not any(phase == "error" for phase, *_ in events)
-    # 1-based index, stable total = the 9 non-write_config steps.
+    # 1-based index, stable total = the 10 non-write_config steps.
     starts = [e for e in events if e[0] == "start"]
     assert starts[0][1] == 1
-    assert all(total == 9 for _p, _i, total, _s, _e in starts)
+    assert all(total == 10 for _p, _i, total, _s, _e in starts)
 
 
 def test_apply_execute_emits_error_event_on_failure(tmp_path):
@@ -832,3 +833,67 @@ def test_seed_appconfig_fails_when_no_endpoint_in_outputs(tmp_path):
     assert "appConfigEndpoint" in steps["seed_appconfig"].error
     # The line stops at the failed step — later steps are left unrun.
     assert steps["deploy_council"].result == ""
+
+
+def test_install_app_adds_repo_to_owner_installation_and_records_binding(tmp_path):
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[:3] == ["gh", "repo", "view"]:
+            return MagicMock(returncode=1)
+        if cmd[:3] == ["gh", "api", "/repos/acme/demo"]:
+            return MagicMock(returncode=0, stdout="555\n")
+        hit = _az_deploy(cmd, _AZURE_OUTPUTS_JSON)
+        if hit is not None:
+            return hit
+        return MagicMock(returncode=0, stdout="")
+
+    prov = InstanceProvisioner(
+        _spec(),
+        run=fake_run,
+        repo_root=tmp_path,
+        owner_keyvault_uri="https://kv-dsf-app.vault.azure.net/",
+        github_app_id="42",
+        github_installation_id="9001",
+    )
+    manifest = prov.apply(execute=True)
+
+    # the repo id was looked up, then a PUT added it to the single owner installation
+    put = next(c for c in calls if c[:3] == ["gh", "api", "--method"])
+    assert "PUT" in put
+    assert "/user/installations/9001/repositories/555" in " ".join(put)
+    assert manifest.github_app is not None
+    assert manifest.github_app.app_id == "42"
+    assert manifest.github_app.installation_id == "9001"
+    assert manifest.github_app.repository_id == 555
+
+
+def test_install_app_step_skips_when_no_owner_app_configured(tmp_path):
+    # Backward-compat: dsf new without an owner App must still run; install_app
+    # skips gracefully rather than issuing a malformed /user/installations//... call.
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[:3] == ["gh", "repo", "view"]:
+            return MagicMock(returncode=1)
+        hit = _az_deploy(cmd, _AZURE_OUTPUTS_JSON)
+        if hit is not None:
+            return hit
+        return MagicMock(returncode=0, stdout="")
+
+    prov = InstanceProvisioner(_spec(), run=fake_run, repo_root=tmp_path)
+    manifest = prov.apply(execute=True)
+
+    assert not any("/user/installations/" in " ".join(c) for c in calls)  # no install attempt
+    assert manifest.github_app is None
+    install = next(s for s in manifest.plan.steps if s.name == "install_app")
+    assert "skip" in install.result.lower()
+
+
+def test_install_app_step_is_dry_run_safe(tmp_path):
+    prov = InstanceProvisioner(_spec(), repo_root=tmp_path, github_installation_id="9001")
+    plan = prov.plan()
+    install = next(s for s in plan.steps if s.name == "install_app")
+    assert "9001" in install.description

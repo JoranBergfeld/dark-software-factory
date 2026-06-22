@@ -188,7 +188,7 @@ def test_new_execute_surfaces_step_failure_and_exits_nonzero(capsys, tmp_path, m
     from dsf.instance.spec import InstanceManifest, InstancePlan, ProvisionStep
 
     class _FailingProvisioner:
-        def __init__(self, spec, repo_root=None):
+        def __init__(self, spec, repo_root=None, **kwargs):
             self.spec = spec
 
         def apply(self, *, execute=False, on_event=None, on_progress=None):
@@ -222,7 +222,7 @@ def test_new_execute_indents_provision_progress(capsys, tmp_path, monkeypatch):
     from dsf.instance.spec import InstanceManifest, InstancePlan, ProvisionStep
 
     class _ProgressProvisioner:
-        def __init__(self, spec, repo_root=None):
+        def __init__(self, spec, repo_root=None, **kwargs):
             self.spec = spec
 
         def apply(self, *, execute=False, on_event=None, on_progress=None):
@@ -397,3 +397,34 @@ def test_delete_execute_failure_exits_nonzero(capsys, tmp_path, monkeypatch):
     assert rc == 1
     assert "FAILED" in out
     assert "STOPPED at 'delete_resource_group'" in out
+
+
+def test_new_parser_has_owner_keyvault_uri():
+    args = build_parser().parse_args(
+        [
+            "new", "--product", "demo", "--owner", "acme",
+            "--owner-keyvault-uri", "https://kv-dsf-app.vault.azure.net/",
+        ]
+    )
+    assert args.owner_keyvault_uri == "https://kv-dsf-app.vault.azure.net/"
+
+
+def test_read_owner_app_pointers_reads_id_and_installation(monkeypatch):
+    import subprocess
+
+    from dsf.cli.factory import _read_owner_app_pointers
+
+    seen: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        seen.append(cmd)
+        from unittest.mock import MagicMock
+        value = "42" if cmd[cmd.index("--name") + 1] == "github-app-id" else "9001"
+        return MagicMock(returncode=0, stdout=value + "\n")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    app_id, installation_id = _read_owner_app_pointers("https://kv-dsf-app.vault.azure.net/")
+    assert app_id == "42"
+    assert installation_id == "9001"
+    # vault name parsed from the URI host
+    assert any("kv-dsf-app" in c for c in seen[0])

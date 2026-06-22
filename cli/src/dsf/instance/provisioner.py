@@ -31,6 +31,7 @@ from dsf.instance.runtime_render import (
 )
 from dsf.instance.spec import (
     AzureProvisionResult,
+    GitHubAppBinding,
     InstanceManifest,
     InstancePlan,
     InstanceSpec,
@@ -177,11 +178,18 @@ class InstanceProvisioner:
         run: Runner | None = None,
         repo_root: Path | None = None,
         sleep: Callable[[float], None] | None = None,
+        owner_keyvault_uri: str = "",
+        github_app_id: str = "",
+        github_installation_id: str = "",
     ) -> None:
         self.spec = spec
         self._run = run or subprocess.run
         self._repo_root = repo_root
         self._sleep = sleep or time.sleep
+        self._owner_keyvault_uri = owner_keyvault_uri
+        self._github_app_id = github_app_id
+        self._github_installation_id = github_installation_id
+        self._app_binding: GitHubAppBinding | None = None
 
     def plan(self) -> InstancePlan:
         """Return the ordered provisioning plan (pure — no side effects)."""
@@ -202,6 +210,13 @@ class InstanceProvisioner:
                     f"Create the label taxonomy + handoff label in {s.github_repo()}"
                 ),
                 commands=_label_commands(s),
+            ),
+            ProvisionStep(
+                name="install_app",
+                description=(
+                    f"Add {s.github_repo()} to the DSF App installation "
+                    f"{self._github_installation_id or '<installation>'}"
+                ),
             ),
             ProvisionStep(
                 name="create_resource_group",
@@ -332,7 +347,8 @@ class InstanceProvisioner:
                 if step.name == "write_config":
                     step.executed, step.result = True, str(path)
             manifest = InstanceManifest(
-                spec=self.spec, plan=plan, executed=executed, azure=azure_result
+                spec=self.spec, plan=plan, executed=executed,
+                azure=azure_result, github_app=self._app_binding,
             )
             write_manifest(manifest, self._repo_root)
         return manifest
@@ -369,6 +385,14 @@ class InstanceProvisioner:
             else:
                 self._seed_appconfig(azure_result)
                 step.executed, step.result = True, "seeded"
+        elif step.name == "install_app":
+            if not self._github_installation_id:
+                step.result = "skipped (no owner App configured)"
+            elif not execute:
+                step.result = "installed (dry-run)"
+            else:
+                self._app_binding = self._install_app()
+                step.executed, step.result = True, "installed"
         elif step.name == "deploy_council":
             provisional = InstanceManifest(
                 spec=self.spec, plan=plan, executed=executed, azure=azure_result
@@ -473,6 +497,28 @@ class InstanceProvisioner:
             deployment_name=self.spec.deployment_name(),
             location=self.spec.location,
             outputs={k: str(val) for k, val in outputs.items() if val is not None},
+        )
+
+    def _install_app(self) -> GitHubAppBinding:
+        """Add the product repo to the single owner installation; capture the binding."""
+        repo = self.spec.github_repo()
+        lookup = self._run(
+            ["gh", "api", f"/repos/{repo}", "--jq", ".id"],
+            check=True, capture_output=True, text=True,
+        )
+        repository_id = int(getattr(lookup, "stdout", "0").strip())
+        self._run(
+            [
+                "gh", "api", "--method", "PUT",
+                f"/user/installations/{self._github_installation_id}"
+                f"/repositories/{repository_id}",
+            ],
+            check=True,
+        )
+        return GitHubAppBinding(
+            app_id=self._github_app_id,
+            installation_id=self._github_installation_id,
+            repository_id=repository_id,
         )
 
     def _sre_deploy_command(self, outputs: dict[str, str]) -> list[str]:
