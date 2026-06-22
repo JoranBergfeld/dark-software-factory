@@ -765,6 +765,21 @@ class InstanceOffboarder:
     def _purge_cognitive_if_deleted(self, name: str, location: str) -> bool:
         if not name:
             return False
+        found = self._capture_tsv(
+            [
+                "az",
+                "cognitiveservices",
+                "account",
+                "list-deleted",
+                "--query",
+                f"[?name=='{name}'].name",
+                "-o",
+                "tsv",
+            ],
+            allow_not_found=True,
+        )
+        if not found:
+            return False
         self._run(
             ["az", "cognitiveservices", "account", "purge", "--name", name, "--location", location],
             check=True,
