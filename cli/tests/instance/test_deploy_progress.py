@@ -26,10 +26,11 @@ class _ScriptedAz:
     the last entry is reused if the poller polls more times than scripted.
     """
 
-    def __init__(self, op_polls, states, outputs="{}"):
+    def __init__(self, op_polls, states, outputs="{}", error_json="null"):
         self._op_polls = list(op_polls)
         self._states = list(states)
         self._outputs = outputs
+        self._error = error_json
         self._poll = -1
 
     def __call__(self, cmd, **kwargs):
@@ -44,6 +45,8 @@ class _ScriptedAz:
                 return MagicMock(returncode=0, stdout=self._states[idx])
             if query == "properties.outputs":
                 return MagicMock(returncode=0, stdout=self._outputs)
+            if query == "properties.error":
+                return MagicMock(returncode=0, stdout=self._error)
         return MagicMock(returncode=0, stdout="")
 
 
@@ -109,6 +112,27 @@ def test_stream_raises_with_failed_operation_reason():
     message = str(excinfo.value)
     assert quota in message
     assert "dsf-orchestrator-demo" in message
+
+
+def test_stream_surfaces_deployment_level_error_when_no_failed_operation():
+    # Policy/auth denials populate the deployment's properties.error but may leave
+    # NO per-operation in a Failed state; that reason must still be surfaced.
+    policy = "Resource 'cosmos-x' was disallowed by policy 'deny-public-network'."
+    error_json = json.dumps({
+        "code": "DeploymentFailed",
+        "message": "At least one resource deployment operation failed.",
+        "details": [{"code": "RequestDisallowedByPolicy", "message": policy}],
+    })
+    # The only operation reported is the deployment's own (untargeted) op — no
+    # per-resource Failed op carries a statusMessage.
+    ops = [{"properties": {"provisioningState": "Failed"}}]
+    with pytest.raises(DeploymentFailedError) as excinfo:
+        _poller(
+            _ScriptedAz([ops], ["Failed"], error_json=error_json), lambda _l: None
+        ).stream("rg-x", "dep-x")
+    message = str(excinfo.value)
+    assert policy in message
+    assert "RequestDisallowedByPolicy" in message
 
 
 def test_stream_tolerates_empty_first_poll():

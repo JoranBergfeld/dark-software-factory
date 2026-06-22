@@ -28,6 +28,9 @@ _TERMINAL_STATES = {"Succeeded", "Failed", "Canceled"}
 #: Per-resource states that mark a failed operation (for the failure message).
 _FAILED_STATES = {"Failed", "Canceled"}
 
+#: Shown when a failed deployment yields neither a per-op nor a top-level reason.
+_NO_FAILURE_DETAIL = "(no failure detail)"
+
 #: Poll cadence default: how often to re-list the deployment's operations.
 _DEFAULT_POLL_INTERVAL = 5.0
 
@@ -98,6 +101,33 @@ def _status_message(status: Any) -> str:
     return ""
 
 
+def _format_arm_error(error: Any) -> str:
+    """Render a deployment's ``properties.error`` ARM object as a readable reason.
+
+    Prefers the nested ``details[].message`` (where policy/auth denials put the real
+    reason); falls back to the top-level ``message``. Returns ``""`` when absent.
+    """
+    if not isinstance(error, dict) or not error:
+        return ""
+    messages: list[str] = []
+    details = error.get("details")
+    if isinstance(details, list):
+        for item in details:
+            if not isinstance(item, dict):
+                continue
+            message = item.get("message")
+            if isinstance(message, str) and message.strip():
+                code = (item.get("code") or "").strip()
+                messages.append(f"{code}: {message.strip()}" if code else message.strip())
+    if messages:
+        return "; ".join(messages)
+    top = error.get("message")
+    if isinstance(top, str) and top.strip():
+        code = (error.get("code") or "").strip()
+        return f"{code}: {top.strip()}" if code else top.strip()
+    return ""
+
+
 def _format_line(target: dict[str, Any], state: str, props: dict[str, Any]) -> str:
     symbol = {"Succeeded": "✓", "Failed": "✗", "Canceled": "✗"}.get(state, "…")
     label = f"{target.get('resourceType', '')} {target.get('resourceName', '')}".strip()
@@ -159,9 +189,8 @@ class DeploymentProgressPoller:
             state = self._deployment_state(resource_group, deployment_name)
         if state == "Succeeded":
             return self._fetch_outputs(resource_group, deployment_name)
-        raise DeploymentFailedError(
-            f"deployment {deployment_name} {state}: {self._failure_detail(ops)}"
-        )
+        detail = self._failure_summary(resource_group, deployment_name, ops)
+        raise DeploymentFailedError(f"deployment {deployment_name} {state}: {detail}")
 
     def _list_operations(self, rg: str, name: str) -> list[dict[str, Any]]:
         proc = self._run(
@@ -208,6 +237,23 @@ class DeploymentProgressPoller:
             seen[key] = state
             self._emit(_format_line(target, state, props))
 
+    def _failure_summary(self, rg: str, name: str, ops: list[dict[str, Any]]) -> str:
+        """Combine per-operation failures with the deployment-level ``properties.error``.
+
+        Per-resource ops carry the most specific reason, but deployment-level failures
+        (policy/auth denials, evaluation errors) leave no failed op — their reason lives
+        only in ``properties.error``, which the old blocking create surfaced via stderr.
+        Fetch both so neither class of failure is reported opaquely.
+        """
+        parts: list[str] = []
+        op_detail = self._failure_detail(ops)
+        if op_detail:
+            parts.append(op_detail)
+        deployment_error = self._deployment_error(rg, name)
+        if deployment_error and deployment_error not in op_detail:
+            parts.append(deployment_error)
+        return "; ".join(parts) if parts else _NO_FAILURE_DETAIL
+
     def _failure_detail(self, ops: list[dict[str, Any]]) -> str:
         failures: list[str] = []
         for op in ops:
@@ -221,7 +267,26 @@ class DeploymentProgressPoller:
             )
             reason = _status_message(props.get("statusMessage"))
             failures.append(f"{label}: {reason}" if reason else label)
-        return "; ".join(failures) if failures else "(no per-operation detail)"
+        return "; ".join(failures)
+
+    def _deployment_error(self, rg: str, name: str) -> str:
+        """The deployment's top-level ``properties.error`` reason, or ``""``.
+
+        Runs on the failure path only; never raises — a failed error-fetch must not
+        mask the underlying deployment failure.
+        """
+        try:
+            proc = self._run(
+                [
+                    "az", "deployment", "group", "show",
+                    "-g", rg, "-n", name,
+                    "--query", "properties.error", "-o", "json",
+                ],
+                check=False, capture_output=True, text=True,
+            )
+        except Exception:  # noqa: BLE001 - best-effort reason fetch on the failure path
+            return ""
+        return _format_arm_error(_parse_json(getattr(proc, "stdout", ""), dict))
 
 
 def _parse_json(raw: Any, expected: type) -> Any:
