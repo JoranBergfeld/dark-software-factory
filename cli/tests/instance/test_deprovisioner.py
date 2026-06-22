@@ -1,0 +1,391 @@
+"""Tests for InstanceDeprovisioner.plan() and apply()."""
+
+from __future__ import annotations
+
+import json
+import subprocess
+from unittest.mock import MagicMock
+
+import pytest
+
+from dsf.config.registry import load_registry
+from dsf.instance.deprovisioner import InstanceDeprovisioner
+from dsf.instance.provisioner import InstanceProvisioner
+from dsf.instance.spec import (
+    AzureProvisionResult,
+    InstanceManifest,
+    InstancePlan,
+    InstanceSpec,
+    TeardownPlan,
+    manifest_path,
+    write_manifest,
+)
+
+
+def _spec() -> InstanceSpec:
+    return InstanceSpec(product="demo", owner="acme")
+
+
+def _manifest(
+    *,
+    spec: InstanceSpec | None = None,
+    azure: AzureProvisionResult | None = None,
+) -> InstanceManifest:
+    s = spec or _spec()
+    return InstanceManifest(
+        spec=s,
+        plan=InstancePlan(product=s.product, steps=[]),
+        executed=True,
+        azure=azure,
+    )
+
+
+# ---------------------------------------------------------------------------
+# plan() — structure and content
+# ---------------------------------------------------------------------------
+
+
+def test_plan_step_order_and_names():
+    plan = InstanceDeprovisioner(_manifest()).plan()
+    assert isinstance(plan, TeardownPlan)
+    assert plan.product == "demo"
+    assert [s.name for s in plan.steps] == [
+        "delete_sre_agent",
+        "delete_resource_group",
+        "deregister_product",
+        "delete_config",
+        "delete_repo",
+    ]
+
+
+def test_plan_step_order_delete_repo_is_last():
+    """delete_repo MUST be the last step — Azure teardown before repo removal."""
+    plan = InstanceDeprovisioner(_manifest()).plan()
+    assert plan.steps[-1].name == "delete_repo"
+
+
+def test_plan_delete_sre_agent_command():
+    plan = InstanceDeprovisioner(_manifest()).plan()
+    step = next(s for s in plan.steps if s.name == "delete_sre_agent")
+    assert step.command == [
+        "az", "group", "delete", "--name", "rg-dsf-sre-demo", "--yes",
+    ]
+
+
+def test_plan_delete_resource_group_command():
+    plan = InstanceDeprovisioner(_manifest()).plan()
+    step = next(s for s in plan.steps if s.name == "delete_resource_group")
+    assert step.command == [
+        "az", "group", "delete", "--name", "rg-dsf-demo", "--yes",
+    ]
+
+
+def test_plan_delete_repo_command():
+    plan = InstanceDeprovisioner(_manifest()).plan()
+    step = next(s for s in plan.steps if s.name == "delete_repo")
+    assert step.command == ["gh", "repo", "delete", "acme/demo", "--yes"]
+
+
+def test_plan_no_purge_step_by_default():
+    plan = InstanceDeprovisioner(_manifest()).plan()
+    assert not any(s.name == "purge_keyvault" for s in plan.steps)
+
+
+def test_plan_purge_step_included_when_flag_set():
+    azure = AzureProvisionResult(
+        resource_group="rg-dsf-demo",
+        deployment_name="dsf-demo",
+        location="swedencentral",
+        outputs={"keyVaultName": "kv-demoxyz"},
+    )
+    plan = InstanceDeprovisioner(_manifest(azure=azure), purge=True).plan()
+    step = next((s for s in plan.steps if s.name == "purge_keyvault"), None)
+    assert step is not None
+    assert step.command == [
+        "az", "keyvault", "purge", "--name", "kv-demoxyz", "--location", "swedencentral",
+    ]
+
+
+def test_plan_purge_step_skipped_when_no_azure_outputs():
+    # No Azure result means we can't know the vault name — skip purge silently.
+    plan = InstanceDeprovisioner(_manifest(azure=None), purge=True).plan()
+    assert not any(s.name == "purge_keyvault" for s in plan.steps)
+
+
+def test_plan_purge_step_falls_back_to_keyvaulturi():
+    azure = AzureProvisionResult(
+        resource_group="rg-dsf-demo",
+        deployment_name="dsf-demo",
+        location="swedencentral",
+        outputs={"keyVaultUri": "https://kv-fallback.vault.azure.net/"},
+    )
+    plan = InstanceDeprovisioner(_manifest(azure=azure), purge=True).plan()
+    step = next((s for s in plan.steps if s.name == "purge_keyvault"), None)
+    assert step is not None
+    assert "kv-fallback" in step.command
+
+
+def test_plan_delete_repo_false_omits_step():
+    plan = InstanceDeprovisioner(_manifest(), delete_repo=False).plan()
+    assert not any(s.name == "delete_repo" for s in plan.steps)
+
+
+# ---------------------------------------------------------------------------
+# apply() — dry-run
+# ---------------------------------------------------------------------------
+
+
+def test_apply_dry_run_marks_all_steps_dry_run(tmp_path):
+    m = _manifest()
+    plan = InstanceDeprovisioner(m, repo_root=tmp_path).apply(execute=False)
+    for step in plan.steps:
+        assert step.result == "dry-run"
+
+
+def test_apply_dry_run_makes_no_subprocess_calls(tmp_path):
+    calls = []
+
+    def fake_run(*a, **kw):
+        calls.append(a)
+        return MagicMock(returncode=0)
+
+    m = _manifest()
+    InstanceDeprovisioner(m, run=fake_run, repo_root=tmp_path).apply(execute=False)
+    assert calls == []
+
+
+def test_apply_dry_run_emits_start_and_done_per_step(tmp_path):
+    events = []
+    m = _manifest()
+    InstanceDeprovisioner(m, repo_root=tmp_path).apply(
+        execute=False,
+        on_event=lambda *a: events.append(a),
+    )
+    phases = [(p, s.name) for p, _i, _t, s, _e in events]
+    assert ("start", "delete_sre_agent") in phases
+    assert ("done", "delete_sre_agent") in phases
+    assert ("start", "delete_repo") in phases
+    assert ("done", "delete_repo") in phases
+    assert not any(p == "error" for p, *_ in events)
+
+
+# ---------------------------------------------------------------------------
+# apply() — execute
+# ---------------------------------------------------------------------------
+
+
+def test_apply_execute_runs_az_and_gh_commands(tmp_path):
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return MagicMock(returncode=0)
+
+    InstanceDeprovisioner(_manifest(), run=fake_run, repo_root=tmp_path).apply(execute=True)
+
+    executed = calls
+    assert ["az", "group", "delete", "--name", "rg-dsf-sre-demo", "--yes"] in executed
+    assert ["az", "group", "delete", "--name", "rg-dsf-demo", "--yes"] in executed
+    assert ["gh", "repo", "delete", "acme/demo", "--yes"] in executed
+
+
+def test_apply_execute_order_azure_before_repo(tmp_path):
+    """Azure teardown steps must precede GitHub repo deletion."""
+    call_order = []
+
+    def fake_run(cmd, **kwargs):
+        if cmd[:2] == ["az", "group"]:
+            call_order.append("azure")
+        elif cmd[:3] == ["gh", "repo", "delete"]:
+            call_order.append("repo")
+        return MagicMock(returncode=0)
+
+    InstanceDeprovisioner(_manifest(), run=fake_run, repo_root=tmp_path).apply(execute=True)
+    assert call_order.index("azure") < call_order.index("repo")
+
+
+def test_apply_execute_deregisters_product(tmp_path):
+    # First register a product by writing a products.json.
+    products_json = tmp_path / "config" / "products.json"
+    products_json.parent.mkdir(parents=True, exist_ok=True)
+    products_json.write_text(
+        json.dumps({"products": [{"key": "demo", "github_repo": "acme/demo"}]}) + "\n",
+        encoding="utf-8",
+    )
+
+    InstanceDeprovisioner(
+        _manifest(), run=lambda *a, **kw: MagicMock(returncode=0), repo_root=tmp_path
+    ).apply(execute=True)
+
+    registry = load_registry(products_json)
+    assert "demo" not in registry
+
+
+def test_apply_execute_deletes_manifest_and_runtime(tmp_path):
+    # Write a manifest and runtime bundle.
+    m = _manifest()
+    write_manifest(m, repo_root=tmp_path)
+    runtime = tmp_path / "config" / "instances" / "demo.runtime"
+    runtime.mkdir(parents=True)
+    (runtime / "containerapp.yaml").write_text("# dummy", encoding="utf-8")
+
+    InstanceDeprovisioner(
+        m, run=lambda *a, **kw: MagicMock(returncode=0), repo_root=tmp_path
+    ).apply(execute=True)
+
+    assert not manifest_path("demo", tmp_path).exists()
+    assert not runtime.exists()
+
+
+def test_apply_execute_tolerates_already_absent_resource_group(tmp_path):
+    """404-like errors from az group delete must not stop the teardown."""
+    not_found_err = subprocess.CalledProcessError(
+        1, ["az", "group", "delete"], stderr="ResourceGroupNotFound: rg-dsf-sre-demo"
+    )
+
+    def fake_run(cmd, **kwargs):
+        if cmd == ["az", "group", "delete", "--name", "rg-dsf-sre-demo", "--yes"]:
+            raise not_found_err
+        return MagicMock(returncode=0)
+
+    plan = InstanceDeprovisioner(_manifest(), run=fake_run, repo_root=tmp_path).apply(execute=True)
+    steps = {s.name: s for s in plan.steps}
+    assert steps["delete_sre_agent"].result == "not-found (already absent)"
+    # Teardown continues past the absent resource.
+    assert steps["delete_resource_group"].result == "executed"
+    assert steps["delete_repo"].result == "executed"
+
+
+def test_apply_execute_tolerates_already_deleted_repo(tmp_path):
+    """A 404 from gh repo delete must not fail the teardown."""
+    not_found_err = subprocess.CalledProcessError(
+        1, ["gh", "repo", "delete"], stderr="Could not resolve to a repository"
+    )
+
+    def fake_run(cmd, **kwargs):
+        if cmd[:3] == ["gh", "repo", "delete"]:
+            raise not_found_err
+        return MagicMock(returncode=0)
+
+    plan = InstanceDeprovisioner(_manifest(), run=fake_run, repo_root=tmp_path).apply(execute=True)
+    step = next(s for s in plan.steps if s.name == "delete_repo")
+    assert step.result == "not-found (already absent)"
+    assert not any(s.result == "failed" for s in plan.steps)
+
+
+def test_apply_execute_stops_on_real_error(tmp_path):
+    real_error = subprocess.CalledProcessError(
+        1, ["az", "group", "delete"], stderr="AuthorizationFailed: insufficient permissions"
+    )
+
+    def fake_run(cmd, **kwargs):
+        if cmd == ["az", "group", "delete", "--name", "rg-dsf-demo", "--yes"]:
+            raise real_error
+        return MagicMock(returncode=0)
+
+    plan = InstanceDeprovisioner(_manifest(), run=fake_run, repo_root=tmp_path).apply(execute=True)
+    steps = {s.name: s for s in plan.steps}
+    assert steps["delete_resource_group"].result == "failed"
+    assert "AuthorizationFailed" in steps["delete_resource_group"].error
+    # Steps after the failure are left unrun.
+    assert steps["delete_repo"].result == ""
+
+
+def test_apply_execute_emits_error_event_on_failure(tmp_path):
+    real_error = subprocess.CalledProcessError(
+        1, ["az", "group", "delete"], stderr="AuthorizationFailed"
+    )
+
+    def fake_run(cmd, **kwargs):
+        if cmd == ["az", "group", "delete", "--name", "rg-dsf-demo", "--yes"]:
+            raise real_error
+        return MagicMock(returncode=0)
+
+    events = []
+    InstanceDeprovisioner(_manifest(), run=fake_run, repo_root=tmp_path).apply(
+        execute=True, on_event=lambda *a: events.append(a)
+    )
+
+    errors = [e for e in events if e[0] == "error"]
+    assert len(errors) == 1
+    phase, _i, _t, step, exc = errors[0]
+    assert step.name == "delete_resource_group"
+    assert isinstance(exc, subprocess.CalledProcessError)
+
+
+def test_apply_execute_purges_keyvault_when_flag_set(tmp_path):
+    azure = AzureProvisionResult(
+        resource_group="rg-dsf-demo",
+        deployment_name="dsf-demo",
+        location="swedencentral",
+        outputs={"keyVaultName": "kv-demoxyz"},
+    )
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return MagicMock(returncode=0)
+
+    InstanceDeprovisioner(
+        _manifest(azure=azure), run=fake_run, repo_root=tmp_path, purge=True
+    ).apply(execute=True)
+
+    purge_calls = [c for c in calls if c[:3] == ["az", "keyvault", "purge"]]
+    assert len(purge_calls) == 1
+    assert "--name" in purge_calls[0]
+    assert "kv-demoxyz" in purge_calls[0]
+
+
+# ---------------------------------------------------------------------------
+# from_product() factory
+# ---------------------------------------------------------------------------
+
+
+def test_from_product_loads_manifest(tmp_path):
+    m = _manifest()
+    write_manifest(m, repo_root=tmp_path)
+
+    deprv = InstanceDeprovisioner.from_product("demo", repo_root=tmp_path)
+    assert deprv.spec.product == "demo"
+    assert deprv.spec.owner == "acme"
+
+
+def test_from_product_raises_when_manifest_missing(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        InstanceDeprovisioner.from_product("nonexistent", repo_root=tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# Integration: round-trip new → delete
+# ---------------------------------------------------------------------------
+
+
+def test_roundtrip_new_then_delete_leaves_no_config_files(tmp_path):
+    """Full provisioning dry-run followed by delete dry-run leaves no artifacts."""
+    spec = _spec()
+    prov = InstanceProvisioner(spec, run=MagicMock(returncode=0), repo_root=tmp_path)
+    prov.apply(execute=False)
+    assert manifest_path("demo", tmp_path).exists()
+
+    # Now delete (dry-run) — config files should NOT be removed in dry-run.
+    deprv = InstanceDeprovisioner.from_product("demo", repo_root=tmp_path)
+    deprv.apply(execute=False)
+    assert manifest_path("demo", tmp_path).exists()  # dry-run: file survives
+
+
+def test_roundtrip_new_then_delete_execute_cleans_up(tmp_path):
+    """After execute delete, manifest + runtime are gone from disk."""
+    spec = _spec()
+    prov = InstanceProvisioner(spec, run=MagicMock(returncode=0), repo_root=tmp_path)
+    prov.apply(execute=False)
+    assert manifest_path("demo", tmp_path).exists()
+
+    deprv = InstanceDeprovisioner.from_product(
+        "demo",
+        run=lambda *a, **kw: MagicMock(returncode=0),
+        repo_root=tmp_path,
+    )
+    deprv.apply(execute=True)
+    assert not manifest_path("demo", tmp_path).exists()
+    runtime = tmp_path / "config" / "instances" / "demo.runtime"
+    assert not runtime.exists()

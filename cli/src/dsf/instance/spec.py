@@ -137,6 +137,13 @@ class InstancePlan(BaseModel):
     steps: list[ProvisionStep]
 
 
+class TeardownPlan(BaseModel):
+    """Ordered teardown steps for one instance (inverse of :class:`InstancePlan`)."""
+
+    product: str
+    steps: list[ProvisionStep]
+
+
 class AzureProvisionResult(BaseModel):
     """Captured outcome of the Azure deployment for one instance."""
 

@@ -130,4 +130,21 @@ def route_product(hints: list[str], registry: dict[str, Product]) -> Product | N
 
 
 
-__all__ = ["Product", "load_registry", "register_product", "route_product"]
+def deregister_product(key: str, *, path: str | Path | None = None) -> Path:
+    """Remove the product with ``key`` from ``config/products.json``.
+
+    Idempotent — silently no-ops if the key is not present or the file does not
+    exist. The canonical ``{"products": [...]}`` shape is always preserved.
+    ``path`` overrides the default location.
+    """
+    target = Path(path) if path is not None else _repo_root() / "config" / "products.json"
+    if not target.exists():
+        return target
+    raw = json.loads(target.read_text(encoding="utf-8"))
+    existing = raw["products"] if isinstance(raw, dict) and "products" in raw else raw
+    entries = [e for e in existing if e.get("key") != key]
+    target.write_text(json.dumps({"products": entries}, indent=2) + "\n", encoding="utf-8")
+    return target
+
+
+__all__ = ["Product", "deregister_product", "load_registry", "register_product", "route_product"]
