@@ -184,7 +184,7 @@ class BootstrapResult:
 
 def _default_write_pem(pem: str) -> str:
     """Write the PEM to a private (0600) temp file; caller unlinks it."""
-    fd, path = tempfile.mkstemp(prefix="dsf-app-", suffix=".pem", dir=Path.cwd())
+    fd, path = tempfile.mkstemp(prefix="dsf-app-", suffix=".pem")
     with open(fd, "w", encoding="utf-8") as fh:
         fh.write(pem)
     Path(path).chmod(0o600)
@@ -273,7 +273,7 @@ def _browser_capture_code(manifest: dict) -> str:
         f"<input type='hidden' name='manifest' value='{json.dumps(manifest)}'>"
         "</form><script>document.forms[0].submit()</script>"
     )
-    fd, html_name = tempfile.mkstemp(prefix="dsf-app-", suffix=".html", dir=Path.cwd())
+    fd, html_name = tempfile.mkstemp(prefix="dsf-app-", suffix=".html")
     with open(fd, "w", encoding="utf-8") as fh:
         fh.write(page)
     html_path = Path(html_name)
