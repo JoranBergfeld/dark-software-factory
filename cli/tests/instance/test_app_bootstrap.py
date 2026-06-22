@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 from datetime import UTC, datetime
 
 import httpx
@@ -139,12 +140,14 @@ def test_owner_kv_store_commands_set_id_installation_and_keyfile():
         pem_path="/tmp/app.pem",
     )
     assert ["az", "keyvault", "secret", "set", "--vault-name", "kv-dsf-app",
-            "--name", "github-app-id", "--value", "42"] in cmds
+            "--name", "github-app-id", "--value", "42", "-o", "none"] in cmds
     assert ["az", "keyvault", "secret", "set", "--vault-name", "kv-dsf-app",
-            "--name", "github-app-installation-id", "--value", "9001"] in cmds
+            "--name", "github-app-installation-id", "--value", "9001", "-o", "none"] in cmds
     keyset = next(c for c in cmds if "github-app-private-key" in c)
     assert "--file" in keyset and "/tmp/app.pem" in keyset
     assert "--value" not in keyset
+    # The private-key write must not echo the stored secret bundle to stdout.
+    assert keyset[-2:] == ["-o", "none"]
 
 
 def test_bootstrap_app_runs_ensure_then_store_with_resolved_scope(tmp_path):
@@ -195,3 +198,38 @@ def test_bootstrap_app_runs_ensure_then_store_with_resolved_scope(tmp_path):
     # The private key was stored from a file, not as a CLI value.
     keyset = next(c for c in calls if "github-app-private-key" in c)
     assert "--file" in keyset and "--value" not in keyset
+
+
+def test_bootstrap_app_retries_secret_writes_on_rbac_propagation(tmp_path):
+    creds = AppCredentials(app_id="42", slug="s", pem="PEMDATA", webhook_secret="",
+                           client_id="", client_secret="")
+    failures = {"left": 2}
+
+    def fake_run(cmd, **kwargs):
+        class R:
+            stdout = ""
+            returncode = 0
+
+        if cmd[:3] == ["az", "account", "show"]:
+            R.stdout = "sub-123\n"
+        if cmd[:4] == ["az", "ad", "signed-in-user", "show"]:
+            R.stdout = "oid-1\n"
+        # The data-plane secret writes 403 until the Secrets Officer grant propagates.
+        if "github-app-private-key" in cmd and failures["left"] > 0:
+            failures["left"] -= 1
+            raise subprocess.CalledProcessError(1, cmd)
+        return R()
+
+    slept: list[float] = []
+    result = bootstrap_app(
+        BootstrapConfig(app_name="s", resource_group="rg", keyvault_name="kv"),
+        run=fake_run,
+        capture_code=lambda manifest: "tempcode",
+        exchange=lambda code, **_: creds,
+        discover=lambda c, **_: "9001",
+        write_pem=lambda pem: str(tmp_path / "app.pem"),
+        sleep=slept.append,
+    )
+    assert result.installation_id == "9001"
+    assert failures["left"] == 0  # both 403s were absorbed
+    assert len(slept) == 2  # backed off once per failed attempt

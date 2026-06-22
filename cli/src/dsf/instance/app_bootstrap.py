@@ -30,6 +30,8 @@ _APP_ID_SECRET = "github-app-id"
 _INSTALLATION_SECRET = "github-app-installation-id"
 _JWT_TTL = timedelta(minutes=9)
 _SECRETS_OFFICER = "Key Vault Secrets Officer"
+_SEED_ATTEMPTS = 8
+_SEED_RETRY_DELAY = 15.0
 
 
 @dataclass(frozen=True)
@@ -148,14 +150,19 @@ def owner_kv_ensure_commands(
 def owner_kv_store_commands(
     *, keyvault_name: str, app_id: str, installation_id: str, pem_path: str
 ) -> list[list[str]]:
-    """Build `az keyvault secret set` commands persisting the App credentials."""
+    """Build `az keyvault secret set` commands persisting the App credentials.
+
+    Every set runs with ``-o none``: ``az keyvault secret set`` echoes the stored
+    secret bundle (including the plaintext ``value``) to stdout by default, which
+    would leak the App private key into the terminal / CI logs.
+    """
     return [
         ["az", "keyvault", "secret", "set", "--vault-name", keyvault_name,
-         "--name", _APP_ID_SECRET, "--value", app_id],
+         "--name", _APP_ID_SECRET, "--value", app_id, "-o", "none"],
         ["az", "keyvault", "secret", "set", "--vault-name", keyvault_name,
-         "--name", _INSTALLATION_SECRET, "--value", installation_id],
+         "--name", _INSTALLATION_SECRET, "--value", installation_id, "-o", "none"],
         ["az", "keyvault", "secret", "set", "--vault-name", keyvault_name,
-         "--name", _PRIVATE_KEY_SECRET, "--file", pem_path],
+         "--name", _PRIVATE_KEY_SECRET, "--file", pem_path, "-o", "none"],
     ]
 
 
@@ -199,6 +206,7 @@ def bootstrap_app(
     exchange: Callable[..., AppCredentials] = exchange_manifest_code,
     discover: Callable[..., str] = discover_installation_id,
     write_pem: Callable[[str], str] = _default_write_pem,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> BootstrapResult:
     """Drive the one-time App bootstrap end to end.
 
@@ -233,14 +241,25 @@ def bootstrap_app(
         runner(cmd, check=True)
 
     pem_path = write_pem(creds.pem)
+    store_cmds = owner_kv_store_commands(
+        keyvault_name=cfg.keyvault_name,
+        app_id=creds.app_id,
+        installation_id=installation_id,
+        pem_path=pem_path,
+    )
     try:
-        for cmd in owner_kv_store_commands(
-            keyvault_name=cfg.keyvault_name,
-            app_id=creds.app_id,
-            installation_id=installation_id,
-            pem_path=pem_path,
-        ):
-            runner(cmd, check=True)
+        # The owner just granted itself Secrets Officer above; the data-plane RBAC
+        # assignment can take tens of seconds to propagate, so retry the (idempotent)
+        # secret writes to absorb the initial 403s.
+        for attempt in range(1, _SEED_ATTEMPTS + 1):
+            try:
+                for cmd in store_cmds:
+                    runner(cmd, check=True)
+                break
+            except subprocess.CalledProcessError:
+                if attempt == _SEED_ATTEMPTS:
+                    raise
+                sleep(_SEED_RETRY_DELAY)
     finally:
         Path(pem_path).unlink(missing_ok=True)
 
@@ -268,21 +287,23 @@ def _browser_capture_code(manifest: dict) -> str:
             pass
 
     server = http.server.HTTPServer(("127.0.0.1", 8765), _Handler)
-    page = (
-        "<form action='https://github.com/settings/apps/new' method='post'>"
-        f"<input type='hidden' name='manifest' value='{json.dumps(manifest)}'>"
-        "</form><script>document.forms[0].submit()</script>"
-    )
-    fd, html_name = tempfile.mkstemp(prefix="dsf-app-", suffix=".html")
-    with open(fd, "w", encoding="utf-8") as fh:
-        fh.write(page)
-    html_path = Path(html_name)
-    webbrowser.open(html_path.as_uri())
+    html_path: Path | None = None
     try:
-        server.handle_request()
+        page = (
+            "<form action='https://github.com/settings/apps/new' method='post'>"
+            f"<input type='hidden' name='manifest' value='{json.dumps(manifest)}'>"
+            "</form><script>document.forms[0].submit()</script>"
+        )
+        fd, html_name = tempfile.mkstemp(prefix="dsf-app-", suffix=".html")
+        with open(fd, "w", encoding="utf-8") as fh:
+            fh.write(page)
+        html_path = Path(html_name)
+        webbrowser.open(html_path.as_uri())
+        server.handle_request()  # one callback
     finally:
         server.server_close()
-        html_path.unlink(missing_ok=True)
+        if html_path is not None:
+            html_path.unlink(missing_ok=True)
     if not captured.get("code"):
         raise RuntimeError("App-manifest callback returned no code")
     return captured["code"]
