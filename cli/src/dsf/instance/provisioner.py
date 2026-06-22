@@ -649,9 +649,7 @@ class InstanceProvisioner:
             capture_output=True,
             text=True,
         )
-        fd, pem_path = tempfile.mkstemp(
-            prefix="dsf-app-", suffix=".pem", dir=self._repo_root or _default_repo_root()
-        )
+        fd, pem_path = tempfile.mkstemp(prefix="dsf-app-", suffix=".pem")
         try:
             with open(fd, "w", encoding="utf-8") as fh:
                 fh.write(getattr(pem, "stdout", ""))
