@@ -167,8 +167,8 @@ resource kvSecretsUserAssignment 'Microsoft.Authorization/roleAssignments@2022-0
   }
 }
 
-// Admin (human/operator) gets Secrets Officer so `dsf new` can seed the
-// squad GitHub token into the vault (ADR 0012), mirroring the App Config admin grant.
+// Admin (human/operator) gets Secrets Officer so `dsf new` can seed product
+// secrets into the vault, mirroring the App Config admin grant.
 // Data-plane reachability still requires allowPublicNetworkAccess=true (or running
 // provisioning from inside the vault's network); see docs/site/get-started/operate.md.
 resource keyVaultAdminAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(adminPrincipalId)) {
@@ -317,52 +317,6 @@ resource foundryOpenAIUserAssignment 'Microsoft.Authorization/roleAssignments@20
 }
 
 // ---------------------------------------------------------------------------
-// Coding squad compute: per-product AKS cluster running the Ralph watch loop,
-// scaled 0..1 by KEDA off the open squad:ready issue count (ADR 0012)
-// ---------------------------------------------------------------------------
-
-module aks 'modules/aks.bicep' = {
-  name: 'aks'
-  params: {
-    namePrefix: namePrefix
-    location: location
-    product: product
-  }
-}
-
-// Squad workload identity: a dedicated user-assigned identity federated to the
-// squad-<product> Kubernetes service account, granted Key Vault Secrets User so
-// the CSI driver can project the GitHub token secret into the Ralph + exporter
-// pods (ADR 0012).
-resource squadIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
-  name: '${namePrefix}-squad-${suffix}'
-  location: location
-  tags: tags
-}
-
-resource squadFederation 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-01-31' = {
-  parent: squadIdentity
-  name: 'squad-${product}'
-  properties: {
-    issuer: aks.outputs.aksOidcIssuerUrl
-    subject: 'system:serviceaccount:squad-${product}:squad-${product}'
-    audiences: [
-      'api://AzureADTokenExchange'
-    ]
-  }
-}
-
-resource squadKvSecretsUser 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(keyVault.id, squadIdentity.id, keyVaultSecretsUserRoleId)
-  scope: keyVault
-  properties: {
-    principalId: squadIdentity.properties.principalId
-    principalType: 'ServicePrincipal'
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', keyVaultSecretsUserRoleId)
-  }
-}
-
-// ---------------------------------------------------------------------------
 // Runtime compute: Azure Container Apps environment + orchestrator app (ADR 0004)
 // ---------------------------------------------------------------------------
 
@@ -465,16 +419,8 @@ output runtimePrincipalId string = runtimeIdentity.properties.principalId
 @description('Name of the orchestrator Container App.')
 output orchestratorAppName string = orchestratorApp.name
 
-output aksName string = aks.outputs.aksName
-
-@description('Client ID of the squad workload identity (for the K8s ServiceAccount annotation).')
-output squadIdentityClientId string = squadIdentity.properties.clientId
-
-@description('Key Vault name (for the squad SecretProviderClass).')
+@description('Name of the per-product Key Vault.')
 output keyVaultName string = keyVault.name
-
-@description('Entra tenant ID (for the squad SecretProviderClass).')
-output tenantId string = subscription().tenantId
 
 @description('Application Insights resource id (consumed by the SRE agent connector + RBAC).')
 output appInsightsId string = appInsights.id
