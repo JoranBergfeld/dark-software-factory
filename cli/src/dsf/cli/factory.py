@@ -49,6 +49,11 @@ def _print_step_event(phase, index, total, step, error) -> None:
         print(f"[dsf]   ✗ {step.name} FAILED: {error}", flush=True)
 
 
+def _print_step_progress(line: str) -> None:
+    """Live per-resource progress under an executing step (indented)."""
+    print(f"[dsf]     {line}", flush=True)
+
+
 def _cmd_new(args: argparse.Namespace) -> int:
     """Create (or preview) a new isolated product factory instance."""
     from dsf.instance.github_identity import OwnerResolutionError, resolve_owner
@@ -93,7 +98,9 @@ def _cmd_new(args: argparse.Namespace) -> int:
     prov = InstanceProvisioner(spec, repo_root=root)
     execute = not args.dry_run
     if execute:
-        plan = prov.apply(execute=True, on_event=_print_step_event).plan
+        plan = prov.apply(
+            execute=True, on_event=_print_step_event, on_progress=_print_step_progress
+        ).plan
         print()  # separate the live progress from the final summary
     elif args.write_plan:
         plan = prov.apply(execute=False).plan

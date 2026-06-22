@@ -172,7 +172,7 @@ def test_new_execute_surfaces_step_failure_and_exits_nonzero(capsys, tmp_path, m
         def __init__(self, spec, repo_root=None):
             self.spec = spec
 
-        def apply(self, *, execute=False, on_event=None):
+        def apply(self, *, execute=False, on_event=None, on_progress=None):
             step = ProvisionStep(
                 name="provision_azure",
                 description="deploy backing services",
@@ -195,6 +195,42 @@ def test_new_execute_surfaces_step_failure_and_exits_nonzero(capsys, tmp_path, m
     assert "FAILED" in out  # live per-step error line
     assert "STOPPED at 'provision_azure'" in out  # final surfaced summary
     assert "boom" in out
+
+
+def test_new_execute_indents_provision_progress(capsys, tmp_path, monkeypatch):
+    # provision_azure progress lines are indented under the step line.
+    from dsf.instance import provisioner as prov_mod
+    from dsf.instance.spec import InstanceManifest, InstancePlan, ProvisionStep
+
+    class _ProgressProvisioner:
+        def __init__(self, spec, repo_root=None):
+            self.spec = spec
+
+        def apply(self, *, execute=False, on_event=None, on_progress=None):
+            step = ProvisionStep(
+                name="provision_azure", description="deploy backing services", result="executed"
+            )
+            if on_event is not None:
+                on_event("start", 5, 11, step, None)
+            if on_progress is not None:
+                on_progress(
+                    "· Microsoft.App/containerApps dsf-orchestrator-demo: ✓ Succeeded (1m04s)"
+                )
+            if on_event is not None:
+                on_event("done", 5, 11, step, None)
+            plan = InstancePlan(product=self.spec.product, steps=[step])
+            return InstanceManifest(spec=self.spec, plan=plan, executed=True)
+
+    monkeypatch.setattr(prov_mod, "InstanceProvisioner", _ProgressProvisioner)
+    rc = main([
+        "new", "--product", "demo", "--owner", "acme",
+        "--name-prefix", "demopfx", "--config-root", str(tmp_path),
+    ])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert (
+        "[dsf]     · Microsoft.App/containerApps dsf-orchestrator-demo: ✓ Succeeded" in out
+    )
 
 
 # ---------------------------------------------------------------------------
