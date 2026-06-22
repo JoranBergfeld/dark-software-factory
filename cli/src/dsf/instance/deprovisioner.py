@@ -12,6 +12,7 @@ External CLIs (``gh``, ``az``) are invoked through an injectable ``run`` callabl
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from collections.abc import Callable
@@ -219,7 +220,7 @@ class InstanceDeprovisioner:
                     step.result = "dry-run"
                 else:
                     self._execute_step(step)
-            except Exception as exc:  # noqa: BLE001 - reported via on_event, not swallowed
+            except Exception as exc:  # noqa: BLE001 - intentionally caught; converted to step failure, reported via on_event
                 step.executed = False
                 step.result = "failed"
                 step.error = _format_step_error(exc)
@@ -281,7 +282,6 @@ class InstanceDeprovisioner:
         uri = outputs.get("keyVaultUri", "")
         if not uri:
             return ""
-        import re
         m = re.match(r"https://([^.]+)\.vault\.azure\.net", uri)
         return m.group(1) if m else ""
 
