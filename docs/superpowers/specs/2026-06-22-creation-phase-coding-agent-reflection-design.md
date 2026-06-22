@@ -60,14 +60,18 @@ behind the label changes — from `squad watch` to assign-to-Coding-Agent.
 | DSF orchestration | file issue, assign, post advisory review, set branch protection | one **DSF GitHub App**, per-repo installation token |
 | DSF runtime <-> memory | read/write lessons + member history | Entra **managed identity** to Cosmos |
 
-### One DSF GitHub App, installed per product repo
+### One DSF GitHub App, one owner installation
 
 A single owner/org-level **DSF GitHub App** is created **once**, interactively, via GitHub's
 App-manifest flow (a one-time browser approval with a local callback to capture the
-credentials). Each `dsf new` then **installs** that App on the new product repo. Installation
-access tokens are already per-installation and repo-scoped, short-lived, and revocable — which
-is exactly the security property #71 asks for, without an interactive browser dance on every
-provision.
+credentials). The App is installed **once** on the owner account (one installation). Each
+`dsf new` then adds the product repo to that single installation via the API (no per-product
+browser consent) and records the shared installation id on the instance manifest. Installation
+access tokens are minted **scoped to just the product repo** — short-lived, revocable,
+least-privilege — which is exactly the security property #71 asks for, without an interactive
+browser dance on every provision. The App id + private key + installation id live in a
+dedicated **owner-level Key Vault**; `dsf new` reads the private key from it to seed each
+product Key Vault.
 
 App permissions (least privilege): `issues:write` (file + assign), `pull_requests:write`
 (advisory reviews), `contents:read`, and `administration:write` (set branch-protection
@@ -75,10 +79,11 @@ rulesets). The Coding Agent must be enabled on the repo so `copilot` is an assig
 
 A new **real** `GitHubAppClient` lives in `core` (alongside `github_client.py`). It signs a
 short-lived JWT with the App private key, exchanges it for an installation token, and exposes
-the four orchestration actions. The App id is shared; the installation id is per product
-(discovered at install and stored on the instance manifest). The App **private key** is the
-one remaining secret: seeded into the product Key Vault at provision time, read by the runtime
-to mint tokens. It is defensible because it is not a bearer credential for the API — it only
+the four orchestration actions. The App id **and** installation id are both owner-level and
+shared across products; each `dsf new` adds its product repo to that one installation and
+stores the repo id on the instance manifest, so the runtime mints tokens scoped to just that
+repo. The App **private key** is the one remaining secret: held in the owner Key Vault, seeded
+into the product Key Vault at provision time, read by the runtime to mint tokens. It is defensible because it is not a bearer credential for the API — it only
 signs requests that mint short-lived, narrowly-scoped installation tokens, and it is centrally
 revocable/rotatable at the App.
 
