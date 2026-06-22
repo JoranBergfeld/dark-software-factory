@@ -35,6 +35,9 @@ class AzureRuntimeSettings(BaseModel):
     openai_endpoint: str = ""
     openai_deployment: str = ""
     openai_embedding_deployment: str = ""
+    github_app_id: str = ""
+    github_installation_id: str = ""
+    github_app_private_key_secret: str = ""
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> AzureRuntimeSettings:
@@ -58,6 +61,11 @@ class AzureRuntimeSettings(BaseModel):
             openai_deployment=(env.get("AZURE_OPENAI_DEPLOYMENT") or "").strip(),
             openai_embedding_deployment=(
                 env.get("AZURE_OPENAI_EMBEDDING_DEPLOYMENT") or ""
+            ).strip(),
+            github_app_id=(env.get("GITHUB_APP_ID") or "").strip(),
+            github_installation_id=(env.get("GITHUB_INSTALLATION_ID") or "").strip(),
+            github_app_private_key_secret=(
+                env.get("GITHUB_APP_PRIVATE_KEY_SECRET") or ""
             ).strip(),
         )
 

@@ -68,3 +68,27 @@ def test_build_services_partial_endpoints_names_only_the_missing():
     # The ones that are set must not be reported as missing.
     assert "AZURE_APPCONFIG_ENDPOINT" not in message
     assert "AZURE_COSMOS_ENDPOINT" not in message
+
+
+def test_settings_parse_github_app_env():
+    from dsf.container import AzureRuntimeSettings
+
+    settings = AzureRuntimeSettings.from_env(
+        {
+            "DSF_PRODUCT": "demo",
+            "GITHUB_APP_ID": "42",
+            "GITHUB_INSTALLATION_ID": "9001",
+            "GITHUB_APP_PRIVATE_KEY_SECRET": "github-app-private-key",
+        }
+    )
+    assert settings.github_app_id == "42"
+    assert settings.github_installation_id == "9001"
+    assert settings.github_app_private_key_secret == "github-app-private-key"
+
+
+def test_settings_github_app_fields_default_blank():
+    from dsf.container import AzureRuntimeSettings
+
+    settings = AzureRuntimeSettings.from_env({"DSF_PRODUCT": "demo"})
+    assert settings.github_app_id == ""
+    assert settings.github_installation_id == ""

@@ -35,6 +35,12 @@ param product string = 'demo'
 @description('Container image for the feature-council orchestrator runtime.')
 param runtimeImage string = 'ghcr.io/joranbergfeld/dsf-runtime:latest'
 
+@description('DSF GitHub App id (owner-level; supplied by `dsf new` from the owner Key Vault).')
+param githubAppId string = ''
+
+@description('DSF GitHub App installation id (owner-level single installation).')
+param githubInstallationId string = ''
+
 @description('Azure AI Foundry chat model deployed for the runtime (created here, called over the Azure OpenAI data plane).')
 param chatModel string = 'gpt-4o'
 
@@ -373,6 +379,9 @@ resource orchestratorApp 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'AZURE_OPENAI_ENDPOINT', value: foundry.properties.endpoint }
             { name: 'AZURE_OPENAI_DEPLOYMENT', value: chatModel }
             { name: 'AZURE_OPENAI_EMBEDDING_DEPLOYMENT', value: embeddingModel }
+            { name: 'GITHUB_APP_ID', value: githubAppId }
+            { name: 'GITHUB_INSTALLATION_ID', value: githubInstallationId }
+            { name: 'GITHUB_APP_PRIVATE_KEY_SECRET', value: 'github-app-private-key' }
             {
               name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
               value: appInsights.properties.ConnectionString
