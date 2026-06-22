@@ -81,6 +81,12 @@ uv run dsf new --product microbi --owner your-org --name-prefix microbi --write-
 uv run dsf new --product microbi --owner your-org --name-prefix microbi --execute
 ```
 
+> **Live progress during step 5.** `provision_azure` runs `az deployment group create --no-wait`
+> and polls the deployment, streaming each Azure resource as it starts and finishes (indented
+> `· <type> <name>: <state>` lines) so a multi-minute deployment is never silent. On failure the
+> specific failed resource and its reason are surfaced. Tune the poll cadence with
+> `DSF_DEPLOY_POLL_INTERVAL` (seconds, default 5).
+
 ### The rendered per-product council runtime
 
 `deploy_council` renders an Azure Container Apps descriptor to

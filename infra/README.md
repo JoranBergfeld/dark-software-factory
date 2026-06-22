@@ -160,6 +160,9 @@ fetched at runtime via the managed identity. Under `--execute` `dsf new` rolls t
 image with `az containerapp update`. See `docs/RUNBOOK.md` → *Creating a product
 instance*.
 
+Step 5 (`provision_azure`) deploys with `--no-wait` and streams per-resource progress to the
+console while it polls; set `DSF_DEPLOY_POLL_INTERVAL` (seconds, default 5) to tune the cadence.
+
 ## Notes
 - `enablePurgeProtection: true` on Key Vault is intentional; the vault cannot be
   hard-deleted for 90 days after a soft delete.
