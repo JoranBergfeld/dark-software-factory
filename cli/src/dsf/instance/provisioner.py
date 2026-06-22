@@ -1,6 +1,6 @@
 """InstanceProvisioner — build and apply a provisioning plan for an instance.
 
-External CLIs (``gh``, ``squad``, ``az``) are invoked through an injectable
+External CLIs (``gh``, ``az``) are invoked through an injectable
 ``run`` callable (defaults to :func:`subprocess.run`) so tests stay offline,
 mirroring :class:`dsf.github_client.RealGitHubClient`.
 """
@@ -186,7 +186,6 @@ class InstanceProvisioner:
     def plan(self) -> InstancePlan:
         """Return the ordered provisioning plan (pure — no side effects)."""
         s = self.spec
-        repo_dir = s.resolved_repo()
         bicep = str((self._repo_root or _default_repo_root()) / "infra" / "main.bicep")
         steps = [
             ProvisionStep(
@@ -203,12 +202,6 @@ class InstanceProvisioner:
                     f"Create the label taxonomy + handoff label in {s.github_repo()}"
                 ),
                 commands=_label_commands(s),
-            ),
-            ProvisionStep(
-                name="squad_init",
-                description=f"Initialize Coding Squad in {s.github_repo()}",
-                command=["squad", "init", "--preset", "default"],
-                cwd=repo_dir,
             ),
             ProvisionStep(
                 name="create_resource_group",
@@ -422,8 +415,8 @@ class InstanceProvisioner:
             if Path(repo_dir).is_dir():
                 step.result = "exists"
             else:
-                # Repo exists remotely but isn't cloned here; the squad steps
-                # need a local working copy, so clone it.
+                # Repo exists remotely but isn't cloned here; later steps need a
+                # local working copy, so clone it.
                 self._run(
                     ["gh", "repo", "clone", self.spec.github_repo(), repo_dir],
                     check=True,

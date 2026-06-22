@@ -69,7 +69,6 @@ def test_plan_step_order_and_names():
     assert [s.name for s in plan.steps] == [
         "create_repo",
         "create_labels",
-        "squad_init",
         "create_resource_group",
         "provision_azure",
         "seed_appconfig",
@@ -119,14 +118,6 @@ def test_plan_create_repo_command():
     assert create.command[:3] == ["gh", "repo", "create"]
     assert "acme/demo" in create.command
     assert "--private" in create.command
-
-
-def test_plan_squad_steps_run_in_repo_dir():
-    plan = InstanceProvisioner(_spec()).plan()
-    for name in ("squad_init",):
-        step = next(s for s in plan.steps if s.name == name)
-        assert step.cwd == "demo"
-        assert step.command[0] == "squad"
 
 
 def test_plan_create_labels_covers_taxonomy_and_handoff():
@@ -258,10 +249,8 @@ def test_apply_execute_runs_real_steps_and_onboards_sre(tmp_path):
     manifest = prov.apply(execute=True)
 
     executed = [cmd for cmd, _ in calls]
-    # repo created and squad initialized in the cloned repo dir:
+    # repo created (and cloned locally) for the product:
     assert ["gh", "repo", "create", "acme/demo", "--private", "--clone"] in executed
-    squad_init = next((cmd, cwd) for cmd, cwd in calls if cmd[:2] == ["squad", "init"])
-    assert squad_init[1] == "demo"
     # azure now provisions for real (RG + Bicep deployment):
     assert [
         "az", "group", "create", "--name", "rg-dsf-demo", "--location", "swedencentral",
@@ -318,7 +307,7 @@ def test_apply_execute_clones_when_repo_exists_but_not_local(tmp_path, monkeypat
     prov = InstanceProvisioner(_spec(), run=fake_run, repo_root=tmp_path)
     manifest = prov.apply(execute=True)
 
-    # repo exists remotely but isn't cloned here -> clone so squad steps have a cwd:
+    # repo exists remotely but isn't cloned here -> clone so we have a local checkout:
     assert ["gh", "repo", "create", "acme/demo", "--private", "--clone"] not in calls
     assert ["gh", "repo", "clone", "acme/demo", "demo"] in calls
     create = next(s for s in manifest.plan.steps if s.name == "create_repo")
@@ -452,10 +441,10 @@ def test_apply_execute_emits_start_and_done_events_per_step(tmp_path):
     assert ("start", "deploy_sre_agent") in phases
     assert ("done", "deploy_sre_agent") in phases
     assert not any(phase == "error" for phase, *_ in events)
-    # 1-based index, stable total = the 10 non-write_config steps.
+    # 1-based index, stable total = the 9 non-write_config steps.
     starts = [e for e in events if e[0] == "start"]
     assert starts[0][1] == 1
-    assert all(total == 10 for _p, _i, total, _s, _e in starts)
+    assert all(total == 9 for _p, _i, total, _s, _e in starts)
 
 
 def test_apply_execute_emits_error_event_on_failure(tmp_path):
@@ -569,7 +558,7 @@ def test_removed_one_shot_squad_steps_are_gone():
     """The retired squad steps (Cloud Agent + AKS/Ralph harness) are gone."""
     plan = InstanceProvisioner(_spec()).plan()
     names = {s.name for s in plan.steps}
-    assert not names & {"squad_copilot", "squad_triage", "deploy_squad_ralph"}
+    assert not names & {"squad_copilot", "squad_triage", "deploy_squad_ralph", "squad_init"}
 
 
 def test_squad_governance_low_maturity_disables_auto_merge():
