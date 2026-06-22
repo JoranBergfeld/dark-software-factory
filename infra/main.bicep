@@ -186,6 +186,19 @@ resource keyVaultAdminAssignment 'Microsoft.Authorization/roleAssignments@2022-0
   }
 }
 
+// The principal running the deployment (the `dsf` CLI's `az login`) gets Key Vault Secrets
+// Officer so the provisioner can seed the App private key post-deploy (`_seed_app_key`),
+// mirroring the App Configuration deployer grant below. Data-plane reachability still
+// requires allowPublicNetworkAccess=true (or provisioning from inside the vault's network).
+resource keyVaultDeployerAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(keyVault.id, deployer().objectId, keyVaultSecretsOfficerRoleId)
+  scope: keyVault
+  properties: {
+    principalId: deployer().objectId
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', keyVaultSecretsOfficerRoleId)
+  }
+}
+
 // ---------------------------------------------------------------------------
 // App Configuration + seeded feature flags
 // ---------------------------------------------------------------------------
