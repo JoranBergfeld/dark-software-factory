@@ -268,3 +268,38 @@ async def test_assign_coding_agent_raises_when_copilot_not_assignable():
     client = _app_client(_token_handler(extra))
     with pytest.raises(RuntimeError, match="copilot-swe-agent"):
         await client.assign_coding_agent("acme/demo", "ISSUE_1")
+
+
+async def test_create_issue_raises_assignment_error_carrying_url_when_assign_fails():
+    from dsf.ports import CodingAgentAssignmentError
+
+    def extra(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/repos/acme/demo/issues":
+            return httpx.Response(
+                201,
+                json={
+                    "html_url": "https://github.com/acme/demo/issues/9",
+                    "node_id": "ISSUE_NODE_9",
+                },
+            )
+        # suggestedActors with no copilot bot -> assign_coding_agent raises
+        return httpx.Response(
+            200,
+            json={
+                "data": {
+                    "repository": {
+                        "suggestedActors": {
+                            "nodes": [
+                                {"login": "someone-else", "__typename": "User", "id": "U_1"},
+                            ]
+                        }
+                    }
+                }
+            },
+        )
+
+    client = _app_client(_token_handler(extra))
+    with pytest.raises(CodingAgentAssignmentError) as excinfo:
+        await client.create_issue("acme/demo", "Title", "Body", ["enhancement"])
+    assert excinfo.value.issue_url == "https://github.com/acme/demo/issues/9"
+    assert excinfo.value.issue_node_id == "ISSUE_NODE_9"

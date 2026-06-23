@@ -16,6 +16,8 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import jwt
 
+from dsf.ports import CodingAgentAssignmentError
+
 _GITHUB_API = "https://api.github.com"
 _JWT_TTL = timedelta(minutes=9)  # GitHub caps App JWTs at 10 minutes
 _REFRESH_SKEW = timedelta(seconds=60)  # re-mint slightly before expiry
@@ -158,5 +160,12 @@ class GitHubAppClient:
             )
             resp.raise_for_status()
             data = resp.json()
-        await self.assign_coding_agent(repo, data["node_id"])
+        try:
+            await self.assign_coding_agent(repo, data["node_id"])
+        except Exception as exc:
+            raise CodingAgentAssignmentError(
+                f"filed issue {data['html_url']} but failed to assign {_COPILOT_LOGIN}: {exc}",
+                issue_url=data["html_url"],
+                issue_node_id=data["node_id"],
+            ) from exc
         return data["html_url"]

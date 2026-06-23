@@ -115,6 +115,20 @@ class GitHubClient(Protocol):
         ...
 
 
+class CodingAgentAssignmentError(RuntimeError):
+    """An issue was filed but assigning the Copilot coding agent failed.
+
+    Carries the created issue's URL and node id so the caller can still record the
+    filing for dedup and surface the assignment failure loudly, instead of
+    discarding the already-created issue and re-filing a duplicate on the next run.
+    """
+
+    def __init__(self, message: str, *, issue_url: str, issue_node_id: str) -> None:
+        super().__init__(message)
+        self.issue_url = issue_url
+        self.issue_node_id = issue_node_id
+
+
 @runtime_checkable
 class SourceBackend(Protocol):
     """A source agent's evidence-gathering backend."""
@@ -135,6 +149,7 @@ class Tracer(Protocol):
 
 __all__ = [
     "ConfigStore",
+    "CodingAgentAssignmentError",
     "EmbeddingClient",
     "GitHubClient",
     "MemoryStore",
