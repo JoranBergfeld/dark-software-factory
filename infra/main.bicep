@@ -84,6 +84,9 @@ param allowPublicNetworkAccess bool = false
 // ---------------------------------------------------------------------------
 
 var suffix = uniqueString(resourceGroup().id, namePrefix, environmentName)
+// Key Vault names are capped at 24 chars. namePrefix (<=12) + 'kv' + suffix (13)
+// can reach 27, so truncate to keep the vault name valid; the prefix is preserved.
+var keyVaultName = take('${namePrefix}kv${suffix}', 24)
 var tags = {
   'azd-env-name': environmentName
   project: 'dark-software-factory'
@@ -142,7 +145,7 @@ resource runtimeIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-
 // ---------------------------------------------------------------------------
 
 resource keyVault 'Microsoft.KeyVault/vaults@2024-04-01-preview' = {
-  name: '${namePrefix}kv${suffix}'
+  name: keyVaultName
   location: location
   tags: tags
   properties: {
