@@ -114,6 +114,82 @@ def _read_kv_secret(keyvault_uri: str, secret_name: str) -> str:
     return value
 
 
+def _app_configured(settings: AzureRuntimeSettings) -> bool:
+    """Whether every GitHub App credential pointer is set."""
+    return bool(
+        settings.github_app_id
+        and settings.github_installation_id
+        and settings.keyvault_uri
+        and settings.github_app_private_key_secret
+    )
+
+
+def build_repo_app_client(
+    settings: AzureRuntimeSettings,
+    *,
+    key_reader: Callable[[str, str], str] = _read_kv_secret,
+) -> GitHubAppClient:
+    """Build the App client scoped to the single product repo. Raises if unconfigured."""
+    if not _app_configured(settings):
+        raise ValueError(
+            "GitHub App is not fully configured (need GITHUB_APP_ID, "
+            "GITHUB_INSTALLATION_ID, AZURE_KEYVAULT_URI, GITHUB_APP_PRIVATE_KEY_SECRET)"
+        )
+    from dsf.github_app_client import GitHubAppClient
+
+    repo_name = settings.github_repository.split("/")[-1]
+    if not repo_name:
+        raise ValueError(
+            "GITHUB_REPOSITORY is required when the GitHub App is configured, to "
+            "scope installation tokens to the single product repo"
+        )
+    return GitHubAppClient(
+        app_id=settings.github_app_id,
+        installation_id=settings.github_installation_id,
+        private_key_pem=key_reader(
+            settings.keyvault_uri, settings.github_app_private_key_secret
+        ),
+        repositories=[repo_name],
+    )
+
+
+def build_model_client(settings: AzureRuntimeSettings) -> ModelClient:
+    """Build the real Azure OpenAI model client. Raises if endpoint/deployment unset."""
+    missing = [
+        var
+        for attr, var in (
+            ("openai_endpoint", "AZURE_OPENAI_ENDPOINT"),
+            ("openai_deployment", "AZURE_OPENAI_DEPLOYMENT"),
+        )
+        if not getattr(settings, attr)
+    ]
+    if missing:
+        raise ValueError("missing required Azure OpenAI configuration: " + ", ".join(missing))
+    from dsf.model.azure_client import AzureOpenAIModelClient
+
+    return AzureOpenAIModelClient.from_endpoint(
+        settings.openai_endpoint, deployment=settings.openai_deployment
+    )
+
+
+def build_charter_store(settings: AzureRuntimeSettings) -> CharterStore:
+    """Build the real Cosmos charter store. Raises if the Cosmos endpoint is unset."""
+    if not settings.cosmos_endpoint:
+        raise ValueError("missing required Azure runtime configuration: AZURE_COSMOS_ENDPOINT")
+    from dsf.charter.cosmos_store import CosmosCharterStore
+
+    return CosmosCharterStore.from_endpoint(settings.cosmos_endpoint, database=settings.product)
+
+
+def build_config_store(settings: AzureRuntimeSettings) -> ConfigStore:
+    """Build the real App Configuration store. Raises if the endpoint is unset."""
+    if not settings.appconfig_endpoint:
+        raise ValueError("missing required Azure runtime configuration: AZURE_APPCONFIG_ENDPOINT")
+    from dsf.config.azure_store import AppConfigStore
+
+    return AppConfigStore.from_endpoint(settings.appconfig_endpoint)
+
+
 def _select_github_client(
     settings: AzureRuntimeSettings,
     *,
@@ -126,30 +202,8 @@ def _select_github_client(
     single product repo by name (``GITHUB_REPOSITORY`` -> repo name). Otherwise falls
     back to the gh-CLI ``RealGitHubClient`` (local/dev, no App).
     """
-    app_configured = (
-        settings.github_app_id
-        and settings.github_installation_id
-        and settings.keyvault_uri
-        and settings.github_app_private_key_secret
-    )
-    if app_configured:
-        from dsf.github_app_client import GitHubAppClient
-
-        repo_name = settings.github_repository.split("/")[-1]
-        if not repo_name:
-            raise ValueError(
-                "GITHUB_REPOSITORY is required when the GitHub App is configured, to "
-                "scope installation tokens to the single product repo (refusing to mint "
-                "a token scoped to all installation repositories)"
-            )
-        return GitHubAppClient(
-            app_id=settings.github_app_id,
-            installation_id=settings.github_installation_id,
-            private_key_pem=key_reader(
-                settings.keyvault_uri, settings.github_app_private_key_secret
-            ),
-            repositories=[repo_name],
-        )
+    if _app_configured(settings):
+        return build_repo_app_client(settings, key_reader=key_reader)
 
     from dsf.github_client import RealGitHubClient
 
@@ -176,9 +230,7 @@ def build_services(*, env: Mapping[str, str] | None = None) -> Services:
             "missing required Azure runtime configuration: "
             + ", ".join(missing)
         )
-    from dsf.config.azure_store import AppConfigStore
     from dsf.memory.azure_store import CosmosMemoryStore
-    from dsf.model.azure_client import AzureOpenAIModelClient
     from dsf.model.azure_embeddings import AzureOpenAIEmbeddingClient
     from dsf.observability.tracing import build_tracer
 
@@ -186,22 +238,29 @@ def build_services(*, env: Mapping[str, str] | None = None) -> Services:
         settings.openai_endpoint,
         deployment=settings.openai_embedding_deployment,
     )
-    config = AppConfigStore.from_endpoint(settings.appconfig_endpoint)
     memory = CosmosMemoryStore.from_endpoint(
         settings.cosmos_endpoint,
         database=settings.product,
         embedder=embedder,
     )
-    model = AzureOpenAIModelClient.from_endpoint(
-        settings.openai_endpoint, deployment=settings.openai_deployment
-    )
+    model = build_model_client(settings)
+    config = build_config_store(settings)
+    repo_app = build_repo_app_client(settings) if _app_configured(settings) else None
+    if repo_app is not None:
+        github: GitHubClient = repo_app
+    else:
+        from dsf.github_client import RealGitHubClient
+
+        github = RealGitHubClient()
 
     return Services(
         model=model,
         memory=memory,
         config=config,
-        github=_select_github_client(settings),
+        github=github,
         tracer=build_tracer(),
+        charter=build_charter_store(settings),
         product=settings.product,
         azure=settings,
+        repo=repo_app,
     )
