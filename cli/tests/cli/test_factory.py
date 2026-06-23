@@ -59,6 +59,14 @@ def test_bootstrap_subcommand_is_wired():
     assert args.keyvault_name == "kv-dsf-app"
 
 
+def test_charter_next_action_message():
+    from dsf.cli.factory import charter_next_action
+
+    msg = charter_next_action("demo")
+    assert "charter init" in msg
+    assert "demo" in msg
+
+
 def test_new_creation_maturity_high_flows_into_manifest(tmp_path):
     rc = main([
         "new", "--product", "demo", "--owner", "acme",

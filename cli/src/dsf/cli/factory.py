@@ -71,6 +71,14 @@ def _print_step_progress(line: str) -> None:
     print(f"[dsf]     {line}", flush=True)
 
 
+def charter_next_action(product: str) -> str:
+    """The post-provision hint pointing the operator at the charter workflow."""
+    return (
+        f"[dsf] next: run `dsf charter init --product {product}` to author the "
+        "product charter (opens a PR for review)"
+    )
+
+
 def _cmd_new(args: argparse.Namespace) -> int:
     """Create (or preview) a new isolated product factory instance."""
     import os
@@ -140,6 +148,8 @@ def _cmd_new(args: argparse.Namespace) -> int:
     if failed:
         print(f"[dsf] provisioning STOPPED at '{failed.name}': {failed.error}")
         return 1
+    if execute:
+        print(charter_next_action(args.product))
     return 0
 
 
@@ -346,6 +356,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="override repo root where config/instances/ is read from (tests/CI)",
     )
     p_delete.set_defaults(func=_cmd_delete)
+
+    from dsf.cli.charter import add_charter_subcommands
+
+    add_charter_subcommands(sub)
 
     return parser
 

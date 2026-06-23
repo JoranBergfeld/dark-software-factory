@@ -14,6 +14,7 @@ from typing import Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel
 
+from dsf.contracts.charter import StoredCharter
 from dsf.contracts.enums import SourceKind
 from dsf.contracts.models import EvidenceItem
 
@@ -76,6 +77,19 @@ class MemoryStore(Protocol):
 
     async def get_lessons(self, product: str, k: int = 5) -> list[dict]:
         """Retrieve up to ``k`` lessons for ``product``."""
+        ...
+
+
+@runtime_checkable
+class CharterStore(Protocol):
+    """Singleton-per-product store for the human-owned Product Charter."""
+
+    async def get_charter(self, product: str) -> StoredCharter | None:
+        """Return the stored charter for ``product`` (or ``None`` if never synced)."""
+        ...
+
+    async def put_charter(self, stored: StoredCharter) -> None:
+        """Upsert the stored charter for its product (replace by product)."""
         ...
 
 
@@ -148,6 +162,7 @@ class Tracer(Protocol):
 
 
 __all__ = [
+    "CharterStore",
     "ConfigStore",
     "CodingAgentAssignmentError",
     "EmbeddingClient",

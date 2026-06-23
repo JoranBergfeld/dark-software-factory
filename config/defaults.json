@@ -25,6 +25,14 @@
     },
     "security": {
       "enabled": true
+    },
+    "scope": {
+      "enabled": true
+    }
+  },
+  "charter": {
+    "interview": {
+      "max_turns": 12
     }
   },
   "agents": {
@@ -62,7 +70,8 @@
     "feasibility": 1.0,
     "strategic_fit": 1.0,
     "cost": 1.0,
-    "security": 1.0
+    "security": 1.0,
+    "scope": 1.0
   },
   "jury": {
     "roster": ["pragmatist", "skeptic", "user_advocate"]

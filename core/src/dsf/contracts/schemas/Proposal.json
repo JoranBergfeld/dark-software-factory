@@ -17,6 +17,13 @@
       "title": "Confidence",
       "type": "number"
     },
+    "context_tags": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Context Tags",
+      "type": "array"
+    },
     "created_at": {
       "format": "date-time",
       "title": "Created At",

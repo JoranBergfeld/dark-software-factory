@@ -42,4 +42,5 @@ command. This repository is the blueprint, not a factory that's already running.
   [provision a factory](get-started/provision-a-factory.md) and
   [operate it](get-started/operate.md).
 - **Each phase in depth:** [Feature Council](concept/feature-council.md),
+  [Product Charter](concept/product-charter.md),
   [Coding Squad](concept/coding-squad.md), [SRE Agent](concept/sre-agent.md).
