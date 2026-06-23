@@ -5,16 +5,21 @@ from __future__ import annotations
 import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
 
 from dsf.ports import (
+    CharterStore,
     ConfigStore,
     GitHubClient,
     MemoryStore,
     ModelClient,
     Tracer,
 )
+
+if TYPE_CHECKING:
+    from dsf.github_app_client import GitHubAppClient
 
 
 class AzureRuntimeSettings(BaseModel):
@@ -81,8 +86,10 @@ class Services:
     config: ConfigStore
     github: GitHubClient
     tracer: Tracer
+    charter: CharterStore
     product: str | None = None
     azure: AzureRuntimeSettings | None = None
+    repo: GitHubAppClient | None = None
 
 
 #: Required endpoint settings paired with the env var that supplies each one.
