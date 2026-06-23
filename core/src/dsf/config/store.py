@@ -36,6 +36,8 @@ def resolve_flag_key(flag: str) -> str | None:
         return f"agents.{flag.split('.', 1)[1]}.enabled"
     if flag.startswith("trigger.") and flag.endswith(".paused"):
         return f"triggers.{flag.split('.')[1]}.paused"
+    if flag == "charter.amendment.enabled":
+        return "charter.amendment.enabled"
     return None
 
 

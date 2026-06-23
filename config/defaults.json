@@ -33,6 +33,11 @@
   "charter": {
     "interview": {
       "max_turns": 12
+    },
+    "amendment": {
+      "enabled": false,
+      "cooldown_hours": 168,
+      "min_lessons": 3
     }
   },
   "agents": {

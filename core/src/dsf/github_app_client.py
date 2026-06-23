@@ -56,6 +56,17 @@ class FileContent:
 
 
 @dataclass
+class PullRequestRef:
+    """A pull request's URL, ``state`` (``open``/``closed``), head branch and
+    creation time — enough to enforce the one-open-PR and cooldown guardrails."""
+
+    html_url: str
+    state: str
+    created_at: datetime
+    head_ref: str
+
+
+@dataclass
 class GitHubAppClient:
     """Mints installation access tokens for the DSF GitHub App.
 
@@ -207,11 +218,14 @@ class GitHubAppClient:
         title: str,
         body: str,
         message: str,
+        labels: list[str] | None = None,
     ) -> str:
         """Create ``branch`` off ``base``, write ``path``, open a PR; return its URL.
 
         Overwrites the file if it already exists on ``branch`` (passes the prior
-        blob ``sha`` as the Contents API requires).
+        blob ``sha`` as the Contents API requires). When ``labels`` are given they
+        are applied to the PR (PRs are issues) — used to stamp the governance class
+        on charter-amendment PRs.
         """
         token = self.installation_token()
         headers = self._token_headers(token)
@@ -248,4 +262,42 @@ class GitHubAppClient:
                 json={"title": title, "body": body, "head": branch, "base": base},
             )
             pull.raise_for_status()
-            return pull.json()["html_url"]
+            created = pull.json()
+            if labels:
+                applied = await client.post(
+                    f"/repos/{repo}/issues/{created['number']}/labels",
+                    headers=headers,
+                    json={"labels": list(labels)},
+                )
+                applied.raise_for_status()
+            return created["html_url"]
+
+    async def latest_pr_with_head_prefix(
+        self, repo: str, *, head_prefix: str
+    ) -> PullRequestRef | None:
+        """Return the most-recently-created PR whose head branch starts with
+        ``head_prefix`` (any state), or ``None`` if there is none.
+
+        Lists PRs newest-first so the first match is the latest. Used to derive
+        the one-open-PR and cooldown guardrails from GitHub state (the source of
+        truth) rather than from mutable local memory.
+        """
+        token = self.installation_token()
+        async with httpx.AsyncClient(transport=self.transport, base_url=_GITHUB_API) as client:
+            resp = await client.get(
+                f"/repos/{repo}/pulls",
+                headers=self._token_headers(token),
+                params={"state": "all", "sort": "created", "direction": "desc", "per_page": 100},
+            )
+            resp.raise_for_status()
+            for pr in resp.json():
+                head_ref = pr.get("head", {}).get("ref", "")
+                if head_ref.startswith(head_prefix):
+                    created_at = datetime.fromisoformat(pr["created_at"].replace("Z", "+00:00"))
+                    return PullRequestRef(
+                        html_url=pr["html_url"],
+                        state=pr["state"],
+                        created_at=created_at,
+                        head_ref=head_ref,
+                    )
+        return None

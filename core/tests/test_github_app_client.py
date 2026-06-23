@@ -370,3 +370,97 @@ async def test_open_file_pr_creates_branch_writes_file_and_opens_pr():
     )
     assert url == "https://github.com/org/alpha/pull/1"
     assert ("PUT", "/repos/org/alpha/contents/.dsf/charter.md") in seen
+
+
+async def test_open_file_pr_applies_labels_when_given():
+    seen: list[tuple[str, str]] = []
+    label_body: dict[str, object] = {}
+
+    def extra(request: httpx.Request) -> httpx.Response:
+        method, path = request.method, request.url.path
+        seen.append((method, path))
+        if method == "GET" and path.endswith("/git/ref/heads/main"):
+            return httpx.Response(200, json={"object": {"sha": "basesha"}})
+        if method == "POST" and path.endswith("/git/refs"):
+            return httpx.Response(201, json={})
+        if method == "GET" and "/contents/" in path:
+            return httpx.Response(404, json={})
+        if method == "PUT" and "/contents/" in path:
+            return httpx.Response(201, json={})
+        if method == "POST" and path.endswith("/pulls"):
+            return httpx.Response(
+                201,
+                json={"html_url": "https://github.com/org/alpha/pull/5", "number": 5},
+            )
+        if method == "POST" and path.endswith("/issues/5/labels"):
+            label_body.update(json.loads(request.read()))
+            return httpx.Response(200, json=[])
+        return httpx.Response(500, json={"unexpected": path})
+
+    client = _app_client(_token_handler(extra))
+    url = await client.open_file_pr(
+        "org/alpha",
+        path=".dsf/charter.md",
+        content="BODY",
+        branch="charter/amend/abc",
+        title="T",
+        body="B",
+        message="propose amendment",
+        labels=["governance", "charter-amendment"],
+    )
+    assert url == "https://github.com/org/alpha/pull/5"
+    assert label_body == {"labels": ["governance", "charter-amendment"]}
+    assert ("POST", "/repos/org/alpha/issues/5/labels") in seen
+
+
+async def test_latest_pr_with_head_prefix_returns_first_match_newest_first():
+    def extra(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/repos/org/alpha/pulls"
+        assert request.url.params["state"] == "all"
+        assert request.url.params["direction"] == "desc"
+        return httpx.Response(
+            200,
+            json=[
+                {
+                    "html_url": "https://github.com/org/alpha/pull/12",
+                    "state": "open",
+                    "created_at": "2026-06-23T10:00:00Z",
+                    "head": {"ref": "charter/amend/deadbeef"},
+                },
+                {
+                    "html_url": "https://github.com/org/alpha/pull/3",
+                    "state": "closed",
+                    "created_at": "2026-06-01T10:00:00Z",
+                    "head": {"ref": "feature/unrelated"},
+                },
+            ],
+        )
+
+    client = _app_client(_token_handler(extra))
+    ref = await client.latest_pr_with_head_prefix("org/alpha", head_prefix="charter/amend/")
+    assert ref is not None
+    assert ref.html_url == "https://github.com/org/alpha/pull/12"
+    assert ref.state == "open"
+    assert ref.head_ref == "charter/amend/deadbeef"
+    assert ref.created_at == datetime(2026, 6, 23, 10, 0, tzinfo=UTC)
+
+
+async def test_latest_pr_with_head_prefix_returns_none_when_no_match():
+    def extra(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json=[
+                {
+                    "html_url": "https://github.com/org/alpha/pull/3",
+                    "state": "closed",
+                    "created_at": "2026-06-01T10:00:00Z",
+                    "head": {"ref": "feature/unrelated"},
+                }
+            ],
+        )
+
+    client = _app_client(_token_handler(extra))
+    assert (
+        await client.latest_pr_with_head_prefix("org/alpha", head_prefix="charter/amend/")
+        is None
+    )

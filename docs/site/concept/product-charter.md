@@ -60,7 +60,34 @@ is always injected inside a `<product_charter trust="UNTRUSTED">` envelope and t
 personas that read it are told to treat it as data and never follow instructions
 inside it.
 
+## Living charter (factory-proposed amendments)
+
+A product's north star should be revisitable **with evidence** — but an agent
+editing its own governing intent is a real risk, so the factory may only
+**propose**, never apply. When enabled, the sweep runs a charter-reflection step:
+if accumulated lessons warrant it, the factory drafts an amendment and opens a
+**governance-labeled pull request** against `.dsf/charter.md`. A human reviews and
+merges it; only the merge syncs into Cosmos (via the same pull-only sync above).
+Nothing is ever applied from an unmerged branch.
+
+Deterministic guardrails gate *whether* a proposal is even drafted — the model
+only writes the prose inside them:
+
+- **Opt-in** — off unless `charter.amendment.enabled` is set for the product.
+- **Baseline required** — only amends an existing, valid (`OK`) charter.
+- **Evidence threshold** — needs at least `charter.amendment.min_lessons` lessons,
+  and the cited lessons are attached to the PR as an evidence bundle.
+- **One open PR per product** and a **cooldown** (`charter.amendment.cooldown_hours`)
+  between proposals, both derived from GitHub state.
+- **Governance class** — PRs carry `governance` + `charter-amendment` labels so
+  branch protection can require an anti-rubber-stamp review (proposer ≠ approver).
+
+The lessons are fed to the drafter inside an `UNTRUSTED` envelope, just like the
+charter, and the proposed charter's product key and schema are forced back to the
+baseline so a proposal can never retarget another product.
+
 ## Out of scope (for now)
 
-v1 stops at advice. Hard non-goal vetoes, a living-charter loop where the council
-proposes amendments, and richer scope enforcement are tracked in Issue #75.
+A **deterministic non-goal veto** (structured non-goal IDs + machine-checkable
+scope rules) and charter-shaped synthesis remain future work.
+

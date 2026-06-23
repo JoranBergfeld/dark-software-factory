@@ -42,6 +42,14 @@ DEFAULT_DELIBERATION_ROUNDS_KEY = "default_deliberation_rounds"
 #: Hard fallback when ``default_deliberation_rounds`` is itself unset. One to two
 #: see-and-revise rounds is the design range; two is the deliberative default.
 DEFAULT_DELIBERATION_ROUNDS = 2
+#: Config flag gating the living-charter amendment loop (default off — opt-in).
+CHARTER_AMENDMENT_ENABLED_FLAG = "charter.amendment.enabled"
+#: Config key + fallback for the cooldown between factory amendment proposals.
+CHARTER_AMENDMENT_COOLDOWN_HOURS_KEY = "charter.amendment.cooldown_hours"
+DEFAULT_CHARTER_AMENDMENT_COOLDOWN_HOURS = 168.0
+#: Config key + fallback for the minimum lessons required to justify an amendment.
+CHARTER_AMENDMENT_MIN_LESSONS_KEY = "charter.amendment.min_lessons"
+DEFAULT_CHARTER_AMENDMENT_MIN_LESSONS = 3
 
 
 def critic_enabled(cfg: ConfigStore, name: str, product: str | None = None) -> bool:
@@ -130,7 +138,39 @@ def deliberation_rounds(cfg: ConfigStore, product: str | None = None) -> int:
     return max(1, default)
 
 
+def charter_amendment_enabled(cfg: ConfigStore, product: str | None = None) -> bool:
+    """Whether the factory may *propose* charter amendments for ``product``.
+
+    Off by default (an LLM proposing changes to its own governing intent is a
+    governance smell — opt-in per product via a control-center override).
+    """
+    return cfg.is_enabled(CHARTER_AMENDMENT_ENABLED_FLAG, product=product)
+
+
+def charter_amendment_cooldown_hours(cfg: ConfigStore) -> float:
+    """Minimum hours between successive factory amendment proposals (floored at 0)."""
+    value = float(
+        cfg.get_value(
+            CHARTER_AMENDMENT_COOLDOWN_HOURS_KEY, DEFAULT_CHARTER_AMENDMENT_COOLDOWN_HOURS
+        )
+    )
+    return max(0.0, value)
+
+
+def charter_amendment_min_lessons(cfg: ConfigStore) -> int:
+    """Minimum lessons that must back a proposal before one is drafted (floored at 1)."""
+    value = int(
+        cfg.get_value(CHARTER_AMENDMENT_MIN_LESSONS_KEY, DEFAULT_CHARTER_AMENDMENT_MIN_LESSONS)
+    )
+    return max(1, value)
+
+
 __all__ = [
+    "CHARTER_AMENDMENT_COOLDOWN_HOURS_KEY",
+    "CHARTER_AMENDMENT_ENABLED_FLAG",
+    "CHARTER_AMENDMENT_MIN_LESSONS_KEY",
+    "DEFAULT_CHARTER_AMENDMENT_COOLDOWN_HOURS",
+    "DEFAULT_CHARTER_AMENDMENT_MIN_LESSONS",
     "DEFAULT_CONSENSUS_BAR",
     "DEFAULT_CONSENSUS_BAR_KEY",
     "DEFAULT_DELIBERATION_ROUNDS",
@@ -142,6 +182,9 @@ __all__ = [
     "DEFAULT_WEIGHT",
     "JURY_ROSTER_KEY",
     "agent_enabled",
+    "charter_amendment_cooldown_hours",
+    "charter_amendment_enabled",
+    "charter_amendment_min_lessons",
     "consensus_bar",
     "critic_enabled",
     "deliberation_rounds",

@@ -56,6 +56,27 @@ verdict's rationale. It never vetoes a proposal and never changes the score.
 Products without a charter run exactly as before (tagged `uncharted product context`).
 See [Product Charter](../concept/product-charter.md) and ADR 0017.
 
+### Living charter (proposed amendments)
+
+When `charter.amendment.enabled` is set for a product, the sweep can **propose**
+charter amendments from accumulated lessons — strictly as a human-gated
+governance PR against `.dsf/charter.md`. The factory never edits the stored
+charter; only merging the PR syncs it (the pull-only path above).
+
+- Off by default — opt in with a control-center override of
+  `charter.amendment.enabled` per product.
+- Tunables: `charter.amendment.min_lessons` (evidence threshold, default 3) and
+  `charter.amendment.cooldown_hours` (min interval between proposals, default 168).
+- Guardrails (deterministic): one open amendment PR per product, the cooldown,
+  an evidence bundle attached to the PR, and `governance` + `charter-amendment`
+  labels for anti-rubber-stamp review (require a reviewer who is **not** the
+  proposer via branch protection / CODEOWNERS).
+- Each sweep records the decision on the run audit (`trigger:charter-amend`):
+  `proposed PR <url>`, `disabled`, `cooldown`, `open_pr`, `no_change`, etc.
+
+See ADR 0018.
+
+
 ## Steering: the Control Center
 
 The Control Center (`dsf.control_center.app`) is the **write surface** for runtime behaviour —
