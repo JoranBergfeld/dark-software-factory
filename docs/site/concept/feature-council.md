@@ -81,7 +81,7 @@ flowchart TD
     end
 
     verdict --> policy{"Outcome policy, deterministic"}
-    policy -->|strong consensus| proceed(["Proceed: file issue with squad:ready"])
+    policy -->|strong consensus| proceed(["Proceed: file issue with creation:ready"])
     policy -->|split| escalate(["Escalate to a person"])
     policy -->|consensus against| kill(["Kill, logged"])
 ```
@@ -124,7 +124,7 @@ Upstream, the Council consumes signals. Some come from outside the factory
 lessons back in as new signals.
 
 Downstream, the Council hands to the Coding Squad. The contract is one label:
-every filed issue carries `squad:ready`, and the Squad's triage keys on exactly
+every filed issue carries `creation:ready`, and the Squad's triage keys on exactly
 that label. The Council does not call the Squad directly. It files an issue and
 the label does the wiring, which keeps the two phases independent.
 

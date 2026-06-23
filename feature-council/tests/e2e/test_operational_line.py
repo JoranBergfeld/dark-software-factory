@@ -1,5 +1,5 @@
 """End-to-end: an operational signal (INCIDENTS) flows through the whole conveyor
-to a routed, grounded, squad:ready issue — offline, no real GitHub call."""
+to a routed, grounded, creation:ready issue — offline, no real GitHub call."""
 
 from __future__ import annotations
 
@@ -76,7 +76,7 @@ async def test_incident_line_files_real_issue_then_dedups_on_recurrence() -> Non
     assert issues, "expected at least one routed issue"
 
     # The real filing path was taken: create_issue once per routed issue, each
-    # carrying the squad:ready handoff label and a returned URL.
+    # carrying the creation:ready handoff label and a returned URL.
     assert len(services.github.calls) == len(issues)
     for issue in issues:
         assert issue.filed_url is not None
