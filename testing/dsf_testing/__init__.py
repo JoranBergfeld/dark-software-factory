@@ -13,7 +13,7 @@ from dsf.contracts.enums import ProposalKind, SourceKind, TriggerKind
 from dsf.contracts.models import EvidenceItem, Proposal, Provenance, Run
 from dsf_testing.charter import InMemoryCharterStore
 from dsf_testing.config import InMemoryConfigStore
-from dsf_testing.github import RecordingGitHubClient
+from dsf_testing.github import RecordingGitHubClient, RecordingRepoClient
 from dsf_testing.memory import InMemoryMemoryStore
 from dsf_testing.model import ECHO_PREFIX, DeterministicModelClient
 from dsf_testing.services import build_test_services
@@ -99,6 +99,7 @@ __all__ = [
     "InMemoryMemoryStore",
     "NoOpTracer",
     "RecordingGitHubClient",
+    "RecordingRepoClient",
     "RecordingSourceBackend",
     "build_test_services",
     "make_evidence",
