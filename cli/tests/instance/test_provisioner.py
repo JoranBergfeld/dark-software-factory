@@ -1090,3 +1090,62 @@ def test_apply_preserves_prior_github_app_binding_when_install_skips(tmp_path):
     assert on_disk.github_app is not None
     assert on_disk.github_app.app_id == "42"
     assert on_disk.github_app.repository_id == 555
+
+
+def test_apply_execute_skips_branch_protection_when_plan_unsupported(tmp_path, monkeypatch):
+    """A private repo on a Free plan -> rulesets 403; the step is skipped, not failed."""
+    monkeypatch.chdir(tmp_path)
+    from dsf.instance.branch_protection import RULESET_UNSUPPORTED_RESULT
+
+    def fake_run(cmd, **kwargs):
+        if cmd[:3] == ["gh", "repo", "view"]:
+            return MagicMock(returncode=1)
+        if len(cmd) > 2 and "rulesets?includes_parents" in str(cmd[2]):
+            raise subprocess.CalledProcessError(
+                returncode=1,
+                cmd=cmd,
+                stderr=(
+                    "gh: Upgrade to GitHub Pro or make this repository public to "
+                    "enable this feature. (HTTP 403)"
+                ),
+            )
+        hit = _az_deploy(cmd, _AZURE_OUTPUTS_JSON)
+        if hit is not None:
+            return hit
+        return MagicMock(returncode=0)
+
+    prov = InstanceProvisioner(_spec(), run=fake_run, repo_root=tmp_path)
+    manifest = prov.apply(execute=True)
+
+    results = {s.name: s.result for s in manifest.plan.steps}
+    bp = next(s for s in manifest.plan.steps if s.name == "branch_protection")
+    assert bp.result == RULESET_UNSUPPORTED_RESULT
+    assert bp.executed is False
+    assert not bp.error
+    # the line did not stop: a later step still ran and the manifest completed.
+    assert "deploy_sre_agent" in results
+    assert manifest.executed is True
+
+
+def test_apply_execute_branch_protection_other_403_still_fails(tmp_path, monkeypatch):
+    """A non-plan 403 (e.g. permission) is not swallowed -> the step fails."""
+    monkeypatch.chdir(tmp_path)
+
+    def fake_run(cmd, **kwargs):
+        if cmd[:3] == ["gh", "repo", "view"]:
+            return MagicMock(returncode=1)
+        if len(cmd) > 2 and "rulesets?includes_parents" in str(cmd[2]):
+            raise subprocess.CalledProcessError(
+                returncode=1, cmd=cmd, stderr="gh: Must have admin rights (HTTP 403)"
+            )
+        hit = _az_deploy(cmd, _AZURE_OUTPUTS_JSON)
+        if hit is not None:
+            return hit
+        return MagicMock(returncode=0)
+
+    prov = InstanceProvisioner(_spec(), run=fake_run, repo_root=tmp_path)
+    manifest = prov.apply(execute=True)
+
+    bp = next(s for s in manifest.plan.steps if s.name == "branch_protection")
+    assert bp.result == "failed"
+    assert bp.error

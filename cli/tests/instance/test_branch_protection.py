@@ -5,6 +5,7 @@ from __future__ import annotations
 from dsf.instance.branch_protection import (
     RULESET_NAME,
     auto_merge_command,
+    is_unsupported_ruleset_error,
     ruleset_payload,
 )
 from dsf.instance.spec import InstanceSpec
@@ -47,3 +48,17 @@ def test_auto_merge_command_enabled_only_for_high():
         "gh", "api", "--method", "PATCH", "repos/acme/demo",
         "-F", "allow_auto_merge=true",
     ]
+
+
+def test_is_unsupported_ruleset_error_matches_pro_upgrade_403():
+    stderr = (
+        "gh: Upgrade to GitHub Pro or make this repository public to enable "
+        "this feature. (HTTP 403)"
+    )
+    assert is_unsupported_ruleset_error(stderr) is True
+
+
+def test_is_unsupported_ruleset_error_ignores_other_failures():
+    assert is_unsupported_ruleset_error("HTTP 404: Not Found") is False
+    assert is_unsupported_ruleset_error("gh: Bad credentials (HTTP 401)") is False
+    assert is_unsupported_ruleset_error("") is False

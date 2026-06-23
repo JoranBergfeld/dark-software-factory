@@ -22,6 +22,22 @@ from dsf.instance.spec import InstanceSpec
 RULESET_NAME = "dsf-creation"
 _REQUIRED_CHECK_CONTEXT = "ci"
 
+#: Result string recorded when the repo's plan/visibility doesn't support rulesets
+#: (a private repo on a Free GitHub plan returns HTTP 403). Provisioning continues.
+RULESET_UNSUPPORTED_RESULT = "skipped (rulesets need GitHub Pro or a public repo)"
+
+
+def is_unsupported_ruleset_error(stderr: str) -> bool:
+    """Return `True` when a `gh api` ruleset call failed purely because the
+    repo's plan or visibility doesn't support rulesets.
+
+    GitHub returns `403 "Upgrade to GitHub Pro or make this repository public to
+    enable this feature."` for the rulesets API on private repos under a Free plan.
+    Matching that specific plan-limitation message keeps genuine auth/permission 403s
+    surfacing as hard failures.
+    """
+    return "upgrade to github pro" in stderr.lower()
+
 
 def ruleset_payload(spec: InstanceSpec) -> dict:
     """Build the repo ruleset body for ``spec.creation_maturity``."""

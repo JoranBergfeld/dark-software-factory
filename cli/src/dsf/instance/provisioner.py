@@ -24,7 +24,13 @@ from dsf.contracts.handoff import (
     INCIDENT_LABEL_COLOR,
     INCIDENT_LABEL_DESCRIPTION,
 )
-from dsf.instance.branch_protection import RULESET_NAME, auto_merge_command, ruleset_payload
+from dsf.instance.branch_protection import (
+    RULESET_NAME,
+    RULESET_UNSUPPORTED_RESULT,
+    auto_merge_command,
+    is_unsupported_ruleset_error,
+    ruleset_payload,
+)
 from dsf.instance.deploy_progress import DeploymentProgressPoller
 from dsf.instance.runtime_render import (
     render_product_registration,
@@ -439,8 +445,11 @@ class InstanceProvisioner:
             if not execute:
                 step.result = "ruleset planned (dry-run)"
             else:
-                self._apply_branch_protection()
-                step.executed, step.result = True, "applied"
+                skip_reason = self._apply_branch_protection()
+                if skip_reason:
+                    step.result = skip_reason
+                else:
+                    step.executed, step.result = True, "applied"
         elif step.name == "deploy_sre_agent":
             provisional = InstanceManifest(
                 spec=self.spec, plan=plan, executed=executed, azure=azure_result
@@ -551,7 +560,7 @@ class InstanceProvisioner:
             repository_id=repository_id,
         )
 
-    def _apply_branch_protection(self) -> None:
+    def _apply_branch_protection(self) -> str | None:
         """Apply the creation-maturity dial as a real branch-protection ruleset.
 
         Uses the operator's interactive ``gh`` auth (admin on the just-created repo),
@@ -561,13 +570,18 @@ class InstanceProvisioner:
         """
         repo = self.spec.github_repo()
         payload = json.dumps(ruleset_payload(self.spec))
-        lookup = self._run(
-            [
-                "gh", "api", f"/repos/{repo}/rulesets?includes_parents=false", "--jq",
-                f'[.[] | select(.name=="{RULESET_NAME}") | .id] | first // empty',
-            ],
-            check=True, capture_output=True, text=True,
-        )
+        try:
+            lookup = self._run(
+                [
+                    "gh", "api", f"/repos/{repo}/rulesets?includes_parents=false", "--jq",
+                    f'[.[] | select(.name=="{RULESET_NAME}") | .id] | first // empty',
+                ],
+                check=True, capture_output=True, text=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            if is_unsupported_ruleset_error(getattr(exc, "stderr", "") or ""):
+                return RULESET_UNSUPPORTED_RESULT
+            raise
         ruleset_id = (getattr(lookup, "stdout", "") or "").strip()
         if ruleset_id:
             self._run(
@@ -582,6 +596,7 @@ class InstanceProvisioner:
                 input=payload, text=True, check=True,
             )
         self._run(auto_merge_command(self.spec), check=True)
+        return None
 
     def _sre_deploy_command(self, outputs: dict[str, str]) -> list[str]:
         """`az deployment sub create` for the SRE agent, from provision_azure outputs."""
