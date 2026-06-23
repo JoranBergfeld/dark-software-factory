@@ -101,7 +101,10 @@ def _read_kv_secret(keyvault_uri: str, secret_name: str) -> str:
     from azure.keyvault.secrets import SecretClient
 
     client = SecretClient(vault_url=keyvault_uri, credential=DefaultAzureCredential())
-    return client.get_secret(secret_name).value
+    value = client.get_secret(secret_name).value
+    if not value:
+        raise ValueError(f"Key Vault secret {secret_name!r} is empty or unset")
+    return value
 
 
 def _select_github_client(
@@ -126,13 +129,19 @@ def _select_github_client(
         from dsf.github_app_client import GitHubAppClient
 
         repo_name = settings.github_repository.split("/")[-1]
+        if not repo_name:
+            raise ValueError(
+                "GITHUB_REPOSITORY is required when the GitHub App is configured, to "
+                "scope installation tokens to the single product repo (refusing to mint "
+                "a token scoped to all installation repositories)"
+            )
         return GitHubAppClient(
             app_id=settings.github_app_id,
             installation_id=settings.github_installation_id,
             private_key_pem=key_reader(
                 settings.keyvault_uri, settings.github_app_private_key_secret
             ),
-            repositories=[repo_name] if repo_name else None,
+            repositories=[repo_name],
         )
 
     from dsf.github_client import RealGitHubClient

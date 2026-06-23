@@ -124,6 +124,21 @@ def test_select_github_client_uses_app_when_configured():
     assert client.repositories == ["demo"]
 
 
+def test_select_github_client_requires_repository_when_app_configured():
+    from dsf.container import AzureRuntimeSettings, _select_github_client
+
+    settings = AzureRuntimeSettings(
+        product="demo",
+        keyvault_uri="https://kv.example",
+        github_app_id="42",
+        github_installation_id="9001",
+        github_app_private_key_secret="github-app-private-key",
+        github_repository="",
+    )
+    with pytest.raises(ValueError, match="GITHUB_REPOSITORY"):
+        _select_github_client(settings, key_reader=lambda uri, name: "PEM")
+
+
 def test_select_github_client_falls_back_without_app():
     from dsf.container import AzureRuntimeSettings, _select_github_client
     from dsf.github_client import RealGitHubClient
