@@ -57,7 +57,8 @@ behind the label changes — from `squad watch` to assign-to-Coding-Agent.
 | Actor | Action | Identity (no PAT) |
 | --- | --- | --- |
 | Copilot Coding Agent | write code, open PR | GitHub-managed, ephemeral |
-| DSF orchestration | file issue, assign, post advisory review, set branch protection | one **DSF GitHub App**, per-repo installation token |
+| DSF orchestration | file issue, assign, post advisory review | one **DSF GitHub App**, per-repo installation token |
+| DSF provisioning | set branch-protection ruleset | operator's interactive **`gh`** auth (admin on the new repo) |
 | DSF runtime <-> memory | read/write lessons + member history | Entra **managed identity** to Cosmos |
 
 ### One DSF GitHub App, one owner installation
@@ -74,18 +75,29 @@ dedicated **owner-level Key Vault**; `dsf new` reads the private key from it to 
 product Key Vault.
 
 App permissions (least privilege): `issues:write` (file + assign), `pull_requests:write`
-(advisory reviews), `contents:read`, and `administration:write` (set branch-protection
-rulesets). The Coding Agent must be enabled on the repo so `copilot` is an assignable actor.
+(advisory reviews), and `contents:read`. Branch-protection rulesets are applied separately
+with the operator's interactive `gh` auth at provision time (the operator is admin on the
+freshly created repo), so the App needs **no** `administration:write`. The Coding Agent must
+be enabled on the repo so `copilot` is an assignable actor.
 
 A new **real** `GitHubAppClient` lives in `core` (alongside `github_client.py`). It signs a
 short-lived JWT with the App private key, exchanges it for an installation token, and exposes
-the four orchestration actions. The App id **and** installation id are both owner-level and
+its orchestration actions (file issue + assign now; advisory PR reviews land with the
+reflection stage). Branch protection is **not** one of them — it is applied with the operator's
+`gh` auth (above). The App id **and** installation id are both owner-level and
 shared across products; each `dsf new` adds its product repo to that one installation and
 stores the repo id on the instance manifest, so the runtime mints tokens scoped to just that
 repo. The App **private key** is the one remaining secret: held in the owner Key Vault, seeded
 into the product Key Vault at provision time, read by the runtime to mint tokens. It is defensible because it is not a bearer credential for the API — it only
 signs requests that mint short-lived, narrowly-scoped installation tokens, and it is centrally
 revocable/rotatable at the App.
+
+At runtime, S7 selects its GitHub client in `build_services` (`_select_github_client`): it
+**prefers the App client** (file the issue **and** assign the Coding Agent) and falls back to
+the plain `gh`-CLI `GitHubClient` when no App is configured — the fallback files the issue
+only (no Copilot assignment). Token minting fails closed: with the App configured the runtime
+**requires** `GITHUB_REPOSITORY` so installation tokens are always scoped to the single product
+repo (never all installation repos).
 
 ## Shared Cosmos memory + namespacing
 
@@ -158,13 +170,20 @@ After the Coding Agent opens a PR, the **DSF reflection job** extends the existi
 **maturity dial** (renamed `squad_maturity` -> `creation_maturity`, CLI `--creation-maturity`,
 since Squad is retired and the dial now means repo controls, not Ralph behavior):
 
-- **low** — ruleset requires a human approval **and** green required status checks before
-  merge. Coding Agent PRs wait for a human.
-- **high** — auto-merge once the required status checks pass; still deterministically
+- **low** — ruleset requires a human approval **and** the green required `ci` status check
+  before merge. Coding Agent PRs wait for a human.
+- **high** — auto-merge once the required `ci` status check passes; still deterministically
   CI-gated, no human required.
 
+Both dials require a green status check named **`ci`** — a DSF convention the product CI must
+publish (GitHub auto-merge for `high` cannot be enabled without at least one required check, so
+the named check is structurally required).
+
 The LLM never decides a merge. This is the proper fix for #54's governance no-op: the
-provisioner sets a **real** branch-protection ruleset instead of toggling `allow_auto_merge`.
+provisioner sets a **real** branch-protection ruleset (named `dsf-creation`) instead of
+toggling `allow_auto_merge`. It is applied with the operator's interactive `gh` auth at
+provision time — not the App — and is idempotent (it updates the existing `dsf-creation`
+ruleset in place).
 
 ## Provisioning changes (`dsf new`)
 
@@ -179,7 +198,10 @@ Added / changed steps:
   installation id onto the instance manifest, seed the App private key into the product Key
   Vault.
 - **Branch-protection ruleset** step (replaces `squad_governance`): apply the
-  `creation_maturity` dial as a real ruleset (required checks + required reviews) via the App.
+  `creation_maturity` dial as a real `dsf-creation` ruleset (required reviews + green `ci`
+  check) via the operator's interactive `gh` auth (admin on the new repo), so the App needs no
+  `administration:write`. The ruleset JSON is passed on stdin (`gh api --input -`); the step is
+  idempotent.
 - **Deploy the MCP grounding server** as part of the ACA runtime bring-up.
 
 `squad_render.py` and its tests are deleted.
