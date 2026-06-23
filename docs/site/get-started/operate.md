@@ -34,6 +34,28 @@ it onto the Container App with `az containerapp update`. Rendered runtime descri
 `.env.orchestrator` — endpoints only). See [Provision a factory](provision-a-factory.md) for
 how all of this is stood up.
 
+## The product charter
+
+The charter (`.dsf/charter.md` in the product repo) states what the product is
+for. The runtime syncs it on every sweep — deterministically and fail-safe: if
+the file is missing or unparsable, the council keeps the last good charter and
+flags the status instead of dropping it. So an operator never has to push the
+charter; merging it to the product repo is enough.
+
+Operator commands:
+
+- `dsf charter init --product <p>` — interview, then open a PR adding the charter.
+- `dsf charter sync --product <p>` — force a sync now (otherwise the next sweep
+  does it).
+- `dsf charter status --product <p>` — print the stored charter's status and any
+  drift vs the file (`OK` / `STALE` / `MISSING` / `INVALID`).
+
+The charter is **advisory**: it informs the council's value and strategic-fit
+reasoning and adds a non-blocking "possible non-goal conflict" note to a
+verdict's rationale. It never vetoes a proposal and never changes the score.
+Products without a charter run exactly as before (tagged `uncharted product context`).
+See [Product Charter](../concept/product-charter.md) and ADR 0017.
+
 ## Steering: the Control Center
 
 The Control Center (`dsf.control_center.app`) is the **write surface** for runtime behaviour —
