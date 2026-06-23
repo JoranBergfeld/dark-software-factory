@@ -246,6 +246,7 @@ class InstanceProvisioner:
                     f"runtimeImage={s.runtime_image}",
                     f"githubAppId={self._github_app_id}",
                     f"githubInstallationId={self._github_installation_id}",
+                    f"githubRepository={s.github_repo()}",
                     "--no-wait",
                 ],
             ),

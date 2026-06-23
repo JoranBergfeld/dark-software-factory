@@ -124,6 +124,13 @@ def test_plan_provision_azure_command_shape():
     assert "--query" not in az.command  # outputs are fetched post-deploy via `show`
 
 
+def test_provision_azure_passes_github_repository_param():
+    spec = _spec()
+    plan = InstanceProvisioner(spec).plan()
+    step = next(s for s in plan.steps if s.name == "provision_azure")
+    assert f"githubRepository={spec.github_repo()}" in step.command
+
+
 def test_plan_create_repo_command():
     plan = InstanceProvisioner(_spec()).plan()
     create = next(s for s in plan.steps if s.name == "create_repo")
