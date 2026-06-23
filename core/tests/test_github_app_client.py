@@ -25,6 +25,30 @@ def _fixed_clock(moment: datetime):
     return lambda: moment
 
 
+def _token_handler(extra):
+    """MockTransport handler: serves the token mint + delegates other paths to ``extra``."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/access_tokens"):
+            return httpx.Response(
+                201, json={"token": "ghs_x", "expires_at": "2026-06-22T13:00:00Z"}
+            )
+        return extra(request)
+
+    return handler
+
+
+def _app_client(handler):
+    pem, _ = _rsa_pem()
+    return GitHubAppClient(
+        app_id="1",
+        installation_id="2",
+        private_key_pem=pem,
+        transport=httpx.MockTransport(handler),
+        clock=_fixed_clock(datetime(2026, 6, 22, 12, 0, tzinfo=UTC)),
+    )
+
+
 def test_repr_does_not_leak_private_key():
     pem, _ = _rsa_pem()
     client = GitHubAppClient(app_id="1", installation_id="2", private_key_pem=pem)
@@ -134,3 +158,64 @@ def test_installation_token_raises_on_api_error():
     )
     with pytest.raises(httpx.HTTPStatusError):
         client.installation_token()
+
+
+async def test_assign_coding_agent_replaces_actors_with_copilot_bot():
+    import json
+
+    calls: list[dict] = []
+
+    def extra(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.read())
+        calls.append(payload)
+        if "suggestedActors" in payload["query"]:
+            return httpx.Response(
+                200,
+                json={
+                    "data": {
+                        "repository": {
+                            "suggestedActors": {
+                                "nodes": [
+                                    {"login": "someone-else", "__typename": "User", "id": "U_1"},
+                                    {
+                                        "login": "copilot-swe-agent",
+                                        "__typename": "Bot",
+                                        "id": "BOT_42",
+                                    },
+                                ]
+                            }
+                        }
+                    }
+                },
+            )
+        return httpx.Response(
+            200, json={"data": {"replaceActorsForAssignable": {"assignable": {"id": "ISSUE_1"}}}}
+        )
+
+    client = _app_client(_token_handler(extra))
+    await client.assign_coding_agent("acme/demo", "ISSUE_1")
+
+    assert calls[0]["variables"] == {"owner": "acme", "name": "demo"}
+    assert calls[1]["variables"] == {"assignableId": "ISSUE_1", "actorIds": ["BOT_42"]}
+
+
+async def test_assign_coding_agent_raises_when_copilot_not_assignable():
+    def extra(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "data": {
+                    "repository": {
+                        "suggestedActors": {
+                            "nodes": [
+                                {"login": "someone-else", "__typename": "User", "id": "U_1"},
+                            ]
+                        }
+                    }
+                }
+            },
+        )
+
+    client = _app_client(_token_handler(extra))
+    with pytest.raises(RuntimeError, match="copilot-swe-agent"):
+        await client.assign_coding_agent("acme/demo", "ISSUE_1")
