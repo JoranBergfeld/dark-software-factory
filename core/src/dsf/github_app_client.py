@@ -9,6 +9,7 @@ with no live call (ADR 0014 real-only ``src/``).
 
 from __future__ import annotations
 
+import base64
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -43,6 +44,15 @@ def _utcnow() -> datetime:
 class _CachedToken:
     token: str
     expires_at: datetime
+
+
+@dataclass
+class FileContent:
+    """A file's decoded UTF-8 text plus its git blob ``sha`` and the ``ref`` read."""
+
+    text: str
+    sha: str
+    ref: str
 
 
 @dataclass
@@ -169,3 +179,19 @@ class GitHubAppClient:
                 issue_node_id=data["node_id"],
             ) from exc
         return data["html_url"]
+
+    async def read_file(self, repo: str, path: str, ref: str = "main") -> FileContent | None:
+        """Read a UTF-8 text file from ``repo`` at ``ref``; ``None`` if absent (404)."""
+        token = self.installation_token()
+        async with httpx.AsyncClient(transport=self.transport, base_url=_GITHUB_API) as client:
+            resp = await client.get(
+                f"/repos/{repo}/contents/{path}",
+                headers=self._token_headers(token),
+                params={"ref": ref},
+            )
+        if resp.status_code == 404:
+            return None
+        resp.raise_for_status()
+        data = resp.json()
+        text = base64.b64decode(data["content"]).decode("utf-8")
+        return FileContent(text=text, sha=data["sha"], ref=ref)
