@@ -20,6 +20,10 @@ def _spec() -> InstanceSpec:
     return InstanceSpec(product="demo", owner="acme")
 
 
+def _completed(stdout="", returncode=0):
+    return subprocess.CompletedProcess(args=[], returncode=returncode, stdout=stdout, stderr="")
+
+
 #: The bicep emits ``appConfigEndpoint``; the ``seed_appconfig`` step reads it to
 #: seed config/defaults.json into App Configuration. Execute-path tests must surface
 #: it in the provision_azure outputs or the seed step (correctly) fails for want of
@@ -86,7 +90,7 @@ def test_plan_step_order_and_names():
         "seed_app_key",
         "register_product",
         "deploy_council",
-        "squad_governance",
+        "branch_protection",
         "deploy_sre_agent",
         "write_config",
     ]
@@ -580,13 +584,67 @@ def test_removed_one_shot_squad_steps_are_gone():
     assert not names & {"squad_copilot", "squad_triage", "deploy_squad_ralph", "squad_init"}
 
 
-def test_squad_governance_low_creation_maturity_disables_auto_merge():
+def test_branch_protection_step_present_and_has_no_static_commands():
     spec = InstanceSpec(product="demo", owner="acme", creation_maturity="low")
     plan = InstanceProvisioner(spec).plan()
-    gov = next(s for s in plan.steps if s.name == "squad_governance")
-    assert gov.commands == [
-        ["gh", "api", "--method", "PATCH", "repos/acme/demo", "-F", "allow_auto_merge=false"]
+    step = next(s for s in plan.steps if s.name == "branch_protection")
+    assert step.commands == []
+    assert step.command == []
+
+
+def test_branch_protection_dry_run_records_plan(tmp_path):
+    spec = InstanceSpec(product="demo", owner="acme", creation_maturity="high")
+    manifest = InstanceProvisioner(spec, repo_root=tmp_path).apply(execute=False)
+    step = next(s for s in manifest.plan.steps if s.name == "branch_protection")
+    assert step.result == "ruleset planned (dry-run)"
+    assert step.executed is False
+
+
+def test_branch_protection_execute_creates_ruleset_and_sets_auto_merge():
+    calls: list[dict] = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append({"cmd": cmd, "input": kwargs.get("input")})
+        if "--jq" in cmd:
+            return _completed(stdout="")
+        return _completed(stdout="")
+
+    provisioner = InstanceProvisioner(
+        InstanceSpec(product="demo", owner="acme", creation_maturity="high"),
+        run=fake_run,
+    )
+    provisioner._apply_branch_protection()
+
+    api_calls = [c for c in calls if c["cmd"][:2] == ["gh", "api"]]
+    assert api_calls[0]["cmd"][2] == "/repos/acme/demo/rulesets?includes_parents=false"
+    assert api_calls[1]["cmd"][:5] == [
+        "gh", "api", "--method", "POST", "/repos/acme/demo/rulesets"
     ]
+    assert api_calls[1]["cmd"][-2:] == ["--input", "-"]
+    assert json.loads(api_calls[1]["input"])["name"] == "dsf-creation"
+    assert api_calls[2]["cmd"] == [
+        "gh", "api", "--method", "PATCH", "repos/acme/demo",
+        "-F", "allow_auto_merge=true",
+    ]
+
+
+def test_branch_protection_execute_updates_existing_ruleset():
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if "--jq" in cmd:
+            return _completed(stdout="123\n")
+        return _completed(stdout="")
+
+    provisioner = InstanceProvisioner(
+        InstanceSpec(product="demo", owner="acme", creation_maturity="low"),
+        run=fake_run,
+    )
+    provisioner._apply_branch_protection()
+
+    methods = [c for c in calls if c[:2] == ["gh", "api"] and "--method" in c]
+    assert methods[0][:5] == ["gh", "api", "--method", "PUT", "/repos/acme/demo/rulesets/123"]
 
 
 def test_plan_create_labels_includes_incident_marker():

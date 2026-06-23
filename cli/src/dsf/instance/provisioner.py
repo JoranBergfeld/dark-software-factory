@@ -24,6 +24,7 @@ from dsf.contracts.handoff import (
     INCIDENT_LABEL_COLOR,
     INCIDENT_LABEL_DESCRIPTION,
 )
+from dsf.instance.branch_protection import RULESET_NAME, auto_merge_command, ruleset_payload
 from dsf.instance.deploy_progress import DeploymentProgressPoller
 from dsf.instance.runtime_render import (
     render_product_registration,
@@ -42,7 +43,6 @@ from dsf.instance.spec import (
     read_manifest,
     write_manifest,
 )
-from dsf.instance.squad_governance import governance_commands
 
 Runner = Callable[..., Any]
 
@@ -278,12 +278,12 @@ class InstanceProvisioner:
                 ),
             ),
             ProvisionStep(
-                name="squad_governance",
+                name="branch_protection",
                 description=(
                     f"Apply the '{s.creation_maturity}' creation maturity dial to "
-                    f"{s.github_repo()}"
+                    f"{s.github_repo()} as a branch-protection ruleset (required "
+                    "reviews + green 'ci' check)"
                 ),
-                commands=governance_commands(s),
             ),
             ProvisionStep(
                 name="deploy_sre_agent",
@@ -435,6 +435,12 @@ class InstanceProvisioner:
                     check=True,
                 )
                 step.executed, step.result = True, "deployed"
+        elif step.name == "branch_protection":
+            if not execute:
+                step.result = "ruleset planned (dry-run)"
+            else:
+                self._apply_branch_protection()
+                step.executed, step.result = True, "applied"
         elif step.name == "deploy_sre_agent":
             provisional = InstanceManifest(
                 spec=self.spec, plan=plan, executed=executed, azure=azure_result
@@ -544,6 +550,38 @@ class InstanceProvisioner:
             installation_id=self._github_installation_id,
             repository_id=repository_id,
         )
+
+    def _apply_branch_protection(self) -> None:
+        """Apply the creation-maturity dial as a real branch-protection ruleset.
+
+        Uses the operator's interactive ``gh`` auth (admin on the just-created repo),
+        not the App, so the App needs no ``administration:write`` scope. Idempotent:
+        updates the existing ``dsf-creation`` ruleset in place when present. The
+        ruleset JSON is passed on stdin (``gh api --input -``) — no temp files.
+        """
+        repo = self.spec.github_repo()
+        payload = json.dumps(ruleset_payload(self.spec))
+        lookup = self._run(
+            [
+                "gh", "api", f"/repos/{repo}/rulesets?includes_parents=false", "--jq",
+                f'[.[] | select(.name=="{RULESET_NAME}") | .id] | first // empty',
+            ],
+            check=True, capture_output=True, text=True,
+        )
+        ruleset_id = (getattr(lookup, "stdout", "") or "").strip()
+        if ruleset_id:
+            self._run(
+                ["gh", "api", "--method", "PUT",
+                 f"/repos/{repo}/rulesets/{ruleset_id}", "--input", "-"],
+                input=payload, text=True, check=True,
+            )
+        else:
+            self._run(
+                ["gh", "api", "--method", "POST",
+                 f"/repos/{repo}/rulesets", "--input", "-"],
+                input=payload, text=True, check=True,
+            )
+        self._run(auto_merge_command(self.spec), check=True)
 
     def _sre_deploy_command(self, outputs: dict[str, str]) -> list[str]:
         """`az deployment sub create` for the SRE agent, from provision_azure outputs."""
