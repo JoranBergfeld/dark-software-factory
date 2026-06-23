@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 from dsf.config.flags import agent_enabled
 from dsf.contracts.enums import RunStatus, SourceKind
+from dsf.council.charter_context import set_charter_memo
 from dsf.observability.tracing import span_attrs_for_run
 from dsf.triggers.debounce import DEFAULT_DEBOUNCE_TTL, record_signal, should_suppress
 
@@ -83,7 +84,35 @@ async def run(run: Run, services: Services) -> Run:
 
         # Record this signal so a repeat within the TTL window is suppressed.
         await record_signal(payload, services, window_kind=SIGNAL_KIND, ttl=DEFAULT_DEBOUNCE_TTL)
+
+        await _load_and_audit_charter(run, services)
         return run
+
+
+async def _load_and_audit_charter(run: Run, services: Services) -> None:
+    """Load the run's charter once, warm the per-run memo, and audit presence.
+
+    Reads the charter store exactly once (for the status), seeds the per-run memo
+    so later stations/lenses read it without re-hitting Cosmos, and records an
+    audit line. Uncharted runs get an explicit warning; their proposals are tagged
+    in S3 and the value/strategic_fit lenses score charter-neutral.
+    """
+    product = run.scope_product_hints[0] if run.scope_product_hints else None
+    if product is None:
+        return
+    stored = await services.charter.get_charter(product)
+    charter = stored.charter if stored else None
+    await set_charter_memo(services, run, product, charter)
+    if charter is None:
+        run.audit.append(
+            _audit(
+                f"charter: none for '{product}' — uncharted; "
+                "value/strategic_fit neutral, proposals tagged"
+            )
+        )
+    else:
+        status = stored.status.value if stored else "OK"
+        run.audit.append(_audit(f"charter: loaded for '{product}' (status={status})"))
 
 
 def _audit(message: str):

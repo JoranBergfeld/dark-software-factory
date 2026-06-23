@@ -13,6 +13,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from dsf.contracts.enums import RunStatus
+from dsf.council.charter_context import load_charter
 from dsf.council.synthesizer import synthesize
 from dsf.observability.tracing import span_attrs_for_run
 from dsf.orchestrator.blackboard import Blackboard
@@ -22,6 +23,9 @@ if TYPE_CHECKING:
     from dsf.contracts.models import Proposal, Run
 
 STATION = "S3:synthesis"
+
+#: Tag applied to proposals whose product has no active charter.
+UNCHARTED_TAG = "uncharted product context"
 
 
 async def load_proposals(run_id: str, services: Services) -> list[Proposal]:
@@ -35,6 +39,7 @@ async def run(run: Run, services: Services) -> Run:
         run.status = RunStatus.SYNTHESIZING
 
         proposals = await synthesize(run, services)
+        await _tag_uncharted(run, services, proposals)
 
         blackboard = Blackboard(services.memory)
         await blackboard.save_proposals(run.id, proposals)
@@ -47,6 +52,16 @@ async def run(run: Run, services: Services) -> Run:
             )
         )
         return run
+
+
+async def _tag_uncharted(run: Run, services: Services, proposals: list[Proposal]) -> None:
+    """Tag each proposal whose product has no active charter (uncharted context)."""
+    for proposal in proposals:
+        if proposal.product is None:
+            continue
+        charter = await load_charter(services, run, proposal.product)
+        if charter is None:
+            proposal.context_tags.append(UNCHARTED_TAG)
 
 
 def _audit(message: str):
