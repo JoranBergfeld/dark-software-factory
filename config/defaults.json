@@ -27,6 +27,11 @@
       "enabled": true
     }
   },
+  "charter": {
+    "interview": {
+      "max_turns": 12
+    }
+  },
   "agents": {
     "SENTRY": {
       "enabled": true

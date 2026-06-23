@@ -347,6 +347,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_delete.set_defaults(func=_cmd_delete)
 
+    from dsf.cli.charter import add_charter_subcommands
+
+    add_charter_subcommands(sub)
+
     return parser
 
 
