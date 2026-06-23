@@ -141,3 +141,22 @@ class GitHubAppClient:
                 _REPLACE_ACTORS_MUTATION,
                 {"assignableId": issue_node_id, "actorIds": [bot_id]},
             )
+
+    async def create_issue(self, repo: str, title: str, body: str, labels: list[str]) -> str:
+        """File an issue and hand it to the Copilot coding agent; return its URL.
+
+        Files via REST, captures the issue node id, then assigns the coding agent
+        (Feature Council's output is a build request for the agent). Satisfies the
+        :class:`dsf.ports.GitHubClient` port.
+        """
+        token = self.installation_token()
+        async with httpx.AsyncClient(transport=self.transport, base_url=_GITHUB_API) as client:
+            resp = await client.post(
+                f"/repos/{repo}/issues",
+                headers=self._token_headers(token),
+                json={"title": title, "body": body, "labels": labels},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        await self.assign_coding_agent(repo, data["node_id"])
+        return data["html_url"]

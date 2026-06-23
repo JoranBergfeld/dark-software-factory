@@ -199,6 +199,55 @@ async def test_assign_coding_agent_replaces_actors_with_copilot_bot():
     assert calls[1]["variables"] == {"assignableId": "ISSUE_1", "actorIds": ["BOT_42"]}
 
 
+async def test_create_issue_files_then_assigns_and_returns_url():
+    import json
+
+    seen: dict[str, object] = {}
+
+    def extra(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/repos/acme/demo/issues":
+            seen["issue_body"] = json.loads(request.read())
+            return httpx.Response(
+                201,
+                json={
+                    "html_url": "https://github.com/acme/demo/issues/7",
+                    "node_id": "ISSUE_NODE_7",
+                },
+            )
+        payload = json.loads(request.read())
+        if "suggestedActors" in payload["query"]:
+            return httpx.Response(
+                200,
+                json={
+                    "data": {
+                        "repository": {
+                            "suggestedActors": {
+                                "nodes": [
+                                    {
+                                        "login": "copilot-swe-agent",
+                                        "__typename": "Bot",
+                                        "id": "BOT_42",
+                                    },
+                                ]
+                            }
+                        }
+                    }
+                },
+            )
+        seen["assign_vars"] = payload["variables"]
+        return httpx.Response(
+            200,
+            json={"data": {"replaceActorsForAssignable": {"assignable": {"id": "ISSUE_NODE_7"}}}},
+        )
+
+    client = _app_client(_token_handler(extra))
+    url = await client.create_issue("acme/demo", "Title", "Body", ["enhancement"])
+
+    assert url == "https://github.com/acme/demo/issues/7"
+    assert seen["issue_body"] == {"title": "Title", "body": "Body", "labels": ["enhancement"]}
+    assert seen["assign_vars"] == {"assignableId": "ISSUE_NODE_7", "actorIds": ["BOT_42"]}
+
+
 async def test_assign_coding_agent_raises_when_copilot_not_assignable():
     def extra(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
