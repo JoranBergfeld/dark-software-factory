@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
 from pydantic import BaseModel
@@ -38,6 +38,7 @@ class AzureRuntimeSettings(BaseModel):
     github_app_id: str = ""
     github_installation_id: str = ""
     github_app_private_key_secret: str = ""
+    github_repository: str = ""
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> AzureRuntimeSettings:
@@ -67,6 +68,7 @@ class AzureRuntimeSettings(BaseModel):
             github_app_private_key_secret=(
                 env.get("GITHUB_APP_PRIVATE_KEY_SECRET") or ""
             ).strip(),
+            github_repository=(env.get("GITHUB_REPOSITORY") or "").strip(),
         )
 
 
@@ -93,6 +95,51 @@ _REQUIRED_ENDPOINTS: tuple[tuple[str, str], ...] = (
 )
 
 
+def _read_kv_secret(keyvault_uri: str, secret_name: str) -> str:
+    """Read a Key Vault secret's value (real adapter; deferred Azure import)."""
+    from azure.identity import DefaultAzureCredential
+    from azure.keyvault.secrets import SecretClient
+
+    client = SecretClient(vault_url=keyvault_uri, credential=DefaultAzureCredential())
+    return client.get_secret(secret_name).value
+
+
+def _select_github_client(
+    settings: AzureRuntimeSettings,
+    *,
+    key_reader: Callable[[str, str], str] = _read_kv_secret,
+) -> GitHubClient:
+    """Return the App-backed client when the App is fully configured, else gh fallback.
+
+    App path (preferred): app id + installation id + Key Vault uri + secret name all
+    set. The private key is read from Key Vault and minted tokens are scoped to the
+    single product repo by name (``GITHUB_REPOSITORY`` -> repo name). Otherwise falls
+    back to the gh-CLI ``RealGitHubClient`` (local/dev, no App).
+    """
+    app_configured = (
+        settings.github_app_id
+        and settings.github_installation_id
+        and settings.keyvault_uri
+        and settings.github_app_private_key_secret
+    )
+    if app_configured:
+        from dsf.github_app_client import GitHubAppClient
+
+        repo_name = settings.github_repository.split("/")[-1]
+        return GitHubAppClient(
+            app_id=settings.github_app_id,
+            installation_id=settings.github_installation_id,
+            private_key_pem=key_reader(
+                settings.keyvault_uri, settings.github_app_private_key_secret
+            ),
+            repositories=[repo_name] if repo_name else None,
+        )
+
+    from dsf.github_client import RealGitHubClient
+
+    return RealGitHubClient()
+
+
 def build_services(*, env: Mapping[str, str] | None = None) -> Services:
     """Build a wired :class:`Services` bundle backed by real Azure adapters.
 
@@ -113,9 +160,7 @@ def build_services(*, env: Mapping[str, str] | None = None) -> Services:
             "missing required Azure runtime configuration: "
             + ", ".join(missing)
         )
-
     from dsf.config.azure_store import AppConfigStore
-    from dsf.github_client import RealGitHubClient
     from dsf.memory.azure_store import CosmosMemoryStore
     from dsf.model.azure_client import AzureOpenAIModelClient
     from dsf.model.azure_embeddings import AzureOpenAIEmbeddingClient
@@ -139,7 +184,7 @@ def build_services(*, env: Mapping[str, str] | None = None) -> Services:
         model=model,
         memory=memory,
         config=config,
-        github=RealGitHubClient(),
+        github=_select_github_client(settings),
         tracer=build_tracer(),
         product=settings.product,
         azure=settings,

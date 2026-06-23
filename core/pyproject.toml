@@ -15,6 +15,7 @@ azure = [
     "azure-appconfiguration>=1.5",
     "azure-cosmos>=4.5",
     "azure-identity>=1.15",
+    "azure-keyvault-secrets>=4.7",
     "openai>=1.30",
 ]
 

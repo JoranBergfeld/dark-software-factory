@@ -122,6 +122,20 @@ wheels = [
 ]
 
 [[package]]
+name = "azure-keyvault-secrets"
+version = "4.11.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "azure-core" },
+    { name = "isodate" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/f1/b8/03c7b4edd1e3355ad5fffb70e68af70cd09542963f45cf3a2aa9fb3930b5/azure_keyvault_secrets-4.11.0.tar.gz", hash = "sha256:ac14727b9159cca353173ec5a454d8d7b192a6f2f5e7eb540f9fbcf914fa0ca0", size = 112291, upload-time = "2026-04-17T00:52:12.422Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/78/76/41c513917c0e8dc68de0c33578c6a0668b4a09eb4dc3e2782d382dc2947f/azure_keyvault_secrets-4.11.0-py3-none-any.whl", hash = "sha256:d8543b710423569bd00ada2a2533fe83d52d8e1fe026e1c47f41a3bc0fc73ef5", size = 103148, upload-time = "2026-04-17T00:52:13.796Z" },
+]
+
+[[package]]
 name = "babel"
 version = "2.18.0"
 source = { registry = "https://pypi.org/simple" }
@@ -408,6 +422,7 @@ azure = [
     { name = "azure-appconfiguration" },
     { name = "azure-cosmos" },
     { name = "azure-identity" },
+    { name = "azure-keyvault-secrets" },
     { name = "openai" },
 ]
 
@@ -416,6 +431,7 @@ requires-dist = [
     { name = "azure-appconfiguration", marker = "extra == 'azure'", specifier = ">=1.5" },
     { name = "azure-cosmos", marker = "extra == 'azure'", specifier = ">=4.5" },
     { name = "azure-identity", marker = "extra == 'azure'", specifier = ">=1.15" },
+    { name = "azure-keyvault-secrets", marker = "extra == 'azure'", specifier = ">=4.7" },
     { name = "fastapi", specifier = ">=0.110" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "openai", marker = "extra == 'azure'", specifier = ">=1.30" },

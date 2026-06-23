@@ -92,3 +92,43 @@ def test_settings_github_app_fields_default_blank():
     settings = AzureRuntimeSettings.from_env({"DSF_PRODUCT": "demo"})
     assert settings.github_app_id == ""
     assert settings.github_installation_id == ""
+
+
+def test_settings_parse_github_repository_env():
+    from dsf.container import AzureRuntimeSettings
+
+    settings = AzureRuntimeSettings.from_env(
+        {"DSF_PRODUCT": "demo", "GITHUB_REPOSITORY": "acme/demo"}
+    )
+    assert settings.github_repository == "acme/demo"
+
+
+def test_select_github_client_uses_app_when_configured():
+    from dsf.container import AzureRuntimeSettings, _select_github_client
+    from dsf.github_app_client import GitHubAppClient
+
+    settings = AzureRuntimeSettings(
+        product="demo",
+        keyvault_uri="https://kv.example",
+        github_app_id="42",
+        github_installation_id="9001",
+        github_app_private_key_secret="github-app-private-key",
+        github_repository="acme/demo",
+    )
+    client = _select_github_client(settings, key_reader=lambda uri, name: "PEM")
+
+    assert isinstance(client, GitHubAppClient)
+    assert client.app_id == "42"
+    assert client.installation_id == "9001"
+    assert client.private_key_pem == "PEM"
+    assert client.repositories == ["demo"]
+
+
+def test_select_github_client_falls_back_without_app():
+    from dsf.container import AzureRuntimeSettings, _select_github_client
+    from dsf.github_client import RealGitHubClient
+
+    settings = AzureRuntimeSettings(product="demo")
+    client = _select_github_client(settings, key_reader=lambda uri, name: "PEM")
+
+    assert isinstance(client, RealGitHubClient)
