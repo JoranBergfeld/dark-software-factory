@@ -1,7 +1,7 @@
 # Operate the factory
 
 A factory you have [provisioned](provision-a-factory.md) runs itself. The council sweeps its
-sources on a schedule, files grounded `squad:ready` issues, the Coding Squad builds them, and
+sources on a schedule, files grounded `creation:ready` issues, the Coding Squad builds them, and
 the SRE Agent watches production and feeds incidents back to the start. No one stands inside
 the pipeline.
 
@@ -104,22 +104,22 @@ Grafana once App Insights is wired.
 ## The closed loop: council → squad
 
 The council files issues into the product repo; the Coding Squad triages and implements them.
-The whole contract is one system label — `dsf.contracts.handoff.HANDOFF_LABEL` (`squad:ready`)
+The whole contract is one system label — `dsf.contracts.handoff.HANDOFF_LABEL` (`creation:ready`)
 — that S6 stamps on **every** routed issue and that the squad's watch loop filters on
 (ADR 0007, ADR 0012).
 
 `dsf new` wires this end to end: `register_product` upserts the product (repo + label taxonomy
 + confidence threshold) into the routing registry that S1 scoping and S6 routing read;
-`create_labels` idempotently creates the taxonomy + `squad:ready` so filing never fails on a
+`create_labels` idempotently creates the taxonomy + `creation:ready` so filing never fails on a
 missing label; and `deploy_squad_ralph` brings up the per-product **Ralph watch loop** on AKS
-(`squad watch --execute`), which **KEDA** scales 0→1 on the open `squad:ready` issue count
+(`squad watch --execute`), which **KEDA** scales 0→1 on the open `creation:ready` issue count
 (ADR 0012). The squad reads its GitHub credential from the product Key Vault under AKS workload
 identity, seeded once during provisioning.
 
 The full loop:
 
 ```
-council files issue (squad:ready) → KEDA wakes the Ralph loop → squad watch →
+council files issue (creation:ready) → KEDA wakes the Ralph loop → squad watch →
 PR → review or auto-merge → council feedback-watcher → Lesson → next council run
 ```
 
@@ -133,15 +133,15 @@ resource groups plus Monitoring Contributor at subscription scope, and the Azure
 connectors (ADR 0015). The agent can be scoped to a resource group or to a whole subscription.
 
 It investigates incidents (Azure Monitor / App Insights) and files issues/PRs carrying
-`squad:ready` — so the Ralph loop picks them up — plus an `incident` label that the council's
+`creation:ready` — so the Ralph loop picks them up — plus an `incident` label that the council's
 `incidents` and `azuremonitor` sources pull on the council's own schedule. Recurring
 production faults therefore become systemic hardening proposals, not just one-off fixes
 (ADR 0013).
 
 ```
-prod telemetry → Azure SRE Agent → investigate → issue/PR (squad:ready) → Ralph → PR
+prod telemetry → Azure SRE Agent → investigate → issue/PR (creation:ready) → Ralph → PR
 prod incidents  → issue (incident) + Azure Monitor → council incidents/azuremonitor
-                  → S1–S7 → squad:ready proposal
+                  → S1–S7 → creation:ready proposal
 ```
 
 ## The learning loop

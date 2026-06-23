@@ -93,7 +93,7 @@ def test_render_sre_summary_writes_post_deploy_summary(tmp_path):
     assert "dsf-sre-microbi" in body     # agent name
     assert "rg-dsf-microbi" in body     # monitored RG
     assert "acme/microbi" in body       # product repo
-    assert "squad:ready" in body        # handoff label preserved
+    assert "creation:ready" in body     # handoff label preserved
     assert "containerapp" not in body   # no Container App deploy
     assert "wizard" not in body.lower()  # no interactive wizard framing
     assert "oauth" not in body.lower()   # no OAuth framing

@@ -35,7 +35,7 @@ per product and keep it pointed at the same handoff the rest of the loop uses.
 **In:** production telemetry for the product's Azure resources.
 
 **Out:** incident issues and pull requests in the product repo, carrying
-`squad:ready` and, for incident issues, `incident`. The fast path sends incidents
+`creation:ready` and, for incident issues, `incident`. The fast path sends incidents
 to the Squad; the council's `incidents` and `azuremonitor` sources also pull
 incidents and telemetry on the council's schedule (ADR 0013).
 
@@ -44,7 +44,7 @@ incidents and telemetry on the council's schedule (ADR 0013).
 Upstream, the SRE Agent takes from production itself: the running system is its
 input.
 
-Downstream, it hands to the Coding Squad through the same `squad:ready` label
+Downstream, it hands to the Coding Squad through the same `creation:ready` label
 the Council uses, so a production incident and a planned feature reach the Squad
 the same way and need no separate path. The second downstream hand, back to the
 Feature Council as signal, uses the `incident` label plus the council's
@@ -70,7 +70,7 @@ systemic hardening proposals.
   Azure-Monitor-connected either way.
 - Provisioning requires the caller to hold Owner, or Contributor + User Access
   Administrator, on the subscription.
-- The handoff label is the same `squad:ready` the rest of the loop uses, created
+- The handoff label is the same `creation:ready` the rest of the loop uses, created
   already by the `create_labels` provisioning step.
 
 ## Where it lives and how autonomous it is today
@@ -81,7 +81,7 @@ DSF provides is the Bicep (`infra/sre-agent.bicep`) and the `deploy_sre_agent`
 provisioner step that runs it. After provisioning, `dsf new` writes a short
 `sre-agent.md` summary (what got created, the agent portal link, a one-time
 `what-if`/verify note). The fix-forward handoff into the Squad uses the shared
-`squad:ready` label. The feedback path into the Council is built through the
+`creation:ready` label. The feedback path into the Council is built through the
 `incident` marker plus the `incidents` and `azuremonitor` sources (ADR 0013; ADR
 0015 supersedes ADR 0009's render-only approach).
 
