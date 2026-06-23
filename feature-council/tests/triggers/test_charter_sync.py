@@ -69,6 +69,20 @@ async def test_sync_on_sweep_unregistered_product_skips(monkeypatch):
     assert any(r.station == STATION and "not in registry" in r.message for r in run.audit)
 
 
+async def test_sync_on_sweep_registry_failure_is_audited(monkeypatch):
+    def _boom():
+        raise RuntimeError("registry unreadable")
+
+    monkeypatch.setattr(charter_sync, "load_registry", _boom)
+    repo = RecordingRepoClient({CHARTER_PATH: (_charter_md(), "s")})
+    services = build_test_services(product="alpha", charter=InMemoryCharterStore(), repo=repo)
+    run = _sweep_run()
+
+    await sync_charter_on_sweep(services, run)  # must not raise
+
+    assert any(r.station == STATION and "error" in r.message.lower() for r in run.audit)
+
+
 async def test_sync_on_sweep_no_product_is_noop():
     services = build_test_services(product=None, charter=InMemoryCharterStore())
     run = _sweep_run()

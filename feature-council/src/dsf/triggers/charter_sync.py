@@ -36,11 +36,11 @@ async def sync_charter_on_sweep(services: Services, run: Run) -> None:
     if services.repo is None:
         _audit(run, "charter sync skipped: no GitHub App configured")
         return
-    routed = route_product([product], load_registry())
-    if routed is None:
-        _audit(run, f"charter sync skipped: '{product}' not in registry")
-        return
     try:
+        routed = route_product([product], load_registry())
+        if routed is None:
+            _audit(run, f"charter sync skipped: '{product}' not in registry")
+            return
         stored = await sync_charter(
             services.charter, services.repo, product=product, repo=routed.github_repo
         )
