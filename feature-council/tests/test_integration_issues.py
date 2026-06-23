@@ -8,7 +8,6 @@ from pathlib import Path
 from dsf.config.flags import weights
 from dsf.contracts.enums import Verdict
 from dsf.contracts.models import CouncilVerdict, CriticScore
-from dsf.council.critics import strategic_fit
 from dsf.learning.calibration import proposed_weight_update
 from dsf.learning.feedback_watcher import PrOutcome, record_outcome
 from dsf.memory.consolidation import consolidate_run
@@ -28,17 +27,16 @@ from dsf_testing import (
 # ---------------------------------------------------------------------------
 
 
-async def test_consolidate_run_lesson_text_boosts_strategic_fit():
-    """consolidate_run -> get_lessons -> strategic_fit boost — no hand-fed text key."""
+async def test_consolidate_run_writes_retrievable_lesson_text():
+    """Issue #2: consolidate_run writes a lesson with a retrievable ``text`` field.
+
+    The charter spec drops strategic_fit's lesson keyword-count; the durable
+    learning contract is that the lesson text is written and retrievable.
+    """
     services = build_test_services()
     run = make_run([make_evidence("feature ask")])
     prop = make_proposal(run, product="alpha")
 
-    # Baseline: no lessons yet
-    base = await strategic_fit.evaluate(prop, run, services)
-    assert base.score == strategic_fit.DEFAULT_SCORE
-
-    # Write a lesson via the real consolidation path with strategic terms in rationale
     verdict = CouncilVerdict(
         proposal_id=prop.id,
         verdict=Verdict.ACCEPT,
@@ -48,24 +46,16 @@ async def test_consolidate_run_lesson_text_boosts_strategic_fit():
     )
     await consolidate_run(run, verdict, services.memory)
 
-    # strategic_fit reads lessons["text"] and finds supportive terms
-    boosted = await strategic_fit.evaluate(prop, run, services)
-    assert boosted.score > base.score, (
-        f"Expected boost above {base.score}, got {boosted.score}. "
-        "Lesson text field was not written or not read."
-    )
+    lessons = await services.memory.get_lessons("alpha")
+    assert lessons
+    assert any("strategic priority" in str(le.get("text", "")) for le in lessons)
 
 
-async def test_pr_outcome_lesson_text_boosts_strategic_fit():
-    """outcome_to_lesson writes text; strategic_fit reads it (PR path)."""
+async def test_pr_outcome_writes_retrievable_lesson_text():
+    """Issue #2 (PR path): outcome_to_lesson writes a retrievable ``text`` field."""
     from dsf.learning.lessons import outcome_to_lesson
 
     services = build_test_services()
-    run = make_run([make_evidence("pr feature")])
-    prop = make_proposal(run, product="alpha")
-
-    base = await strategic_fit.evaluate(prop, run, services)
-
     outcome = PrOutcome(
         id="pr-1",
         product="alpha",
@@ -76,8 +66,9 @@ async def test_pr_outcome_lesson_text_boosts_strategic_fit():
     lesson = outcome_to_lesson(outcome)
     await services.memory.put_lesson(dict(lesson))
 
-    boosted = await strategic_fit.evaluate(prop, run, services)
-    assert boosted.score > base.score
+    lessons = await services.memory.get_lessons("alpha")
+    assert lessons
+    assert any("roadmap" in str(le.get("text", "")) for le in lessons)
 
 
 # ---------------------------------------------------------------------------
