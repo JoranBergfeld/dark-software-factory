@@ -280,7 +280,7 @@ class InstanceProvisioner:
             ProvisionStep(
                 name="squad_governance",
                 description=(
-                    f"Apply the '{s.squad_maturity}' squad maturity dial to "
+                    f"Apply the '{s.creation_maturity}' creation maturity dial to "
                     f"{s.github_repo()}"
                 ),
                 commands=governance_commands(s),

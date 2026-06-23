@@ -34,7 +34,7 @@ def test_new_parser_wiring():
     assert args.name_prefix == "demopfx"
     assert args.environment == "dev"
     assert args.location == "swedencentral"
-    assert args.squad_maturity == "low"
+    assert args.creation_maturity == "low"
     # Provisioning executes by default; --dry-run is the opt-in preview.
     assert args.dry_run is False
     assert args.write_plan is False
@@ -59,21 +59,21 @@ def test_bootstrap_subcommand_is_wired():
     assert args.keyvault_name == "kv-dsf-app"
 
 
-def test_new_squad_maturity_high_flows_into_manifest(tmp_path):
+def test_new_creation_maturity_high_flows_into_manifest(tmp_path):
     rc = main([
         "new", "--product", "demo", "--owner", "acme",
-        "--name-prefix", "demopfx", "--squad-maturity", "high",
+        "--name-prefix", "demopfx", "--creation-maturity", "high",
         "--dry-run", "--write-plan", "--config-root", str(tmp_path),
     ])
     assert rc == 0
-    assert read_manifest("demo", repo_root=tmp_path).spec.squad_maturity == "high"
+    assert read_manifest("demo", repo_root=tmp_path).spec.creation_maturity == "high"
 
 
-def test_new_rejects_unknown_squad_maturity():
+def test_new_rejects_unknown_creation_maturity():
     with pytest.raises(SystemExit):
         build_parser().parse_args([
             "new", "--product", "demo", "--owner", "acme",
-            "--name-prefix", "demopfx", "--squad-maturity", "wild",
+            "--name-prefix", "demopfx", "--creation-maturity", "wild",
         ])
 
 

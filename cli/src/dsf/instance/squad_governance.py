@@ -13,8 +13,8 @@ from dsf.instance.spec import InstanceSpec
 
 
 def governance_commands(spec: InstanceSpec) -> list[list[str]]:
-    """Return the ``gh`` commands that apply ``spec.squad_maturity`` to the repo."""
-    enabled = "true" if spec.squad_maturity == "high" else "false"
+    """Return the ``gh`` commands that apply ``spec.creation_maturity`` to the repo."""
+    enabled = "true" if spec.creation_maturity == "high" else "false"
     return [
         [
             "gh", "api", "--method", "PATCH", f"repos/{spec.github_repo()}",

@@ -109,14 +109,14 @@ def test_azure_provision_result_round_trips_in_manifest(tmp_path):
     assert loaded.azure.deployment_name == "dsf-demo"
 
 
-def test_squad_maturity_defaults_to_low():
+def test_creation_maturity_defaults_to_low():
     spec = InstanceSpec(product="demo", owner="acme")
-    assert spec.squad_maturity == "low"
+    assert spec.creation_maturity == "low"
 
 
-def test_squad_maturity_accepts_high():
-    spec = InstanceSpec(product="demo", owner="acme", squad_maturity="high")
-    assert spec.squad_maturity == "high"
+def test_creation_maturity_accepts_high():
+    spec = InstanceSpec(product="demo", owner="acme", creation_maturity="high")
+    assert spec.creation_maturity == "high"
 
 
 def test_manifest_round_trips_github_app_binding():
@@ -139,9 +139,9 @@ def test_manifest_github_app_defaults_to_none():
     assert InstanceManifest(spec=spec, plan=plan).github_app is None
 
 
-def test_squad_maturity_rejects_unknown_value():
+def test_creation_maturity_rejects_unknown_value():
     with pytest.raises(ValidationError):
-        InstanceSpec(product="demo", owner="acme", squad_maturity="medium")
+        InstanceSpec(product="demo", owner="acme", creation_maturity="medium")
 
 
 # --- SRE agent spec tests ---

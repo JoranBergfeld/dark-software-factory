@@ -580,8 +580,8 @@ def test_removed_one_shot_squad_steps_are_gone():
     assert not names & {"squad_copilot", "squad_triage", "deploy_squad_ralph", "squad_init"}
 
 
-def test_squad_governance_low_maturity_disables_auto_merge():
-    spec = InstanceSpec(product="demo", owner="acme", squad_maturity="low")
+def test_squad_governance_low_creation_maturity_disables_auto_merge():
+    spec = InstanceSpec(product="demo", owner="acme", creation_maturity="low")
     plan = InstanceProvisioner(spec).plan()
     gov = next(s for s in plan.steps if s.name == "squad_governance")
     assert gov.commands == [

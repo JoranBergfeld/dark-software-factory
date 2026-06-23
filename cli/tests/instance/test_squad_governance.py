@@ -7,7 +7,7 @@ from dsf.instance.squad_governance import governance_commands
 
 
 def _spec(maturity: str) -> InstanceSpec:
-    return InstanceSpec(product="demo", owner="acme", squad_maturity=maturity)
+    return InstanceSpec(product="demo", owner="acme", creation_maturity=maturity)
 
 
 def test_low_maturity_disables_auto_merge():

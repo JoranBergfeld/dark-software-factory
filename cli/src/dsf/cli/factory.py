@@ -112,7 +112,7 @@ def _cmd_new(args: argparse.Namespace) -> int:
         name_prefix=name_prefix,
         environment=args.environment,
         location=args.location,
-        squad_maturity=args.squad_maturity,
+        creation_maturity=args.creation_maturity,
     )
     owner_kv = args.owner_keyvault_uri or os.environ.get("DSF_OWNER_KEYVAULT_URI", "")
     app_id, installation_id = "", ""
@@ -273,10 +273,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Azure region for the resource group and resources",
     )
     p_new.add_argument(
-        "--squad-maturity",
+        "--creation-maturity",
         default="low",
         choices=["low", "high"],
-        help="coding-squad autonomy: 'low' routes every PR to a human, "
+        help="creation-phase autonomy: 'low' routes every PR to a human, "
         "'high' auto-merges on green CI",
     )
     p_new.add_argument(

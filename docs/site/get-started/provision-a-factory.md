@@ -32,7 +32,7 @@ uv run dsf new \
   --name-prefix microbi \
   --visibility private \
   --location swedencentral \
-  --squad-maturity low      # 'low' routes every PR to a human; 'high' auto-merges on green CI
+  --creation-maturity low   # 'low' routes every PR to a human; 'high' auto-merges on green CI
 ```
 
 Run `uv run dsf new --help` for the full flag list.
