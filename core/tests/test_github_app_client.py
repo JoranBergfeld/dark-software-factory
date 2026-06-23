@@ -325,3 +325,48 @@ async def test_read_file_returns_none_on_404():
 
     client = _app_client(_token_handler(extra))
     assert await client.read_file("org/alpha", ".dsf/charter.md") is None
+
+
+async def test_open_file_pr_creates_branch_writes_file_and_opens_pr():
+    seen: list[tuple[str, str]] = []
+
+    def extra(request: httpx.Request) -> httpx.Response:
+        method, path = request.method, request.url.path
+        seen.append((method, path))
+        if method == "GET" and path.endswith("/git/ref/heads/main"):
+            return httpx.Response(200, json={"object": {"sha": "basesha"}})
+        if method == "POST" and path.endswith("/git/refs"):
+            body = json.loads(request.read())
+            assert body == {"ref": "refs/heads/charter/alpha", "sha": "basesha"}
+            return httpx.Response(201, json={})
+        if method == "GET" and "/contents/" in path:
+            return httpx.Response(404, json={})  # new file (no existing sha)
+        if method == "PUT" and "/contents/" in path:
+            body = json.loads(request.read())
+            assert body["branch"] == "charter/alpha"
+            assert base64.b64decode(body["content"]).decode() == "BODY"
+            assert "sha" not in body
+            return httpx.Response(201, json={})
+        if method == "POST" and path.endswith("/pulls"):
+            body = json.loads(request.read())
+            assert body == {
+                "title": "T",
+                "body": "B",
+                "head": "charter/alpha",
+                "base": "main",
+            }
+            return httpx.Response(201, json={"html_url": "https://github.com/org/alpha/pull/1"})
+        return httpx.Response(500, json={"unexpected": path})
+
+    client = _app_client(_token_handler(extra))
+    url = await client.open_file_pr(
+        "org/alpha",
+        path=".dsf/charter.md",
+        content="BODY",
+        branch="charter/alpha",
+        title="T",
+        body="B",
+        message="add charter",
+    )
+    assert url == "https://github.com/org/alpha/pull/1"
+    assert ("PUT", "/repos/org/alpha/contents/.dsf/charter.md") in seen
