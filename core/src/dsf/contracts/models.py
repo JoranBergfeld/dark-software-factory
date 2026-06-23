@@ -100,6 +100,7 @@ class Proposal(BaseModel):
     product: str | None = None
     evidence_ids: list[str] = Field(default_factory=list)
     confidence: float = 0.0
+    context_tags: list[str] = Field(default_factory=list)
 
 
 class CriticScore(BaseModel):
