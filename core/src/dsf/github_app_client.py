@@ -35,13 +35,15 @@ class _CachedToken:
 class GitHubAppClient:
     """Mints installation access tokens for the DSF GitHub App.
 
-    ``repository_ids`` (when set) scopes minted tokens to exactly those repos.
+    ``repository_ids`` / ``repositories`` (when set) scope minted tokens to exactly
+    those repos (by numeric id or by name, respectively).
     """
 
     app_id: str
     installation_id: str
     private_key_pem: str = field(repr=False)
     repository_ids: list[int] | None = None
+    repositories: list[str] | None = None
     transport: httpx.BaseTransport | None = None
     clock: Callable[[], datetime] = _utcnow
     _cached: _CachedToken | None = field(default=None, init=False, repr=False)
@@ -64,6 +66,8 @@ class GitHubAppClient:
         body: dict[str, object] = {}
         if self.repository_ids:
             body["repository_ids"] = self.repository_ids
+        if self.repositories:
+            body["repositories"] = self.repositories
         with httpx.Client(transport=self.transport, base_url=_GITHUB_API) as client:
             resp = client.post(
                 f"/app/installations/{self.installation_id}/access_tokens",

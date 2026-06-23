@@ -69,6 +69,31 @@ def test_installation_token_mints_repo_scoped_token_and_signs_valid_jwt():
     assert b'"repository_ids"' in seen["body"] and b"789" in seen["body"]
 
 
+def test_installation_token_scopes_by_repository_name():
+    pem, _ = _rsa_pem()
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["body"] = request.read()
+        return httpx.Response(
+            201,
+            json={"token": "ghs_x", "expires_at": "2026-06-22T13:00:00Z"},
+        )
+
+    client = GitHubAppClient(
+        app_id="1",
+        installation_id="2",
+        private_key_pem=pem,
+        repositories=["demo"],
+        transport=httpx.MockTransport(handler),
+        clock=_fixed_clock(datetime(2026, 6, 22, 12, 0, tzinfo=UTC)),
+    )
+    client.installation_token()
+    import json
+
+    assert json.loads(seen["body"]) == {"repositories": ["demo"]}
+
+
 def test_installation_token_caches_until_near_expiry_then_refreshes():
     pem, _ = _rsa_pem()
     now = {"t": datetime(2026, 6, 22, 12, 0, tzinfo=UTC)}
