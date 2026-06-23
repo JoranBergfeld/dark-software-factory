@@ -71,6 +71,14 @@ def _print_step_progress(line: str) -> None:
     print(f"[dsf]     {line}", flush=True)
 
 
+def charter_next_action(product: str) -> str:
+    """The post-provision hint pointing the operator at the charter workflow."""
+    return (
+        f"[dsf] next: run `dsf charter init --product {product}` to author the "
+        "product charter (opens a PR for review)"
+    )
+
+
 def _cmd_new(args: argparse.Namespace) -> int:
     """Create (or preview) a new isolated product factory instance."""
     import os
@@ -140,6 +148,8 @@ def _cmd_new(args: argparse.Namespace) -> int:
     if failed:
         print(f"[dsf] provisioning STOPPED at '{failed.name}': {failed.error}")
         return 1
+    if execute:
+        print(charter_next_action(args.product))
     return 0
 
 
