@@ -23,7 +23,7 @@ from dsf_testing import (
 )
 
 # ---------------------------------------------------------------------------
-# Issue #2 — Learning loop: consolidate_run writes text; strategic_fit reads it
+# Issue #2 — Learning loop: consolidate_run writes a retrievable lesson text
 # ---------------------------------------------------------------------------
 
 
