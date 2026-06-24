@@ -172,3 +172,64 @@ def test_init_requires_app(monkeypatch, capsys):
     )
     rc = main(["charter", "init", "--product", "alpha"])
     assert rc == 1 and "App" in capsys.readouterr().err
+
+
+def test_app_settings_derives_app_creds_from_owner_kv(monkeypatch):
+    from dsf.cli.charter import _app_settings
+
+    for var in (
+        "GITHUB_APP_ID",
+        "GITHUB_INSTALLATION_ID",
+        "GITHUB_APP_PRIVATE_KEY_SECRET",
+        "AZURE_KEYVAULT_URI",
+        "GITHUB_REPOSITORY",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("DSF_OWNER_KEYVAULT_URI", "https://owner-kv.vault.azure.net/")
+    monkeypatch.setattr("dsf.cli.charter._resolve_repo", lambda product: "org/alpha")
+
+    secrets = {"github-app-id": "111", "github-app-installation-id": "222"}
+    settings = _app_settings("alpha", secret_reader=lambda kv, name: secrets[name])
+
+    assert settings.github_app_id == "111"
+    assert settings.github_installation_id == "222"
+    assert settings.github_app_private_key_secret == "github-app-private-key"
+    assert settings.keyvault_uri == "https://owner-kv.vault.azure.net/"
+    assert settings.github_repository == "org/alpha"
+
+
+def test_app_settings_respects_explicit_env(monkeypatch):
+    from dsf.cli.charter import _app_settings
+
+    monkeypatch.setenv("DSF_OWNER_KEYVAULT_URI", "https://owner-kv.vault.azure.net/")
+    monkeypatch.setenv("GITHUB_APP_ID", "explicit-app")
+    monkeypatch.setenv("GITHUB_INSTALLATION_ID", "explicit-inst")
+    monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY_SECRET", "explicit-secret")
+    monkeypatch.setenv("AZURE_KEYVAULT_URI", "https://product-kv.vault.azure.net/")
+
+    def _boom(kv, name):
+        raise AssertionError("must not read the owner KV when App env is explicit")
+
+    settings = _app_settings("alpha", secret_reader=_boom)
+    assert settings.github_app_id == "explicit-app"
+    assert settings.keyvault_uri == "https://product-kv.vault.azure.net/"
+
+
+def test_app_settings_no_owner_kv_stays_offline(monkeypatch):
+    from dsf.cli.charter import _app_settings
+
+    for var in (
+        "GITHUB_APP_ID",
+        "GITHUB_INSTALLATION_ID",
+        "GITHUB_APP_PRIVATE_KEY_SECRET",
+        "AZURE_KEYVAULT_URI",
+        "DSF_OWNER_KEYVAULT_URI",
+    ):
+        monkeypatch.delenv(var, raising=False)
+
+    def _boom(kv, name):
+        raise AssertionError("must not read any KV without DSF_OWNER_KEYVAULT_URI")
+
+    settings = _app_settings("alpha", secret_reader=_boom)
+    assert settings.github_app_id == ""
+    assert settings.product == "alpha"

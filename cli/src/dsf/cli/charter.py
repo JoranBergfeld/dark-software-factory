@@ -42,6 +42,72 @@ def _settings(product: str) -> AzureRuntimeSettings:
     return AzureRuntimeSettings.from_env({**os.environ, "DSF_PRODUCT": product})
 
 
+# The one master DSF GitHub App identity is seeded into the owner Key Vault by
+# ``dsf bootstrap`` under these secret names (see dsf.instance.app_bootstrap).
+_OWNER_KV_ENV = "DSF_OWNER_KEYVAULT_URI"
+_APP_ID_SECRET = "github-app-id"
+_INSTALLATION_SECRET = "github-app-installation-id"
+_PRIVATE_KEY_SECRET = "github-app-private-key"
+
+
+def _read_owner_secret(owner_keyvault_uri: str, secret_name: str) -> str:
+    """Read a secret's value from the owner Key Vault via the ``az`` CLI."""
+    import subprocess
+
+    name = owner_keyvault_uri.split("//", 1)[-1].split(".", 1)[0]
+    res = subprocess.run(
+        [
+            "az", "keyvault", "secret", "show",
+            "--vault-name", name,
+            "--name", secret_name,
+            "--query", "value", "-o", "tsv",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return res.stdout.strip()
+
+
+def _app_settings(
+    product: str,
+    *,
+    secret_reader: Callable[[str, str], str] = _read_owner_secret,
+) -> AzureRuntimeSettings:
+    """Settings for the App-backed charter paths (``init`` and ``--ref``).
+
+    The factory authenticates to a product repo with the single master DSF GitHub
+    App, whose credentials ``dsf bootstrap`` seeds into the owner Key Vault. When
+    the operator has not set the App env vars explicitly but
+    ``DSF_OWNER_KEYVAULT_URI`` is exported (as it is for ``dsf new``), derive the
+    App id, installation id, private-key pointer and Key Vault from that owner
+    vault, and resolve the product repo from the registry — so ``dsf charter
+    init`` works straight after provisioning without re-exporting five more
+    variables. Explicit env always wins.
+    """
+    import os
+
+    env = {**os.environ, "DSF_PRODUCT": product}
+    already_set = all(
+        env.get(name)
+        for name in (
+            "GITHUB_APP_ID",
+            "GITHUB_INSTALLATION_ID",
+            "GITHUB_APP_PRIVATE_KEY_SECRET",
+            "AZURE_KEYVAULT_URI",
+        )
+    )
+    owner_kv = (env.get(_OWNER_KV_ENV) or "").strip()
+    if owner_kv and not already_set:
+        env["AZURE_KEYVAULT_URI"] = owner_kv
+        env["GITHUB_APP_PRIVATE_KEY_SECRET"] = _PRIVATE_KEY_SECRET
+        env["GITHUB_APP_ID"] = secret_reader(owner_kv, _APP_ID_SECRET)
+        env["GITHUB_INSTALLATION_ID"] = secret_reader(owner_kv, _INSTALLATION_SECRET)
+        if not env.get("GITHUB_REPOSITORY"):
+            env["GITHUB_REPOSITORY"] = _resolve_repo(product) or ""
+    return AzureRuntimeSettings.from_env(env)
+
+
 def _resolve_repo(product: str) -> str | None:
     """Resolve ``product`` to its ``owner/name`` repo via the product registry."""
     from dsf.config.registry import load_registry, route_product
@@ -78,7 +144,7 @@ def _live_blob_sha(args: argparse.Namespace, product: str) -> tuple[str | None, 
         if not repo_full:
             return None, f"product {product!r} is not in registry"
         try:
-            app = build_repo_app_client(_settings(product))
+            app = build_repo_app_client(_app_settings(product))
         except ValueError as exc:
             return None, str(exc)
         file = asyncio.run(app.read_file(repo_full, CHARTER_PATH, ref=args.ref))
@@ -146,7 +212,7 @@ def _cmd_charter_sync(args: argparse.Namespace) -> int:
             if not repo_full:
                 print(f"[dsf] error: product {product!r} is not in registry", file=sys.stderr)
                 return 1
-            app = build_repo_app_client(_settings(product))
+            app = build_repo_app_client(_app_settings(product))
             stored = asyncio.run(
                 sync_charter(store, app, product=product, repo=repo_full, ref=args.ref)
             )
@@ -184,13 +250,20 @@ def _cmd_charter_init(args: argparse.Namespace) -> int:
         print(f"[dsf] error: product {product!r} is not in registry", file=sys.stderr)
         return 1
 
-    settings = _settings(product)
+    settings = _app_settings(product)
     try:
         app = build_repo_app_client(settings)
         model = build_model_client(settings)
         config = build_config_store(settings)
     except ValueError as exc:
         print(f"[dsf] error: {exc}", file=sys.stderr)
+        if "GitHub App" in str(exc):
+            print(
+                "[dsf] hint: export DSF_OWNER_KEYVAULT_URI=<owner Key Vault uri> "
+                "(printed by `dsf bootstrap`) to derive the App credentials "
+                "automatically.",
+                file=sys.stderr,
+            )
         return 1
 
     max_turns = int(config.get_value(MAX_TURNS_KEY, DEFAULT_MAX_TURNS))

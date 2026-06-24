@@ -50,6 +50,14 @@ Operator commands:
 - `dsf charter status --product <p>` — print the stored charter's status and any
   drift vs the file (`OK` / `STALE` / `MISSING` / `INVALID`).
 
+`dsf charter init` (and `sync`/`status --ref`) reach the product repo through the
+master DSF GitHub App. Keep `DSF_OWNER_KEYVAULT_URI` exported (the value `dsf
+bootstrap` printed and that `dsf new` already uses): the CLI then reads the App id,
+installation id, and private key from that owner Key Vault and resolves the repo
+from the registry — no other GitHub env vars are needed. Explicit `GITHUB_APP_ID` /
+`GITHUB_INSTALLATION_ID` / `GITHUB_APP_PRIVATE_KEY_SECRET` / `AZURE_KEYVAULT_URI`
+override it when set.
+
 The charter is **advisory**: it informs the council's value and strategic-fit
 reasoning and adds a non-blocking "possible non-goal conflict" note to a
 verdict's rationale. It never vetoes a proposal and never changes the score.
