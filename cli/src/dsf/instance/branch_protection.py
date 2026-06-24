@@ -12,7 +12,9 @@ The dial governs repo controls, not any agent's behaviour:
   so a PR merges itself once ``ci`` is green (no human).
 
 ``ci`` is a DSF convention: the product CI must publish a status check named ``ci``
-for merges (low) / auto-merge (high) to proceed.
+for merges (low) / auto-merge (high) to proceed. The status-check rule sets
+``do_not_enforce_on_create`` so the repository's initial commit (branch creation)
+isn't blocked by a ``ci`` check that cannot exist yet on an empty repo.
 """
 
 from __future__ import annotations
@@ -62,6 +64,7 @@ def ruleset_payload(spec: InstanceSpec) -> dict:
                 "type": "required_status_checks",
                 "parameters": {
                     "strict_required_status_checks_policy": True,
+                    "do_not_enforce_on_create": True,
                     "required_status_checks": [{"context": _REQUIRED_CHECK_CONTEXT}],
                 },
             },
