@@ -207,6 +207,45 @@ class GitHubAppClient:
         text = base64.b64decode(data["content"]).decode("utf-8")
         return FileContent(text=text, sha=data["sha"], ref=ref)
 
+    async def _seed_initial_commit(
+        self,
+        client: httpx.AsyncClient,
+        repo: str,
+        base: str,
+        headers: dict[str, str],
+    ) -> str:
+        """Seed an empty repository with an initial commit on ``base``.
+
+        GitHub answers ref reads with 409 ("Git Repository is empty") until the
+        first commit exists, so a freshly provisioned product repo cannot be
+        branched from. Create a minimal initial commit (a single ``.gitkeep``)
+        and point ``base`` at it; the caller then branches off the returned sha.
+        """
+        tree = await client.post(
+            f"/repos/{repo}/git/trees",
+            headers=headers,
+            json={
+                "tree": [
+                    {"path": ".gitkeep", "mode": "100644", "type": "blob", "content": ""}
+                ]
+            },
+        )
+        tree.raise_for_status()
+        commit = await client.post(
+            f"/repos/{repo}/git/commits",
+            headers=headers,
+            json={"message": "chore: initialize repository", "tree": tree.json()["sha"]},
+        )
+        commit.raise_for_status()
+        commit_sha = commit.json()["sha"]
+        ref = await client.post(
+            f"/repos/{repo}/git/refs",
+            headers=headers,
+            json={"ref": f"refs/heads/{base}", "sha": commit_sha},
+        )
+        ref.raise_for_status()
+        return commit_sha
+
     async def open_file_pr(
         self,
         repo: str,
@@ -231,8 +270,11 @@ class GitHubAppClient:
         headers = self._token_headers(token)
         async with httpx.AsyncClient(transport=self.transport, base_url=_GITHUB_API) as client:
             base_ref = await client.get(f"/repos/{repo}/git/ref/heads/{base}", headers=headers)
-            base_ref.raise_for_status()
-            base_sha = base_ref.json()["object"]["sha"]
+            if base_ref.status_code == 409:
+                base_sha = await self._seed_initial_commit(client, repo, base, headers)
+            else:
+                base_ref.raise_for_status()
+                base_sha = base_ref.json()["object"]["sha"]
 
             new_ref = await client.post(
                 f"/repos/{repo}/git/refs",
