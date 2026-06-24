@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dsf.contracts.enums import TriggerKind
+from dsf.contracts.enums import RunStatus, TriggerKind
 from dsf.contracts.models import RoutedIssue, Run
 from dsf.orchestrator.blackboard import Blackboard
 from dsf.orchestrator.stations import s7_filing
@@ -56,3 +56,45 @@ async def test_s7_dedups_reworded_title_with_semantic_embedder():
 
     messages = " ".join(a.message for a in run2.audit)
     assert "duplicate" in messages
+
+
+async def test_s7_records_dedup_and_files_when_coding_agent_assignment_fails():
+    """If filing succeeds but Copilot assignment fails, S7 must still record the
+    dedup key and complete FILED (never silently drop it and re-file a duplicate)."""
+    from dsf.ports import CodingAgentAssignmentError
+
+    class _AssignFailsClient:
+        async def create_issue(self, repo, title, body, labels):
+            raise CodingAgentAssignmentError(
+                "filed but assign failed",
+                issue_url="https://github.com/acme/demo/issues/9",
+                issue_node_id="ISSUE_NODE_9",
+            )
+
+    services = build_test_services()
+    services.github = _AssignFailsClient()
+
+    run = Run(trigger=TriggerKind.SIGNAL, dry_run=False)
+    problem = "checkout crashes on submit returning 500 errors"
+    issue = RoutedIssue(
+        proposal_id="p1",
+        product="demo",
+        repo="acme/demo",
+        title="Checkout returns 500",
+        body="body",
+        problem=problem,
+    )
+    await Blackboard(services.memory).save_issues(run.id, [issue])
+
+    result = await s7_filing.run(run, services)
+
+    assert result.status == RunStatus.FILED
+    # The filing was recorded for dedup despite the assignment failure.
+    hits = await services.memory.query_similar(problem, "issue", k=5)
+    assert hits, "S7 must dedup-index a filed issue even when assignment failed"
+    # filed_url carried over from the error.
+    saved = await Blackboard(services.memory).load_issues(run.id)
+    assert saved[0].filed_url == "https://github.com/acme/demo/issues/9"
+    # The assignment failure is surfaced loudly in the audit log.
+    messages = " ".join(a.message for a in result.audit)
+    assert "assignment FAILED" in messages

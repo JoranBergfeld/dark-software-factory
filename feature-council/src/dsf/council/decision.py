@@ -20,11 +20,13 @@ from dsf.config.flags import (
     threshold,
     weights,
 )
-from dsf.contracts.models import CouncilVerdict
+from dsf.contracts.models import AuditRecord, CouncilVerdict
+from dsf.council.charter_context import load_charter
 from dsf.council.critics import ALL_CRITICS
 from dsf.council.deliberation import GATE_NAMES, deliberate
 from dsf.council.jury import convene_jury
 from dsf.council.outcome import decide_outcome
+from dsf.council.scope import annotate_scope
 
 if TYPE_CHECKING:
     from dsf.container import Services
@@ -86,7 +88,7 @@ async def decide(proposal: Proposal, run: Run, services: Services) -> CouncilVer
     )
 
     go = sum(1 for v in jury.votes if v.go)
-    return CouncilVerdict(
+    verdict = CouncilVerdict(
         proposal_id=proposal.id,
         verdict=verdict,
         weighted_score=recommendation.weighted_score,
@@ -97,6 +99,28 @@ async def decide(proposal: Proposal, run: Run, services: Services) -> CouncilVer
             f"{outcome_rationale} Jury {go}/{len(jury.votes)} to proceed. "
             f"Recommendation: {recommendation.rationale}"
         ),
+    )
+    await _annotate_scope(proposal, run, services, verdict)
+    return verdict
+
+
+async def _annotate_scope(
+    proposal: Proposal, run: Run, services: Services, verdict: CouncilVerdict
+) -> None:
+    """Advisory non-goal scope check (gated). Never changes the score or veto.
+
+    On a flagged conflict, append a "scope: ..." line to the verdict rationale and
+    a ``council:scope`` audit record. Uncharted / no-non-goal proposals are no-ops.
+    """
+    if not critic_enabled(services.config, "scope", product=proposal.product):
+        return
+    charter = await load_charter(services, run, proposal.product)
+    note = await annotate_scope(proposal, charter, services)
+    if note.in_scope:
+        return
+    verdict.rationale = f"{verdict.rationale} scope: {note.note} (advisory)."
+    run.audit.append(
+        AuditRecord(station="council:scope", message=f"{proposal.id}: scope {note.note} (advisory)")
     )
 
 

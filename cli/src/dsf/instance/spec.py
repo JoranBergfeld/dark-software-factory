@@ -36,7 +36,7 @@ class InstanceSpec(BaseModel):
     runtime_image: str = "ghcr.io/joranbergfeld/dsf-runtime:latest"
     confidence_threshold: float = 0.6
     name_prefix: str = "dsf"
-    squad_maturity: str = "low"
+    creation_maturity: str = "low"
     environment: str = "dev"
     location: str = "swedencentral"
     label_taxonomy: dict[str, list[str]] = Field(default_factory=default_label_taxonomy)
@@ -73,11 +73,11 @@ class InstanceSpec(BaseModel):
             )
         return value
 
-    @field_validator("squad_maturity")
+    @field_validator("creation_maturity")
     @classmethod
-    def _validate_squad_maturity(cls, value: str) -> str:
+    def _validate_creation_maturity(cls, value: str) -> str:
         if value not in {"low", "high"}:
-            raise ValueError(f"squad_maturity must be 'low' or 'high', got {value!r}")
+            raise ValueError(f"creation_maturity must be 'low' or 'high', got {value!r}")
         return value
 
     def resolved_repo(self) -> str:
@@ -153,6 +153,20 @@ class AzureProvisionResult(BaseModel):
     outputs: dict[str, str] = Field(default_factory=dict)
 
 
+class GitHubAppBinding(BaseModel):
+    """The DSF GitHub App binding captured for one product at provision time.
+
+    ``app_id`` and ``installation_id`` are owner-level (shared across products);
+    ``repository_id`` is this product's repo, added to that single installation.
+    ``private_key_secret`` is the product Key Vault secret name the runtime reads.
+    """
+
+    app_id: str
+    installation_id: str
+    repository_id: int
+    private_key_secret: str = "github-app-private-key"
+
+
 class InstanceManifest(BaseModel):
     """Persisted record of an instance: spec + plan + execution status."""
 
@@ -160,6 +174,7 @@ class InstanceManifest(BaseModel):
     plan: InstancePlan
     executed: bool = False
     azure: AzureProvisionResult | None = None
+    github_app: GitHubAppBinding | None = None
 
 
 def _default_repo_root() -> Path:

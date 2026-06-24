@@ -14,6 +14,7 @@ from typing import Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel
 
+from dsf.contracts.charter import StoredCharter
 from dsf.contracts.enums import SourceKind
 from dsf.contracts.models import EvidenceItem
 
@@ -80,6 +81,19 @@ class MemoryStore(Protocol):
 
 
 @runtime_checkable
+class CharterStore(Protocol):
+    """Singleton-per-product store for the human-owned Product Charter."""
+
+    async def get_charter(self, product: str) -> StoredCharter | None:
+        """Return the stored charter for ``product`` (or ``None`` if never synced)."""
+        ...
+
+    async def put_charter(self, stored: StoredCharter) -> None:
+        """Upsert the stored charter for its product (replace by product)."""
+        ...
+
+
+@runtime_checkable
 class ConfigStore(Protocol):
     """Feature flags + tunable config (control center backend)."""
 
@@ -115,6 +129,20 @@ class GitHubClient(Protocol):
         ...
 
 
+class CodingAgentAssignmentError(RuntimeError):
+    """An issue was filed but assigning the Copilot coding agent failed.
+
+    Carries the created issue's URL and node id so the caller can still record the
+    filing for dedup and surface the assignment failure loudly, instead of
+    discarding the already-created issue and re-filing a duplicate on the next run.
+    """
+
+    def __init__(self, message: str, *, issue_url: str, issue_node_id: str) -> None:
+        super().__init__(message)
+        self.issue_url = issue_url
+        self.issue_node_id = issue_node_id
+
+
 @runtime_checkable
 class SourceBackend(Protocol):
     """A source agent's evidence-gathering backend."""
@@ -134,7 +162,9 @@ class Tracer(Protocol):
 
 
 __all__ = [
+    "CharterStore",
     "ConfigStore",
+    "CodingAgentAssignmentError",
     "EmbeddingClient",
     "GitHubClient",
     "MemoryStore",

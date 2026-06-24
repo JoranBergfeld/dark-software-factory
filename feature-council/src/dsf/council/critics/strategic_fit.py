@@ -1,8 +1,10 @@
-"""Strategic-fit critic — scores alignment with product roadmap/lessons.
+"""Strategic-fit critic — deterministic neutral baseline for the lens.
 
-Reads Decision-Memory lessons (FoundryIQ roadmap/company-knowledge hints) for
-the proposal's product. Supportive lessons raise the score above the neutral
-default of 0.6; no veto.
+``strategic_fit`` is a *lens*: during deliberation it states a position through
+the model against the product charter (see :mod:`dsf.council.deliberation`), and
+this deterministic ``evaluate`` is only the fallback used when the model returns
+no structured position. Charter alignment is a matter of judgment, not a keyword
+count, so the deterministic baseline is the neutral 0.6. No veto.
 """
 
 from __future__ import annotations
@@ -17,40 +19,21 @@ if TYPE_CHECKING:
 
 NAME = "strategic_fit"
 
-#: Neutral score when there is nothing for/against strategic fit.
+#: Neutral score: the model-driven lens does charter alignment; this is its floor.
 DEFAULT_SCORE = 0.6
-
-#: Lesson sentiment terms that count as supportive of a proposal.
-SUPPORTIVE_TERMS = ("roadmap", "priority", "strategic", "invest", "aligned", "supported")
 
 
 async def evaluate(proposal: Proposal, run: Run, services: Services) -> CriticScore:
-    """Score strategic fit from supportive product lessons. No veto."""
-    if proposal.product is None:
-        return CriticScore(
-            critic=NAME,
-            score=DEFAULT_SCORE,
-            veto=False,
-            rationale="No product scope; neutral strategic fit.",
-        )
-
-    lessons = await services.memory.get_lessons(proposal.product)
-    supportive = 0
-    for le in lessons:
-        blob = str(le.get("text", "")).lower()
-        if any(term in blob for term in SUPPORTIVE_TERMS):
-            supportive += 1
-
-    score = min(1.0, DEFAULT_SCORE + 0.2 * supportive)
-
+    """Neutral strategic-fit baseline (alignment is judged by the lens). No veto."""
     return CriticScore(
         critic=NAME,
-        score=score,
+        score=DEFAULT_SCORE,
         veto=False,
         rationale=(
-            f"{len(lessons)} lesson(s), {supportive} supportive -> strategic fit {score:.2f}."
+            f"Neutral strategic-fit baseline {DEFAULT_SCORE:.2f} "
+            "(charter alignment is judged by the deliberation lens)."
         ),
     )
 
 
-__all__ = ["NAME", "DEFAULT_SCORE", "SUPPORTIVE_TERMS", "evaluate"]
+__all__ = ["NAME", "DEFAULT_SCORE", "evaluate"]

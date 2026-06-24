@@ -35,6 +35,15 @@ param product string = 'demo'
 @description('Container image for the feature-council orchestrator runtime.')
 param runtimeImage string = 'ghcr.io/joranbergfeld/dsf-runtime:latest'
 
+@description('DSF GitHub App id (owner-level; supplied by `dsf new` from the owner Key Vault).')
+param githubAppId string = ''
+
+@description('DSF GitHub App installation id (owner-level single installation).')
+param githubInstallationId string = ''
+
+@description('Product repository in owner/name form; scopes App tokens to the single repo.')
+param githubRepository string = ''
+
 @description('Azure AI Foundry chat model deployed for the runtime (created here, called over the Azure OpenAI data plane).')
 param chatModel string = 'gpt-4o'
 
@@ -75,6 +84,9 @@ param allowPublicNetworkAccess bool = false
 // ---------------------------------------------------------------------------
 
 var suffix = uniqueString(resourceGroup().id, namePrefix, environmentName)
+// Key Vault names are capped at 24 chars. namePrefix (<=12) + 'kv' + suffix (13)
+// can reach 27, so truncate to keep the vault name valid; the prefix is preserved.
+var keyVaultName = take('${namePrefix}kv${suffix}', 24)
 var tags = {
   'azd-env-name': environmentName
   project: 'dark-software-factory'
@@ -133,7 +145,7 @@ resource runtimeIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-
 // ---------------------------------------------------------------------------
 
 resource keyVault 'Microsoft.KeyVault/vaults@2024-04-01-preview' = {
-  name: '${namePrefix}kv${suffix}'
+  name: keyVaultName
   location: location
   tags: tags
   properties: {
@@ -167,8 +179,8 @@ resource kvSecretsUserAssignment 'Microsoft.Authorization/roleAssignments@2022-0
   }
 }
 
-// Admin (human/operator) gets Secrets Officer so `dsf new` can seed the
-// squad GitHub token into the vault (ADR 0012), mirroring the App Config admin grant.
+// Admin (human/operator) gets Secrets Officer so `dsf new` can seed product
+// secrets into the vault, mirroring the App Config admin grant.
 // Data-plane reachability still requires allowPublicNetworkAccess=true (or running
 // provisioning from inside the vault's network); see docs/site/get-started/operate.md.
 resource keyVaultAdminAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(adminPrincipalId)) {
@@ -176,6 +188,19 @@ resource keyVaultAdminAssignment 'Microsoft.Authorization/roleAssignments@2022-0
   scope: keyVault
   properties: {
     principalId: adminPrincipalId
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', keyVaultSecretsOfficerRoleId)
+  }
+}
+
+// The principal running the deployment (the `dsf` CLI's `az login`) gets Key Vault Secrets
+// Officer so the provisioner can seed the App private key post-deploy (`_seed_app_key`),
+// mirroring the App Configuration deployer grant below. Data-plane reachability still
+// requires allowPublicNetworkAccess=true (or provisioning from inside the vault's network).
+resource keyVaultDeployerAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(keyVault.id, deployer().objectId, keyVaultSecretsOfficerRoleId)
+  scope: keyVault
+  properties: {
+    principalId: deployer().objectId
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', keyVaultSecretsOfficerRoleId)
   }
 }
@@ -317,52 +342,6 @@ resource foundryOpenAIUserAssignment 'Microsoft.Authorization/roleAssignments@20
 }
 
 // ---------------------------------------------------------------------------
-// Coding squad compute: per-product AKS cluster running the Ralph watch loop,
-// scaled 0..1 by KEDA off the open squad:ready issue count (ADR 0012)
-// ---------------------------------------------------------------------------
-
-module aks 'modules/aks.bicep' = {
-  name: 'aks'
-  params: {
-    namePrefix: namePrefix
-    location: location
-    product: product
-  }
-}
-
-// Squad workload identity: a dedicated user-assigned identity federated to the
-// squad-<product> Kubernetes service account, granted Key Vault Secrets User so
-// the CSI driver can project the GitHub token secret into the Ralph + exporter
-// pods (ADR 0012).
-resource squadIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
-  name: '${namePrefix}-squad-${suffix}'
-  location: location
-  tags: tags
-}
-
-resource squadFederation 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-01-31' = {
-  parent: squadIdentity
-  name: 'squad-${product}'
-  properties: {
-    issuer: aks.outputs.aksOidcIssuerUrl
-    subject: 'system:serviceaccount:squad-${product}:squad-${product}'
-    audiences: [
-      'api://AzureADTokenExchange'
-    ]
-  }
-}
-
-resource squadKvSecretsUser 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(keyVault.id, squadIdentity.id, keyVaultSecretsUserRoleId)
-  scope: keyVault
-  properties: {
-    principalId: squadIdentity.properties.principalId
-    principalType: 'ServicePrincipal'
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', keyVaultSecretsUserRoleId)
-  }
-}
-
-// ---------------------------------------------------------------------------
 // Runtime compute: Azure Container Apps environment + orchestrator app (ADR 0004)
 // ---------------------------------------------------------------------------
 
@@ -419,6 +398,10 @@ resource orchestratorApp 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'AZURE_OPENAI_ENDPOINT', value: foundry.properties.endpoint }
             { name: 'AZURE_OPENAI_DEPLOYMENT', value: chatModel }
             { name: 'AZURE_OPENAI_EMBEDDING_DEPLOYMENT', value: embeddingModel }
+            { name: 'GITHUB_APP_ID', value: githubAppId }
+            { name: 'GITHUB_INSTALLATION_ID', value: githubInstallationId }
+            { name: 'GITHUB_REPOSITORY', value: githubRepository }
+            { name: 'GITHUB_APP_PRIVATE_KEY_SECRET', value: 'github-app-private-key' }
             {
               name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
               value: appInsights.properties.ConnectionString
@@ -465,16 +448,8 @@ output runtimePrincipalId string = runtimeIdentity.properties.principalId
 @description('Name of the orchestrator Container App.')
 output orchestratorAppName string = orchestratorApp.name
 
-output aksName string = aks.outputs.aksName
-
-@description('Client ID of the squad workload identity (for the K8s ServiceAccount annotation).')
-output squadIdentityClientId string = squadIdentity.properties.clientId
-
-@description('Key Vault name (for the squad SecretProviderClass).')
+@description('Name of the per-product Key Vault.')
 output keyVaultName string = keyVault.name
-
-@description('Entra tenant ID (for the squad SecretProviderClass).')
-output tenantId string = subscription().tenantId
 
 @description('Application Insights resource id (consumed by the SRE agent connector + RBAC).')
 output appInsightsId string = appInsights.id

@@ -65,12 +65,23 @@ async def sweep(services: Services) -> Run:
 async def run_sweep(services: Services) -> Run:
     """Build a scheduled sweep and run it through the conveyor if not paused.
 
-    Returns the KILLED run unchanged when paused; otherwise builds the sweep and
-    returns the final run from ``run_line``.
+    Returns the KILLED run unchanged when paused; otherwise builds the sweep,
+    refreshes the product charter (pull-only, audited, never raises), reflects on
+    accumulated lessons to maybe open a governance amendment PR (audited, never
+    raises), and returns the final run from ``run_line``.
     """
     run = await sweep(services)
     if run.status == RunStatus.KILLED:
         return run
+    # Pull-only charter refresh before the line runs (audited; never raises).
+    from dsf.triggers.charter_sync import sync_charter_on_sweep
+
+    await sync_charter_on_sweep(services, run)
+    # Living-charter reflection: maybe open a human-gated amendment PR (audited;
+    # never raises; advisory — only a merge writes the charter).
+    from dsf.triggers.charter_amend import propose_amendment_on_sweep
+
+    await propose_amendment_on_sweep(services, run)
     # Imported lazily to keep the trigger module importable without the full
     # orchestrator graph (and to avoid any import cycle).
     from dsf.orchestrator.conveyor import run_line

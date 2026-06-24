@@ -1,6 +1,6 @@
 """InstanceProvisioner — build and apply a provisioning plan for an instance.
 
-External CLIs (``gh``, ``squad``, ``az``) are invoked through an injectable
+External CLIs (``gh``, ``az``) are invoked through an injectable
 ``run`` callable (defaults to :func:`subprocess.run`) so tests stay offline,
 mirroring :class:`dsf.github_client.RealGitHubClient`.
 """
@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import tempfile
 import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -24,6 +25,13 @@ from dsf.contracts.handoff import (
     INCIDENT_LABEL_COLOR,
     INCIDENT_LABEL_DESCRIPTION,
 )
+from dsf.instance.branch_protection import (
+    RULESET_NAME,
+    RULESET_UNSUPPORTED_RESULT,
+    auto_merge_command,
+    is_unsupported_ruleset_error,
+    ruleset_payload,
+)
 from dsf.instance.deploy_progress import DeploymentProgressPoller
 from dsf.instance.runtime_render import (
     render_product_registration,
@@ -34,6 +42,7 @@ from dsf.instance.runtime_render import (
 )
 from dsf.instance.spec import (
     AzureProvisionResult,
+    GitHubAppBinding,
     InstanceManifest,
     InstancePlan,
     InstanceSpec,
@@ -43,8 +52,6 @@ from dsf.instance.spec import (
     read_manifest,
     write_manifest,
 )
-from dsf.instance.squad_governance import governance_commands
-from dsf.instance.squad_render import KV_SECRET_NAME, render_squad_bundle
 from dsf.instance.teardown_common import (
     ALREADY_ABSENT_RESULT,
     is_not_found,
@@ -190,16 +197,22 @@ class InstanceProvisioner:
         run: Runner | None = None,
         repo_root: Path | None = None,
         sleep: Callable[[float], None] | None = None,
+        owner_keyvault_uri: str = "",
+        github_app_id: str = "",
+        github_installation_id: str = "",
     ) -> None:
         self.spec = spec
         self._run = run or subprocess.run
         self._repo_root = repo_root
         self._sleep = sleep or time.sleep
+        self._owner_keyvault_uri = owner_keyvault_uri
+        self._github_app_id = github_app_id
+        self._github_installation_id = github_installation_id
+        self._app_binding: GitHubAppBinding | None = None
 
     def plan(self) -> InstancePlan:
         """Return the ordered provisioning plan (pure — no side effects)."""
         s = self.spec
-        repo_dir = s.resolved_repo()
         bicep = str((self._repo_root or _default_repo_root()) / "infra" / "main.bicep")
         steps = [
             ProvisionStep(
@@ -218,10 +231,11 @@ class InstanceProvisioner:
                 commands=_label_commands(s),
             ),
             ProvisionStep(
-                name="squad_init",
-                description=f"Initialize Coding Squad in {s.github_repo()}",
-                command=["squad", "init", "--preset", "default"],
-                cwd=repo_dir,
+                name="install_app",
+                description=(
+                    f"Add {s.github_repo()} to the DSF App installation "
+                    f"{self._github_installation_id or '<installation>'}"
+                ),
             ),
             ProvisionStep(
                 name="create_resource_group",
@@ -248,6 +262,9 @@ class InstanceProvisioner:
                     f"location={s.location}",
                     f"product={s.product}",
                     f"runtimeImage={s.runtime_image}",
+                    f"githubAppId={self._github_app_id}",
+                    f"githubInstallationId={self._github_installation_id}",
+                    f"githubRepository={s.github_repo()}",
                     "--no-wait",
                 ],
             ),
@@ -256,6 +273,13 @@ class InstanceProvisioner:
                 description=(
                     "Seed the canonical config/defaults.json into App Configuration "
                     f"for {s.product} (critic/agent flags + thresholds)"
+                ),
+            ),
+            ProvisionStep(
+                name="seed_app_key",
+                description=(
+                    "Seed the DSF App private key from the owner Key Vault into the "
+                    f"product Key Vault for {s.product}"
                 ),
             ),
             ProvisionStep(
@@ -272,18 +296,12 @@ class InstanceProvisioner:
                 ),
             ),
             ProvisionStep(
-                name="deploy_squad_ralph",
+                name="branch_protection",
                 description=(
-                    f"Render + apply the Ralph watch loop (AKS + KEDA) for {s.product}"
+                    f"Apply the '{s.creation_maturity}' creation maturity dial to "
+                    f"{s.github_repo()} as a branch-protection ruleset (required "
+                    "reviews + green 'ci' check)"
                 ),
-            ),
-            ProvisionStep(
-                name="squad_governance",
-                description=(
-                    f"Apply the '{s.squad_maturity}' squad maturity dial to "
-                    f"{s.github_repo()}"
-                ),
-                commands=governance_commands(s),
             ),
             ProvisionStep(
                 name="deploy_sre_agent",
@@ -330,6 +348,9 @@ class InstanceProvisioner:
         path = manifest_path(self.spec.product, self._repo_root)
         prior = self._existing_manifest()
         azure_result = prior.azure if (prior and not execute) else None
+        # Carry a previously recorded App binding forward so a skip/preview/--write-plan
+        # never blanks it; install_app overwrites self._app_binding only when it installs.
+        self._app_binding = prior.github_app if prior else None
         executed = execute or bool(prior and prior.executed)
         # write_config is finalized after the manifest is built, not run in-loop.
         steps = [s for s in plan.steps if s.name != "write_config"]
@@ -358,7 +379,8 @@ class InstanceProvisioner:
                 if step.name == "write_config":
                     step.executed, step.result = True, str(path)
             manifest = InstanceManifest(
-                spec=self.spec, plan=plan, executed=executed, azure=azure_result
+                spec=self.spec, plan=plan, executed=executed,
+                azure=azure_result, github_app=self._app_binding,
             )
             write_manifest(manifest, self._repo_root)
         return manifest
@@ -395,6 +417,24 @@ class InstanceProvisioner:
             else:
                 self._seed_appconfig(azure_result)
                 step.executed, step.result = True, "seeded"
+        elif step.name == "seed_app_key":
+            if not self._owner_keyvault_uri:
+                step.result = "skipped (no owner App configured)"
+            elif not execute:
+                step.result = "seeded (dry-run)"
+            else:
+                self._seed_app_key(azure_result)
+                step.executed, step.result = True, "seeded"
+        elif step.name == "install_app":
+            if not self._owner_keyvault_uri:
+                step.result = "skipped (no owner App configured)"
+            elif not execute:
+                step.result = "installed (dry-run)"
+            elif not self._github_installation_id:
+                step.result = "skipped (owner App pointer unavailable)"
+            else:
+                self._app_binding = self._install_app()
+                step.executed, step.result = True, "installed"
         elif step.name == "deploy_council":
             provisional = InstanceManifest(
                 spec=self.spec, plan=plan, executed=executed, azure=azure_result
@@ -413,35 +453,15 @@ class InstanceProvisioner:
                     check=True,
                 )
                 step.executed, step.result = True, "deployed"
-        elif step.name == "deploy_squad_ralph":
-            provisional = InstanceManifest(
-                spec=self.spec, plan=plan, executed=executed, azure=azure_result
-            )
-            bundle = render_squad_bundle(provisional, repo_root=self._repo_root)
+        elif step.name == "branch_protection":
             if not execute:
-                step.result = "rendered (dry-run)"
+                step.result = "ruleset planned (dry-run)"
             else:
-                self._run(
-                    [
-                        "az", "aks", "get-credentials",
-                        "--resource-group", self.spec.resource_group(),
-                        "--name", f"aks-dsf-{self.spec.product}",
-                        "--overwrite-existing",
-                    ],
-                    check=True,
-                )
-                self._seed_github_token(azure_result)
-                for manifest_file in (
-                    bundle.identity_path,
-                    bundle.exporter_path,
-                    bundle.deployment_path,
-                    bundle.scaledobject_path,
-                ):
-                    self._run(
-                        ["kubectl", "apply", "-f", str(manifest_file)],
-                        check=True,
-                    )
-                step.executed, step.result = True, "deployed"
+                skip_reason = self._apply_branch_protection()
+                if skip_reason:
+                    step.result = skip_reason
+                else:
+                    step.executed, step.result = True, "applied"
         elif step.name == "deploy_sre_agent":
             provisional = InstanceManifest(
                 spec=self.spec, plan=plan, executed=executed, azure=azure_result
@@ -470,8 +490,8 @@ class InstanceProvisioner:
             if Path(repo_dir).is_dir():
                 step.result = "exists"
             else:
-                # Repo exists remotely but isn't cloned here; the squad steps
-                # need a local working copy, so clone it.
+                # Repo exists remotely but isn't cloned here; later steps need a
+                # local working copy, so clone it.
                 self._run(
                     ["gh", "repo", "clone", self.spec.github_repo(), repo_dir],
                     check=True,
@@ -529,6 +549,66 @@ class InstanceProvisioner:
             location=self.spec.location,
             outputs={k: str(val) for k, val in outputs.items() if val is not None},
         )
+
+    def _install_app(self) -> GitHubAppBinding:
+        """Add the product repo to the single owner installation; capture the binding."""
+        repo = self.spec.github_repo()
+        lookup = self._run(
+            ["gh", "api", f"/repos/{repo}", "--jq", ".id"],
+            check=True, capture_output=True, text=True,
+        )
+        repository_id = int(getattr(lookup, "stdout", "0").strip())
+        self._run(
+            [
+                "gh", "api", "--method", "PUT",
+                f"/user/installations/{self._github_installation_id}"
+                f"/repositories/{repository_id}",
+            ],
+            check=True,
+        )
+        return GitHubAppBinding(
+            app_id=self._github_app_id,
+            installation_id=self._github_installation_id,
+            repository_id=repository_id,
+        )
+
+    def _apply_branch_protection(self) -> str | None:
+        """Apply the creation-maturity dial as a real branch-protection ruleset.
+
+        Uses the operator's interactive ``gh`` auth (admin on the just-created repo),
+        not the App, so the App needs no ``administration:write`` scope. Idempotent:
+        updates the existing ``dsf-creation`` ruleset in place when present. The
+        ruleset JSON is passed on stdin (``gh api --input -``) — no temp files.
+        """
+        repo = self.spec.github_repo()
+        payload = json.dumps(ruleset_payload(self.spec))
+        try:
+            lookup = self._run(
+                [
+                    "gh", "api", f"/repos/{repo}/rulesets?includes_parents=false", "--jq",
+                    f'[.[] | select(.name=="{RULESET_NAME}") | .id] | first // empty',
+                ],
+                check=True, capture_output=True, text=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            if is_unsupported_ruleset_error(getattr(exc, "stderr", "") or ""):
+                return RULESET_UNSUPPORTED_RESULT
+            raise
+        ruleset_id = (getattr(lookup, "stdout", "") or "").strip()
+        if ruleset_id:
+            self._run(
+                ["gh", "api", "--method", "PUT",
+                 f"/repos/{repo}/rulesets/{ruleset_id}", "--input", "-"],
+                input=payload, text=True, check=True,
+            )
+        else:
+            self._run(
+                ["gh", "api", "--method", "POST",
+                 f"/repos/{repo}/rulesets", "--input", "-"],
+                input=payload, text=True, check=True,
+            )
+        self._run(auto_merge_command(self.spec), check=True)
+        return None
 
     def _sre_deploy_command(self, outputs: dict[str, str]) -> list[str]:
         """`az deployment sub create` for the SRE agent, from provision_azure outputs."""
@@ -609,28 +689,56 @@ class InstanceProvisioner:
         assert last_error is not None  # loop ran at least once
         raise last_error
 
-    def _seed_github_token(self, azure_result: AzureProvisionResult | None) -> None:
-        """Seed the operator's GitHub token into the per-product Key Vault.
+    def _seed_app_key(self, azure_result: AzureProvisionResult | None) -> None:
+        """Copy the App private key from the owner KV into the product KV (with retry).
 
-        The squad pods never hold a static in-cluster credential; the Key Vault
-        CSI driver projects this secret at runtime under AKS workload identity
-        (Option 2, ADR 0012). Swapping to a GitHub App installation token later is
-        a value change here, not a rewrite. Reads the vault name from the Azure
-        deployment outputs captured by the ``provision_azure`` step.
+        Mirrors ``_seed_appconfig``: the product Key Vault's Secrets User/Officer role
+        grant and this data-plane write would otherwise race, so the (idempotent) set
+        is retried until the grant propagates. The PEM is materialized to a 0600 temp
+        file only long enough to push it in, then unlinked; the owner-vault read and the
+        product-vault write both capture output so the key is never echoed.
         """
-        keyvault_name = azure_result.outputs.get("keyVaultName", "") if azure_result else ""
-        token = self._run(
-            ["gh", "auth", "token"], check=True, capture_output=True, text=True
-        )
-        self._run(
+        if not self._owner_keyvault_uri:
+            raise RuntimeError(
+                "no owner Key Vault configured; set DSF_OWNER_KEYVAULT_URI or "
+                "--owner-keyvault-uri (run `dsf bootstrap` first)"
+            )
+        product_kv = azure_result.outputs.get("keyVaultName", "") if azure_result else ""
+        if not product_kv:
+            raise RuntimeError("provision_azure returned no keyVaultName; cannot seed App key")
+        owner_kv = self._owner_keyvault_uri.split("//", 1)[-1].split(".", 1)[0]
+
+        pem = self._run(
             [
-                "az", "keyvault", "secret", "set",
-                "--vault-name", keyvault_name,
-                "--name", KV_SECRET_NAME,
-                "--value", getattr(token, "stdout", "").strip(),
+                "az", "keyvault", "secret", "show", "--vault-name", owner_kv,
+                "--name", "github-app-private-key", "--query", "value", "-o", "tsv",
             ],
             check=True,
+            capture_output=True,
+            text=True,
         )
+        fd, pem_path = tempfile.mkstemp(prefix="dsf-app-", suffix=".pem")
+        try:
+            with open(fd, "w", encoding="utf-8") as fh:
+                fh.write(getattr(pem, "stdout", ""))
+            Path(pem_path).chmod(0o600)
+            cmd = [
+                "az", "keyvault", "secret", "set", "--vault-name", product_kv,
+                "--name", "github-app-private-key", "--file", pem_path,
+            ]
+            last_error: subprocess.CalledProcessError | None = None
+            for attempt in range(1, _SEED_MAX_ATTEMPTS + 1):
+                try:
+                    self._run(cmd, check=True, capture_output=True, text=True)
+                    return
+                except subprocess.CalledProcessError as exc:
+                    last_error = exc
+                    if attempt < _SEED_MAX_ATTEMPTS:
+                        self._sleep(_SEED_RETRY_DELAY)
+            assert last_error is not None
+            raise last_error
+        finally:
+            Path(pem_path).unlink(missing_ok=True)
 
 
 class InstanceOffboarder:

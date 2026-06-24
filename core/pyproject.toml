@@ -7,6 +7,7 @@ dependencies = [
     "pydantic>=2.6",
     "httpx>=0.27",
     "fastapi>=0.110",
+    "pyjwt[crypto]>=2.8",
 ]
 
 [project.optional-dependencies]
@@ -14,6 +15,7 @@ azure = [
     "azure-appconfiguration>=1.5",
     "azure-cosmos>=4.5",
     "azure-identity>=1.15",
+    "azure-keyvault-secrets>=4.7",
     "openai>=1.30",
 ]
 

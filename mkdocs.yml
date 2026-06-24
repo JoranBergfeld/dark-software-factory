@@ -54,6 +54,7 @@ nav:
   - Concept:
       - The loop: concept/the-loop.md
       - Feature Council: concept/feature-council.md
+      - Product Charter: concept/product-charter.md
       - Coding Squad: concept/coding-squad.md
       - SRE Agent: concept/sre-agent.md
       - The harness: concept/the-harness.md

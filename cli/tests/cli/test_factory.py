@@ -34,27 +34,54 @@ def test_new_parser_wiring():
     assert args.name_prefix == "demopfx"
     assert args.environment == "dev"
     assert args.location == "swedencentral"
-    assert args.squad_maturity == "low"
+    assert args.creation_maturity == "low"
     # Provisioning executes by default; --dry-run is the opt-in preview.
     assert args.dry_run is False
     assert args.write_plan is False
 
 
-def test_new_squad_maturity_high_flows_into_manifest(tmp_path):
+def test_bootstrap_subcommand_is_wired():
+    from dsf.cli.factory import build_parser
+
+    args = build_parser().parse_args(
+        [
+            "bootstrap",
+            "--app-name",
+            "dsf-acme",
+            "--keyvault-name",
+            "kv-dsf-app",
+            "--resource-group",
+            "rg-dsf-app",
+        ]
+    )
+    assert args.command == "bootstrap"
+    assert args.app_name == "dsf-acme"
+    assert args.keyvault_name == "kv-dsf-app"
+
+
+def test_charter_next_action_message():
+    from dsf.cli.factory import charter_next_action
+
+    msg = charter_next_action("demo")
+    assert "charter init" in msg
+    assert "demo" in msg
+
+
+def test_new_creation_maturity_high_flows_into_manifest(tmp_path):
     rc = main([
         "new", "--product", "demo", "--owner", "acme",
-        "--name-prefix", "demopfx", "--squad-maturity", "high",
+        "--name-prefix", "demopfx", "--creation-maturity", "high",
         "--dry-run", "--write-plan", "--config-root", str(tmp_path),
     ])
     assert rc == 0
-    assert read_manifest("demo", repo_root=tmp_path).spec.squad_maturity == "high"
+    assert read_manifest("demo", repo_root=tmp_path).spec.creation_maturity == "high"
 
 
-def test_new_rejects_unknown_squad_maturity():
+def test_new_rejects_unknown_creation_maturity():
     with pytest.raises(SystemExit):
         build_parser().parse_args([
             "new", "--product", "demo", "--owner", "acme",
-            "--name-prefix", "demopfx", "--squad-maturity", "wild",
+            "--name-prefix", "demopfx", "--creation-maturity", "wild",
         ])
 
 
@@ -240,7 +267,7 @@ def test_new_execute_surfaces_step_failure_and_exits_nonzero(capsys, tmp_path, m
     from dsf.instance.spec import InstanceManifest, InstancePlan, ProvisionStep
 
     class _FailingProvisioner:
-        def __init__(self, spec, repo_root=None):
+        def __init__(self, spec, repo_root=None, **kwargs):
             self.spec = spec
 
         def apply(self, *, execute=False, on_event=None, on_progress=None):
@@ -274,7 +301,7 @@ def test_new_execute_indents_provision_progress(capsys, tmp_path, monkeypatch):
     from dsf.instance.spec import InstanceManifest, InstancePlan, ProvisionStep
 
     class _ProgressProvisioner:
-        def __init__(self, spec, repo_root=None):
+        def __init__(self, spec, repo_root=None, **kwargs):
             self.spec = spec
 
         def apply(self, *, execute=False, on_event=None, on_progress=None):
@@ -450,3 +477,33 @@ def test_delete_execute_failure_exits_nonzero(capsys, tmp_path, monkeypatch):
     assert "FAILED" in out
     assert "STOPPED at 'delete_resource_group'" in out
 
+
+def test_new_parser_has_owner_keyvault_uri():
+    args = build_parser().parse_args(
+        [
+            "new", "--product", "demo", "--owner", "acme",
+            "--owner-keyvault-uri", "https://kv-dsf-app.vault.azure.net/",
+        ]
+    )
+    assert args.owner_keyvault_uri == "https://kv-dsf-app.vault.azure.net/"
+
+
+def test_read_owner_app_pointers_reads_id_and_installation(monkeypatch):
+    import subprocess
+
+    from dsf.cli.factory import _read_owner_app_pointers
+
+    seen: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        seen.append(cmd)
+        from unittest.mock import MagicMock
+        value = "42" if cmd[cmd.index("--name") + 1] == "github-app-id" else "9001"
+        return MagicMock(returncode=0, stdout=value + "\n")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    app_id, installation_id = _read_owner_app_pointers("https://kv-dsf-app.vault.azure.net/")
+    assert app_id == "42"
+    assert installation_id == "9001"
+    # vault name parsed from the URI host
+    assert any("kv-dsf-app" in c for c in seen[0])

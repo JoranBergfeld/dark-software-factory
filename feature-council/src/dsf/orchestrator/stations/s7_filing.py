@@ -14,6 +14,7 @@ from dsf.memory.consolidation import consolidate_run
 from dsf.memory.dedup import FILED_ISSUE_KIND, dedup_key, is_duplicate
 from dsf.observability.tracing import span_attrs_for_run
 from dsf.orchestrator.blackboard import Blackboard
+from dsf.ports import CodingAgentAssignmentError
 
 if TYPE_CHECKING:
     from dsf.container import Services
@@ -47,11 +48,23 @@ async def run(run: Run, services: Services) -> Run:
                     _audit(f"DRY-RUN: would file issue '{issue.title}' to {issue.repo}")
                 )
             else:
-                url = await services.github.create_issue(
-                    issue.repo, issue.title, issue.body, list(issue.labels)
-                )
-                issue.filed_url = url
-                run.audit.append(_audit(f"filed issue '{issue.title}' to {issue.repo}: {url}"))
+                try:
+                    url = await services.github.create_issue(
+                        issue.repo, issue.title, issue.body, list(issue.labels)
+                    )
+                    issue.filed_url = url
+                    run.audit.append(
+                        _audit(f"filed issue '{issue.title}' to {issue.repo}: {url}")
+                    )
+                except CodingAgentAssignmentError as exc:
+                    issue.filed_url = exc.issue_url
+                    run.audit.append(
+                        _audit(
+                            f"filed issue '{issue.title}' to {issue.repo}: {exc.issue_url} "
+                            f"— Coding Agent assignment FAILED ({exc}); recorded for dedup, "
+                            "assign Copilot manually once enabled"
+                        )
+                    )
 
             # Index the title+problem key so future runs dedup against it.
             await services.memory.put_record(

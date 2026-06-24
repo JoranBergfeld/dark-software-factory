@@ -64,6 +64,7 @@ name = "core must not import application members"
 type = "forbidden"
 source_modules = [
     "dsf.a2a",
+    "dsf.charter",
     "dsf.config",
     "dsf.container",
     "dsf.contracts",

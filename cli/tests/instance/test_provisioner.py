@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import subprocess
-from pathlib import Path
 from unittest.mock import MagicMock
 
 from dsf.config.registry import load_registry, route_product
@@ -21,15 +20,20 @@ def _spec() -> InstanceSpec:
     return InstanceSpec(product="demo", owner="acme")
 
 
+def _completed(stdout="", returncode=0):
+    return subprocess.CompletedProcess(args=[], returncode=returncode, stdout=stdout, stderr="")
+
+
 #: The bicep emits ``appConfigEndpoint``; the ``seed_appconfig`` step reads it to
 #: seed config/defaults.json into App Configuration. Execute-path tests must surface
 #: it in the provision_azure outputs or the seed step (correctly) fails for want of
-#: an endpoint.
+#: an endpoint. It also emits ``keyVaultName`` for the optional App-key seed.
 _APPCONFIG_ENDPOINT = "https://demo.azconfig.io"
 _APPCONFIG_OUTPUT = (
     f'"appConfigEndpoint": {{"type": "String", "value": "{_APPCONFIG_ENDPOINT}"}}'
 )
-_AZURE_OUTPUTS_JSON = "{" + _APPCONFIG_OUTPUT + "}"
+_KEYVAULT_OUTPUT = '"keyVaultName": {"type": "String", "value": "kv-demo-xyz"}'
+_AZURE_OUTPUTS_JSON = "{" + _APPCONFIG_OUTPUT + "," + _KEYVAULT_OUTPUT + "}"
 
 
 def _az_deploy(cmd, outputs_json, *, state="Succeeded", ops_json=None):
@@ -64,20 +68,29 @@ def _az_deploy(cmd, outputs_json, *, state="Succeeded", ops_json=None):
     return None
 
 
+def _azure_result_with(tmp_path, **outputs):
+    from dsf.instance.spec import AzureProvisionResult
+
+    return AzureProvisionResult(
+        resource_group="rg-dsf-demo", deployment_name="dsf-demo",
+        location="swedencentral", outputs={k: str(v) for k, v in outputs.items()},
+    )
+
+
 def test_plan_step_order_and_names():
     plan = InstanceProvisioner(_spec()).plan()
     assert plan.product == "demo"
     assert [s.name for s in plan.steps] == [
         "create_repo",
         "create_labels",
-        "squad_init",
+        "install_app",
         "create_resource_group",
         "provision_azure",
         "seed_appconfig",
+        "seed_app_key",
         "register_product",
         "deploy_council",
-        "deploy_squad_ralph",
-        "squad_governance",
+        "branch_protection",
         "deploy_sre_agent",
         "write_config",
     ]
@@ -115,20 +128,19 @@ def test_plan_provision_azure_command_shape():
     assert "--query" not in az.command  # outputs are fetched post-deploy via `show`
 
 
+def test_provision_azure_passes_github_repository_param():
+    spec = _spec()
+    plan = InstanceProvisioner(spec).plan()
+    step = next(s for s in plan.steps if s.name == "provision_azure")
+    assert f"githubRepository={spec.github_repo()}" in step.command
+
+
 def test_plan_create_repo_command():
     plan = InstanceProvisioner(_spec()).plan()
     create = next(s for s in plan.steps if s.name == "create_repo")
     assert create.command[:3] == ["gh", "repo", "create"]
     assert "acme/demo" in create.command
     assert "--private" in create.command
-
-
-def test_plan_squad_steps_run_in_repo_dir():
-    plan = InstanceProvisioner(_spec()).plan()
-    for name in ("squad_init",):
-        step = next(s for s in plan.steps if s.name == name)
-        assert step.cwd == "demo"
-        assert step.command[0] == "squad"
 
 
 def test_plan_create_labels_covers_taxonomy_and_handoff():
@@ -260,10 +272,8 @@ def test_apply_execute_runs_real_steps_and_onboards_sre(tmp_path):
     manifest = prov.apply(execute=True)
 
     executed = [cmd for cmd, _ in calls]
-    # repo created and squad initialized in the cloned repo dir:
+    # repo created (and cloned locally) for the product:
     assert ["gh", "repo", "create", "acme/demo", "--private", "--clone"] in executed
-    squad_init = next((cmd, cwd) for cmd, cwd in calls if cmd[:2] == ["squad", "init"])
-    assert squad_init[1] == "demo"
     # azure now provisions for real (RG + Bicep deployment):
     assert [
         "az", "group", "create", "--name", "rg-dsf-demo", "--location", "swedencentral",
@@ -320,7 +330,7 @@ def test_apply_execute_clones_when_repo_exists_but_not_local(tmp_path, monkeypat
     prov = InstanceProvisioner(_spec(), run=fake_run, repo_root=tmp_path)
     manifest = prov.apply(execute=True)
 
-    # repo exists remotely but isn't cloned here -> clone so squad steps have a cwd:
+    # repo exists remotely but isn't cloned here -> clone so we have a local checkout:
     assert ["gh", "repo", "create", "acme/demo", "--private", "--clone"] not in calls
     assert ["gh", "repo", "clone", "acme/demo", "demo"] in calls
     create = next(s for s in manifest.plan.steps if s.name == "create_repo")
@@ -568,77 +578,73 @@ def test_apply_execute_aca_updates_container_app(tmp_path):
 
 
 def test_removed_one_shot_squad_steps_are_gone():
-    """The pre-Ralph Cloud Agent steps (squad_copilot, squad_triage) are gone."""
+    """The retired squad steps (Cloud Agent + AKS/Ralph harness) are gone."""
     plan = InstanceProvisioner(_spec()).plan()
     names = {s.name for s in plan.steps}
-    assert not names & {"squad_copilot", "squad_triage"}
+    assert not names & {"squad_copilot", "squad_triage", "deploy_squad_ralph", "squad_init"}
 
 
-def test_squad_governance_low_maturity_disables_auto_merge():
-    spec = InstanceSpec(product="demo", owner="acme", squad_maturity="low")
+def test_branch_protection_step_present_and_has_no_static_commands():
+    spec = InstanceSpec(product="demo", owner="acme", creation_maturity="low")
     plan = InstanceProvisioner(spec).plan()
-    gov = next(s for s in plan.steps if s.name == "squad_governance")
-    assert gov.commands == [
-        ["gh", "api", "--method", "PATCH", "repos/acme/demo", "-F", "allow_auto_merge=false"]
+    step = next(s for s in plan.steps if s.name == "branch_protection")
+    assert step.commands == []
+    assert step.command == []
+
+
+def test_branch_protection_dry_run_records_plan(tmp_path):
+    spec = InstanceSpec(product="demo", owner="acme", creation_maturity="high")
+    manifest = InstanceProvisioner(spec, repo_root=tmp_path).apply(execute=False)
+    step = next(s for s in manifest.plan.steps if s.name == "branch_protection")
+    assert step.result == "ruleset planned (dry-run)"
+    assert step.executed is False
+
+
+def test_branch_protection_execute_creates_ruleset_and_sets_auto_merge():
+    calls: list[dict] = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append({"cmd": cmd, "input": kwargs.get("input")})
+        if "--jq" in cmd:
+            return _completed(stdout="")
+        return _completed(stdout="")
+
+    provisioner = InstanceProvisioner(
+        InstanceSpec(product="demo", owner="acme", creation_maturity="high"),
+        run=fake_run,
+    )
+    provisioner._apply_branch_protection()
+
+    api_calls = [c for c in calls if c["cmd"][:2] == ["gh", "api"]]
+    assert api_calls[0]["cmd"][2] == "/repos/acme/demo/rulesets?includes_parents=false"
+    assert api_calls[1]["cmd"][:5] == [
+        "gh", "api", "--method", "POST", "/repos/acme/demo/rulesets"
+    ]
+    assert api_calls[1]["cmd"][-2:] == ["--input", "-"]
+    assert json.loads(api_calls[1]["input"])["name"] == "dsf-creation"
+    assert api_calls[2]["cmd"] == [
+        "gh", "api", "--method", "PATCH", "repos/acme/demo",
+        "-F", "allow_auto_merge=true",
     ]
 
 
-def test_deploy_squad_ralph_renders_bundle_in_dry_run(tmp_path):
-    spec = InstanceSpec(product="demo", owner="acme")
-    InstanceProvisioner(spec, repo_root=tmp_path).apply(execute=False)
-    squad_dir = tmp_path / "config" / "instances" / "demo.runtime" / "squad"
-    assert (squad_dir / "squad-identity.yaml").is_file()
-    assert (squad_dir / "ralph-deployment.yaml").is_file()
-    assert (squad_dir / "ralph-scaledobject.yaml").is_file()
-    assert (squad_dir / "issue-exporter.yaml").is_file()
+def test_branch_protection_execute_updates_existing_ruleset():
+    calls: list[list[str]] = []
 
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if "--jq" in cmd:
+            return _completed(stdout="123\n")
+        return _completed(stdout="")
 
-def test_deploy_squad_ralph_applies_manifests_on_execute(tmp_path):
-    spec = InstanceSpec(product="demo", owner="acme")
-
-    def run(cmd, **kwargs):
-        hit = _az_deploy(cmd, _AZURE_OUTPUTS_JSON)
-        if hit is not None:
-            return hit
-        return subprocess.CompletedProcess([], 0, stdout="{}", stderr="")
-
-    run = MagicMock(side_effect=run)
-    manifest = InstanceProvisioner(spec, run=run, repo_root=tmp_path).apply(execute=True)
-    calls = [c.args[0] for c in run.call_args_list]
-    assert any(cmd[:3] == ["az", "aks", "get-credentials"] for cmd in calls)
-    # The operator's GitHub credential is seeded into the per-product Key Vault
-    # so the CSI driver can project it into the squad pods (Option 2, ADR 0012).
-    assert any(cmd == ["gh", "auth", "token"] for cmd in calls)
-    seed_idx = next(
-        i
-        for i, cmd in enumerate(calls)
-        if cmd[:4] == ["az", "keyvault", "secret", "set"] and "github-token" in cmd
+    provisioner = InstanceProvisioner(
+        InstanceSpec(product="demo", owner="acme", creation_maturity="low"),
+        run=fake_run,
     )
-    applied = [
-        Path(cmd[-1]).name
-        for cmd in calls
-        if cmd[:3] == ["kubectl", "apply", "-f"]
-    ]
-    # Order is load-bearing: the identity manifest carries the Namespace,
-    # ServiceAccount, and SecretProviderClass, so it must be applied before the
-    # namespaced exporter, Deployment, and ScaledObject.
-    assert applied == [
-        "squad-identity.yaml",
-        "issue-exporter.yaml",
-        "ralph-deployment.yaml",
-        "ralph-scaledobject.yaml",
-    ]
-    first_apply_idx = next(
-        i for i, cmd in enumerate(calls) if cmd[:3] == ["kubectl", "apply", "-f"]
-    )
-    # The secret must exist before any pod that mounts it starts.
-    assert seed_idx < first_apply_idx
-    assert any(
-        cmd[:5] == ["gh", "api", "--method", "PATCH", "repos/acme/demo"] for cmd in calls
-    )
-    # The kubectl loop must not clobber the manifest path reported by write_config.
-    write_config = next(s for s in manifest.plan.steps if s.name == "write_config")
-    assert write_config.result.endswith("demo.json")
+    provisioner._apply_branch_protection()
+
+    methods = [c for c in calls if c[:2] == ["gh", "api"] and "--method" in c]
+    assert methods[0][:5] == ["gh", "api", "--method", "PUT", "/repos/acme/demo/rulesets/123"]
 
 
 def test_plan_create_labels_includes_incident_marker():
@@ -903,3 +909,243 @@ def test_seed_appconfig_fails_when_no_endpoint_in_outputs(tmp_path):
     assert "appConfigEndpoint" in steps["seed_appconfig"].error
     # The line stops at the failed step — later steps are left unrun.
     assert steps["deploy_council"].result == ""
+
+
+def test_seed_app_key_copies_owner_pem_into_product_vault(tmp_path):
+    spec = InstanceSpec(product="demo", owner="acme")
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+
+        class R:
+            returncode = 0
+            stdout = "555\n" if "/repos/" in " ".join(cmd) else "-----PEM-----\n"
+
+        return R()
+
+    prov = InstanceProvisioner(
+        spec, run=fake_run, repo_root=tmp_path, sleep=lambda _s: None,
+        owner_keyvault_uri="https://kv-dsf-app.vault.azure.net/",
+        github_app_id="42", github_installation_id="9001",
+    )
+    prov._seed_app_key(_azure_result_with(tmp_path, keyVaultName="kv-demo-xyz"))
+
+    show = next(c for c in calls if c[:4] == ["az", "keyvault", "secret", "show"])
+    assert "kv-dsf-app" in show  # read from owner vault
+    setc = next(c for c in calls if c[:4] == ["az", "keyvault", "secret", "set"])
+    assert "kv-demo-xyz" in setc and "--file" in setc  # written to product vault from a file
+
+
+def test_seed_app_key_raises_without_owner_keyvault(tmp_path):
+    import pytest
+
+    prov = InstanceProvisioner(InstanceSpec(product="demo", owner="acme"), repo_root=tmp_path)
+    with pytest.raises(RuntimeError, match="owner Key Vault"):
+        prov._seed_app_key(_azure_result_with(tmp_path, keyVaultName="kv-demo-xyz"))
+
+
+def test_provision_azure_passes_github_app_params(tmp_path):
+    prov = InstanceProvisioner(
+        InstanceSpec(product="demo", owner="acme"),
+        repo_root=tmp_path, github_app_id="42", github_installation_id="9001",
+    )
+    azure_step = next(s for s in prov.plan().steps if s.name == "provision_azure")
+    joined = " ".join(azure_step.command)
+    assert "githubAppId=42" in joined
+    assert "githubInstallationId=9001" in joined
+
+
+def test_seed_app_key_step_skips_when_no_owner_app_configured(tmp_path):
+    # Backward-compat: dsf new without an owner App must still complete; seed_app_key
+    # skips gracefully instead of raising and failing the line.
+    def fake_run(cmd, **kwargs):
+        if cmd[:3] == ["gh", "repo", "view"]:
+            return MagicMock(returncode=1)
+        hit = _az_deploy(cmd, _AZURE_OUTPUTS_JSON)
+        if hit is not None:
+            return hit
+        return MagicMock(returncode=0, stdout="")
+
+    prov = InstanceProvisioner(_spec(), run=fake_run, repo_root=tmp_path)
+    manifest = prov.apply(execute=True)
+    seed = next(s for s in manifest.plan.steps if s.name == "seed_app_key")
+    assert "skip" in seed.result.lower()
+    # the line did NOT stop at seed_app_key — later steps still ran
+    assert next(s for s in manifest.plan.steps if s.name == "deploy_sre_agent").executed is True
+
+
+def test_install_app_adds_repo_to_owner_installation_and_records_binding(tmp_path):
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[:3] == ["gh", "repo", "view"]:
+            return MagicMock(returncode=1)
+        if cmd[:3] == ["gh", "api", "/repos/acme/demo"]:
+            return MagicMock(returncode=0, stdout="555\n")
+        hit = _az_deploy(cmd, _AZURE_OUTPUTS_JSON)
+        if hit is not None:
+            return hit
+        return MagicMock(returncode=0, stdout="")
+
+    prov = InstanceProvisioner(
+        _spec(),
+        run=fake_run,
+        repo_root=tmp_path,
+        owner_keyvault_uri="https://kv-dsf-app.vault.azure.net/",
+        github_app_id="42",
+        github_installation_id="9001",
+    )
+    manifest = prov.apply(execute=True)
+
+    # the repo id was looked up, then a PUT added it to the single owner installation
+    put = next(c for c in calls if c[:3] == ["gh", "api", "--method"])
+    assert "PUT" in put
+    assert "/user/installations/9001/repositories/555" in " ".join(put)
+    assert manifest.github_app is not None
+    assert manifest.github_app.app_id == "42"
+    assert manifest.github_app.installation_id == "9001"
+    assert manifest.github_app.repository_id == 555
+
+
+def test_install_app_step_skips_when_no_owner_app_configured(tmp_path):
+    # Backward-compat: dsf new without an owner App must still run; install_app
+    # skips gracefully rather than issuing a malformed /user/installations//... call.
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[:3] == ["gh", "repo", "view"]:
+            return MagicMock(returncode=1)
+        hit = _az_deploy(cmd, _AZURE_OUTPUTS_JSON)
+        if hit is not None:
+            return hit
+        return MagicMock(returncode=0, stdout="")
+
+    prov = InstanceProvisioner(_spec(), run=fake_run, repo_root=tmp_path)
+    manifest = prov.apply(execute=True)
+
+    assert not any("/user/installations/" in " ".join(c) for c in calls)  # no install attempt
+    assert manifest.github_app is None
+    install = next(s for s in manifest.plan.steps if s.name == "install_app")
+    assert "skip" in install.result.lower()
+
+
+def test_install_app_step_is_dry_run_safe(tmp_path):
+    prov = InstanceProvisioner(_spec(), repo_root=tmp_path, github_installation_id="9001")
+    plan = prov.plan()
+    install = next(s for s in plan.steps if s.name == "install_app")
+    assert "9001" in install.description
+
+
+def test_install_app_dry_run_preview_consistent_when_owner_kv_set(tmp_path):
+    # In dry-run, factory.py does not read the owner-KV pointers, so installation_id is
+    # empty even though an owner App IS configured (owner_keyvault_uri is set). The two App
+    # steps must preview consistently: install_app must not claim "no owner App configured"
+    # while seed_app_key previews a seed.
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return MagicMock(returncode=0)
+
+    prov = InstanceProvisioner(
+        _spec(), run=fake_run, repo_root=tmp_path,
+        owner_keyvault_uri="https://kv-dsf-app.vault.azure.net/",
+    )
+    manifest = prov.apply(execute=False)
+
+    assert calls == []  # dry-run shells out to nothing
+    results = {s.name: s.result for s in manifest.plan.steps}
+    assert results["install_app"] == "installed (dry-run)"
+    assert results["seed_app_key"] == "seeded (dry-run)"
+
+
+def test_apply_preserves_prior_github_app_binding_when_install_skips(tmp_path):
+    # A binding recorded by an earlier App install must survive a later run that
+    # skips install_app (preview / --write-plan / execute retry without the pointer),
+    # mirroring how prior Azure outputs are carried forward.
+    def fake_run(cmd, **kwargs):
+        if cmd[:3] == ["gh", "repo", "view"]:
+            return MagicMock(returncode=1)
+        if cmd[:3] == ["gh", "api", "/repos/acme/demo"]:
+            return MagicMock(returncode=0, stdout="555\n")
+        hit = _az_deploy(cmd, _AZURE_OUTPUTS_JSON)
+        if hit is not None:
+            return hit
+        return MagicMock(returncode=0, stdout="")
+
+    InstanceProvisioner(
+        _spec(), run=fake_run, repo_root=tmp_path,
+        owner_keyvault_uri="https://kv-dsf-app.vault.azure.net/",
+        github_app_id="42", github_installation_id="9001",
+    ).apply(execute=True)
+
+    # Re-run WITHOUT the owner pointer: install_app skips, but the binding must persist.
+    manifest = InstanceProvisioner(_spec(), repo_root=tmp_path).apply(execute=False)
+    assert manifest.github_app is not None
+    assert manifest.github_app.installation_id == "9001"
+    on_disk = read_manifest("demo", repo_root=tmp_path)
+    assert on_disk.github_app is not None
+    assert on_disk.github_app.app_id == "42"
+    assert on_disk.github_app.repository_id == 555
+
+
+def test_apply_execute_skips_branch_protection_when_plan_unsupported(tmp_path, monkeypatch):
+    """A private repo on a Free plan -> rulesets 403; the step is skipped, not failed."""
+    monkeypatch.chdir(tmp_path)
+    from dsf.instance.branch_protection import RULESET_UNSUPPORTED_RESULT
+
+    def fake_run(cmd, **kwargs):
+        if cmd[:3] == ["gh", "repo", "view"]:
+            return MagicMock(returncode=1)
+        if len(cmd) > 2 and "rulesets?includes_parents" in str(cmd[2]):
+            raise subprocess.CalledProcessError(
+                returncode=1,
+                cmd=cmd,
+                stderr=(
+                    "gh: Upgrade to GitHub Pro or make this repository public to "
+                    "enable this feature. (HTTP 403)"
+                ),
+            )
+        hit = _az_deploy(cmd, _AZURE_OUTPUTS_JSON)
+        if hit is not None:
+            return hit
+        return MagicMock(returncode=0)
+
+    prov = InstanceProvisioner(_spec(), run=fake_run, repo_root=tmp_path)
+    manifest = prov.apply(execute=True)
+
+    results = {s.name: s.result for s in manifest.plan.steps}
+    bp = next(s for s in manifest.plan.steps if s.name == "branch_protection")
+    assert bp.result == RULESET_UNSUPPORTED_RESULT
+    assert bp.executed is False
+    assert not bp.error
+    # the line did not stop: a later step still ran and the manifest completed.
+    assert "deploy_sre_agent" in results
+    assert manifest.executed is True
+
+
+def test_apply_execute_branch_protection_other_403_still_fails(tmp_path, monkeypatch):
+    """A non-plan 403 (e.g. permission) is not swallowed -> the step fails."""
+    monkeypatch.chdir(tmp_path)
+
+    def fake_run(cmd, **kwargs):
+        if cmd[:3] == ["gh", "repo", "view"]:
+            return MagicMock(returncode=1)
+        if len(cmd) > 2 and "rulesets?includes_parents" in str(cmd[2]):
+            raise subprocess.CalledProcessError(
+                returncode=1, cmd=cmd, stderr="gh: Must have admin rights (HTTP 403)"
+            )
+        hit = _az_deploy(cmd, _AZURE_OUTPUTS_JSON)
+        if hit is not None:
+            return hit
+        return MagicMock(returncode=0)
+
+    prov = InstanceProvisioner(_spec(), run=fake_run, repo_root=tmp_path)
+    manifest = prov.apply(execute=True)
+
+    bp = next(s for s in manifest.plan.steps if s.name == "branch_protection")
+    assert bp.result == "failed"
+    assert bp.error

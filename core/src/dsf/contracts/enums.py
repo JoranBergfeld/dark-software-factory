@@ -59,3 +59,12 @@ class TriggerKind(StrEnum):
 
     SCHEDULED = "SCHEDULED"
     SIGNAL = "SIGNAL"
+
+
+class CharterStatus(StrEnum):
+    """Sync state of a product's charter relative to its source file."""
+
+    OK = "OK"
+    STALE = "STALE"
+    MISSING = "MISSING"
+    INVALID = "INVALID"

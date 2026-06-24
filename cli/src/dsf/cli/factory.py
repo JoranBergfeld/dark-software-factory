@@ -13,6 +13,23 @@ import sys
 from pathlib import Path
 
 
+def _read_owner_app_pointers(owner_keyvault_uri: str) -> tuple[str, str]:
+    """Read the (non-secret) App id + installation id from the owner Key Vault."""
+    import subprocess
+
+    name = owner_keyvault_uri.split("//", 1)[-1].split(".", 1)[0]
+
+    def _secret(secret_name: str) -> str:
+        res = subprocess.run(
+            ["az", "keyvault", "secret", "show", "--vault-name", name,
+             "--name", secret_name, "--query", "value", "-o", "tsv"],
+            check=True, capture_output=True, text=True,
+        )
+        return res.stdout.strip()
+
+    return _secret("github-app-id"), _secret("github-app-installation-id")
+
+
 def _print_plan(plan, *, execute: bool = False) -> None:
     """Print an instance provisioning plan in a compact, readable form."""
     mode = "EXECUTE" if execute else "DRY-RUN"
@@ -54,8 +71,18 @@ def _print_step_progress(line: str) -> None:
     print(f"[dsf]     {line}", flush=True)
 
 
+def charter_next_action(product: str) -> str:
+    """The post-provision hint pointing the operator at the charter workflow."""
+    return (
+        f"[dsf] next: run `dsf charter init --product {product}` to author the "
+        "product charter (opens a PR for review)"
+    )
+
+
 def _cmd_new(args: argparse.Namespace) -> int:
     """Create (or preview) a new isolated product factory instance."""
+    import os
+
     from dsf.instance.github_identity import OwnerResolutionError, resolve_owner
     from dsf.instance.naming import make_name_prefix
     from dsf.instance.provisioner import InstanceProvisioner
@@ -93,9 +120,19 @@ def _cmd_new(args: argparse.Namespace) -> int:
         name_prefix=name_prefix,
         environment=args.environment,
         location=args.location,
-        squad_maturity=args.squad_maturity,
+        creation_maturity=args.creation_maturity,
     )
-    prov = InstanceProvisioner(spec, repo_root=root)
+    owner_kv = args.owner_keyvault_uri or os.environ.get("DSF_OWNER_KEYVAULT_URI", "")
+    app_id, installation_id = "", ""
+    if owner_kv and not args.dry_run:
+        app_id, installation_id = _read_owner_app_pointers(owner_kv)
+    prov = InstanceProvisioner(
+        spec,
+        repo_root=root,
+        owner_keyvault_uri=owner_kv,
+        github_app_id=app_id,
+        github_installation_id=installation_id,
+    )
     execute = not args.dry_run
     if execute:
         plan = prov.apply(
@@ -111,6 +148,28 @@ def _cmd_new(args: argparse.Namespace) -> int:
     if failed:
         print(f"[dsf] provisioning STOPPED at '{failed.name}': {failed.error}")
         return 1
+    if execute:
+        print(charter_next_action(args.product))
+    return 0
+
+
+def _cmd_bootstrap(args: argparse.Namespace) -> int:
+    """Create the one-time owner-level DSF GitHub App and store it in the owner KV."""
+    from dsf.instance.app_bootstrap import BootstrapConfig, _browser_capture_code, bootstrap_app
+
+    cfg = BootstrapConfig(
+        app_name=args.app_name,
+        resource_group=args.resource_group,
+        keyvault_name=args.keyvault_name,
+        location=args.location,
+    )
+    result = bootstrap_app(cfg, capture_code=_browser_capture_code)
+    print(
+        f"[dsf] DSF GitHub App created: app_id={result.app_id} "
+        f"installation_id={result.installation_id}"
+    )
+    print(f"[dsf] master credentials stored in owner Key Vault {result.keyvault_name}")
+    print(f"[dsf] now export DSF_OWNER_KEYVAULT_URI={result.keyvault_uri} for `dsf new`")
     return 0
 
 
@@ -253,10 +312,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Azure region for the resource group and resources",
     )
     p_new.add_argument(
-        "--squad-maturity",
+        "--creation-maturity",
         default="low",
         choices=["low", "high"],
-        help="coding-squad autonomy: 'low' routes every PR to a human, "
+        help="creation-phase autonomy: 'low' routes every PR to a human, "
         "'high' auto-merges on green CI",
     )
     p_new.add_argument(
@@ -274,6 +333,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--config-root",
         default=None,
         help="override repo root where config/instances/ is written (tests/CI)",
+    )
+    p_new.add_argument(
+        "--owner-keyvault-uri",
+        default="",
+        help="owner Key Vault holding the DSF App credentials "
+        "(default: $DSF_OWNER_KEYVAULT_URI; required to install the App)",
     )
     p_new.set_defaults(func=_cmd_new)
 
@@ -300,6 +365,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="override repo root where config/instances/ and config/products.json live",
     )
     p_offboard.set_defaults(func=_cmd_offboard)
+    p_boot = sub.add_parser(
+        "bootstrap",
+        help="one-time: create the DSF GitHub App and store it in the owner Key Vault",
+    )
+    p_boot.add_argument("--app-name", required=True, help="GitHub App name (globally unique)")
+    p_boot.add_argument(
+        "--keyvault-name", required=True, help="owner Key Vault name for App credentials"
+    )
+    p_boot.add_argument(
+        "--resource-group", default="rg-dsf-app", help="resource group for the owner Key Vault"
+    )
+    p_boot.add_argument(
+        "--location", default="swedencentral", help="Azure region for the owner Key Vault"
+    )
+    p_boot.set_defaults(func=_cmd_bootstrap)
 
     p_delete = sub.add_parser(
         "delete",
@@ -328,6 +408,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="override repo root where config/instances/ is read from (tests/CI)",
     )
     p_delete.set_defaults(func=_cmd_delete)
+
+    from dsf.cli.charter import add_charter_subcommands
+
+    add_charter_subcommands(sub)
 
     return parser
 

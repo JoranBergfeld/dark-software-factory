@@ -61,8 +61,8 @@ def _labels_for(proposal: Proposal, product: Product) -> list[str]:
     if sev:
         labels.append(sev)
 
-    # The universal council->squad handoff signal: the coding-squad Ralph watch
-    # loop (ADR 0012) keys on this.
+    # The universal council->creation handoff signal: S7 files the issue under
+    # this label and assigns the Copilot Coding Agent (ADR 0016).
     labels.append(HANDOFF_LABEL)
 
     return labels

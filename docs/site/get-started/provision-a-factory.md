@@ -32,7 +32,7 @@ uv run dsf new \
   --name-prefix microbi \
   --visibility private \
   --location swedencentral \
-  --squad-maturity low      # 'low' routes every PR to a human; 'high' auto-merges on green CI
+  --creation-maturity low   # 'low' routes every PR to a human; 'high' auto-merges on green CI
 ```
 
 Run `uv run dsf new --help` for the full flag list.
@@ -43,6 +43,23 @@ Run `uv run dsf new --help` for the full flag list.
     `· <type> <name>: <state>` lines) so a multi-minute deployment is never silent. On
     failure the specific failed resource and its reason are surfaced. Tune the poll cadence
     with `DSF_DEPLOY_POLL_INTERVAL` (seconds, default 5).
+
+## Prerequisites
+
+Provisioning spans three planes — GitHub, Azure resources, and Azure RBAC — so the principal
+running `dsf new` needs:
+
+- **GitHub:** a `gh auth login` session that can create repos under `--owner` and push the
+  Coding Squad workflows.
+- **Azure subscription RBAC:** **Owner**, or **Contributor + User Access Administrator**, on
+  the subscription — the cross-resource-group role assignments (runtime identity, SRE Agent)
+  require it.
+- **Key Vault reachability for the one-time token seed:** the squad's GitHub token is written
+  to the product Key Vault via `az keyvault secret set` as the operator, so the principal is
+  granted **Key Vault Secrets Officer** on the vault. Because the vault defaults to
+  network-`Deny` (`allowPublicNetworkAccess=false`), run provisioning from a host that can
+  reach the vault data plane — deploy with `allowPublicNetworkAccess=true` for a dev instance,
+  or provision from inside the vault's network.
 
 ## What gets provisioned
 

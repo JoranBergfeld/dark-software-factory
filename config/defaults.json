@@ -25,6 +25,19 @@
     },
     "security": {
       "enabled": true
+    },
+    "scope": {
+      "enabled": true
+    }
+  },
+  "charter": {
+    "interview": {
+      "max_turns": 12
+    },
+    "amendment": {
+      "enabled": false,
+      "cooldown_hours": 168,
+      "min_lessons": 3
     }
   },
   "agents": {
@@ -62,7 +75,8 @@
     "feasibility": 1.0,
     "strategic_fit": 1.0,
     "cost": 1.0,
-    "security": 1.0
+    "security": 1.0,
+    "scope": 1.0
   },
   "jury": {
     "roster": ["pragmatist", "skeptic", "user_advocate"]

@@ -107,29 +107,18 @@ async def test_feasibility_penalizes_risky_scope():
     assert s_big.veto is False
 
 
-async def test_strategic_fit_default_and_supportive():
-    from dsf.contracts.enums import Verdict
-    from dsf.contracts.models import CouncilVerdict
-    from dsf.memory.consolidation import consolidate_run
-
+async def test_strategic_fit_is_neutral_baseline():
     services = build_test_services()
     run = make_run([make_evidence("feature ask")])
-    prop = make_proposal(run, product="alpha")
-    base = await strategic_fit.evaluate(prop, run, services)
-    assert base.veto is False
-    assert base.score == strategic_fit.DEFAULT_SCORE
 
-    # Use the real writer path (consolidate_run) so the lesson carries a "text" field.
-    verdict = CouncilVerdict(
-        proposal_id=prop.id,
-        verdict=Verdict.ACCEPT,
-        weighted_score=0.8,
-        threshold=0.6,
-        rationale="aligned with roadmap and strategic priority",
-    )
-    await consolidate_run(run, verdict, services.memory)
-    boosted = await strategic_fit.evaluate(prop, run, services)
-    assert boosted.score > base.score
+    scoped = await strategic_fit.evaluate(make_proposal(run, product="alpha"), run, services)
+    assert scoped.veto is False
+    assert scoped.score == strategic_fit.DEFAULT_SCORE
+
+    # Unscoped proposals are neutral too; lessons no longer move the baseline
+    # (charter alignment is the model lens's job).
+    unscoped = await strategic_fit.evaluate(make_proposal(run, product=None), run, services)
+    assert unscoped.score == strategic_fit.DEFAULT_SCORE
 
 
 async def test_cost_inverse_to_effort():

@@ -30,7 +30,7 @@ the same place.
 
 ## Inputs and outputs
 
-**In:** GitHub issues carrying `squad:ready`. Most come from the Feature
+**In:** GitHub issues carrying `creation:ready`. Most come from the Feature
 Council. Incident issues from the SRE Agent carry the same label and enter the
 same way.
 
@@ -51,14 +51,14 @@ production starts to change, which is what the SRE Agent then watches.
 
 Each product runs Ralph, squad's watch loop (`squad watch --execute`), as a
 standing Deployment on its own AKS cluster. A KEDA ScaledObject scales it between
-zero and one off the count of open `squad:ready` issues: no work means no pod and
+zero and one off the count of open `creation:ready` issues: no work means no pod and
 no cost, one ready issue brings the loop up, a drained queue scales it back down.
 Ralph polls, builds each member's context, dispatches the coding agent, opens pull
 requests, and writes what each member learned back into `.squad/`.
 
 ```mermaid
 flowchart LR
-    I["Open squad:ready issues"] -->|count| K[KEDA ScaledObject]
+    I["Open creation:ready issues"] -->|count| K[KEDA ScaledObject]
     K -->|0..1| R["Ralph watch loop (AKS)"]
     R -->|gh copilot -p context| A[Coding agent]
     A --> PR[Pull request]
@@ -69,7 +69,7 @@ flowchart LR
     G -->|low: human review| Person
 ```
 
-The single `squad:ready` label is still the whole contract (ADR 0007). The maturity
+The single `creation:ready` label is still the whole contract (ADR 0007). The maturity
 dial decides what happens to a squad pull request: low maturity routes it to a human,
 high maturity auto-merges it on green CI. Knowledge iteration is squad's own
 `.squad/` memory, which lives in git and compounds per run; the loop runs with a
