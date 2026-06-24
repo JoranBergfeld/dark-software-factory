@@ -189,6 +189,77 @@ def test_factory_parser_rejects_runtime_command():
         build_parser().parse_args(["run"])
 
 
+def test_offboard_parser_wiring():
+    args = build_parser().parse_args(["offboard", "demo", "--yes", "--purge"])
+    assert args.command == "offboard"
+    assert args.product == "demo"
+    assert args.yes is True
+    assert args.purge is True
+    assert args.dry_run is False
+
+
+def test_offboard_dry_run_prints_plan_without_side_effects(capsys, tmp_path, monkeypatch):
+    from dsf.instance import provisioner as prov_mod
+    from dsf.instance.spec import InstancePlan, ProvisionStep
+
+    class _Offboarder:
+        def __init__(self, product, **kwargs):
+            self.product = product
+
+        def apply(self, *, execute=False, on_event=None):
+            step = ProvisionStep(
+                name="remove_sre_rbac",
+                description="remove RBAC",
+                result="dry-run",
+            )
+            return InstancePlan(product=self.product, steps=[step])
+
+    monkeypatch.setattr(prov_mod, "InstanceOffboarder", _Offboarder)
+    rc = main([
+        "offboard", "demo", "--dry-run", "--config-root", str(tmp_path),
+    ])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "remove_sre_rbac" in out
+    assert not (tmp_path / "config" / "products.json").exists()
+
+
+def test_offboard_execute_surfaces_step_failure_and_exits_nonzero(capsys, tmp_path, monkeypatch):
+    from dsf.instance import provisioner as prov_mod
+    from dsf.instance.spec import InstancePlan, ProvisionStep
+
+    class _FailingOffboarder:
+        def __init__(self, product, **kwargs):
+            self.product = product
+
+        def apply(self, *, execute=False, on_event=None):
+            step = ProvisionStep(
+                name="delete_product_resource_group",
+                description="Delete product resource group",
+                result="failed",
+                error="boom",
+            )
+            if on_event is not None:
+                on_event("start", 3, 6, step, None)
+                on_event("error", 3, 6, step, RuntimeError("boom"))
+            return InstancePlan(product=self.product, steps=[step])
+
+    monkeypatch.setattr(prov_mod, "InstanceOffboarder", _FailingOffboarder)
+    rc = main(["offboard", "demo", "--yes", "--config-root", str(tmp_path)])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "FAILED" in out
+    assert "offboard STOPPED at 'delete_product_resource_group'" in out
+
+
+def test_offboard_execute_requires_confirmation(capsys, monkeypatch, tmp_path):
+    monkeypatch.setattr("builtins.input", lambda _prompt: "nope")
+    rc = main(["offboard", "demo", "--config-root", str(tmp_path)])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "aborted" in out
+
+
 def test_new_execute_surfaces_step_failure_and_exits_nonzero(capsys, tmp_path, monkeypatch):
     # An executing run whose provisioner reports a failed step must surface the
     # error (not a traceback) and return a non-zero exit code.

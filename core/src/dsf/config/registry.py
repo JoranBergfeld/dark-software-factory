@@ -79,6 +79,21 @@ def register_product(product: Product, *, path: str | Path | None = None) -> Pat
     return target
 
 
+def unregister_product(key: str, *, path: str | Path | None = None) -> Path:
+    """Remove product ``key`` from ``config/products.json`` (idempotent)."""
+    target = Path(path) if path is not None else _repo_root() / "config" / "products.json"
+    if not target.exists():
+        return target
+
+    raw = json.loads(target.read_text(encoding="utf-8"))
+    existing = raw["products"] if isinstance(raw, dict) and "products" in raw else raw
+    entries = [entry for entry in existing if entry.get("key") != key]
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps({"products": entries}, indent=2) + "\n", encoding="utf-8")
+    return target
+
+
 # Minimum key length for word-boundary fallback matching.
 # Keys shorter than this (e.g. 3-char "api") are skipped to prevent mis-routing.
 _MIN_KEY_LEN: int = 4
@@ -129,7 +144,6 @@ def route_product(hints: list[str], registry: dict[str, Product]) -> Product | N
     return None
 
 
-
 def deregister_product(key: str, *, path: str | Path | None = None) -> Path:
     """Remove the product with ``key`` from ``config/products.json``.
 
@@ -137,14 +151,14 @@ def deregister_product(key: str, *, path: str | Path | None = None) -> Path:
     exist. The canonical ``{"products": [...]}`` shape is always preserved.
     ``path`` overrides the default location.
     """
-    target = Path(path) if path is not None else _repo_root() / "config" / "products.json"
-    if not target.exists():
-        return target
-    raw = json.loads(target.read_text(encoding="utf-8"))
-    existing = raw["products"] if isinstance(raw, dict) and "products" in raw else raw
-    entries = [e for e in existing if e.get("key") != key]
-    target.write_text(json.dumps({"products": entries}, indent=2) + "\n", encoding="utf-8")
-    return target
+    return unregister_product(key, path=path)
 
 
-__all__ = ["Product", "deregister_product", "load_registry", "register_product", "route_product"]
+__all__ = [
+    "Product",
+    "deregister_product",
+    "load_registry",
+    "register_product",
+    "route_product",
+    "unregister_product",
+]

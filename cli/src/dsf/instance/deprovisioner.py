@@ -28,6 +28,7 @@ from dsf.instance.spec import (
     _default_repo_root,
     manifest_path,
 )
+from dsf.instance.teardown_common import ALREADY_ABSENT_RESULT, is_not_found
 
 Runner = Callable[..., Any]
 
@@ -38,16 +39,6 @@ StepEvent = Callable[[str, int, int, ProvisionStep, "BaseException | None"], Non
 #: Cap captured stderr/stdout folded into a step error so a runaway tool log
 #: doesn't flood the summary.
 _MAX_ERROR_DETAIL = 2000
-
-#: stderr/stdout signals that indicate a resource is already absent (idempotency).
-_NOT_FOUND_SIGNALS = (
-    "resourcegroupnotfound",
-    "resourcenotfound",
-    "could not resolve to a repository",
-    "not found",
-    "does not exist",
-    "no resource group",
-)
 
 
 def _format_step_error(exc: BaseException) -> str:
@@ -61,17 +52,6 @@ def _format_step_error(exc: BaseException) -> str:
         if detail:
             parts.append(detail[:_MAX_ERROR_DETAIL])
     return "\n".join(parts)
-
-
-def _is_not_found(exc: subprocess.CalledProcessError) -> bool:
-    """Return ``True`` if the error indicates an already-absent resource (404)."""
-    combined = ""
-    for attr in ("stderr", "stdout"):
-        raw = getattr(exc, attr, None)
-        if isinstance(raw, bytes):
-            raw = raw.decode(errors="replace")
-        combined += (raw or "").lower()
-    return any(sig in combined for sig in _NOT_FOUND_SIGNALS)
 
 
 class InstanceDeprovisioner:
@@ -252,9 +232,9 @@ class InstanceDeprovisioner:
                 self._run(step.command, check=True)
                 step.executed, step.result = True, "executed"
             except subprocess.CalledProcessError as exc:
-                if _is_not_found(exc):
+                if is_not_found(exc):
                     step.executed = True
-                    step.result = "not-found (already absent)"
+                    step.result = ALREADY_ABSENT_RESULT
                 else:
                     raise
 

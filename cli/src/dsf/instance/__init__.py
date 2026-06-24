@@ -1,7 +1,7 @@
 """Instance provisioning — turn an InstanceSpec into a product factory instance."""
 
 from dsf.instance.naming import make_name_prefix
-from dsf.instance.provisioner import InstanceProvisioner
+from dsf.instance.provisioner import InstanceOffboarder, InstanceProvisioner
 from dsf.instance.spec import (
     AzureProvisionResult,
     InstanceManifest,
@@ -19,6 +19,7 @@ __all__ = [
     "AzureProvisionResult",
     "InstanceManifest",
     "InstancePlan",
+    "InstanceOffboarder",
     "InstanceProvisioner",
     "InstanceSpec",
     "ProvisionStep",

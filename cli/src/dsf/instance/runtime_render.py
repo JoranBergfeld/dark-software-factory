@@ -14,7 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from dsf.config.registry import Product, register_product
+from dsf.config.registry import Product, register_product, unregister_product
 from dsf.contracts.handoff import HANDOFF_LABEL, INCIDENT_LABEL
 from dsf.instance.spec import (
     InstanceManifest,
@@ -209,10 +209,17 @@ def render_product_registration(
     return register_product(_product_from_spec(manifest.spec), path=products_json)
 
 
+def render_product_unregistration(product: str, *, repo_root: Path | None = None) -> Path:
+    """Unregister ``product`` from ``config/products.json`` (idempotent)."""
+    products_json = (repo_root or _default_repo_root()) / "config" / "products.json"
+    return unregister_product(product, path=products_json)
+
+
 __all__ = [
     "RuntimeBundle",
     "SreSummary",
     "render_product_registration",
+    "render_product_unregistration",
     "render_runtime_bundle",
     "render_sre_summary",
     "runtime_dir",

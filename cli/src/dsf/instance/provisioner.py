@@ -8,6 +8,7 @@ mirroring :class:`dsf.github_client.RealGitHubClient`.
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import tempfile
 import time
@@ -34,8 +35,10 @@ from dsf.instance.branch_protection import (
 from dsf.instance.deploy_progress import DeploymentProgressPoller
 from dsf.instance.runtime_render import (
     render_product_registration,
+    render_product_unregistration,
     render_runtime_bundle,
     render_sre_summary,
+    runtime_dir,
 )
 from dsf.instance.spec import (
     AzureProvisionResult,
@@ -49,6 +52,11 @@ from dsf.instance.spec import (
     read_manifest,
     write_manifest,
 )
+from dsf.instance.teardown_common import (
+    ALREADY_ABSENT_RESULT,
+    is_not_found,
+    is_not_found_text,
+)
 
 Runner = Callable[..., Any]
 
@@ -59,6 +67,10 @@ StepEvent = Callable[[str, int, int, ProvisionStep, "BaseException | None"], Non
 #: Cap captured stderr/stdout folded into a step error so a runaway tool log
 #: doesn't flood the summary.
 _MAX_ERROR_DETAIL = 2000
+_READER_ROLE_ID = "acdd72a7-3385-48ef-bd42-f606fba81ae7"
+_MONITORING_READER_ROLE_ID = "43d0d8ad-25c7-4714-9337-8ba259a9fe05"
+_LOG_ANALYTICS_READER_ROLE_ID = "73c42c96-874c-492b-b04d-ab87d138a893"
+_MONITORING_CONTRIBUTOR_ROLE_ID = "749f88d5-cbae-40b8-bcfc-e573ddc772fa"
 
 #: App Configuration seeding (``seed_appconfig`` step) retries the batch to absorb
 #: the role-assignment (Data Owner) RBAC propagation lag right after deployment:
@@ -727,3 +739,305 @@ class InstanceProvisioner:
             raise last_error
         finally:
             Path(pem_path).unlink(missing_ok=True)
+
+
+class InstanceOffboarder:
+    """Build and apply the shared teardown core for one product instance."""
+
+    def __init__(
+        self,
+        product: str,
+        *,
+        run: Runner | None = None,
+        repo_root: Path | None = None,
+        purge: bool = False,
+    ) -> None:
+        self.product = product
+        self._run = run or subprocess.run
+        self._repo_root = repo_root
+        self._purge = purge
+        self._manifest: InstanceManifest | None = None
+
+    def plan(self) -> InstancePlan:
+        spec = self._load_manifest().spec
+        purge_step = ProvisionStep(
+            name="purge_soft_deleted",
+            description=(
+                "Purge soft-deleted Key Vault + Foundry/Cognitive accounts for name reuse"
+                if self._purge
+                else "Skip soft-delete purge (enable with --purge)"
+            ),
+            deferred=not self._purge,
+        )
+        return InstancePlan(
+            product=self.product,
+            steps=[
+                ProvisionStep(
+                    name="remove_sre_rbac",
+                    description=(
+                        f"Remove SRE agent RBAC outside {spec.sre_resource_group()} "
+                        "(cross-RG + subscription)"
+                    ),
+                ),
+                ProvisionStep(
+                    name="delete_sre_resource_group",
+                    description=f"Delete dedicated SRE resource group {spec.sre_resource_group()}",
+                    command=["az", "group", "delete", "--name", spec.sre_resource_group(), "--yes"],
+                ),
+                ProvisionStep(
+                    name="delete_product_resource_group",
+                    description=f"Delete product resource group {spec.resource_group()}",
+                    command=["az", "group", "delete", "--name", spec.resource_group(), "--yes"],
+                ),
+                purge_step,
+                ProvisionStep(
+                    name="unregister_product",
+                    description=f"Unregister {self.product} from config/products.json",
+                ),
+                ProvisionStep(
+                    name="remove_instance_artifacts",
+                    description=(
+                        f"Remove config/instances/{self.product}.json and "
+                        f"config/instances/{self.product}.runtime/"
+                    ),
+                ),
+            ],
+        )
+
+    def apply(
+        self,
+        *,
+        execute: bool = False,
+        on_event: StepEvent | None = None,
+    ) -> InstancePlan:
+        """Apply the teardown plan, stopping at the first failed step.
+
+        Already-absent resources (404s) are tolerated: the step records
+        ``"not-found (already absent)"`` and the line continues, so a re-run
+        can finish a partial offboard.
+        """
+        emit = on_event or (lambda *_a: None)
+        plan = self.plan()
+        total = len(plan.steps)
+        for index, step in enumerate(plan.steps, 1):
+            emit("start", index, total, step, None)
+            try:
+                self._execute_step(step, execute=execute)
+            except Exception as exc:  # noqa: BLE001
+                step.executed = False
+                step.result = "failed"
+                step.error = _format_step_error(exc)
+                emit("error", index, total, step, exc)
+                break
+            emit("done", index, total, step, None)
+        return plan
+
+    def _execute_step(self, step: ProvisionStep, *, execute: bool) -> None:
+        if step.deferred:
+            step.result = "skipped"
+        elif not execute:
+            step.result = "dry-run"
+        elif step.name == "remove_sre_rbac":
+            step.executed = True
+            step.result = self._remove_sre_rbac()
+        elif step.name == "delete_sre_resource_group":
+            step.executed = True
+            step.result = self._delete_group(self._load_manifest().spec.sre_resource_group())
+        elif step.name == "delete_product_resource_group":
+            step.executed = True
+            step.result = self._delete_group(self._load_manifest().spec.resource_group())
+        elif step.name == "purge_soft_deleted":
+            step.executed = True
+            step.result = self._purge_soft_deleted()
+        elif step.name == "unregister_product":
+            render_product_unregistration(self.product, repo_root=self._repo_root)
+            step.executed = True
+            step.result = "unregistered"
+        elif step.name == "remove_instance_artifacts":
+            mpath = manifest_path(self.product, self._repo_root)
+            mpath.unlink(missing_ok=True)
+            shutil.rmtree(runtime_dir(self.product, self._repo_root), ignore_errors=True)
+            step.executed = True
+            step.result = "removed"
+        else:
+            step.result = "noop"
+
+    def _load_manifest(self) -> InstanceManifest:
+        if self._manifest is not None:
+            return self._manifest
+        path = manifest_path(self.product, self._repo_root)
+        if not path.exists():
+            raise FileNotFoundError(
+                f"Instance manifest not found: {path}. Offboard requires "
+                f"config/instances/{self.product}.json."
+            )
+        self._manifest = read_manifest(self.product, self._repo_root)
+        return self._manifest
+
+    def _delete_group(self, name: str) -> str:
+        if not self._group_exists(name):
+            return ALREADY_ABSENT_RESULT
+        try:
+            self._run(["az", "group", "delete", "--name", name, "--yes"], check=True)
+        except subprocess.CalledProcessError as exc:
+            if is_not_found(exc):
+                return ALREADY_ABSENT_RESULT
+            raise
+        return "deleted"
+
+    def _group_exists(self, name: str) -> bool:
+        proc = self._run(
+            ["az", "group", "exists", "--name", name],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        return str(getattr(proc, "stdout", "")).strip().lower() == "true"
+
+    def _remove_sre_rbac(self) -> str:
+        spec = self._load_manifest().spec
+        principal_id = self._capture_tsv(
+            [
+                "az", "identity", "show",
+                "--resource-group", spec.sre_resource_group(),
+                "--name", f"{spec.sre_agent_name()}-id",
+                "--query", "principalId",
+                "-o", "tsv",
+            ],
+            allow_not_found=True,
+        )
+        if not principal_id:
+            return ALREADY_ABSENT_RESULT
+        sub_id = self._capture_tsv(["az", "account", "show", "--query", "id", "-o", "tsv"])
+        rg_scopes = [f"/subscriptions/{sub_id}/resourceGroups/{rg}" for rg in spec.monitored_rgs()]
+        for scope in rg_scopes:
+            self._delete_role_assignment(principal_id, _READER_ROLE_ID, scope)
+            self._delete_role_assignment(principal_id, _MONITORING_READER_ROLE_ID, scope)
+            self._delete_role_assignment(principal_id, _LOG_ANALYTICS_READER_ROLE_ID, scope)
+        self._delete_role_assignment(
+            principal_id,
+            _MONITORING_CONTRIBUTOR_ROLE_ID,
+            f"/subscriptions/{sub_id}",
+        )
+        return "removed"
+
+    def _delete_role_assignment(self, principal_id: str, role_id: str, scope: str) -> None:
+        cmd = [
+            "az", "role", "assignment", "delete",
+            "--assignee-object-id", principal_id,
+            "--assignee-principal-type", "ServicePrincipal",
+            "--role", role_id,
+            "--scope", scope,
+        ]
+        proc = self._run(cmd, check=False, capture_output=True, text=True)
+        if getattr(proc, "returncode", 1) == 0:
+            return
+        detail = f"{getattr(proc, 'stderr', '')}\n{getattr(proc, 'stdout', '')}"
+        if is_not_found_text(detail):
+            return
+        raise subprocess.CalledProcessError(
+            getattr(proc, "returncode", 1),
+            cmd,
+            output=getattr(proc, "stdout", ""),
+            stderr=getattr(proc, "stderr", ""),
+        )
+
+    def _purge_soft_deleted(self) -> str:
+        manifest = self._load_manifest()
+        spec = manifest.spec
+        outputs = manifest.azure.outputs if manifest.azure else {}
+        keyvault_name = outputs.get("keyVaultName", "")
+        keyvault_purged = self._purge_keyvault_if_deleted(keyvault_name, spec.location)
+
+        foundry_names = set()
+        for key in ("foundryAccountName", "cognitiveAccountName", "aiFoundryName"):
+            value = outputs.get(key, "")
+            if value:
+                foundry_names.add(value)
+        foundry_names.update(self._list_deleted_cognitive_accounts(spec.name_prefix))
+        purged_foundry = 0
+        for name in sorted(foundry_names):
+            if self._purge_cognitive_if_deleted(name, spec.location):
+                purged_foundry += 1
+
+        return (
+            f"purged (keyvault={'yes' if keyvault_purged else 'no'}, "
+            f"foundry={purged_foundry})"
+        )
+
+    def _purge_keyvault_if_deleted(self, name: str, location: str) -> bool:
+        if not name:
+            return False
+        found = self._capture_tsv(
+            ["az", "keyvault", "list-deleted", "--query", f"[?name=='{name}'].name", "-o", "tsv"],
+            allow_not_found=True,
+        )
+        if not found:
+            return False
+        try:
+            self._run(
+                ["az", "keyvault", "purge", "--name", name, "--location", location],
+                check=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            if is_not_found(exc):
+                return False
+            raise
+        return True
+
+    def _list_deleted_cognitive_accounts(self, name_prefix: str) -> list[str]:
+        listed = self._capture_tsv(
+            [
+                "az", "cognitiveservices", "account", "list-deleted",
+                "--query", f"[?starts_with(name, '{name_prefix}')].name",
+                "-o", "tsv",
+            ],
+            allow_not_found=True,
+        )
+        return [line.strip() for line in listed.splitlines() if line.strip()]
+
+    def _purge_cognitive_if_deleted(self, name: str, location: str) -> bool:
+        if not name:
+            return False
+        found = self._capture_tsv(
+            [
+                "az",
+                "cognitiveservices",
+                "account",
+                "list-deleted",
+                "--query",
+                f"[?name=='{name}'].name",
+                "-o",
+                "tsv",
+            ],
+            allow_not_found=True,
+        )
+        if not found:
+            return False
+        try:
+            self._run(
+                [
+                    "az", "cognitiveservices", "account", "purge",
+                    "--name", name, "--location", location,
+                ],
+                check=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            if is_not_found(exc):
+                return False
+            raise
+        return True
+
+    def _capture_tsv(self, cmd: list[str], *, allow_not_found: bool = False) -> str:
+        proc = self._run(cmd, check=False, capture_output=True, text=True)
+        if getattr(proc, "returncode", 1) == 0:
+            return str(getattr(proc, "stdout", "")).strip()
+        detail = f"{getattr(proc, 'stderr', '')}\n{getattr(proc, 'stdout', '')}"
+        if allow_not_found and is_not_found_text(detail):
+            return ""
+        raise subprocess.CalledProcessError(
+            getattr(proc, "returncode", 1),
+            cmd,
+            output=getattr(proc, "stdout", ""),
+            stderr=getattr(proc, "stderr", ""),
+        )

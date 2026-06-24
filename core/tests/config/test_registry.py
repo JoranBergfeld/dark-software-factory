@@ -9,6 +9,7 @@ from dsf.config.registry import (
     load_registry,
     register_product,
     route_product,
+    unregister_product,
 )
 
 
@@ -153,6 +154,23 @@ def test_register_product_appends_without_clobbering(tmp_path):
     registry = load_registry(path)
     assert list(registry) == ["alpha", "beta"]
     assert registry["alpha"].github_repo == "o/alpha"
+
+
+def test_unregister_product_removes_entry(tmp_path):
+    path = tmp_path / "config" / "products.json"
+    register_product(Product(key="alpha", github_repo="o/alpha"), path=path)
+    register_product(Product(key="beta", github_repo="o/beta"), path=path)
+
+    unregister_product("alpha", path=path)
+    registry = load_registry(path)
+    assert list(registry) == ["beta"]
+
+
+def test_unregister_product_missing_file_is_noop(tmp_path):
+    path = tmp_path / "config" / "products.json"
+    written = unregister_product("alpha", path=path)
+    assert written == path
+    assert not path.exists()
 
 
 def test_product_has_azure_monitor_scope_default():
