@@ -22,6 +22,52 @@ class ChatGateway(Protocol):
     ) -> str: ...
 
 
+def _is_strict_compatible(node: Any) -> bool:
+    """True if every object in ``node`` can satisfy OpenAI strict mode.
+
+    Strict structured outputs require ``additionalProperties: false`` on every
+    object, so open-keyed maps (a ``dict[...]`` field whose
+    ``additionalProperties`` is itself a schema) and ``patternProperties``
+    cannot be expressed and must fall back to non-strict.
+    """
+    if isinstance(node, dict):
+        if isinstance(node.get("additionalProperties"), dict):
+            return False
+        if "patternProperties" in node:
+            return False
+        return all(_is_strict_compatible(v) for v in node.values())
+    if isinstance(node, list):
+        return all(_is_strict_compatible(v) for v in node)
+    return True
+
+
+def _strictify(node: Any) -> Any:
+    """Recursively coerce a JSON schema to satisfy OpenAI strict mode."""
+    if isinstance(node, dict):
+        if node.get("type") == "object" and "properties" in node:
+            node["additionalProperties"] = False
+            node["required"] = list(node["properties"].keys())
+        for v in node.values():
+            _strictify(v)
+    elif isinstance(node, list):
+        for v in node:
+            _strictify(v)
+    return node
+
+
+def _response_format_schema(schema: type[BaseModel]) -> dict:
+    """Build the ``json_schema`` response_format payload for ``schema``.
+
+    Uses strict mode when the schema permits it (stronger adherence
+    guarantees); falls back to non-strict for schemas with open-keyed maps
+    (e.g. ``dict`` fields), which strict mode cannot represent.
+    """
+    raw = schema.model_json_schema()
+    if _is_strict_compatible(raw):
+        return {"name": schema.__name__, "schema": _strictify(raw), "strict": True}
+    return {"name": schema.__name__, "schema": raw, "strict": False}
+
+
 class AzureOpenAIModelClient:
     """:class:`~dsf.ports.ModelClient` backed by Azure OpenAI."""
 
@@ -41,13 +87,9 @@ class AzureOpenAIModelClient:
         prompt: str,
         schema: type[BaseModel] | None = None,
     ) -> BaseModel | str:
-        json_schema = None
-        if schema is not None:
-            json_schema = {
-                "name": schema.__name__,
-                "schema": schema.model_json_schema(),
-                "strict": True,
-            }
+        json_schema = (
+            _response_format_schema(schema) if schema is not None else None
+        )
         content = await self._gw.complete(system, prompt, json_schema)
         if schema is not None:
             return schema.model_validate_json(content)
