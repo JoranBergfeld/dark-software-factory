@@ -45,6 +45,11 @@ from dsf.instance.spec import (
 )
 from dsf.instance.squad_governance import governance_commands
 from dsf.instance.squad_render import KV_SECRET_NAME, render_squad_bundle
+from dsf.instance.teardown_common import (
+    ALREADY_ABSENT_RESULT,
+    is_not_found,
+    is_not_found_text,
+)
 
 Runner = Callable[..., Any]
 
@@ -697,6 +702,12 @@ class InstanceOffboarder:
         execute: bool = False,
         on_event: StepEvent | None = None,
     ) -> InstancePlan:
+        """Apply the teardown plan, stopping at the first failed step.
+
+        Already-absent resources (404s) are tolerated: the step records
+        ``"not-found (already absent)"`` and the line continues, so a re-run
+        can finish a partial offboard.
+        """
         emit = on_event or (lambda *_a: None)
         plan = self.plan()
         total = len(plan.steps)
@@ -757,12 +768,12 @@ class InstanceOffboarder:
 
     def _delete_group(self, name: str) -> str:
         if not self._group_exists(name):
-            return "already absent"
+            return ALREADY_ABSENT_RESULT
         try:
             self._run(["az", "group", "delete", "--name", name, "--yes"], check=True)
         except subprocess.CalledProcessError as exc:
-            if self._is_not_found_error(exc):
-                return "already absent"
+            if is_not_found(exc):
+                return ALREADY_ABSENT_RESULT
             raise
         return "deleted"
 
@@ -788,7 +799,7 @@ class InstanceOffboarder:
             allow_not_found=True,
         )
         if not principal_id:
-            return "already absent"
+            return ALREADY_ABSENT_RESULT
         sub_id = self._capture_tsv(["az", "account", "show", "--query", "id", "-o", "tsv"])
         rg_scopes = [f"/subscriptions/{sub_id}/resourceGroups/{rg}" for rg in spec.monitored_rgs()]
         for scope in rg_scopes:
@@ -814,7 +825,7 @@ class InstanceOffboarder:
         if getattr(proc, "returncode", 1) == 0:
             return
         detail = f"{getattr(proc, 'stderr', '')}\n{getattr(proc, 'stdout', '')}"
-        if self._is_not_found_text(detail):
+        if is_not_found_text(detail):
             return
         raise subprocess.CalledProcessError(
             getattr(proc, "returncode", 1),
@@ -855,10 +866,15 @@ class InstanceOffboarder:
         )
         if not found:
             return False
-        self._run(
-            ["az", "keyvault", "purge", "--name", name, "--location", location],
-            check=True,
-        )
+        try:
+            self._run(
+                ["az", "keyvault", "purge", "--name", name, "--location", location],
+                check=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            if is_not_found(exc):
+                return False
+            raise
         return True
 
     def _list_deleted_cognitive_accounts(self, name_prefix: str) -> list[str]:
@@ -890,10 +906,18 @@ class InstanceOffboarder:
         )
         if not found:
             return False
-        self._run(
-            ["az", "cognitiveservices", "account", "purge", "--name", name, "--location", location],
-            check=True,
-        )
+        try:
+            self._run(
+                [
+                    "az", "cognitiveservices", "account", "purge",
+                    "--name", name, "--location", location,
+                ],
+                check=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            if is_not_found(exc):
+                return False
+            raise
         return True
 
     def _capture_tsv(self, cmd: list[str], *, allow_not_found: bool = False) -> str:
@@ -901,31 +925,11 @@ class InstanceOffboarder:
         if getattr(proc, "returncode", 1) == 0:
             return str(getattr(proc, "stdout", "")).strip()
         detail = f"{getattr(proc, 'stderr', '')}\n{getattr(proc, 'stdout', '')}"
-        if allow_not_found and self._is_not_found_text(detail):
+        if allow_not_found and is_not_found_text(detail):
             return ""
         raise subprocess.CalledProcessError(
             getattr(proc, "returncode", 1),
             cmd,
             output=getattr(proc, "stdout", ""),
             stderr=getattr(proc, "stderr", ""),
-        )
-
-    def _is_not_found_error(self, exc: BaseException) -> bool:
-        return self._is_not_found_text(_format_step_error(exc))
-
-    @staticmethod
-    def _is_not_found_text(text: str) -> bool:
-        value = text.lower()
-        return any(
-            marker in value
-            for marker in (
-                "not found",
-                "does not exist",
-                "could not be found",
-                "resourcegroupnotfound",
-                "resourcenotfound",
-                "missing",
-                "wasn't found",
-                "couldn't be found",
-            )
         )

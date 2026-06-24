@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from unittest.mock import MagicMock
 
 from dsf.config.registry import Product, load_registry, register_product
@@ -113,9 +114,9 @@ def test_offboard_execute_tolerates_absent_resources(tmp_path):
 
     plan = InstanceOffboarder("demo", run=fake_run, repo_root=tmp_path).apply(execute=True)
     results = {s.name: s.result for s in plan.steps}
-    assert results["remove_sre_rbac"] == "already absent"
-    assert results["delete_sre_resource_group"] == "already absent"
-    assert results["delete_product_resource_group"] == "already absent"
+    assert results["remove_sre_rbac"] == "not-found (already absent)"
+    assert results["delete_sre_resource_group"] == "not-found (already absent)"
+    assert results["delete_product_resource_group"] == "not-found (already absent)"
 
 
 def test_offboard_purge_purges_soft_deleted_resources(tmp_path):
@@ -151,3 +152,29 @@ def test_offboard_purge_purges_soft_deleted_resources(tmp_path):
         "--location",
         "swedencentral",
     ] in calls
+
+
+def test_offboard_purge_tolerates_absent_on_purge_race(tmp_path):
+    _seed_manifest(tmp_path)
+
+    def fake_run(cmd, **kwargs):
+        if cmd[:4] == ["az", "identity", "show", "--resource-group"]:
+            return MagicMock(returncode=3, stdout="", stderr="ResourceNotFound")
+        if cmd[:3] == ["az", "group", "exists"]:
+            return MagicMock(returncode=0, stdout="false\n")
+        if cmd[:3] == ["az", "keyvault", "list-deleted"]:
+            return MagicMock(returncode=0, stdout="demokv\n")
+        if cmd[:4] == ["az", "cognitiveservices", "account", "list-deleted"]:
+            return MagicMock(returncode=0, stdout="")
+        if cmd[:3] == ["az", "keyvault", "purge"]:
+            raise subprocess.CalledProcessError(
+                3, cmd, output="", stderr="Vault not found"
+            )
+        return MagicMock(returncode=0, stdout="")
+
+    plan = InstanceOffboarder(
+        "demo", run=fake_run, repo_root=tmp_path, purge=True
+    ).apply(execute=True)
+    purge = next(s for s in plan.steps if s.name == "purge_soft_deleted")
+    assert purge.result == "purged (keyvault=no, foundry=0)"
+    assert not purge.error
