@@ -139,6 +139,8 @@ def owner_kv_ensure_commands(
             "az", "keyvault", "create", "--name", keyvault_name,
             "--resource-group", resource_group, "--location", location,
             "--enable-rbac-authorization", "true",
+            "--enable-purge-protection", "true",
+            "--retention-days", "90",
         ],
         [
             "az", "role", "assignment", "create",

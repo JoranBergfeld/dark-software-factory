@@ -131,6 +131,8 @@ def test_owner_kv_ensure_commands_create_rbac_vault_and_grant_operator():
             "--location", "swedencentral"] in cmds
     create = next(c for c in cmds if c[:3] == ["az", "keyvault", "create"])
     assert "--enable-rbac-authorization" in create
+    assert "--enable-purge-protection" in create
+    assert "--retention-days" in create
     grant = next(c for c in cmds if c[:4] == ["az", "role", "assignment", "create"])
     assert "Key Vault Secrets Officer" in grant
     assert "oid-1" in grant
