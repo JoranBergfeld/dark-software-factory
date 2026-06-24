@@ -62,7 +62,7 @@ def app_manifest(*, name: str, callback_url: str) -> dict:
         "default_permissions": {
             "issues": "write",
             "pull_requests": "write",
-            "contents": "read",
+            "contents": "write",
             "administration": "write",
         },
     }

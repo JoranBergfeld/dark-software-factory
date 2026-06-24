@@ -38,7 +38,7 @@ def test_app_manifest_describes_least_privilege_app():
     assert manifest["default_permissions"] == {
         "issues": "write",
         "pull_requests": "write",
-        "contents": "read",
+        "contents": "write",
         "administration": "write",
     }
     # No webhook events: GitHub rejects a manifest that declares events without a
