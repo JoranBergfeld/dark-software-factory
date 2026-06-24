@@ -47,7 +47,13 @@ class AppCredentials:
 
 
 def app_manifest(*, name: str, callback_url: str) -> dict:
-    """Build the GitHub App manifest (least-privilege permissions)."""
+    """Build the GitHub App manifest (least-privilege permissions).
+
+    No webhook events are declared: the App authenticates with installation
+    tokens for REST/GraphQL and bootstrap provisions no webhook receiver. GitHub
+    rejects a manifest that lists ``default_events`` without a ``hook_attributes``
+    URL ("Hook url cannot be blank"), so events are omitted entirely.
+    """
     return {
         "name": name,
         "url": callback_url,
@@ -59,7 +65,6 @@ def app_manifest(*, name: str, callback_url: str) -> dict:
             "contents": "read",
             "administration": "write",
         },
-        "default_events": ["pull_request", "issues"],
     }
 
 

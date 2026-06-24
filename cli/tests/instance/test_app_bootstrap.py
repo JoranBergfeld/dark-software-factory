@@ -41,6 +41,10 @@ def test_app_manifest_describes_least_privilege_app():
         "contents": "read",
         "administration": "write",
     }
+    # No webhook events: GitHub rejects a manifest that declares events without a
+    # hook URL, and the App needs none (installation-token REST/GraphQL only).
+    assert "default_events" not in manifest
+    assert "hook_attributes" not in manifest
 
 
 def test_exchange_manifest_code_posts_to_conversions_and_parses_credentials():
