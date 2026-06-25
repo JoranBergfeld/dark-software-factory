@@ -28,7 +28,7 @@ _CANNED_TAVILY = {
 @pytest.fixture(autouse=True)
 def _api_key(monkeypatch):
     monkeypatch.setenv("TAVILY_API_KEY", "tv-key")
-    monkeypatch.delenv("WEBIQ_PROVIDER", raising=False)
+    monkeypatch.setenv("WEBIQ_PROVIDER", "tavily")
 
 
 async def test_search_maps_results_and_hits_tavily():
@@ -78,6 +78,6 @@ def test_build_agent_live_missing_key_raises(monkeypatch):
 
 
 def test_build_client_unsupported_provider_raises(monkeypatch):
-    monkeypatch.setenv("WEBIQ_PROVIDER", "bing")
+    monkeypatch.setenv("WEBIQ_PROVIDER", "serpapi")
     with pytest.raises(NotImplementedError):
         build_webiq_client_from_env()

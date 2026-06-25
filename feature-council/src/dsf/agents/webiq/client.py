@@ -1,12 +1,16 @@
-"""Live WebIQ web-search client (HTTP) for :class:`WebIqMcpBackend`.
+"""Live WebIQ web-search client for :class:`WebIqMcpBackend`.
 
-Builds an async ``search(query)`` callable backed by a real web-search provider
-via ``httpx``. Only Tavily is supported today; the provider is selected with the
-``WEBIQ_PROVIDER`` env var (default ``tavily``).
+Builds an async ``search(query) -> list[dict]`` callable backed by a real
+web-research provider, selected with the ``WEBIQ_PROVIDER`` env var:
 
-The client is constructed from environment variables (see
-``build_webiq_client_from_env``) but accepts an injected ``httpx.AsyncClient`` so
-tests can drive it with ``httpx.MockTransport`` and never touch the network.
+* ``foundry`` (default; aliases ``azure`` / ``bing``) — Azure AI Foundry's
+  *Grounding with Bing Search* tool, so WebIQ researches through the product's own
+  Azure AI Foundry resource. Implemented in :mod:`dsf.agents.webiq.foundry`.
+* ``tavily`` — the third-party Tavily web-search API (opt-in). Built here via
+  ``httpx`` and constructed from ``TAVILY_API_KEY``.
+
+The Tavily path accepts an injected ``httpx.AsyncClient`` so tests can drive it
+with ``httpx.MockTransport`` and never touch the network.
 """
 
 from __future__ import annotations
@@ -23,28 +27,46 @@ if TYPE_CHECKING:
 
 _TAVILY_URL = "https://api.tavily.com/search"
 
+#: ``WEBIQ_PROVIDER`` values that select the Azure AI Foundry grounding backend.
+_FOUNDRY_PROVIDERS = frozenset({"foundry", "azure", "bing"})
+
 
 def build_webiq_client_from_env(
     client: httpx.AsyncClient | None = None,
 ) -> Callable[[str], Awaitable[list[dict]]]:
-    """Return an async ``search(query)`` backed by a web-search provider.
+    """Return an async ``search(query)`` backed by the configured provider.
 
-    Env vars:
+    ``WEBIQ_PROVIDER`` (default ``foundry``) selects the backend:
 
-    * ``WEBIQ_PROVIDER`` (default ``tavily``) — which provider to use. Anything
-      other than ``tavily`` raises :class:`NotImplementedError`.
-    * ``TAVILY_API_KEY`` (required when provider is ``tavily``) — Tavily API key.
+    * ``foundry`` / ``azure`` / ``bing`` — Azure AI Foundry Grounding with Bing
+      Search (see :func:`dsf.agents.webiq.foundry.build_foundry_search_from_env`).
+      The ``client`` argument is ignored for this provider.
+    * ``tavily`` — the Tavily web-search API (requires ``TAVILY_API_KEY``).
 
-    When ``client`` is ``None`` a real ``httpx.AsyncClient`` is constructed with a
-    20s timeout. When a client is injected (tests pass a ``MockTransport``-backed
-    client) it is used as-is.
+    Any other value raises :class:`NotImplementedError`.
     """
-    provider = (os.environ.get("WEBIQ_PROVIDER") or "tavily").strip().lower()
+    provider = (os.environ.get("WEBIQ_PROVIDER") or "foundry").strip().lower()
+    if provider in _FOUNDRY_PROVIDERS:
+        from dsf.agents.webiq.foundry import build_foundry_search_from_env
+
+        return build_foundry_search_from_env()
     if provider != "tavily":
         raise NotImplementedError(
-            f"WEBIQ_PROVIDER {provider!r} not supported (only 'tavily')"
+            f"WEBIQ_PROVIDER {provider!r} not supported "
+            "(use 'foundry' (default) or 'tavily')"
         )
+    return _build_tavily_search_from_env(client)
 
+
+def _build_tavily_search_from_env(
+    client: httpx.AsyncClient | None = None,
+) -> Callable[[str], Awaitable[list[dict]]]:
+    """Return an async ``search(query)`` backed by the Tavily web-search API.
+
+    Requires ``TAVILY_API_KEY``. When ``client`` is ``None`` a real
+    ``httpx.AsyncClient`` is constructed with a 20s timeout; when injected (tests
+    pass a ``MockTransport``-backed client) it is used as-is.
+    """
     api_key = env_required("TAVILY_API_KEY", hint="Tavily web-search API key")
 
     if client is None:

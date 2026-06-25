@@ -188,6 +188,20 @@ wheels = [
 ]
 
 [[package]]
+name = "azure-ai-agents"
+version = "1.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "azure-core" },
+    { name = "isodate" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/39/98/bbe2e9e5b0a934be1930545025bf7018ebc4cc33b10134cc3314d6487076/azure_ai_agents-1.1.0.tar.gz", hash = "sha256:eb9d7226282d03206c3fab3f3ee0a2fc71e0ad38e52d2f4f19a92c56ed951aea", size = 303656, upload-time = "2025-08-05T19:02:26.7Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e6/31/43750555bf20d3d2d7589fcd775c96ce7c96e58e208b81c1ed6d4bad6c5f/azure_ai_agents-1.1.0-py3-none-any.whl", hash = "sha256:f660bb0d564aeb88e33140ebc1e4700d2e36e2e12ee60c3346915d702a9310a9", size = 191126, upload-time = "2025-08-05T19:02:28.178Z" },
+]
+
+[[package]]
 name = "azure-appconfiguration"
 version = "1.8.1"
 source = { registry = "https://pypi.org/simple" }
@@ -542,6 +556,7 @@ dependencies = [
 [package.optional-dependencies]
 azure = [
     { name = "aiohttp" },
+    { name = "azure-ai-agents" },
     { name = "azure-appconfiguration" },
     { name = "azure-cosmos" },
     { name = "azure-identity" },
@@ -552,6 +567,7 @@ azure = [
 [package.metadata]
 requires-dist = [
     { name = "aiohttp", marker = "extra == 'azure'", specifier = ">=3.9" },
+    { name = "azure-ai-agents", marker = "extra == 'azure'", specifier = ">=1.0" },
     { name = "azure-appconfiguration", marker = "extra == 'azure'", specifier = ">=1.5" },
     { name = "azure-cosmos", marker = "extra == 'azure'", specifier = ">=4.5" },
     { name = "azure-identity", marker = "extra == 'azure'", specifier = ">=1.15" },

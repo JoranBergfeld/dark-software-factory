@@ -11,11 +11,13 @@ external/industry web-research source:
   calling an *injected* ``search`` callable so it stays unit-testable and never
   hits the network in local mode. In live mode :mod:`dsf.agents.webiq.main`
   wires this backend to the real provider client built by
-  :func:`dsf.agents.webiq.client.build_webiq_client_from_env` (Tavily today).
+  :func:`dsf.agents.webiq.client.build_webiq_client_from_env` — Azure AI Foundry
+  Grounding with Bing Search by default; Tavily optional.
 
 Live-mode contract:
-    ``search`` is a web search/fetch client (Tavily today; selected via
-    ``WEBIQ_PROVIDER``). The backend builds one or more industry queries from
+    ``search`` is a web search/fetch client (Azure AI Foundry grounding by
+    default; Tavily optional; selected via ``WEBIQ_PROVIDER``). The backend
+    builds one or more industry queries from
     ``run_scope`` — product hints plus competitive/market framing (e.g.
     ``"<product> competitor feature release"`` or
     ``"<product> industry trend market signal"``) — and calls ``search`` to
