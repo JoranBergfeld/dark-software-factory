@@ -1198,3 +1198,111 @@ def test_seed_repo_is_idempotent_when_workflow_present():
     prov._seed_repo()
 
     assert not [c for c in calls if "--method" in c and "PUT" in c]
+
+
+# ---------------------------------------------------------------------------
+# Human owner/governance principal grants (adminPrincipalId + ownerPrincipalId)
+# ---------------------------------------------------------------------------
+
+_SIGNED_IN_USER_CMD = ["az", "ad", "signed-in-user", "show", "--query", "id", "-o", "tsv"]
+_OWNER_OID = "11111111-2222-3333-4444-555555555555"
+
+_SRE_OUTPUTS_JSON = (
+    "{" + _APPCONFIG_OUTPUT + ","
+    ' "appInsightsId": {"type": "String", "value": "/sub/ai"},'
+    ' "logAnalyticsId": {"type": "String", "value": "/sub/law"},'
+    ' "keyVaultName": {"type": "String", "value": "kv1"}}'
+)
+
+
+def test_plan_includes_admin_principal_id_only_when_overridden():
+    # Default plan() stays pure: no az lookup, so no adminPrincipalId is injected.
+    plain = next(
+        s for s in InstanceProvisioner(_spec()).plan().steps if s.name == "provision_azure"
+    )
+    assert not any(c.startswith("adminPrincipalId=") for c in plain.command)
+
+    # An explicit override is threaded purely (no az call needed for plan()).
+    overridden = next(
+        s
+        for s in InstanceProvisioner(_spec(), admin_principal_id=_OWNER_OID).plan().steps
+        if s.name == "provision_azure"
+    )
+    assert f"adminPrincipalId={_OWNER_OID}" in overridden.command
+
+
+def test_execute_threads_admin_and_owner_principal_ids(tmp_path):
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[:3] == ["gh", "repo", "view"]:
+            return MagicMock(returncode=1)
+        if cmd == _SIGNED_IN_USER_CMD:
+            return _completed(stdout=f"{_OWNER_OID}\n")
+        hit = _az_deploy(cmd, _SRE_OUTPUTS_JSON)
+        if hit is not None:
+            return hit
+        return MagicMock(returncode=0, stdout="")
+
+    prov = InstanceProvisioner(_spec(), run=fake_run, repo_root=tmp_path)
+    prov.apply(execute=True)
+
+    group_create = next(c for c in calls if c[:4] == ["az", "deployment", "group", "create"])
+    assert f"adminPrincipalId={_OWNER_OID}" in group_create
+
+    sub_create = next(c for c in calls if c[:4] == ["az", "deployment", "sub", "create"])
+    assert f"ownerPrincipalId={_OWNER_OID}" in sub_create
+
+
+def test_admin_principal_id_override_beats_signed_in_user(tmp_path):
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[:3] == ["gh", "repo", "view"]:
+            return MagicMock(returncode=1)
+        if cmd == _SIGNED_IN_USER_CMD:
+            return _completed(stdout="should-not-be-used\n")
+        hit = _az_deploy(cmd, _SRE_OUTPUTS_JSON)
+        if hit is not None:
+            return hit
+        return MagicMock(returncode=0, stdout="")
+
+    prov = InstanceProvisioner(
+        _spec(), run=fake_run, repo_root=tmp_path, admin_principal_id=_OWNER_OID
+    )
+    prov.apply(execute=True)
+
+    # The override wins and short-circuits the signed-in-user lookup entirely.
+    assert _SIGNED_IN_USER_CMD not in calls
+    group_create = next(c for c in calls if c[:4] == ["az", "deployment", "group", "create"])
+    assert f"adminPrincipalId={_OWNER_OID}" in group_create
+    sub_create = next(c for c in calls if c[:4] == ["az", "deployment", "sub", "create"])
+    assert f"ownerPrincipalId={_OWNER_OID}" in sub_create
+
+
+def test_no_human_grant_when_signed_in_user_unavailable(tmp_path):
+    # Service-principal / CI: `az ad signed-in-user show` fails -> both grants no-op so
+    # provisioning still succeeds without any human principal.
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[:3] == ["gh", "repo", "view"]:
+            return MagicMock(returncode=1)
+        if cmd == _SIGNED_IN_USER_CMD:
+            return _completed(returncode=1)
+        hit = _az_deploy(cmd, _SRE_OUTPUTS_JSON)
+        if hit is not None:
+            return hit
+        return MagicMock(returncode=0, stdout="")
+
+    prov = InstanceProvisioner(_spec(), run=fake_run, repo_root=tmp_path)
+    manifest = prov.apply(execute=True)
+
+    group_create = next(c for c in calls if c[:4] == ["az", "deployment", "group", "create"])
+    assert not any(c.startswith("adminPrincipalId=") for c in group_create)
+    sub_create = next(c for c in calls if c[:4] == ["az", "deployment", "sub", "create"])
+    assert not any(c.startswith("ownerPrincipalId=") for c in sub_create)
+    assert manifest.executed is True
