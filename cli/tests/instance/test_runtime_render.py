@@ -61,6 +61,17 @@ def test_render_env_scopes_product_and_maps_endpoints(tmp_path):
     assert "AZURE_OPENAI_EMBEDDING_DEPLOYMENT=text-embedding-3-small" in env
 
 
+def test_render_env_selects_webiq_provider_and_drops_bing(tmp_path):
+    bundle = render_runtime_bundle(_manifest(tmp_path), repo_root=tmp_path)
+    env = bundle.env_path.read_text(encoding="utf-8")
+    # the webiq agent now uses the WebIQ SDK (API key from Key Vault), not Bing
+    assert "WEBIQ_PROVIDER=webiq" in env
+    assert "WEBIQ_API_KEY_SECRET=webiq-api-key" in env
+    # the dead Foundry-project / Bing endpoints are gone
+    assert "AZURE_AI_PROJECT_ENDPOINT" not in env
+    assert "WEBIQ_BING_CONNECTION_ID" not in env
+
+
 def test_render_app_config_scopes_product(tmp_path):
     bundle = render_runtime_bundle(_manifest(tmp_path), repo_root=tmp_path)
     app = bundle.app_config_path.read_text(encoding="utf-8")

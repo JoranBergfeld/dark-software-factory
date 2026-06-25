@@ -33,8 +33,6 @@ _ENDPOINT_MAP: tuple[tuple[str, str], ...] = (
     ("AZURE_OPENAI_ENDPOINT", "openaiEndpoint"),
     ("AZURE_OPENAI_DEPLOYMENT", "openaiDeployment"),
     ("AZURE_OPENAI_EMBEDDING_DEPLOYMENT", "openaiEmbeddingDeployment"),
-    ("AZURE_AI_PROJECT_ENDPOINT", "aiProjectEndpoint"),
-    ("WEBIQ_BING_CONNECTION_ID", "bingConnectionId"),
 )
 
 
@@ -67,6 +65,8 @@ def _render_env(product: str, outputs: dict[str, str]) -> str:
         "# read at runtime from Key Vault via the ACA managed identity (ADR 0004),",
         "# never rendered here.",
         f"DSF_PRODUCT={product}",
+        "WEBIQ_PROVIDER=webiq",
+        "WEBIQ_API_KEY_SECRET=webiq-api-key",
     ]
     lines.extend(f"{var}={outputs.get(key, '')}" for var, key in _ENDPOINT_MAP)
     return "\n".join(lines) + "\n"
