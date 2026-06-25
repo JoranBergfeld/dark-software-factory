@@ -33,6 +33,8 @@ _ENDPOINT_MAP: tuple[tuple[str, str], ...] = (
     ("AZURE_OPENAI_ENDPOINT", "openaiEndpoint"),
     ("AZURE_OPENAI_DEPLOYMENT", "openaiDeployment"),
     ("AZURE_OPENAI_EMBEDDING_DEPLOYMENT", "openaiEmbeddingDeployment"),
+    ("AZURE_AI_PROJECT_ENDPOINT", "aiProjectEndpoint"),
+    ("WEBIQ_BING_CONNECTION_ID", "bingConnectionId"),
 )
 
 
