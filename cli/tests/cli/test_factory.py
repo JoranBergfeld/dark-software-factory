@@ -444,6 +444,37 @@ def test_delete_execute_noninteractive_without_yes_returns_error(tmp_path, monke
     assert rc == 1
 
 
+def test_delete_confirm_ctrl_c_aborts_cleanly(capsys, tmp_path, monkeypatch):
+    """Ctrl-C / EOF at the confirm prompt aborts cleanly with no traceback."""
+    _write_demo_manifest(tmp_path)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+
+    def _raise(_prompt):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("builtins.input", _raise)
+    rc = main(["delete", "demo", "--config-root", str(tmp_path)])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "cancelled" in err
+    # Manifest must survive an aborted delete.
+    from dsf.instance.spec import manifest_path
+    assert manifest_path("demo", tmp_path).exists()
+
+
+def test_delete_confirm_eof_aborts_cleanly(tmp_path, monkeypatch):
+    """EOFError (closed stdin) at the confirm prompt aborts cleanly."""
+    _write_demo_manifest(tmp_path)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+
+    def _raise(_prompt):
+        raise EOFError
+
+    monkeypatch.setattr("builtins.input", _raise)
+    rc = main(["delete", "demo", "--config-root", str(tmp_path)])
+    assert rc == 1
+
+
 def test_delete_execute_failure_exits_nonzero(capsys, tmp_path, monkeypatch):
     from dsf.instance import deprovisioner as dep_mod
 

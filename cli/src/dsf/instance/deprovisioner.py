@@ -30,6 +30,7 @@ from dsf.instance.spec import (
 )
 from dsf.instance.teardown_common import (
     ALREADY_ABSENT_RESULT,
+    AzureTeardown,
     guarded_group_delete,
     is_not_found,
 )
@@ -95,6 +96,7 @@ class InstanceDeprovisioner:
         self._repo_root = repo_root
         self._purge = purge
         self._delete_repo = delete_repo
+        self._az = AzureTeardown(self._run)
 
     # ------------------------------------------------------------------
     # Plan building
@@ -104,6 +106,13 @@ class InstanceDeprovisioner:
         """Return the ordered teardown plan (pure — no side effects)."""
         s = self.spec
         steps: list[ProvisionStep] = [
+            ProvisionStep(
+                name="remove_sre_rbac",
+                description=(
+                    f"Remove SRE agent ({s.sre_agent_name()}) RBAC outside "
+                    f"{s.sre_resource_group()} (cross-RG + subscription)"
+                ),
+            ),
             ProvisionStep(
                 name="delete_sre_agent",
                 description=(
@@ -220,7 +229,11 @@ class InstanceDeprovisioner:
 
     def _execute_step(self, step: ProvisionStep) -> None:
         """Run one teardown step, mutating ``step.result`` / ``step.executed``."""
-        if step.name == "deregister_product":
+        if step.name == "remove_sre_rbac":
+            step.executed = True
+            step.result = self._az.remove_sre_rbac(self.spec)
+
+        elif step.name == "deregister_product":
             products_json = (
                 (self._repo_root or _default_repo_root()) / "config" / "products.json"
             )
@@ -242,7 +255,10 @@ class InstanceDeprovisioner:
 
         elif step.command:
             try:
-                self._run(step.command, check=True)
+                # capture_output so a 404's stderr/stdout is available to
+                # is_not_found(); without it the CalledProcessError carries
+                # stderr=None and an already-absent resource fails the run.
+                self._run(step.command, check=True, capture_output=True, text=True)
                 step.executed, step.result = True, "executed"
             except subprocess.CalledProcessError as exc:
                 if is_not_found(exc):

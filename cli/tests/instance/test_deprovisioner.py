@@ -76,6 +76,7 @@ def test_plan_step_order_and_names():
     assert isinstance(plan, TeardownPlan)
     assert plan.product == "demo"
     assert [s.name for s in plan.steps] == [
+        "remove_sre_rbac",
         "delete_sre_agent",
         "delete_resource_group",
         "deregister_product",
@@ -397,9 +398,81 @@ def test_apply_execute_refuses_untagged_resource_group(tmp_path):
     assert steps["delete_repo"].result == ""
 
 # ---------------------------------------------------------------------------
-# from_product() factory
+# apply() — capture_output idempotency + SRE RBAC removal
 # ---------------------------------------------------------------------------
 
+
+def test_apply_execute_runs_delete_commands_with_captured_output(tmp_path):
+    """Command steps must run with capture_output so is_not_found can read stderr.
+
+    Mirrors real ``subprocess.run`` semantics: the CalledProcessError only carries
+    ``stderr`` when ``capture_output=True`` was passed. Without the capture the
+    already-absent resource would (incorrectly) fail the run. The ``delete_repo``
+    command step is the canary here; resource-group deletes go through the
+    tag-guarded path.
+    """
+
+    def fake_run(cmd, **kwargs):
+        hit = _group_show_tags(cmd)
+        if hit is not None:
+            return hit
+        if cmd[:3] == ["gh", "repo", "delete"]:
+            stderr = "Could not resolve to a repository" if kwargs.get("capture_output") else None
+            raise subprocess.CalledProcessError(1, cmd, stderr=stderr)
+        return MagicMock(returncode=0, stdout="principal\n")
+
+    plan = InstanceDeprovisioner(_manifest(), run=fake_run, repo_root=tmp_path).apply(execute=True)
+    steps = {s.name: s for s in plan.steps}
+    assert steps["delete_repo"].result == "not-found (already absent)"
+    assert not any(s.result == "failed" for s in plan.steps)
+
+
+def test_apply_execute_removes_sre_rbac_scopes(tmp_path):
+    """delete must remove cross-RG + subscription SRE role assignments."""
+    spec = InstanceSpec(product="demo", owner="acme", monitored_resource_groups=["rg-shared"])
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[:4] == ["az", "identity", "show", "--resource-group"]:
+            return MagicMock(returncode=0, stdout="principal-1\n")
+        if cmd[:3] == ["az", "account", "show"]:
+            return MagicMock(returncode=0, stdout="sub-xyz\n")
+        return MagicMock(returncode=0, stdout="")
+
+    plan = InstanceDeprovisioner(_manifest(spec=spec), run=fake_run, repo_root=tmp_path).apply(
+        execute=True
+    )
+    steps = {s.name: s for s in plan.steps}
+    assert steps["remove_sre_rbac"].result == "removed"
+
+    role_deletes = [c for c in calls if c[:4] == ["az", "role", "assignment", "delete"]]
+    scopes = {cmd[cmd.index("--scope") + 1] for cmd in role_deletes}
+    assert "/subscriptions/sub-xyz" in scopes
+    assert "/subscriptions/sub-xyz/resourceGroups/rg-dsf-demo" in scopes
+    assert "/subscriptions/sub-xyz/resourceGroups/rg-shared" in scopes
+
+
+def test_apply_execute_sre_rbac_tolerates_absent_identity(tmp_path):
+    """An already-gone SRE identity records absent and does not stop the run."""
+
+    def fake_run(cmd, **kwargs):
+        hit = _group_show_tags(cmd)
+        if hit is not None:
+            return hit
+        if cmd[:4] == ["az", "identity", "show", "--resource-group"]:
+            return MagicMock(returncode=3, stdout="", stderr="ResourceNotFound")
+        return MagicMock(returncode=0, stdout="")
+
+    plan = InstanceDeprovisioner(_manifest(), run=fake_run, repo_root=tmp_path).apply(execute=True)
+    steps = {s.name: s for s in plan.steps}
+    assert steps["remove_sre_rbac"].result == "not-found (already absent)"
+    assert not any(s.result == "failed" for s in plan.steps)
+
+
+# ---------------------------------------------------------------------------
+# from_product() factory
+# ---------------------------------------------------------------------------
 
 def test_from_product_loads_manifest(tmp_path):
     m = _manifest()
