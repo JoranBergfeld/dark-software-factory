@@ -14,7 +14,11 @@ Serve it with `dsfctl serve-agent --kind webiq` (ASGI app: `dsf.agents.webiq.mai
 
 | Variable | Required | Default | Purpose |
 | --- | --- | --- | --- |
-| `WEBIQ_PROVIDER` | no | `tavily` | Search provider. Only `tavily` is supported; any other value raises. |
+| `WEBIQ_PROVIDER` | no | `webiq` | Search provider: `webiq` (Microsoft WebIQ SDK) or `tavily`. Any other value raises. |
+| `WEBIQ_API_KEY` | no | — | WebIQ API key override. When unset, the key is read from Key Vault. |
+| `WEBIQ_API_KEY_SECRET` | no | `webiq-api-key` | Key Vault secret name holding the WebIQ API key. |
+| `AZURE_KEYVAULT_URI` | yes (for `webiq`, when `WEBIQ_API_KEY` unset) | — | Product Key Vault URI the API key is read from. |
+| `WEBIQ_MAX_RESULTS` | no | `5` | Max web results per query. |
 | `TAVILY_API_KEY` | yes (for `tavily`) | — | Tavily API key. |
 
 ## A2A auth (shared)

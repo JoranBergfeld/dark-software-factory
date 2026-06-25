@@ -3,8 +3,8 @@
 Builds the A2A app over the WebIQ backend, selecting by mode. Run with
 ``uvicorn dsf.agents.webiq.main:app``. In live mode the real web-search backend
 (:class:`dsf.agents.webiq.backend.WebIqMcpBackend`) is wired to the provider
-client built from env vars — Azure AI Foundry Grounding with Bing Search by
-default, Tavily optional. Otherwise the fixture-backed backend is used.
+client built from env vars — the Microsoft WebIQ SDK by default, Tavily
+optional. Otherwise the fixture-backed backend is used.
 """
 
 from __future__ import annotations
@@ -21,8 +21,8 @@ def build_agent(config: object | None = None, mode: str | None = None) -> Source
 
     In live mode (``DSF_MODE`` set to anything but ``local``, or ``mode``
     explicitly live) the real web-search backend is wired to the provider client
-    built from env vars (Azure AI Foundry Grounding with Bing Search by default;
-    Tavily optional). Otherwise the deterministic fixture-backed backend is used.
+    built from env vars (the Microsoft WebIQ SDK by default; Tavily optional).
+    Otherwise the deterministic fixture-backed backend is used.
     """
     cfg = config if config is not None else InMemoryConfigStore.from_defaults()
     if is_live(resolve_mode(mode)):
