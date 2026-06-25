@@ -3,14 +3,14 @@
 Builds an async ``search(query) -> list[dict]`` callable backed by a real
 web-research provider, selected with the ``WEBIQ_PROVIDER`` env var:
 
-* ``foundry`` (default; aliases ``azure`` / ``bing``) — Azure AI Foundry's
-  *Grounding with Bing Search* tool, so WebIQ researches through the product's own
-  Azure AI Foundry resource. Implemented in :mod:`dsf.agents.webiq.foundry`.
+* ``webiq`` (default) — the Microsoft **WebIQ** SDK (API-key auth). Implemented
+  in :mod:`dsf.agents.webiq.webiq_sdk`.
 * ``tavily`` — the third-party Tavily web-search API (opt-in). Built here via
   ``httpx`` and constructed from ``TAVILY_API_KEY``.
 
-The Tavily path accepts an injected ``httpx.AsyncClient`` so tests can drive it
-with ``httpx.MockTransport`` and never touch the network.
+Both paths accept an injected ``httpx.AsyncClient`` so tests can drive them with
+``httpx.MockTransport`` and never touch the network. Any other provider value
+raises :class:`NotImplementedError`.
 """
 
 from __future__ import annotations
@@ -27,33 +27,32 @@ if TYPE_CHECKING:
 
 _TAVILY_URL = "https://api.tavily.com/search"
 
-#: ``WEBIQ_PROVIDER`` values that select the Azure AI Foundry grounding backend.
-_FOUNDRY_PROVIDERS = frozenset({"foundry", "azure", "bing"})
-
 
 def build_webiq_client_from_env(
     client: httpx.AsyncClient | None = None,
+    key_reader: Callable[[str, str], str] | None = None,
 ) -> Callable[[str], Awaitable[list[dict]]]:
     """Return an async ``search(query)`` backed by the configured provider.
 
-    ``WEBIQ_PROVIDER`` (default ``foundry``) selects the backend:
+    ``WEBIQ_PROVIDER`` (default ``webiq``) selects the backend:
 
-    * ``foundry`` / ``azure`` / ``bing`` — Azure AI Foundry Grounding with Bing
-      Search (see :func:`dsf.agents.webiq.foundry.build_foundry_search_from_env`).
-      The ``client`` argument is ignored for this provider.
+    * ``webiq`` — the Microsoft WebIQ SDK (see
+      :func:`dsf.agents.webiq.webiq_sdk._build_webiq_search`). ``key_reader``
+      overrides the Key Vault read in tests.
     * ``tavily`` — the Tavily web-search API (requires ``TAVILY_API_KEY``).
+      ``key_reader`` is ignored for this provider.
 
     Any other value raises :class:`NotImplementedError`.
     """
-    provider = (os.environ.get("WEBIQ_PROVIDER") or "foundry").strip().lower()
-    if provider in _FOUNDRY_PROVIDERS:
-        from dsf.agents.webiq.foundry import build_foundry_search_from_env
+    provider = (os.environ.get("WEBIQ_PROVIDER") or "webiq").strip().lower()
+    if provider == "webiq":
+        from dsf.agents.webiq.webiq_sdk import _build_webiq_search
 
-        return build_foundry_search_from_env()
+        return _build_webiq_search(client=client, key_reader=key_reader)
     if provider != "tavily":
         raise NotImplementedError(
             f"WEBIQ_PROVIDER {provider!r} not supported "
-            "(use 'foundry' (default) or 'tavily')"
+            "(use 'webiq' (default) or 'tavily')"
         )
     return _build_tavily_search_from_env(client)
 
