@@ -59,6 +59,7 @@ from dsf.instance.tagging import canonical_tags, tag_cli_args
 from dsf.instance.teardown_common import (
     AzureTeardown,
     is_not_found,
+    is_purge_protected,
 )
 
 Runner = Callable[..., Any]
@@ -990,7 +991,7 @@ class InstanceOffboarder:
         spec = manifest.spec
         outputs = manifest.azure.outputs if manifest.azure else {}
         keyvault_name = outputs.get("keyVaultName", "")
-        keyvault_purged = self._purge_keyvault_if_deleted(keyvault_name, spec.location)
+        keyvault_status = self._purge_keyvault_if_deleted(keyvault_name, spec.location)
 
         foundry_names = set()
         for key in ("foundryAccountName", "cognitiveAccountName", "aiFoundryName"):
@@ -1000,23 +1001,26 @@ class InstanceOffboarder:
         foundry_names.update(self._list_deleted_cognitive_accounts(spec.name_prefix))
         purged_foundry = 0
         for name in sorted(foundry_names):
-            if self._purge_cognitive_if_deleted(name, spec.location):
+            if self._purge_cognitive_if_deleted(name, spec.location, spec.resource_group()):
                 purged_foundry += 1
 
-        return (
-            f"purged (keyvault={'yes' if keyvault_purged else 'no'}, "
-            f"foundry={purged_foundry})"
-        )
+        return f"purged (keyvault={keyvault_status}, foundry={purged_foundry})"
 
-    def _purge_keyvault_if_deleted(self, name: str, location: str) -> bool:
+    def _purge_keyvault_if_deleted(self, name: str, location: str) -> str:
+        """Purge a soft-deleted Key Vault, returning a status token.
+
+        ``"yes"`` when purged, ``"no"`` when already absent, and ``"protected"``
+        when purge protection blocks the purge (the vault expires after its
+        retention window and cannot be force-purged).
+        """
         if not name:
-            return False
+            return "no"
         found = self._az.capture_tsv(
             ["az", "keyvault", "list-deleted", "--query", f"[?name=='{name}'].name", "-o", "tsv"],
             allow_not_found=True,
         )
         if not found:
-            return False
+            return "no"
         try:
             self._run(
                 ["az", "keyvault", "purge", "--name", name, "--location", location],
@@ -1024,9 +1028,11 @@ class InstanceOffboarder:
             )
         except subprocess.CalledProcessError as exc:
             if is_not_found(exc):
-                return False
+                return "no"
+            if is_purge_protected(exc):
+                return "protected"
             raise
-        return True
+        return "yes"
 
     def _list_deleted_cognitive_accounts(self, name_prefix: str) -> list[str]:
         listed = self._az.capture_tsv(
@@ -1039,7 +1045,7 @@ class InstanceOffboarder:
         )
         return [line.strip() for line in listed.splitlines() if line.strip()]
 
-    def _purge_cognitive_if_deleted(self, name: str, location: str) -> bool:
+    def _purge_cognitive_if_deleted(self, name: str, location: str, resource_group: str) -> bool:
         if not name:
             return False
         found = self._az.capture_tsv(
@@ -1062,6 +1068,7 @@ class InstanceOffboarder:
                 [
                     "az", "cognitiveservices", "account", "purge",
                     "--name", name, "--location", location,
+                    "--resource-group", resource_group,
                 ],
                 check=True,
             )
@@ -1070,4 +1077,3 @@ class InstanceOffboarder:
                 return False
             raise
         return True
-

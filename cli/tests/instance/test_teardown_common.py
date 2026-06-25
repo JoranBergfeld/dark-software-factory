@@ -17,6 +17,7 @@ from dsf.instance.teardown_common import (
     guarded_group_delete,
     is_not_found,
     is_not_found_text,
+    is_purge_protected,
 )
 
 
@@ -60,6 +61,23 @@ def test_is_not_found_reads_stderr_and_stdout():
         1, ["az", "group", "delete"], output="", stderr="AuthorizationFailed"
     )
     assert is_not_found(real) is False
+
+
+def test_is_purge_protected_detects_deleted_vault_purge_block():
+    exc = subprocess.CalledProcessError(
+        1,
+        ["az", "keyvault", "purge"],
+        output="",
+        stderr="(MethodNotAllowed) Operation 'DeletedVaultPurge' is not allowed.",
+    )
+    assert is_purge_protected(exc) is True
+
+
+def test_is_purge_protected_false_for_not_found():
+    exc = subprocess.CalledProcessError(
+        3, ["az", "keyvault", "purge"], output="", stderr="Vault not found"
+    )
+    assert is_purge_protected(exc) is False
 
 
 def test_already_absent_result_wording():

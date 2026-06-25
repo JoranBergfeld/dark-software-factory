@@ -161,6 +161,8 @@ def test_offboard_purge_purges_soft_deleted_resources(tmp_path):
         "demopfx12345abc",
         "--location",
         "swedencentral",
+        "--resource-group",
+        "rg-dsf-demo",
     ] in calls
 
 
@@ -189,6 +191,35 @@ def test_offboard_purge_tolerates_absent_on_purge_race(tmp_path):
     assert purge.result == "purged (keyvault=no, foundry=0)"
     assert not purge.error
 
+
+def test_offboard_purge_skips_purge_protected_keyvault(tmp_path):
+    """A purge-protected vault is reported as protected, not an error."""
+    _seed_manifest(tmp_path)
+
+    def fake_run(cmd, **kwargs):
+        if cmd[:4] == ["az", "identity", "show", "--resource-group"]:
+            return MagicMock(returncode=3, stdout="", stderr="ResourceNotFound")
+        if cmd[:3] == ["az", "group", "show"]:
+            return MagicMock(returncode=3, stdout="", stderr="ResourceGroupNotFound")
+        if cmd[:3] == ["az", "keyvault", "list-deleted"]:
+            return MagicMock(returncode=0, stdout="demokv\n")
+        if cmd[:4] == ["az", "cognitiveservices", "account", "list-deleted"]:
+            return MagicMock(returncode=0, stdout="")
+        if cmd[:3] == ["az", "keyvault", "purge"]:
+            raise subprocess.CalledProcessError(
+                1,
+                cmd,
+                output="",
+                stderr="(MethodNotAllowed) Operation 'DeletedVaultPurge' is not allowed.",
+            )
+        return MagicMock(returncode=0, stdout="")
+
+    plan = InstanceOffboarder("demo", run=fake_run, repo_root=tmp_path, purge=True).apply(
+        execute=True
+    )
+    purge = next(s for s in plan.steps if s.name == "purge_soft_deleted")
+    assert purge.result == "purged (keyvault=protected, foundry=0)"
+    assert not purge.error
 
 
 def test_offboard_execute_refuses_untagged_resource_group(tmp_path):

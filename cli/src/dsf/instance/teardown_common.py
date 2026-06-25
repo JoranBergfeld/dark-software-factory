@@ -68,15 +68,31 @@ def is_not_found_text(text: str) -> bool:
     return any(sig in value for sig in NOT_FOUND_SIGNALS)
 
 
-def is_not_found(exc: subprocess.CalledProcessError) -> bool:
-    """Return ``True`` if a failed CLI call indicates an already-absent resource."""
+def _combined_streams(exc: subprocess.CalledProcessError) -> str:
+    """Lower-cased concatenation of a failed call's stderr and stdout."""
     combined = ""
     for attr in ("stderr", "stdout"):
         raw = getattr(exc, attr, None)
         if isinstance(raw, bytes):
             raw = raw.decode(errors="replace")
         combined += (raw or "").lower()
-    return is_not_found_text(combined)
+    return combined
+
+
+def is_not_found(exc: subprocess.CalledProcessError) -> bool:
+    """Return ``True`` if a failed CLI call indicates an already-absent resource."""
+    return is_not_found_text(_combined_streams(exc))
+
+
+def is_purge_protected(exc: subprocess.CalledProcessError) -> bool:
+    """Return ``True`` if a failed ``keyvault purge`` was blocked by purge protection.
+
+    Azure rejects purging a purge-protected soft-deleted vault with
+    ``(MethodNotAllowed) Operation 'DeletedVaultPurge' is not allowed.``. Such a
+    vault cannot be force-purged and instead expires after its retention window, so
+    the offboarder treats this as a skip rather than a failure.
+    """
+    return "deletedvaultpurge" in _combined_streams(exc)
 
 
 def group_tags(name: str, run: Runner) -> dict[str, str] | None:
