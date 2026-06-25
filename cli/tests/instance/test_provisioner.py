@@ -109,6 +109,11 @@ def test_plan_create_resource_group_command():
     assert rg.command == [
         "az", "group", "create",
         "--name", "rg-dsf-demo", "--location", "swedencentral",
+        "--tags",
+        "project=dark-software-factory",
+        "managed-by=dsf",
+        "product=demo",
+        "component=backing-services",
     ]
 
 
@@ -275,10 +280,12 @@ def test_apply_execute_runs_real_steps_and_onboards_sre(tmp_path):
     executed = [cmd for cmd, _ in calls]
     # repo created (and cloned locally) for the product:
     assert ["gh", "repo", "create", "acme/demo", "--private", "--clone"] in executed
-    # azure now provisions for real (RG + Bicep deployment):
-    assert [
-        "az", "group", "create", "--name", "rg-dsf-demo", "--location", "swedencentral",
-    ] in executed
+    # azure now provisions for real (RG + Bicep deployment), tagged managed-by=dsf:
+    rg_create = next(c for c in executed if c[:3] == ["az", "group", "create"])
+    assert rg_create[:5] == ["az", "group", "create", "--name", "rg-dsf-demo"]
+    assert "--location" in rg_create and "swedencentral" in rg_create
+    assert "managed-by=dsf" in rg_create
+    assert "product=demo" in rg_create
     assert any(cmd[:4] == ["az", "deployment", "group", "create"] for cmd in executed)
     # the council container app is reconciled, but the SRE agent is NOT a
     # Container App — onboarding is wizard/OAuth driven (ADR 0009):

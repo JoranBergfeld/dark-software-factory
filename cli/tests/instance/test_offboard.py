@@ -2,12 +2,22 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 from unittest.mock import MagicMock
 
 from dsf.config.registry import Product, load_registry, register_product
 from dsf.instance.provisioner import InstanceOffboarder, InstanceProvisioner
 from dsf.instance.spec import AzureProvisionResult, InstanceManifest, InstanceSpec, write_manifest
+
+_DSF_GROUP_TAGS = json.dumps(
+    {
+        "project": "dark-software-factory",
+        "managed-by": "dsf",
+        "product": "demo",
+        "component": "backing-services",
+    }
+)
 
 
 def _seed_manifest(tmp_path, *, monitored_rgs: list[str] | None = None) -> InstanceManifest:
@@ -78,8 +88,8 @@ def test_offboard_execute_removes_registry_and_artifacts(tmp_path):
             return MagicMock(returncode=0, stdout="1111-2222\n")
         if cmd[:4] == ["az", "account", "show", "--query"]:
             return MagicMock(returncode=0, stdout="sub123\n")
-        if cmd[:3] == ["az", "group", "exists"]:
-            return MagicMock(returncode=0, stdout="true\n")
+        if cmd[:3] == ["az", "group", "show"]:
+            return MagicMock(returncode=0, stdout=_DSF_GROUP_TAGS)
         return MagicMock(returncode=0, stdout="")
 
     plan = InstanceOffboarder("demo", run=fake_run, repo_root=tmp_path).apply(execute=True)
@@ -108,8 +118,8 @@ def test_offboard_execute_tolerates_absent_resources(tmp_path):
     def fake_run(cmd, **kwargs):
         if cmd[:4] == ["az", "identity", "show", "--resource-group"]:
             return MagicMock(returncode=3, stdout="", stderr="ResourceNotFound")
-        if cmd[:3] == ["az", "group", "exists"]:
-            return MagicMock(returncode=0, stdout="false\n")
+        if cmd[:3] == ["az", "group", "show"]:
+            return MagicMock(returncode=3, stdout="", stderr="ResourceGroupNotFound")
         return MagicMock(returncode=0, stdout="")
 
     plan = InstanceOffboarder("demo", run=fake_run, repo_root=tmp_path).apply(execute=True)
@@ -127,8 +137,8 @@ def test_offboard_purge_purges_soft_deleted_resources(tmp_path):
         calls.append(cmd)
         if cmd[:4] == ["az", "identity", "show", "--resource-group"]:
             return MagicMock(returncode=3, stdout="", stderr="ResourceNotFound")
-        if cmd[:3] == ["az", "group", "exists"]:
-            return MagicMock(returncode=0, stdout="false\n")
+        if cmd[:3] == ["az", "group", "show"]:
+            return MagicMock(returncode=3, stdout="", stderr="ResourceGroupNotFound")
         if cmd[:3] == ["az", "keyvault", "list-deleted"]:
             return MagicMock(returncode=0, stdout="demokv\n")
         if cmd[:4] == ["az", "cognitiveservices", "account", "list-deleted"]:
@@ -160,8 +170,8 @@ def test_offboard_purge_tolerates_absent_on_purge_race(tmp_path):
     def fake_run(cmd, **kwargs):
         if cmd[:4] == ["az", "identity", "show", "--resource-group"]:
             return MagicMock(returncode=3, stdout="", stderr="ResourceNotFound")
-        if cmd[:3] == ["az", "group", "exists"]:
-            return MagicMock(returncode=0, stdout="false\n")
+        if cmd[:3] == ["az", "group", "show"]:
+            return MagicMock(returncode=3, stdout="", stderr="ResourceGroupNotFound")
         if cmd[:3] == ["az", "keyvault", "list-deleted"]:
             return MagicMock(returncode=0, stdout="demokv\n")
         if cmd[:4] == ["az", "cognitiveservices", "account", "list-deleted"]:
@@ -178,3 +188,27 @@ def test_offboard_purge_tolerates_absent_on_purge_race(tmp_path):
     purge = next(s for s in plan.steps if s.name == "purge_soft_deleted")
     assert purge.result == "purged (keyvault=no, foundry=0)"
     assert not purge.error
+
+
+
+def test_offboard_execute_refuses_untagged_resource_group(tmp_path):
+    """Offboard must refuse to delete a resource group it did not tag."""
+    _seed_manifest(tmp_path)
+    foreign_tags = json.dumps({"managed-by": "terraform"})
+
+    def fake_run(cmd, **kwargs):
+        if cmd[:4] == ["az", "identity", "show", "--resource-group"]:
+            return MagicMock(returncode=3, stdout="", stderr="ResourceNotFound")
+        if cmd[:3] == ["az", "group", "show"]:
+            return MagicMock(returncode=0, stdout=foreign_tags)
+        if cmd[:3] == ["az", "group", "delete"]:
+            raise AssertionError("must not delete a foreign resource group")
+        return MagicMock(returncode=0, stdout="")
+
+    plan = InstanceOffboarder("demo", run=fake_run, repo_root=tmp_path).apply(execute=True)
+    results = {s.name: s.result for s in plan.steps}
+    assert results["delete_sre_resource_group"] == "failed"
+    # The line stops, so the product RG and registry/artifacts are left untouched.
+    assert results["delete_product_resource_group"] == ""
+    assert results["unregister_product"] == ""
+    assert (tmp_path / "config" / "instances" / "demo.json").exists()
