@@ -122,6 +122,12 @@ double still in `src/` (the source agents default to it) and is on its way out u
 
 ## Conventions
 
+- **Commit messages** follow Conventional Commits: start every message with one of
+  `feat:` (new capability), `fix:` (bug fix), `chore:` (deps/tooling/housekeeping),
+  `docs:` (docs, ADRs, or `docs/site/` content), `refactor:` (behavior-preserving
+  restructure), `test:` (tests only), `ci:` (changes under `.github/workflows/`),
+  `perf:` (performance), or `build:` (packaging — `pyproject.toml`/`uv`). Use the
+  imperative mood after the prefix, e.g. `feat: add azuremonitor source agent`.
 - `uv` only; never call bare `python`/`pip`/`pytest`.
 - ruff: line length 100, target py312, rules `E,F,I,UP,B`.
 - All I/O-bearing port methods are `async`.
