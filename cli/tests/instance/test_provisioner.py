@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -970,9 +971,12 @@ def test_seed_appconfig_fails_when_no_endpoint_in_outputs(tmp_path):
 def test_seed_app_key_copies_owner_pem_into_product_vault(tmp_path):
     spec = InstanceSpec(product="demo", owner="acme")
     calls: list[list[str]] = []
+    written: dict[str, str] = {}
 
     def fake_run(cmd, **kwargs):
         calls.append(cmd)
+        if cmd[:4] == ["az", "keyvault", "secret", "set"] and "--file" in cmd:
+            written["value"] = Path(cmd[cmd.index("--file") + 1]).read_text(encoding="utf-8")
 
         class R:
             returncode = 0
@@ -991,6 +995,8 @@ def test_seed_app_key_copies_owner_pem_into_product_vault(tmp_path):
     assert "kv-dsf-app" in show  # read from owner vault
     setc = next(c for c in calls if c[:4] == ["az", "keyvault", "secret", "set"])
     assert "kv-demo-xyz" in setc and "--file" in setc  # written to product vault from a file
+    # the PEM is written verbatim (NOT stripped) — trimming would corrupt the key
+    assert written["value"] == "-----PEM-----\n"
 
 
 def test_seed_app_key_raises_without_owner_keyvault(tmp_path):
@@ -1003,9 +1009,12 @@ def test_seed_app_key_raises_without_owner_keyvault(tmp_path):
 def test_seed_webiq_key_copies_owner_secret_into_product_vault(tmp_path):
     spec = InstanceSpec(product="demo", owner="acme")
     calls: list[list[str]] = []
+    written: dict[str, str] = {}
 
     def fake_run(cmd, **kwargs):
         calls.append(cmd)
+        if cmd[:4] == ["az", "keyvault", "secret", "set"] and "--file" in cmd:
+            written["value"] = Path(cmd[cmd.index("--file") + 1]).read_text(encoding="utf-8")
         return MagicMock(returncode=0, stdout="wq-secret\n")
 
     prov = InstanceProvisioner(
@@ -1023,6 +1032,9 @@ def test_seed_webiq_key_copies_owner_secret_into_product_vault(tmp_path):
     assert "--expires" in setc                    # satisfies the MG expiry policy
     # the secret value is never passed on argv
     assert not any("wq-secret" in arg for c in calls for arg in c)
+    # the API key reaches the temp file stripped of its trailing newline — a stray
+    # newline would break bearer-key auth (the reason this strip exists)
+    assert written["value"] == "wq-secret"
 
 
 def test_seed_webiq_key_raises_without_owner_keyvault(tmp_path):
