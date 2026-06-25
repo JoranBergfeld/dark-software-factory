@@ -99,6 +99,10 @@ real WebIQ SDK instead of the Foundry/Bing connection.
   `_SEED_*` retry (the Secrets-User grant vs data-plane write race). Value is
   materialized to a `0600` temp file and unlinked; never echoed in argv.
   Requires `_owner_keyvault_uri` (clear error otherwise, like `_seed_app_key`).
+  Both `_seed_webiq_key` and `_seed_app_key` set `--content-type text/plain` and
+  a 30-day `--expires` to satisfy the management-group Key Vault policy that denies
+  secret writes lacking a content type or expiry; the key is re-seeded each
+  `dsf new` (and must be re-seeded on rotation/expiry).
 - **Remove** the Bing path: the `connect_bing_grounding` step,
   `_connect_bing_grounding`, `_is_transient_bing_error`,
   `_TRANSIENT_BING_STATUS`/`_TRANSIENT_BING_TOKENS`,
@@ -112,9 +116,11 @@ real WebIQ SDK instead of the Foundry/Bing connection.
 
 - Remove the `Microsoft.Bing/accounts` resource, its role assignment(s), the
   `bingConnectionResourceId` var, the `bingConnectionId` / `bingAccountId` /
-  `bingAccountEndpoint` outputs, and the `enableBingGrounding` parameter (and its
-  use gating the Foundry project/connection — the project stays; only the Bing
-  account + connection go).
+  `bingAccountEndpoint` outputs, the `enableBingGrounding` parameter, the Foundry
+  **project** (`Microsoft.CognitiveServices/accounts/projects` — the project is
+  Bing-only, so it is removed along with the Bing account), and the
+  `AZURE_AI_PROJECT_ENDPOINT` container env and output. The Foundry **account**
+  (Azure OpenAI for chat + embeddings) and its model deployments remain.
 - Container app `env`: drop `WEBIQ_BING_CONNECTION_ID`; change `WEBIQ_PROVIDER`
   from `'foundry'` to `'webiq'`; add `{ name: 'WEBIQ_API_KEY_SECRET', value:
   'webiq-api-key' }`. Keep `AZURE_KEYVAULT_URI` (already present).
