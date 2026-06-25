@@ -7,6 +7,9 @@ import re
 import subprocess
 from unittest.mock import MagicMock
 
+import pytest
+
+import dsf.instance.provisioner as provisioner
 from dsf.config.registry import load_registry, route_product
 from dsf.contracts.handoff import HANDOFF_LABEL, HANDOFF_LABEL_COLOR, INCIDENT_LABEL
 from dsf.instance.provisioner import (
@@ -34,7 +37,37 @@ _APPCONFIG_OUTPUT = (
     f'"appConfigEndpoint": {{"type": "String", "value": "{_APPCONFIG_ENDPOINT}"}}'
 )
 _KEYVAULT_OUTPUT = '"keyVaultName": {"type": "String", "value": "kv-demo-xyz"}'
-_AZURE_OUTPUTS_JSON = "{" + _APPCONFIG_OUTPUT + "," + _KEYVAULT_OUTPUT + "}"
+_BING_CONNECTION_ID = (
+    "/subscriptions/sub/resourceGroups/rg-dsf-demo/providers/"
+    "Microsoft.CognitiveServices/accounts/dsf-aif-abc/projects/dsf-proj-abc/"
+    "connections/dsf-bing-conn-abc"
+)
+_BING_CONNECTION_OUTPUT = (
+    f'"bingConnectionId": {{"type": "String", "value": "{_BING_CONNECTION_ID}"}}'
+)
+_BING_ACCOUNT_ID = (
+    "/subscriptions/sub/resourceGroups/rg-dsf-demo/providers/"
+    "Microsoft.Bing/accounts/dsf-bing-abc"
+)
+_BING_ACCOUNT_ENDPOINT = "https://api.bing.microsoft.com/"
+_BING_ACCOUNT_ID_OUTPUT = (
+    f'"bingAccountId": {{"type": "String", "value": "{_BING_ACCOUNT_ID}"}}'
+)
+_BING_ACCOUNT_ENDPOINT_OUTPUT = (
+    f'"bingAccountEndpoint": {{"type": "String", "value": "{_BING_ACCOUNT_ENDPOINT}"}}'
+)
+_BING_OUTPUTS = ",".join(
+    [_BING_CONNECTION_OUTPUT, _BING_ACCOUNT_ID_OUTPUT, _BING_ACCOUNT_ENDPOINT_OUTPUT]
+)
+_AZURE_OUTPUTS_JSON = (
+    "{"
+    + ",".join([
+        _APPCONFIG_OUTPUT,
+        _KEYVAULT_OUTPUT,
+        _BING_OUTPUTS,
+    ])
+    + "}"
+)
 
 
 def _az_deploy(cmd, outputs_json, *, state="Succeeded", ops_json=None):
@@ -45,6 +78,10 @@ def _az_deploy(cmd, outputs_json, *, state="Succeeded", ops_json=None):
     (a single Succeeded App Config op by default), and ``show`` returns ``state`` for
     the provisioningState query and ``outputs_json`` for the outputs query.
     """
+    if cmd[:2] == ["az", "rest"] and "/listKeys" in " ".join(cmd):
+        return MagicMock(returncode=0, stdout=json.dumps({"key1": "bing-key"}))
+    if cmd[:2] == ["az", "rest"] and "--url" in cmd and "connections/" in " ".join(cmd):
+        return MagicMock(returncode=0, stdout="")
     if cmd[:4] == ["az", "deployment", "group", "create"]:
         return MagicMock(returncode=0, stdout="")
     if cmd[:5] == ["az", "deployment", "operation", "group", "list"]:
@@ -88,6 +125,7 @@ def test_plan_step_order_and_names():
         "install_app",
         "create_resource_group",
         "provision_azure",
+        "connect_bing_grounding",
         "seed_appconfig",
         "seed_app_key",
         "register_product",
@@ -154,6 +192,11 @@ def test_provision_azure_disables_bing_grounding_when_spec_opts_out():
     step = next(s for s in plan.steps if s.name == "provision_azure")
     assert "enableBingGrounding=false" in step.command
     assert "enableBingGrounding=true" not in step.command
+
+
+def test_plan_includes_connect_bing_grounding_after_provision_azure():
+    names = [s.name for s in InstanceProvisioner(_spec()).plan().steps]
+    assert names[names.index("provision_azure") + 1] == "connect_bing_grounding"
 
 
 def test_plan_create_repo_command():
@@ -487,10 +530,10 @@ def test_apply_execute_emits_start_and_done_events_per_step(tmp_path):
     assert ("start", "deploy_sre_agent") in phases
     assert ("done", "deploy_sre_agent") in phases
     assert not any(phase == "error" for phase, *_ in events)
-    # 1-based index, stable total = the 12 non-write_config steps.
+    # 1-based index, stable total = the 13 non-write_config steps.
     starts = [e for e in events if e[0] == "start"]
     assert starts[0][1] == 1
-    assert all(total == 12 for _p, _i, total, _s, _e in starts)
+    assert all(total == 13 for _p, _i, total, _s, _e in starts)
 
 
 def test_apply_execute_emits_error_event_on_failure(tmp_path):
@@ -704,7 +747,9 @@ def test_deploy_sre_agent_executes_sub_deployment(tmp_path):
         "{" + _APPCONFIG_OUTPUT + ","
         ' "appInsightsId": {"type": "String", "value": "/sub/ai"},'
         ' "logAnalyticsId": {"type": "String", "value": "/sub/law"},'
-        ' "keyVaultName": {"type": "String", "value": "kv1"}}'
+        ' "keyVaultName": {"type": "String", "value": "kv1"},'
+        + _BING_OUTPUTS
+        + "}"
     )
     calls = []
 
@@ -737,7 +782,9 @@ def test_deploy_sre_agent_connect_repo_skipped_when_no_endpoint(tmp_path):
         "{" + _APPCONFIG_OUTPUT + ","
         ' "appInsightsId": {"type": "String", "value": "/sub/ai"},'
         ' "logAnalyticsId": {"type": "String", "value": "/sub/law"},'
-        ' "keyVaultName": {"type": "String", "value": "kv1"}}'
+        ' "keyVaultName": {"type": "String", "value": "kv1"},'
+        + _BING_OUTPUTS
+        + "}"
     )
     calls = []
 
@@ -756,8 +803,8 @@ def test_deploy_sre_agent_connect_repo_skipped_when_no_endpoint(tmp_path):
     # No agentEndpoint in outputs -> repo connect is skipped cleanly
     step = next(s for s in manifest.plan.steps if s.name == "deploy_sre_agent")
     assert "skipped" in step.result
-    # az rest must not have been called
-    assert not any(cmd[:2] == ["az", "rest"] for cmd in calls)
+    # SRE repo-connect az rest must not have been called.
+    assert not any(cmd[:2] == ["az", "rest"] and "--resource" in cmd for cmd in calls)
 
 
 def test_deploy_sre_agent_connect_repo_skipped_when_no_gh_token(tmp_path):
@@ -766,7 +813,9 @@ def test_deploy_sre_agent_connect_repo_skipped_when_no_gh_token(tmp_path):
         ' "appInsightsId": {"type": "String", "value": "/sub/ai"},'
         ' "logAnalyticsId": {"type": "String", "value": "/sub/law"},'
         ' "agentEndpoint": {"type": "String", "value": "https://sre.example.com"},'
-        ' "keyVaultName": {"type": "String", "value": "kv1"}}'
+        ' "keyVaultName": {"type": "String", "value": "kv1"},'
+        + _BING_OUTPUTS
+        + "}"
     )
     calls = []
 
@@ -786,7 +835,7 @@ def test_deploy_sre_agent_connect_repo_skipped_when_no_gh_token(tmp_path):
 
     step = next(s for s in manifest.plan.steps if s.name == "deploy_sre_agent")
     assert "skipped" in step.result
-    assert not any(cmd[:2] == ["az", "rest"] for cmd in calls)
+    assert not any(cmd[:2] == ["az", "rest"] and "--resource" in cmd for cmd in calls)
 
 
 def test_deploy_sre_agent_connect_repo_calls_az_rest_when_token_present(tmp_path):
@@ -795,7 +844,9 @@ def test_deploy_sre_agent_connect_repo_calls_az_rest_when_token_present(tmp_path
         ' "appInsightsId": {"type": "String", "value": "/sub/ai"},'
         ' "logAnalyticsId": {"type": "String", "value": "/sub/law"},'
         ' "agentEndpoint": {"type": "String", "value": "https://sre.example.com"},'
-        ' "keyVaultName": {"type": "String", "value": "kv1"}}'
+        ' "keyVaultName": {"type": "String", "value": "kv1"},'
+        + _BING_OUTPUTS
+        + "}"
     )
     calls = []
 
@@ -815,7 +866,7 @@ def test_deploy_sre_agent_connect_repo_calls_az_rest_when_token_present(tmp_path
 
     step = next(s for s in manifest.plan.steps if s.name == "deploy_sre_agent")
     assert step.result == "deployed; repo connected"
-    rest_calls = [cmd for cmd in calls if cmd[:2] == ["az", "rest"]]
+    rest_calls = [cmd for cmd in calls if cmd[:2] == ["az", "rest"] and "--resource" in cmd]
     assert len(rest_calls) == 1
     rest_cmd = rest_calls[0]
     assert "--method" in rest_cmd and "post" in rest_cmd
@@ -919,7 +970,10 @@ def test_seed_appconfig_fails_when_no_endpoint_in_outputs(tmp_path):
     def fake_run(cmd, **kwargs):
         if cmd[:3] == ["gh", "repo", "view"]:
             return MagicMock(returncode=1)
-        hit = _az_deploy(cmd, '{"cosmosEndpoint": {"type": "String", "value": "x"}}')
+        hit = _az_deploy(
+            cmd,
+            '{"cosmosEndpoint": {"type": "String", "value": "x"},' + _BING_OUTPUTS + "}",
+        )
         if hit is not None:
             return hit
         return MagicMock(returncode=0, stdout="")
@@ -932,6 +986,155 @@ def test_seed_appconfig_fails_when_no_endpoint_in_outputs(tmp_path):
     assert "appConfigEndpoint" in steps["seed_appconfig"].error
     # The line stops at the failed step — later steps are left unrun.
     assert steps["deploy_council"].result == ""
+
+
+def test_connect_bing_grounding_puts_connection_with_retry(tmp_path):
+    calls: list[list[str]] = []
+    sleeps: list[float] = []
+    bodies: list[dict[str, object]] = []
+    state = {"transient_failures": 1}
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[:2] == ["az", "rest"] and "--method" in cmd and "post" in cmd:
+            assert "/listKeys?api-version=2025-05-01-preview" in cmd[cmd.index("--url") + 1]
+            return MagicMock(returncode=0, stdout=json.dumps({"key1": "SECRET-BING-KEY"}))
+        if cmd[:2] == ["az", "rest"] and "--method" in cmd and "put" in cmd:
+            body_arg = cmd[cmd.index("--body") + 1]
+            with open(body_arg.removeprefix("@"), encoding="utf-8") as fh:
+                bodies.append(json.load(fh))
+            if state["transient_failures"] > 0:
+                state["transient_failures"] -= 1
+                raise subprocess.CalledProcessError(
+                    1, cmd, stderr="HTTP 500 ServiceError while writing secret"
+                )
+            return MagicMock(returncode=0, stdout="")
+        return MagicMock(returncode=0, stdout="")
+
+    prov = InstanceProvisioner(_spec(), run=fake_run, repo_root=tmp_path, sleep=sleeps.append)
+    prov._connect_bing_grounding(
+        _azure_result_with(
+            tmp_path,
+            bingConnectionId=_BING_CONNECTION_ID,
+            bingAccountId=_BING_ACCOUNT_ID,
+            bingAccountEndpoint=_BING_ACCOUNT_ENDPOINT,
+        )
+    )
+
+    put_calls = [c for c in calls if c[:2] == ["az", "rest"] and "put" in c]
+    assert len(put_calls) == 2
+    assert sleeps == [provisioner._BING_CONNECT_RETRY_DELAY]
+    assert _BING_CONNECTION_ID in put_calls[0][put_calls[0].index("--url") + 1]
+    assert "api-version=2025-06-01" in put_calls[0][put_calls[0].index("--url") + 1]
+    assert bodies[0]["properties"]["category"] == "GroundingWithBingSearch"
+    assert bodies[0]["properties"]["target"] == _BING_ACCOUNT_ENDPOINT
+    assert bodies[0]["properties"]["metadata"]["ResourceId"] == _BING_ACCOUNT_ID
+    assert not any("SECRET-BING-KEY" in arg for call in calls for arg in call)
+    assert not any(c[:2] == ["az", "cognitiveservices"] for c in calls)
+
+
+def test_connect_bing_grounding_skipped_when_disabled(tmp_path):
+    calls: list[list[str]] = []
+    spec = InstanceSpec(product="demo", owner="acme", enable_bing_grounding=False)
+    prov = InstanceProvisioner(
+        spec, run=lambda cmd, **_kwargs: calls.append(cmd), repo_root=tmp_path
+    )
+    plan = prov.plan()
+    step = next(s for s in plan.steps if s.name == "connect_bing_grounding")
+
+    prov._execute_step(
+        step,
+        execute=True,
+        executed=False,
+        azure_result=_azure_result_with(tmp_path),
+        plan=plan,
+    )
+
+    assert step.result.startswith("skipped")
+    assert not any(c[:2] == ["az", "rest"] for c in calls)
+
+
+def test_connect_bing_grounding_fails_fast_on_non_transient(tmp_path):
+    sleeps: list[float] = []
+
+    def fake_run(cmd, **kwargs):
+        if cmd[:2] == ["az", "rest"] and "--method" in cmd and "post" in cmd:
+            return MagicMock(returncode=0, stdout=json.dumps({"key1": "SECRET-BING-KEY"}))
+        if cmd[:2] == ["az", "rest"] and "--method" in cmd and "put" in cmd:
+            raise subprocess.CalledProcessError(1, cmd, stderr="Forbidden 403")
+        return MagicMock(returncode=0, stdout="")
+
+    prov = InstanceProvisioner(_spec(), run=fake_run, repo_root=tmp_path, sleep=sleeps.append)
+    with pytest.raises(subprocess.CalledProcessError):
+        prov._connect_bing_grounding(
+            _azure_result_with(
+                tmp_path,
+                bingConnectionId=_BING_CONNECTION_ID,
+                bingAccountId=_BING_ACCOUNT_ID,
+                bingAccountEndpoint=_BING_ACCOUNT_ENDPOINT,
+            )
+        )
+
+    assert sleeps == []
+
+
+def test_connect_bing_grounding_raises_after_exhausting_attempts(tmp_path, monkeypatch):
+    monkeypatch.setattr(provisioner, "_BING_CONNECT_MAX_ATTEMPTS", 3)
+    monkeypatch.setattr(provisioner, "_BING_CONNECT_RETRY_DELAY", 0.25)
+    calls: list[list[str]] = []
+    sleeps: list[float] = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[:2] == ["az", "rest"] and "--method" in cmd and "post" in cmd:
+            return MagicMock(returncode=0, stdout=json.dumps({"key1": "SECRET-BING-KEY"}))
+        if cmd[:2] == ["az", "rest"] and "--method" in cmd and "put" in cmd:
+            raise subprocess.CalledProcessError(1, cmd, stderr="InternalServerError 500")
+        return MagicMock(returncode=0, stdout="")
+
+    prov = InstanceProvisioner(_spec(), run=fake_run, repo_root=tmp_path, sleep=sleeps.append)
+    with pytest.raises(subprocess.CalledProcessError):
+        prov._connect_bing_grounding(
+            _azure_result_with(
+                tmp_path,
+                bingConnectionId=_BING_CONNECTION_ID,
+                bingAccountId=_BING_ACCOUNT_ID,
+                bingAccountEndpoint=_BING_ACCOUNT_ENDPOINT,
+            )
+        )
+
+    assert len([c for c in calls if c[:2] == ["az", "rest"] and "put" in c]) == 3
+    assert sleeps == [0.25, 0.25]
+
+
+def test_connect_bing_grounding_retries_on_503_service_unavailable(tmp_path):
+    calls: list[list[str]] = []
+    sleeps: list[float] = []
+    state = {"transient_failures": 1}
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[:2] == ["az", "rest"] and "--method" in cmd and "post" in cmd:
+            return MagicMock(returncode=0, stdout=json.dumps({"key1": "SECRET-BING-KEY"}))
+        if cmd[:2] == ["az", "rest"] and "--method" in cmd and "put" in cmd:
+            if state["transient_failures"] > 0:
+                state["transient_failures"] -= 1
+                raise subprocess.CalledProcessError(1, cmd, stderr="503 Service Unavailable")
+            return MagicMock(returncode=0, stdout="")
+        return MagicMock(returncode=0, stdout="")
+
+    prov = InstanceProvisioner(_spec(), run=fake_run, repo_root=tmp_path, sleep=sleeps.append)
+    prov._connect_bing_grounding(
+        _azure_result_with(
+            tmp_path,
+            bingConnectionId=_BING_CONNECTION_ID,
+            bingAccountId=_BING_ACCOUNT_ID,
+            bingAccountEndpoint=_BING_ACCOUNT_ENDPOINT,
+        )
+    )
+
+    assert len([c for c in calls if c[:2] == ["az", "rest"] and "put" in c]) == 2
+    assert sleeps == [provisioner._BING_CONNECT_RETRY_DELAY]
 
 
 def test_seed_app_key_copies_owner_pem_into_product_vault(tmp_path):
@@ -1233,7 +1436,9 @@ _SRE_OUTPUTS_JSON = (
     "{" + _APPCONFIG_OUTPUT + ","
     ' "appInsightsId": {"type": "String", "value": "/sub/ai"},'
     ' "logAnalyticsId": {"type": "String", "value": "/sub/law"},'
-    ' "keyVaultName": {"type": "String", "value": "kv1"}}'
+    ' "keyVaultName": {"type": "String", "value": "kv1"},'
+    + _BING_OUTPUTS
+    + "}"
 )
 
 
@@ -1420,29 +1625,27 @@ def test_main_bicep_deployer_grants_guard_against_admin_collision():
         )
 
 
-def test_main_bicep_bing_connection_serialized_after_slow_resources():
-    """Serialize the Grounding-with-Bing connection LAST.
-
-    On a brand-new Foundry account the platform's async managed-Key-Vault
-    registration (account-rp) lags ARM's `Succeeded` on the account+project, so the
-    connection's ApiKey secret write 500s for ~10 min then fails (observed twice in
-    swedencentral). Gating the connection on the slowest resources (Cosmos ~2.5m,
-    the managed env, model deployments) buys that settling time. Mirrors the official
-    Foundry baseline, which creates the Bing connection dead-last.
-    """
+def test_main_bicep_has_no_inline_bing_connection():
     bicep = (_default_repo_root() / "infra" / "main.bicep").read_text()
-    m = re.search(
-        r"resource\s+bingConnection\s+'[^']*'\s*=\s*(?:if\s*\([^)]*\)\s*)?\{(?P<body>.*?)\n\}",
+    assert not re.search(
+        r"resource\s+\w+\s+'Microsoft\.CognitiveServices/accounts/projects/connections",
         bicep,
-        re.DOTALL,
     )
-    assert m, "bingConnection resource not found in infra/main.bicep"
-    body = m.group("body")
-    assert "dependsOn:" in body, (
-        "bingConnection must declare a dependsOn that serializes it behind the slow "
-        "resources so account-rp's managed-KV registration settles before the secret write"
+
+
+def test_main_bicep_bing_connection_id_is_constructed():
+    bicep = (_default_repo_root() / "infra" / "main.bicep").read_text()
+    assert "bingConnectionResourceId" in bicep
+    assert "{ name: 'WEBIQ_BING_CONNECTION_ID', value: bingConnectionResourceId }" in bicep
+    assert "bingConnection.id" not in bicep
+    assert re.search(r"output\s+bingConnectionId\s+string\s+=\s+bingConnectionResourceId", bicep)
+    assert re.search(
+        r"output\s+bingAccountId\s+string\s+=\s+enableBingGrounding\s+\?"
+        r"\s+bingAccount!?.id\s+:\s+''",
+        bicep,
     )
-    # Cosmos is the longest-running resource (~2.5m) — it must gate the connection.
-    assert "cosmos" in body, (
-        "bingConnection.dependsOn must include the Cosmos module (the longest pole)"
+    assert re.search(
+        r"output\s+bingAccountEndpoint\s+string\s+=\s+enableBingGrounding\s+\?"
+        r"\s+bingAccount!\.properties\.endpoint\s+:\s+''",
+        bicep,
     )

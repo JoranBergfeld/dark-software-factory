@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import shutil
 import subprocess
 import tempfile
@@ -78,6 +79,23 @@ _MAX_ERROR_DETAIL = 2000
 #: lands, then the whole batch succeeds. Bound: ~2 min of propagation tolerance.
 _SEED_MAX_ATTEMPTS = 8
 _SEED_RETRY_DELAY = 15.0
+_BING_CONNECT_MAX_ATTEMPTS = 20
+_BING_CONNECT_RETRY_DELAY = 30.0
+_TRANSIENT_BING_STATUS = re.compile(r"\b(429|500|502|503|504)\b")
+_TRANSIENT_BING_TOKENS = (
+    "serviceerror",
+    "internalservererror",
+    "internal server error",
+    "serviceunavailable",
+    "service unavailable",
+    "toomanyrequests",
+    "too many requests",
+    "bad gateway",
+    "gateway timeout",
+    "temporarily unavailable",
+    "connection reset",
+    "timed out",
+)
 
 
 def _flatten_config(node: Any, prefix: str = "") -> Iterator[tuple[str, Any]]:
@@ -139,6 +157,20 @@ def _format_step_error(exc: BaseException) -> str:
         if detail:
             parts.append(detail[:_MAX_ERROR_DETAIL])
     return "\n".join(parts)
+
+
+def _is_transient_bing_error(exc: subprocess.CalledProcessError) -> bool:
+    details: list[str] = [str(exc)]
+    for attr in ("stderr", "stdout"):
+        detail = getattr(exc, attr, None)
+        if isinstance(detail, bytes):
+            detail = detail.decode(errors="replace")
+        if isinstance(detail, str):
+            details.append(detail)
+    text = "\n".join(details).lower()
+    if _TRANSIENT_BING_STATUS.search(text):
+        return True
+    return any(token in text for token in _TRANSIENT_BING_TOKENS)
 
 
 def _label_commands(spec: InstanceSpec) -> list[list[str]]:
@@ -266,6 +298,13 @@ class InstanceProvisioner:
                     f"Deploy backing services into {s.resource_group()} from infra/main.bicep"
                 ),
                 command=self._provision_azure_command(self._admin_principal_id_override),
+            ),
+            ProvisionStep(
+                name="connect_bing_grounding",
+                description=(
+                    "Create the Grounding-with-Bing connection on the Foundry project for "
+                    f"{s.product} out-of-band, with retry (skipped with --no-enable-bing-grounding)"
+                ),
             ),
             ProvisionStep(
                 name="seed_appconfig",
@@ -416,6 +455,14 @@ class InstanceProvisioner:
             else:
                 self._seed_appconfig(azure_result)
                 step.executed, step.result = True, "seeded"
+        elif step.name == "connect_bing_grounding":
+            if not self.spec.enable_bing_grounding:
+                step.result = "skipped (bing grounding disabled)"
+            elif not execute:
+                step.result = "connected (dry-run)"
+            else:
+                self._connect_bing_grounding(azure_result)
+                step.executed, step.result = True, "connected"
         elif step.name == "seed_app_key":
             if not self._owner_keyvault_uri:
                 step.result = "skipped (no owner App configured)"
@@ -800,6 +847,87 @@ class InstanceProvisioner:
                     self._sleep(_SEED_RETRY_DELAY)
         assert last_error is not None  # loop ran at least once
         raise last_error
+
+    def _connect_bing_grounding(self, azure_result: AzureProvisionResult | None) -> None:
+        """Create the Foundry Grounding-with-Bing connection out-of-band with retry."""
+        outputs = azure_result.outputs if azure_result else {}
+        connection_id = outputs.get("bingConnectionId", "")
+        account_id = outputs.get("bingAccountId", "")
+        endpoint = outputs.get("bingAccountEndpoint", "")
+        missing = [
+            name
+            for name, value in (
+                ("bingConnectionId", connection_id),
+                ("bingAccountId", account_id),
+                ("bingAccountEndpoint", endpoint),
+            )
+            if not value
+        ]
+        if missing:
+            raise RuntimeError(
+                "provision_azure returned no "
+                + ", ".join(missing)
+                + "; cannot create Bing grounding connection"
+            )
+
+        key_result = self._run(
+            [
+                "az", "rest",
+                "--method", "post",
+                "--url",
+                f"https://management.azure.com{account_id}/listKeys?api-version=2025-05-01-preview",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        key = str(json.loads(getattr(key_result, "stdout", "") or "{}").get("key1") or "")
+        if not key:
+            raise RuntimeError("Bing account listKeys returned no key1")
+
+        body = {
+            "properties": {
+                "category": "GroundingWithBingSearch",
+                "authType": "ApiKey",
+                "target": endpoint,
+                "isSharedToAll": False,
+                "credentials": {"key": key},
+                "metadata": {
+                    "type": "bing_grounding",
+                    "ApiType": "Azure",
+                    "ResourceId": account_id,
+                    "location": "global",
+                },
+            }
+        }
+        fd, body_path = tempfile.mkstemp(prefix="dsf-bing-conn-", suffix=".json")
+        try:
+            with open(fd, "w", encoding="utf-8") as fh:
+                json.dump(body, fh)
+            Path(body_path).chmod(0o600)
+            url = f"https://management.azure.com{connection_id}?api-version=2025-06-01"
+            cmd = [
+                "az", "rest",
+                "--method", "put",
+                "--url", url,
+                "--headers", "Content-Type=application/json",
+                "--body", f"@{body_path}",
+            ]
+            last_error: subprocess.CalledProcessError | None = None
+            for attempt in range(1, _BING_CONNECT_MAX_ATTEMPTS + 1):
+                try:
+                    self._run(cmd, check=True, capture_output=True, text=True)
+                    return
+                except subprocess.CalledProcessError as exc:
+                    last_error = exc
+                    if not _is_transient_bing_error(exc):
+                        raise
+                    if attempt < _BING_CONNECT_MAX_ATTEMPTS:
+                        self._sleep(_BING_CONNECT_RETRY_DELAY)
+            assert last_error is not None
+            raise last_error
+        finally:
+            Path(body_path).unlink(missing_ok=True)
 
     def _seed_app_key(self, azure_result: AzureProvisionResult | None) -> None:
         """Copy the App private key from the owner KV into the product KV (with retry).

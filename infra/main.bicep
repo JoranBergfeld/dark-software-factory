@@ -113,6 +113,8 @@ var cognitiveServicesUserRoleId = 'a97b65f3-24c7-4388-baec-2e87135dc908' // Cogn
 // azure-ai-agents BingGroundingTool the WebIQ agent uses targets this project
 // endpoint (AZURE_AI_PROJECT_ENDPOINT) and resolves the connection by id.
 var aiProjectName = '${namePrefix}-proj-${suffix}'
+var bingConnectionName = '${namePrefix}-bing-conn-${suffix}'
+var bingConnectionResourceId = enableBingGrounding ? resourceId('Microsoft.CognitiveServices/accounts/projects/connections', '${namePrefix}-aif-${suffix}', aiProjectName, bingConnectionName) : ''
 var aiProjectEndpoint = enableBingGrounding ? 'https://${namePrefix}-aif-${suffix}.services.ai.azure.com/api/projects/${aiProjectName}' : ''
 
 // ---------------------------------------------------------------------------
@@ -395,45 +397,6 @@ resource aiProject 'Microsoft.CognitiveServices/accounts/projects@2025-06-01' = 
   }
 }
 
-// The Grounding with Bing Search connection the agent calls (API-key auth; the
-// key is read from the Bing account at deploy time, never surfaced as an output).
-resource bingConnection 'Microsoft.CognitiveServices/accounts/projects/connections@2025-06-01' = if (enableBingGrounding) {
-  parent: aiProject
-  name: '${namePrefix}-bing-conn-${suffix}'
-  properties: {
-    category: 'GroundingWithBingSearch'
-    authType: 'ApiKey'
-    target: bingAccount!.properties.endpoint
-    isSharedToAll: false
-    credentials: {
-      key: bingAccount!.listKeys().key1
-    }
-    metadata: {
-      type: 'bing_grounding'
-      ApiType: 'Azure'
-      ResourceId: bingAccount!.id
-      location: 'global'
-    }
-  }
-  // Serialize this ApiKey connection LAST. On a brand-new Foundry account the
-  // platform's async workspace/managed-Key-Vault registration (account-rp) lags
-  // ARM's `Succeeded` on the account + project, so the secret write
-  // (credential.vienna -> account-rp -> vault.azure.net token) 500s until it
-  // completes. Gating on the slowest resources (Cosmos ~2.5m, the managed env,
-  // the model deployments + Foundry role grants) buys that settling time without
-  // adding infra. Mirrors the official Foundry baseline ("Single thread ... else
-  // conflict errors"). None of these read bingConnection, so there is no cycle —
-  // the orchestrator app DOES read bingConnection.id and must stay downstream.
-  dependsOn: [
-    cosmos
-    containerEnv
-    chatDeployment
-    embeddingDeployment
-    foundryOpenAIUserAssignment
-    foundryAgentsUserAssignment
-  ]
-}
-
 // The runtime identity needs Cognitive Services User on the account to use the
 // Foundry Agents/project data plane (the grounding tool runs as an agent).
 resource foundryAgentsUserAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (enableBingGrounding) {
@@ -504,7 +467,7 @@ resource orchestratorApp 'Microsoft.App/containerApps@2025-01-01' = {
             { name: 'AZURE_OPENAI_DEPLOYMENT', value: chatModel }
             { name: 'AZURE_OPENAI_EMBEDDING_DEPLOYMENT', value: embeddingModel }
             { name: 'AZURE_AI_PROJECT_ENDPOINT', value: aiProjectEndpoint }
-            { name: 'WEBIQ_BING_CONNECTION_ID', value: enableBingGrounding ? bingConnection.id : '' }
+            { name: 'WEBIQ_BING_CONNECTION_ID', value: bingConnectionResourceId }
             { name: 'WEBIQ_PROVIDER', value: 'foundry' }
             { name: 'GITHUB_APP_ID', value: githubAppId }
             { name: 'GITHUB_INSTALLATION_ID', value: githubInstallationId }
@@ -569,4 +532,10 @@ output logAnalyticsId string = logAnalytics.id
 output aiProjectEndpoint string = aiProjectEndpoint
 
 @description('Grounding with Bing Search connection id for WEBIQ_BING_CONNECTION_ID (empty when disabled).')
-output bingConnectionId string = enableBingGrounding ? bingConnection.id : ''
+output bingConnectionId string = bingConnectionResourceId
+
+@description('Grounding with Bing Search account resource id (Microsoft.Bing/accounts) for the out-of-band connection step (empty when disabled).')
+output bingAccountId string = enableBingGrounding ? bingAccount.id : ''
+
+@description('Grounding with Bing Search account endpoint used as the connection target (empty when disabled).')
+output bingAccountEndpoint string = enableBingGrounding ? bingAccount!.properties.endpoint : ''

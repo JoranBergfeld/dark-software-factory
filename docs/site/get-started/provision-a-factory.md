@@ -47,9 +47,11 @@ Run `uv run dsf new --help` for the full flag list.
     The poll is **bounded** by `DSF_DEPLOY_TIMEOUT` (seconds, default 600 = 10 min; set
     `<= 0` to wait indefinitely). If the deployment is still running at the bound, `dsf new`
     cancels it and fails the step naming the still-running resource(s) — rather than hanging.
-    A Foundry **Grounding with Bing Search** connection occasionally wedges here on a
-    transient Azure 500 while storing its key; re-run `dsf new`, or skip it with
-    `dsf new --no-enable-bing-grounding` (the WebIQ agent then runs without web research).
+    The Foundry **Grounding with Bing Search** connection is created after ARM by the
+    `connect_bing_grounding` step. It retries transient `account-rp` 500s until the new
+    Foundry account's managed Key Vault registration settles, avoiding the old inline
+    deployment wedge. `dsf new --no-enable-bing-grounding` skips it entirely (the WebIQ agent
+    then runs without web research).
 
 ## Prerequisites
 
