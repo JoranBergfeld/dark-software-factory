@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from unittest.mock import MagicMock
 
@@ -13,7 +14,7 @@ from dsf.instance.provisioner import (
     InstanceProvisioner,
     _appconfig_seed_commands,
 )
-from dsf.instance.spec import InstanceSpec, read_manifest
+from dsf.instance.spec import InstanceSpec, _default_repo_root, read_manifest
 
 
 def _spec() -> InstanceSpec:
@@ -1313,3 +1314,93 @@ def test_no_human_grant_when_signed_in_user_unavailable(tmp_path):
     sub_create = next(c for c in calls if c[:4] == ["az", "deployment", "sub", "create"])
     assert not any(c.startswith("ownerPrincipalId=") for c in sub_create)
     assert manifest.executed is True
+
+
+# ---------------------------------------------------------------------------
+# infra/main.bicep role-assignment collision guard
+#
+# `dsf new` resolves adminPrincipalId from `az ad signed-in-user show`, which is the
+# SAME principal as bicep's `deployer()` whenever a human runs provisioning locally.
+# The admin and deployer grants target the same scope + role, so their deterministic
+# `guid()` names collide ("resource defined multiple times") unless the deployer grant
+# is skipped when it would duplicate the admin grant. These tests model that world so a
+# regression is caught offline (CI has no Azure CLI to validate the template).
+# ---------------------------------------------------------------------------
+
+_ROLE_ASSIGNMENT_RE = re.compile(
+    r"resource\s+(?P<sym>\w+)\s+'Microsoft\.Authorization/roleAssignments[^']*'\s*=\s*"
+    r"(?:if\s*\((?P<cond>.*?)\)\s*)?\{(?P<body>.*?)\n\}",
+    re.DOTALL,
+)
+
+
+def _role_assignments() -> list[dict[str, str | None]]:
+    bicep = (_default_repo_root() / "infra" / "main.bicep").read_text()
+    out: list[dict[str, str | None]] = []
+    for m in _ROLE_ASSIGNMENT_RE.finditer(bicep):
+        guid_args = ""
+        for line in m.group("body").splitlines():
+            if "name:" in line and "guid(" in line:
+                guid_args = line.split("guid(", 1)[1].rsplit(")", 1)[0]
+                break
+        out.append({"sym": m.group("sym"), "cond": m.group("cond"), "guid_args": guid_args})
+    return out
+
+
+def _enabled_when_admin_is_deployer(cond: str | None) -> bool:
+    """Evaluate a resource condition in the world where the deployer IS the admin.
+
+    Substitutes ``adminPrincipalId`` and ``deployer().objectId`` with one non-empty,
+    equal sentinel, then evaluates the (tiny) boolean vocabulary the template uses.
+    Unknown gates (e.g. ``enableBingGrounding``) are treated as enabled — the
+    conservative choice for a uniqueness assertion.
+    """
+    if cond is None:
+        return True
+    expr = cond.replace("deployer().objectId", "'P'").replace("adminPrincipalId", "'P'")
+    expr = re.sub(r"toLower\(([^)]*)\)", r"(\1).lower()", expr)
+    expr = re.sub(r"empty\(([^)]*)\)", r"(len(\1)==0)", expr)
+    expr = expr.replace("||", " or ").replace("&&", " and ")
+    expr = re.sub(r"!(?!=)", " not ", expr)
+    try:
+        return bool(eval(expr, {"__builtins__": {}}, {"len": len}))
+    except NameError:
+        return True
+
+
+def _collision_key(guid_args: str) -> str:
+    seed = guid_args.replace("deployer().objectId", "PRINCIPAL").replace(
+        "adminPrincipalId", "PRINCIPAL"
+    )
+    return re.sub(r"\s+", "", seed)
+
+
+def test_main_bicep_role_assignment_names_unique_when_admin_is_deployer():
+    seen: dict[str, str] = {}
+    collisions: list[tuple[str, str]] = []
+    for ra in _role_assignments():
+        if not _enabled_when_admin_is_deployer(ra["cond"]):
+            continue
+        key = _collision_key(ra["guid_args"] or "")
+        if key in seen:
+            collisions.append((seen[key], ra["sym"]))
+        seen[key] = ra["sym"]
+    assert not collisions, (
+        "infra/main.bicep role assignments collide on the same guid() name when the "
+        "deployer is the admin (adminPrincipalId == deployer().objectId), which ARM "
+        f"rejects as a duplicate resource: {collisions}"
+    )
+
+
+def test_main_bicep_deployer_grants_guard_against_admin_collision():
+    deployer_grants = [
+        ra for ra in _role_assignments() if "deployer().objectId" in (ra["guid_args"] or "")
+    ]
+    assert deployer_grants, "expected at least one deployer-keyed role assignment in main.bicep"
+    for ra in deployer_grants:
+        cond = ra["cond"]
+        assert cond and "adminPrincipalId" in cond, (
+            f"{ra['sym']} keys its guid() name on deployer().objectId but is not guarded "
+            "against the admin==deployer collision (its condition must reference "
+            "adminPrincipalId so the redundant grant is skipped)"
+        )

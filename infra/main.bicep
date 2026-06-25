@@ -211,7 +211,9 @@ resource keyVaultAdminAssignment 'Microsoft.Authorization/roleAssignments@2022-0
 // Officer so the provisioner can seed the App private key post-deploy (`_seed_app_key`),
 // mirroring the App Configuration deployer grant below. Data-plane reachability still
 // requires allowPublicNetworkAccess=true (or provisioning from inside the vault's network).
-resource keyVaultDeployerAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+// Skipped when the deployer IS the admin: that grant above is identical (same scope, role,
+// and principal) so emitting both would collide on the deterministic guid() name.
+resource keyVaultDeployerAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (empty(adminPrincipalId) || toLower(deployer().objectId) != toLower(adminPrincipalId)) {
   name: guid(keyVault.id, deployer().objectId, keyVaultSecretsOfficerRoleId)
   scope: keyVault
   properties: {
@@ -262,7 +264,9 @@ resource appConfigAdminAssignment 'Microsoft.Authorization/roleAssignments@2022-
 
 // The principal running the deployment (the `dsf` CLI's `az login`) gets App Configuration
 // Data Owner so the provisioner can seed key-values post-deploy (local auth is disabled).
-resource appConfigDeployerAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+// Skipped when the deployer IS the admin: that grant above is identical (same scope, role,
+// and principal) so emitting both would collide on the deterministic guid() name.
+resource appConfigDeployerAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (empty(adminPrincipalId) || toLower(deployer().objectId) != toLower(adminPrincipalId)) {
   name: guid(appConfig.id, deployer().objectId, appConfigDataOwnerRoleId)
   scope: appConfig
   properties: {
