@@ -96,6 +96,8 @@ var keyVaultName = take('${namePrefix}kv${suffix}', 24)
 var tags = {
   'azd-env-name': environmentName
   project: 'dark-software-factory'
+  'managed-by': 'dsf'
+  product: product
   component: 'backing-services'
 }
 

@@ -58,6 +58,8 @@ param permissionLevel string = 'Reader'
 @description('Tags applied to all resources in this deployment.')
 param tags object = {
   project: 'dark-software-factory'
+  'managed-by': 'dsf'
+  product: product
   component: 'sre-agent'
 }
 

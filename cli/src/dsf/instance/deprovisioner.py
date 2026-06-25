@@ -28,7 +28,11 @@ from dsf.instance.spec import (
     _default_repo_root,
     manifest_path,
 )
-from dsf.instance.teardown_common import ALREADY_ABSENT_RESULT, is_not_found
+from dsf.instance.teardown_common import (
+    ALREADY_ABSENT_RESULT,
+    guarded_group_delete,
+    is_not_found,
+)
 
 Runner = Callable[..., Any]
 
@@ -226,6 +230,15 @@ class InstanceDeprovisioner:
         elif step.name == "delete_config":
             self._delete_config_files()
             step.executed, step.result = True, "deleted"
+
+        elif step.name in ("delete_sre_agent", "delete_resource_group"):
+            name = (
+                self.spec.sre_resource_group()
+                if step.name == "delete_sre_agent"
+                else self.spec.resource_group()
+            )
+            step.result = guarded_group_delete(name, self._run)
+            step.executed = True
 
         elif step.command:
             try:

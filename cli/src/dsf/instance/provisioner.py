@@ -55,8 +55,10 @@ from dsf.instance.spec import (
     read_manifest,
     write_manifest,
 )
+from dsf.instance.tagging import canonical_tags, tag_cli_args
 from dsf.instance.teardown_common import (
     ALREADY_ABSENT_RESULT,
+    guarded_group_delete,
     is_not_found,
     is_not_found_text,
 )
@@ -254,6 +256,8 @@ class InstanceProvisioner:
                     "az", "group", "create",
                     "--name", s.resource_group(),
                     "--location", s.location,
+                    "--tags",
+                    *tag_cli_args(canonical_tags(s.product, "backing-services")),
                 ],
             ),
             ProvisionStep(
@@ -922,24 +926,8 @@ class InstanceOffboarder:
         return self._manifest
 
     def _delete_group(self, name: str) -> str:
-        if not self._group_exists(name):
-            return ALREADY_ABSENT_RESULT
-        try:
-            self._run(["az", "group", "delete", "--name", name, "--yes"], check=True)
-        except subprocess.CalledProcessError as exc:
-            if is_not_found(exc):
-                return ALREADY_ABSENT_RESULT
-            raise
-        return "deleted"
-
-    def _group_exists(self, name: str) -> bool:
-        proc = self._run(
-            ["az", "group", "exists", "--name", name],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        return str(getattr(proc, "stdout", "")).strip().lower() == "true"
+        """Delete a resource group, but only when it is tagged managed-by=dsf."""
+        return guarded_group_delete(name, self._run)
 
     def _remove_sre_rbac(self) -> str:
         spec = self._load_manifest().spec
