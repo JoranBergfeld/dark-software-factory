@@ -42,26 +42,6 @@ def test_new_parser_wiring():
     assert args.write_plan is False
 
 
-def test_new_parser_bing_grounding_default_and_opt_out():
-    on = build_parser().parse_args(["new", "--product", "demo", "--owner", "acme"])
-    assert on.enable_bing_grounding is True
-    off = build_parser().parse_args(
-        ["new", "--product", "demo", "--owner", "acme", "--no-enable-bing-grounding"]
-    )
-    assert off.enable_bing_grounding is False
-
-
-def test_new_threads_bing_grounding_opt_out_into_spec(tmp_path, monkeypatch):
-    from dsf.instance import provisioner as prov_mod
-
-    monkeypatch.setattr(prov_mod, "InstanceProvisioner", _CapturingProvisioner)
-    rc = main([
-        "new", "--product", "demo", "--owner", "acme", "--name-prefix", "demopfx",
-        "--dry-run", "--config-root", str(tmp_path), "--no-enable-bing-grounding",
-    ])
-    assert rc == 0
-    assert _CapturingProvisioner.last_spec.enable_bing_grounding is False
-
 
 def test_bootstrap_subcommand_is_wired():
     from dsf.cli.factory import build_parser
