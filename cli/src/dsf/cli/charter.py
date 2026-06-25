@@ -293,6 +293,15 @@ def _cmd_charter_init(args: argparse.Namespace) -> int:
     return 0
 
 
+def charter_init(product: str) -> int:
+    """Run the charter interview and open the PR for ``product``.
+
+    Public entry point so ``dsf new`` can chain straight into charter seeding
+    after provisioning without reaching for a private command handler.
+    """
+    return _cmd_charter_init(argparse.Namespace(product=product))
+
+
 def add_charter_subcommands(sub: argparse._SubParsersAction) -> None:
     """Register the ``charter`` command (init/sync/status) on ``sub``."""
     parser = sub.add_parser("charter", help="manage the product charter (.dsf/charter.md)")
@@ -316,4 +325,4 @@ def add_charter_subcommands(sub: argparse._SubParsersAction) -> None:
         command_parser.set_defaults(func=func)
 
 
-__all__ = ["add_charter_subcommands"]
+__all__ = ["add_charter_subcommands", "charter_init"]

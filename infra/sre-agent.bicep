@@ -55,9 +55,14 @@ Permission level granted to the SRE agent. "Reader" is the default and only wire
 @allowed(['Reader', 'Privileged'])
 param permissionLevel string = 'Reader'
 
+@description('Object id of the human owner/governance principal granted Reader on the SRE agent RG (so the deployer can open the agent in portal/CLI after `dsf new`). Optional — leave empty in CI / service-principal runs to skip the human grant.')
+param ownerPrincipalId string = ''
+
 @description('Tags applied to all resources in this deployment.')
 param tags object = {
   project: 'dark-software-factory'
+  'managed-by': 'dsf'
+  product: product
   component: 'sre-agent'
 }
 
@@ -126,6 +131,20 @@ module subMonitoringRole 'modules/sre-sub-role.bicep' = {
     principalId: agentResources.outputs.principalId
     agentName: agentName
     roleId: monitoringContributorRoleId
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Human owner/governance grant: Reader on the agent's dedicated RG so the
+// deployer can open the agent (and its RG) in portal/CLI after `dsf new`.
+// No-op in CI / service-principal runs where no human principal is resolvable.
+// ---------------------------------------------------------------------------
+
+module ownerRgRole 'modules/sre-owner-rg-role.bicep' = if (!empty(ownerPrincipalId)) {
+  name: 'sre-owner-rg-role-${product}'
+  scope: agentRg
+  params: {
+    principalId: ownerPrincipalId
   }
 }
 

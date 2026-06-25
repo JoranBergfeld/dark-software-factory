@@ -74,4 +74,37 @@ A complete, isolated factory for the product:
 The persisted manifest lives under `config/instances/<product>.json`; re-running `dsf new`
 for the same product is idempotent (it reuses the persisted name prefix).
 
+## Seed its intent (the charter)
+
+A freshly provisioned factory is **inert**: until a [product charter](operate.md#the-product-charter)
+(`.dsf/charter.md`) lands on `main`, the Feature Council has nothing to ground proposals
+against and tags every run `uncharted product context`. So `dsf new` doesn't stop at the
+infrastructure — on a successful run against a greenfield factory it guides you straight into
+seeding intent:
+
+- In an **interactive terminal** it offers to chain into the charter interview:
+
+    ```text
+    [dsf] Your factory has no intent yet. Seed its charter now? [Y/n]
+    ```
+
+    Answer `Y` and it runs `dsf charter init --product <product>` for you (the interview, then
+    a charter PR). Answer `n` and it prints the copy-pasteable next step instead.
+- It only prompts for **greenfield** factories — if `.dsf/charter.md` is already on `main` or a
+  `charter/*` PR is already open, it says so and doesn't nag.
+- It **never blocks** automation: when stdin isn't a TTY, or you pass `--no-charter`, it skips
+  the prompt and just prints the next step. Charter seeding is layered on top of provisioning,
+  so a failure in the interview never fails `dsf new` itself.
+
+Opening the PR is not the finish line. The charter only becomes authoritative once you
+**review and merge** it, after which the next `dsfctl sweep` syncs it into the runtime. The
+full path to a *charted* factory is:
+
+```text
+dsf new  →  charter PR  →  review & merge  →  dsfctl sweep
+```
+
+See [Operate it › The product charter](operate.md#the-product-charter) for the charter
+commands in full.
+
 Once a factory exists, move on to [Operate it](operate.md).

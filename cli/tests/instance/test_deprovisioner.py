@@ -40,6 +40,32 @@ def _manifest(
     )
 
 
+_DSF_GROUP_TAGS = json.dumps(
+    {
+        "project": "dark-software-factory",
+        "managed-by": "dsf",
+        "product": "demo",
+        "component": "backing-services",
+    }
+)
+
+
+def _group_show_tags(cmd, stdout=_DSF_GROUP_TAGS):
+    """Answer the teardown guard's ``az group show --query tags`` probe.
+
+    Returns a MagicMock carrying DSF tag JSON for a group-show command, else
+    ``None`` so the caller can chain its own command handling.
+    """
+    if cmd[:3] == ["az", "group", "show"]:
+        return MagicMock(returncode=0, stdout=stdout)
+    return None
+
+
+def _ok_run(cmd, **kwargs):
+    """Default run mock: DSF-tagged group-show probe, success for everything else."""
+    return _group_show_tags(cmd) or MagicMock(returncode=0)
+
+
 # ---------------------------------------------------------------------------
 # plan() — structure and content
 # ---------------------------------------------------------------------------
@@ -180,7 +206,7 @@ def test_apply_execute_runs_az_and_gh_commands(tmp_path):
 
     def fake_run(cmd, **kwargs):
         calls.append(cmd)
-        return MagicMock(returncode=0)
+        return _group_show_tags(cmd) or MagicMock(returncode=0)
 
     InstanceDeprovisioner(_manifest(), run=fake_run, repo_root=tmp_path).apply(execute=True)
 
@@ -199,7 +225,7 @@ def test_apply_execute_order_azure_before_repo(tmp_path):
             call_order.append("azure")
         elif cmd[:3] == ["gh", "repo", "delete"]:
             call_order.append("repo")
-        return MagicMock(returncode=0)
+        return _group_show_tags(cmd) or MagicMock(returncode=0)
 
     InstanceDeprovisioner(_manifest(), run=fake_run, repo_root=tmp_path).apply(execute=True)
     assert call_order.index("azure") < call_order.index("repo")
@@ -215,7 +241,7 @@ def test_apply_execute_deregisters_product(tmp_path):
     )
 
     InstanceDeprovisioner(
-        _manifest(), run=lambda *a, **kw: MagicMock(returncode=0), repo_root=tmp_path
+        _manifest(), run=_ok_run, repo_root=tmp_path
     ).apply(execute=True)
 
     registry = load_registry(products_json)
@@ -231,7 +257,7 @@ def test_apply_execute_deletes_manifest_and_runtime(tmp_path):
     (runtime / "containerapp.yaml").write_text("# dummy", encoding="utf-8")
 
     InstanceDeprovisioner(
-        m, run=lambda *a, **kw: MagicMock(returncode=0), repo_root=tmp_path
+        m, run=_ok_run, repo_root=tmp_path
     ).apply(execute=True)
 
     assert not manifest_path("demo", tmp_path).exists()
@@ -245,6 +271,9 @@ def test_apply_execute_tolerates_already_absent_resource_group(tmp_path):
     )
 
     def fake_run(cmd, **kwargs):
+        hit = _group_show_tags(cmd)
+        if hit is not None:
+            return hit
         if cmd == ["az", "group", "delete", "--name", "rg-dsf-sre-demo", "--yes"]:
             raise not_found_err
         return MagicMock(returncode=0)
@@ -253,7 +282,7 @@ def test_apply_execute_tolerates_already_absent_resource_group(tmp_path):
     steps = {s.name: s for s in plan.steps}
     assert steps["delete_sre_agent"].result == "not-found (already absent)"
     # Teardown continues past the absent resource.
-    assert steps["delete_resource_group"].result == "executed"
+    assert steps["delete_resource_group"].result == "deleted"
     assert steps["delete_repo"].result == "executed"
 
 
@@ -264,6 +293,9 @@ def test_apply_execute_tolerates_already_deleted_repo(tmp_path):
     )
 
     def fake_run(cmd, **kwargs):
+        hit = _group_show_tags(cmd)
+        if hit is not None:
+            return hit
         if cmd[:3] == ["gh", "repo", "delete"]:
             raise not_found_err
         return MagicMock(returncode=0)
@@ -280,6 +312,9 @@ def test_apply_execute_stops_on_real_error(tmp_path):
     )
 
     def fake_run(cmd, **kwargs):
+        hit = _group_show_tags(cmd)
+        if hit is not None:
+            return hit
         if cmd == ["az", "group", "delete", "--name", "rg-dsf-demo", "--yes"]:
             raise real_error
         return MagicMock(returncode=0)
@@ -298,6 +333,9 @@ def test_apply_execute_emits_error_event_on_failure(tmp_path):
     )
 
     def fake_run(cmd, **kwargs):
+        hit = _group_show_tags(cmd)
+        if hit is not None:
+            return hit
         if cmd == ["az", "group", "delete", "--name", "rg-dsf-demo", "--yes"]:
             raise real_error
         return MagicMock(returncode=0)
@@ -325,7 +363,7 @@ def test_apply_execute_purges_keyvault_when_flag_set(tmp_path):
 
     def fake_run(cmd, **kwargs):
         calls.append(cmd)
-        return MagicMock(returncode=0)
+        return _group_show_tags(cmd) or MagicMock(returncode=0)
 
     InstanceDeprovisioner(
         _manifest(azure=azure), run=fake_run, repo_root=tmp_path, purge=True
@@ -337,6 +375,28 @@ def test_apply_execute_purges_keyvault_when_flag_set(tmp_path):
     assert "kv-demoxyz" in purge_calls[0]
 
 
+
+def test_apply_execute_refuses_untagged_resource_group(tmp_path):
+    """A resource group not tagged managed-by=dsf must not be deleted."""
+    foreign_tags = json.dumps({"project": "someone-else"})
+
+    def fake_run(cmd, **kwargs):
+        if cmd[:3] == ["az", "group", "show"]:
+            return MagicMock(returncode=0, stdout=foreign_tags)
+        if cmd[:3] == ["az", "group", "delete"]:
+            raise AssertionError("must not delete a foreign resource group")
+        return MagicMock(returncode=0)
+
+    plan = InstanceDeprovisioner(_manifest(), run=fake_run, repo_root=tmp_path).apply(
+        execute=True
+    )
+    steps = {s.name: s for s in plan.steps}
+    assert steps["delete_sre_agent"].result == "failed"
+    assert "managed-by=dsf" in steps["delete_sre_agent"].error
+    # The line stops; later steps (incl. the product RG + repo) are left unrun.
+    assert steps["delete_resource_group"].result == ""
+    assert steps["delete_repo"].result == ""
+
 # ---------------------------------------------------------------------------
 # apply() — capture_output idempotency + SRE RBAC removal
 # ---------------------------------------------------------------------------
@@ -347,19 +407,23 @@ def test_apply_execute_runs_delete_commands_with_captured_output(tmp_path):
 
     Mirrors real ``subprocess.run`` semantics: the CalledProcessError only carries
     ``stderr`` when ``capture_output=True`` was passed. Without the capture the
-    already-absent resource would (incorrectly) fail the run.
+    already-absent resource would (incorrectly) fail the run. The ``delete_repo``
+    command step is the canary here; resource-group deletes go through the
+    tag-guarded path.
     """
 
     def fake_run(cmd, **kwargs):
-        if cmd[:3] == ["az", "group", "delete"]:
-            stderr = "ResourceGroupNotFound" if kwargs.get("capture_output") else None
+        hit = _group_show_tags(cmd)
+        if hit is not None:
+            return hit
+        if cmd[:3] == ["gh", "repo", "delete"]:
+            stderr = "Could not resolve to a repository" if kwargs.get("capture_output") else None
             raise subprocess.CalledProcessError(1, cmd, stderr=stderr)
         return MagicMock(returncode=0, stdout="principal\n")
 
     plan = InstanceDeprovisioner(_manifest(), run=fake_run, repo_root=tmp_path).apply(execute=True)
     steps = {s.name: s for s in plan.steps}
-    assert steps["delete_sre_agent"].result == "not-found (already absent)"
-    assert steps["delete_resource_group"].result == "not-found (already absent)"
+    assert steps["delete_repo"].result == "not-found (already absent)"
     assert not any(s.result == "failed" for s in plan.steps)
 
 
@@ -393,6 +457,9 @@ def test_apply_execute_sre_rbac_tolerates_absent_identity(tmp_path):
     """An already-gone SRE identity records absent and does not stop the run."""
 
     def fake_run(cmd, **kwargs):
+        hit = _group_show_tags(cmd)
+        if hit is not None:
+            return hit
         if cmd[:4] == ["az", "identity", "show", "--resource-group"]:
             return MagicMock(returncode=3, stdout="", stderr="ResourceNotFound")
         return MagicMock(returncode=0, stdout="")
@@ -448,7 +515,7 @@ def test_roundtrip_new_then_delete_execute_cleans_up(tmp_path):
 
     deprv = InstanceDeprovisioner.from_product(
         "demo",
-        run=lambda *a, **kw: MagicMock(returncode=0),
+        run=_ok_run,
         repo_root=tmp_path,
     )
     deprv.apply(execute=True)

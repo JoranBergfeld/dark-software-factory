@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import io
+
 import pytest
 
 from dsf.cli.factory import build_parser, main
@@ -519,6 +521,55 @@ def test_new_parser_has_owner_keyvault_uri():
     assert args.owner_keyvault_uri == "https://kv-dsf-app.vault.azure.net/"
 
 
+def test_new_parser_has_admin_principal_id():
+    args = build_parser().parse_args(
+        ["new", "--product", "demo", "--owner", "acme", "--admin-principal-id", "oid-123"]
+    )
+    assert args.admin_principal_id == "oid-123"
+    # Defaults to empty so CI / service-principal runs skip the human grants.
+    default = build_parser().parse_args(["new", "--product", "demo", "--owner", "acme"])
+    assert default.admin_principal_id == ""
+
+
+class _CapturingProvisioner:
+    """Records the kwargs `dsf new` threads into InstanceProvisioner."""
+
+    last_kwargs: dict = {}
+
+    def __init__(self, spec, repo_root=None, **kwargs):
+        type(self).last_kwargs = kwargs
+        self.spec = spec
+
+    def plan(self):
+        return InstancePlan(product=self.spec.product, steps=[])
+
+
+def test_new_threads_admin_principal_id_from_flag(tmp_path, monkeypatch):
+    from dsf.instance import provisioner as prov_mod
+
+    monkeypatch.delenv("DSF_ADMIN_PRINCIPAL_ID", raising=False)
+    monkeypatch.setattr(prov_mod, "InstanceProvisioner", _CapturingProvisioner)
+    rc = main([
+        "new", "--product", "demo", "--owner", "acme", "--name-prefix", "demopfx",
+        "--dry-run", "--config-root", str(tmp_path), "--admin-principal-id", "oid-flag",
+    ])
+    assert rc == 0
+    assert _CapturingProvisioner.last_kwargs["admin_principal_id"] == "oid-flag"
+
+
+def test_new_admin_principal_id_falls_back_to_env(tmp_path, monkeypatch):
+    from dsf.instance import provisioner as prov_mod
+
+    monkeypatch.setenv("DSF_ADMIN_PRINCIPAL_ID", "oid-env")
+    monkeypatch.setattr(prov_mod, "InstanceProvisioner", _CapturingProvisioner)
+    rc = main([
+        "new", "--product", "demo", "--owner", "acme", "--name-prefix", "demopfx",
+        "--dry-run", "--config-root", str(tmp_path),
+    ])
+    assert rc == 0
+    assert _CapturingProvisioner.last_kwargs["admin_principal_id"] == "oid-env"
+
+
 def test_read_owner_app_pointers_reads_id_and_installation(monkeypatch):
     import subprocess
 
@@ -538,3 +589,227 @@ def test_read_owner_app_pointers_reads_id_and_installation(monkeypatch):
     assert installation_id == "9001"
     # vault name parsed from the URI host
     assert any("kv-dsf-app" in c for c in seen[0])
+
+
+# ---------------------------------------------------------------------------
+# dsf new — post-provision charter seeding (issue #86)
+# ---------------------------------------------------------------------------
+
+
+class _TtyStdin(io.StringIO):
+    """stdin double that reports as an interactive terminal."""
+
+    def isatty(self) -> bool:
+        return True
+
+
+def _patch_success_provisioner(monkeypatch):
+    """Replace the real provisioner with one that 'executes' a single OK step."""
+    from dsf.instance import provisioner as prov_mod
+
+    class _OkProvisioner:
+        def __init__(self, spec, repo_root=None, **kwargs):
+            self.spec = spec
+
+        def apply(self, *, execute=False, on_event=None, on_progress=None):
+            step = ProvisionStep(
+                name="register_product", description="register product", result="executed"
+            )
+            plan = InstancePlan(product=self.spec.product, steps=[step])
+            return InstanceManifest(spec=self.spec, plan=plan, executed=True)
+
+    monkeypatch.setattr(prov_mod, "InstanceProvisioner", _OkProvisioner)
+
+
+def _patch_charter_app(monkeypatch, client):
+    """Wire the charter App seams to a shared recording client (greenfield by default)."""
+    monkeypatch.setattr("dsf.cli.charter._resolve_repo", lambda product: "org/demo")
+    monkeypatch.setattr("dsf.cli.charter._app_settings", lambda product, **_: None)
+    monkeypatch.setattr("dsf.cli.charter.build_repo_app_client", lambda s: client)
+
+
+def _interview_model():
+    """A model client whose interview finishes immediately with a valid draft."""
+    from dsf.charter.interview import InterviewerTurn
+    from dsf.contracts.charter import Charter
+    from dsf_testing.model import DeterministicModelClient
+
+    draft = Charter(
+        product="demo",
+        vision="V",
+        target_users="U",
+        goals=["g"],
+        success_metrics=["m"],
+        source_sha="abc123",
+        source_ref="main",
+    )
+    model = DeterministicModelClient()
+    model.register(
+        "[charter-interview]",
+        lambda s, p: InterviewerTurn(message="drafted", done=True, draft=draft),
+    )
+    return model
+
+
+def _new_argv(tmp_path, *extra):
+    return [
+        "new", "--product", "demo", "--owner", "acme", "--name-prefix", "demopfx",
+        "--config-root", str(tmp_path), *extra,
+    ]
+
+
+def test_new_parser_accepts_no_charter():
+    args = build_parser().parse_args(
+        ["new", "--product", "demo", "--no-charter"]
+    )
+    assert args.no_charter is True
+    assert build_parser().parse_args(["new", "--product", "demo"]).no_charter is False
+
+
+def test_new_no_charter_prints_next_step_without_prompting(monkeypatch, capsys, tmp_path):
+    _patch_success_provisioner(monkeypatch)
+    prompted = {"asked": False}
+    monkeypatch.setattr(
+        "builtins.input", lambda *a: prompted.__setitem__("asked", True) or "y"
+    )
+    rc = main(_new_argv(tmp_path, "--no-charter"))
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "uv run dsf charter init --product demo" in out
+    assert prompted["asked"] is False
+
+
+def test_new_greenfield_interactive_yes_chains_into_interview(monkeypatch, capsys, tmp_path):
+    from dsf.charter.sync import CHARTER_PATH
+    from dsf_testing.config import InMemoryConfigStore
+    from dsf_testing.github import RecordingRepoClient
+
+    _patch_success_provisioner(monkeypatch)
+    client = RecordingRepoClient({})  # no charter on main, no charter PR -> greenfield
+    _patch_charter_app(monkeypatch, client)
+    monkeypatch.setattr("dsf.cli.charter.build_model_client", lambda s: _interview_model())
+    monkeypatch.setattr(
+        "dsf.cli.charter.build_config_store", lambda s: InMemoryConfigStore.from_defaults()
+    )
+    monkeypatch.setattr("sys.stdin", _TtyStdin())
+    prompts: list[str] = []
+    monkeypatch.setattr("builtins.input", lambda prompt="": (prompts.append(prompt), "y")[1])
+
+    rc = main(_new_argv(tmp_path))
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert any("Seed its charter now?" in p for p in prompts)
+    assert "opened charter PR" in out
+    assert "review & MERGE" in out
+    assert len(client.prs) == 1 and client.prs[0]["path"] == CHARTER_PATH
+
+
+def test_new_greenfield_interactive_no_prints_hint_and_opens_no_pr(monkeypatch, capsys, tmp_path):
+    from dsf_testing.github import RecordingRepoClient
+
+    _patch_success_provisioner(monkeypatch)
+    client = RecordingRepoClient({})
+    _patch_charter_app(monkeypatch, client)
+    monkeypatch.setattr("sys.stdin", _TtyStdin())
+    prompts: list[str] = []
+    monkeypatch.setattr("builtins.input", lambda prompt="": (prompts.append(prompt), "n")[1])
+
+    rc = main(_new_argv(tmp_path))
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert any("Seed its charter now?" in p for p in prompts)
+    assert "uv run dsf charter init --product demo" in out
+    assert client.prs == []
+
+
+def test_new_noninteractive_greenfield_prints_hint_without_prompting(monkeypatch, capsys, tmp_path):
+    from dsf_testing.github import RecordingRepoClient
+
+    _patch_success_provisioner(monkeypatch)
+    client = RecordingRepoClient({})
+    _patch_charter_app(monkeypatch, client)
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))  # not a TTY
+    prompted = {"asked": False}
+    monkeypatch.setattr(
+        "builtins.input", lambda *a: prompted.__setitem__("asked", True) or "y"
+    )
+
+    rc = main(_new_argv(tmp_path))
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "your factory has no intent yet" in out
+    assert "uv run dsf charter init --product demo" in out
+    assert prompted["asked"] is False
+    assert client.prs == []
+
+
+def test_new_does_not_nag_when_charter_already_on_main(monkeypatch, capsys, tmp_path):
+    from dsf.charter.sync import CHARTER_PATH
+    from dsf_testing.github import RecordingRepoClient
+
+    _patch_success_provisioner(monkeypatch)
+    client = RecordingRepoClient({CHARTER_PATH: ("# charter", "sha123")})
+    _patch_charter_app(monkeypatch, client)
+    monkeypatch.setattr("sys.stdin", _TtyStdin())
+    monkeypatch.setattr("builtins.input", lambda *a: "y")
+
+    rc = main(_new_argv(tmp_path))
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "already has a product charter" in out
+    assert "no intent yet" not in out
+    assert client.prs == []
+
+
+def test_new_does_not_nag_when_charter_pr_already_open(monkeypatch, capsys, tmp_path):
+    from datetime import UTC, datetime
+
+    from dsf_testing.github import RecordingRepoClient, _AmendmentPr
+
+    _patch_success_provisioner(monkeypatch)
+    pr = _AmendmentPr(
+        html_url="https://github.com/org/demo/pull/1",
+        state="open",
+        created_at=datetime.now(UTC),
+        head_ref="charter/init-deadbeef",
+    )
+    client = RecordingRepoClient({}, prs=[pr])
+    _patch_charter_app(monkeypatch, client)
+    monkeypatch.setattr("sys.stdin", _TtyStdin())
+    monkeypatch.setattr("builtins.input", lambda *a: "y")
+
+    rc = main(_new_argv(tmp_path))
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "already has a product charter" in out
+    assert client.prs == []
+
+
+def test_new_prints_hint_when_charter_state_undeterminable(monkeypatch, capsys, tmp_path):
+    _patch_success_provisioner(monkeypatch)
+    # Repo can't be resolved -> charter state is "unknown" -> print the hint, never prompt.
+    monkeypatch.setattr("dsf.cli.charter._resolve_repo", lambda product: None)
+    monkeypatch.setattr("sys.stdin", _TtyStdin())
+    prompted = {"asked": False}
+    monkeypatch.setattr(
+        "builtins.input", lambda *a: prompted.__setitem__("asked", True) or "y"
+    )
+
+    rc = main(_new_argv(tmp_path))
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "uv run dsf charter init --product demo" in out
+    assert prompted["asked"] is False
+
+
+def test_new_dry_run_does_not_seed_or_prompt(monkeypatch, capsys, tmp_path):
+    prompted = {"asked": False}
+    monkeypatch.setattr(
+        "builtins.input", lambda *a: prompted.__setitem__("asked", True) or "y"
+    )
+    rc = main(_new_argv(tmp_path, "--dry-run"))
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert prompted["asked"] is False
+    assert "Seed its charter now?" not in out
+    assert "no intent yet" not in out

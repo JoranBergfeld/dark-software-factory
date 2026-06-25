@@ -72,11 +72,107 @@ def _print_step_progress(line: str) -> None:
 
 
 def charter_next_action(product: str) -> str:
-    """The post-provision hint pointing the operator at the charter workflow."""
-    return (
-        f"[dsf] next: run `dsf charter init --product {product}` to author the "
-        "product charter (opens a PR for review)"
-    )
+    """The bare, copy-pasteable command that seeds a factory's product charter."""
+    return f"uv run dsf charter init --product {product}"
+
+
+def charter_guidance(product: str) -> list[str]:
+    """Framed next-step guidance for a factory that has no intent (charter) yet.
+
+    Names the full path to a *charted* factory so the operator knows provisioning
+    alone is not enough: provisioning -> charter PR -> merge -> ``dsfctl sweep``.
+    """
+    return [
+        "[dsf] your factory has no intent yet — seed it with a product charter:",
+        f"[dsf]   {charter_next_action(product)}",
+        "[dsf] then review & MERGE the charter PR; the next `dsfctl sweep` makes it "
+        "authoritative.",
+    ]
+
+
+def _charter_state(product: str) -> str:
+    """Classify a factory's charter readiness via the master DSF GitHub App.
+
+    Returns ``"seeded"`` when ``.dsf/charter.md`` is already on ``main`` or a
+    ``charter/*`` PR exists, ``"greenfield"`` when neither does, or ``"unknown"``
+    when the App client can't be built, the repo can't be resolved, or the lookup
+    errors. The check is best-effort: any failure degrades to ``"unknown"`` so
+    ``dsf new`` never crashes on it.
+    """
+    import asyncio
+
+    from dsf.cli import charter as charter_cli
+
+    try:
+        repo_full = charter_cli._resolve_repo(product)
+        if not repo_full:
+            return "unknown"
+        app = charter_cli.build_repo_app_client(charter_cli._app_settings(product))
+
+        async def _lookup() -> bool:
+            on_main = await app.read_file(repo_full, charter_cli.CHARTER_PATH, ref="main")
+            if on_main is not None:
+                return True
+            pr = await app.latest_pr_with_head_prefix(repo_full, head_prefix="charter/")
+            return pr is not None
+
+        seeded = asyncio.run(_lookup())
+    except Exception:
+        return "unknown"
+    return "seeded" if seeded else "greenfield"
+
+
+def _maybe_seed_charter(product: str, *, no_charter: bool) -> None:
+    """Guide the operator into seeding the new factory's charter.
+
+    Layered on top of a successful provisioning run — best-effort and never
+    affecting ``dsf new``'s exit code. On a greenfield factory with an interactive
+    TTY it offers to chain straight into ``dsf charter init``; otherwise it prints
+    a clear, copy-pasteable next step. Skips entirely (apart from the hint) when
+    ``--no-charter`` is passed, stdin isn't a TTY, or the factory already has a
+    charter (PR open or on ``main``).
+    """
+    if no_charter:
+        for line in charter_guidance(product):
+            print(line)
+        return
+
+    state = _charter_state(product)
+    if state == "seeded":
+        print(
+            "[dsf] factory already has a product charter (PR open or on main); "
+            "nothing to seed."
+        )
+        return
+
+    # Non-interactive or undeterminable greenfield: never block on a prompt, never
+    # run the interview blind — just point the way.
+    if state == "unknown" or not sys.stdin.isatty():
+        for line in charter_guidance(product):
+            print(line)
+        return
+
+    answer = input(
+        "[dsf] Your factory has no intent yet. Seed its charter now? [Y/n] "
+    ).strip().lower()
+    if answer not in ("", "y", "yes"):
+        for line in charter_guidance(product):
+            print(line)
+        return
+
+    from dsf.cli.charter import charter_init
+
+    rc = charter_init(product)
+    if rc == 0:
+        print(
+            "[dsf] charter PR opened — review & MERGE it; the next `dsfctl sweep` "
+            "makes it authoritative."
+        )
+    else:
+        print(
+            "[dsf] charter seeding did not complete; retry later with: "
+            f"{charter_next_action(product)}"
+        )
 
 
 def _cmd_new(args: argparse.Namespace) -> int:
@@ -123,6 +219,9 @@ def _cmd_new(args: argparse.Namespace) -> int:
         creation_maturity=args.creation_maturity,
     )
     owner_kv = args.owner_keyvault_uri or os.environ.get("DSF_OWNER_KEYVAULT_URI", "")
+    admin_principal_id = args.admin_principal_id or os.environ.get(
+        "DSF_ADMIN_PRINCIPAL_ID", ""
+    )
     app_id, installation_id = "", ""
     if owner_kv and not args.dry_run:
         app_id, installation_id = _read_owner_app_pointers(owner_kv)
@@ -132,6 +231,7 @@ def _cmd_new(args: argparse.Namespace) -> int:
         owner_keyvault_uri=owner_kv,
         github_app_id=app_id,
         github_installation_id=installation_id,
+        admin_principal_id=admin_principal_id,
     )
     execute = not args.dry_run
     if execute:
@@ -149,7 +249,7 @@ def _cmd_new(args: argparse.Namespace) -> int:
         print(f"[dsf] provisioning STOPPED at '{failed.name}': {failed.error}")
         return 1
     if execute:
-        print(charter_next_action(args.product))
+        _maybe_seed_charter(args.product, no_charter=args.no_charter)
     return 0
 
 
@@ -334,6 +434,12 @@ def build_parser() -> argparse.ArgumentParser:
         "(provisioning executes by default)",
     )
     p_new.add_argument(
+        "--no-charter",
+        action="store_true",
+        help="skip the post-provision charter prompt; just print the next step "
+        "(`dsf charter init`). Always implied when stdin isn't a TTY.",
+    )
+    p_new.add_argument(
         "--write-plan",
         action="store_true",
         help="with --dry-run, still write the instance manifest to config/instances/",
@@ -348,6 +454,14 @@ def build_parser() -> argparse.ArgumentParser:
         default="",
         help="owner Key Vault holding the DSF App credentials "
         "(default: $DSF_OWNER_KEYVAULT_URI; required to install the App)",
+    )
+    p_new.add_argument(
+        "--admin-principal-id",
+        default="",
+        help="object id of the human owner/governance principal to grant data-plane "
+        "admin (App Config / Key Vault) + Reader on the SRE agent RG "
+        "(default: $DSF_ADMIN_PRINCIPAL_ID, else the signed-in user; leave unset in "
+        "CI / service-principal runs to skip the human grants)",
     )
     p_new.set_defaults(func=_cmd_new)
 

@@ -106,6 +106,12 @@ issue, never left as a stub.
 
 ## Conventions
 
+- **Commit messages** follow Conventional Commits: start every message with one of
+  `feat:` (new capability), `fix:` (bug fix), `chore:` (deps/tooling/housekeeping),
+  `docs:` (docs, ADRs, or `docs/site/` content), `refactor:` (behavior-preserving
+  restructure), `test:` (tests only), `ci:` (changes under `.github/workflows/`),
+  `perf:` (performance), or `build:` (packaging — `pyproject.toml`/`uv`). Use the
+  imperative mood after the prefix, e.g. `feat: add azuremonitor source agent`.
 - **Adding a `SourceKind` wires 4 places** (a parity test at
   `feature-council/tests/agents/test_registry.py` enforces it): `contracts/enums.py`
   `SourceKind`, `config/defaults.json` agents block, `agents/registry.py` `DEPLOYABLE_AGENTS`,
