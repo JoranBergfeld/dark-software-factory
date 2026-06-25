@@ -136,10 +136,12 @@ line with no extra wiring.
 
 ## Docs
 
-Add a short recovery note to `docs/site/get-started/operate.md`: if
-`provision_azure` hangs on a Foundry/Bing connection, the deploy is bounded by
-`DSF_DEPLOY_TIMEOUT` (default 10 min) and re-running with
-`--no-enable-bing-grounding` skips the connection.
+Extend the "Live progress during the Azure step" note in
+`docs/site/get-started/provision-a-factory.md` (where the poll +
+`DSF_DEPLOY_POLL_INTERVAL` are already documented): the deploy is bounded by
+`DSF_DEPLOY_TIMEOUT` (default 10 min, `<= 0` disables) and cancels + names the
+wedged resource on timeout; re-running with `--no-enable-bing-grounding` skips
+the flaky Foundry/Bing connection.
 
 ## Files touched
 
@@ -150,4 +152,4 @@ Add a short recovery note to `docs/site/get-started/operate.md`: if
 - `cli/tests/instance/test_deploy_progress.py` — timeout tests
 - `cli/tests/instance/test_provisioner.py` — param tests
 - `cli/tests/cli/test_factory.py` — flag test
-- `docs/site/get-started/operate.md` — recovery note
+- `docs/site/get-started/provision-a-factory.md` — recovery note
