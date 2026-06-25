@@ -44,6 +44,13 @@ Run `uv run dsf new --help` for the full flag list.
     failure the specific failed resource and its reason are surfaced. Tune the poll cadence
     with `DSF_DEPLOY_POLL_INTERVAL` (seconds, default 5).
 
+    The poll is **bounded** by `DSF_DEPLOY_TIMEOUT` (seconds, default 600 = 10 min; set
+    `<= 0` to wait indefinitely). If the deployment is still running at the bound, `dsf new`
+    cancels it and fails the step naming the still-running resource(s) — rather than hanging.
+    A Foundry **Grounding with Bing Search** connection occasionally wedges here on a
+    transient Azure 500 while storing its key; re-run `dsf new`, or skip it with
+    `dsf new --no-enable-bing-grounding` (the WebIQ agent then runs without web research).
+
 ## Prerequisites
 
 Provisioning spans three planes — GitHub, Azure resources, and Azure RBAC — so the principal
