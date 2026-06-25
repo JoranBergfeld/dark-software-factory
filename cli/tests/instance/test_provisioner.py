@@ -142,6 +142,20 @@ def test_provision_azure_passes_github_repository_param():
     assert f"githubRepository={spec.github_repo()}" in step.command
 
 
+def test_provision_azure_enables_bing_grounding_by_default():
+    plan = InstanceProvisioner(_spec()).plan()
+    step = next(s for s in plan.steps if s.name == "provision_azure")
+    assert "enableBingGrounding=true" in step.command
+
+
+def test_provision_azure_disables_bing_grounding_when_spec_opts_out():
+    spec = InstanceSpec(product="demo", owner="acme", enable_bing_grounding=False)
+    plan = InstanceProvisioner(spec).plan()
+    step = next(s for s in plan.steps if s.name == "provision_azure")
+    assert "enableBingGrounding=false" in step.command
+    assert "enableBingGrounding=true" not in step.command
+
+
 def test_plan_create_repo_command():
     plan = InstanceProvisioner(_spec()).plan()
     create = next(s for s in plan.steps if s.name == "create_repo")

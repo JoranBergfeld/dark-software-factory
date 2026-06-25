@@ -39,6 +39,7 @@ class InstanceSpec(BaseModel):
     creation_maturity: str = "low"
     environment: str = "dev"
     location: str = "swedencentral"
+    enable_bing_grounding: bool = True
     label_taxonomy: dict[str, list[str]] = Field(default_factory=default_label_taxonomy)
     sre_agent_location: str = "swedencentral"
     monitored_resource_groups: list[str] = Field(default_factory=list)
