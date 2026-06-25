@@ -1535,22 +1535,22 @@ def test_main_bicep_has_no_inline_bing_connection():
     )
 
 
-def test_main_bicep_bing_connection_id_is_constructed():
+def test_main_bicep_has_no_bing_resources_or_params():
     bicep = (_default_repo_root() / "infra" / "main.bicep").read_text()
-    assert "bingConnectionResourceId" in bicep
-    assert "{ name: 'WEBIQ_BING_CONNECTION_ID', value: bingConnectionResourceId }" in bicep
-    assert "bingConnection.id" not in bicep
-    assert re.search(r"output\s+bingConnectionId\s+string\s+=\s+bingConnectionResourceId", bicep)
-    assert re.search(
-        r"output\s+bingAccountId\s+string\s+=\s+enableBingGrounding\s+\?"
-        r"\s+bingAccount!?.id\s+:\s+''",
-        bicep,
-    )
-    assert re.search(
-        r"output\s+bingAccountEndpoint\s+string\s+=\s+enableBingGrounding\s+\?"
-        r"\s+bingAccount!\.properties\.endpoint\s+:\s+''",
-        bicep,
-    )
+    assert "Microsoft.Bing/accounts" not in bicep
+    assert "enableBingGrounding" not in bicep
+    assert "bingConnectionResourceId" not in bicep
+    assert "WEBIQ_BING_CONNECTION_ID" not in bicep
+    assert "aiProjectEndpoint" not in bicep
+    assert "AZURE_AI_PROJECT_ENDPOINT" not in bicep
+    # the Foundry account (Azure OpenAI) and its deployments stay
+    assert "Microsoft.CognitiveServices/accounts@" in bicep
+
+
+def test_main_bicep_sets_webiq_provider_env():
+    bicep = (_default_repo_root() / "infra" / "main.bicep").read_text()
+    assert "{ name: 'WEBIQ_PROVIDER', value: 'webiq' }" in bicep
+    assert "{ name: 'WEBIQ_API_KEY_SECRET', value: 'webiq-api-key' }" in bicep
 
 
 def test_main_bicep_orchestrator_app_uses_bounded_name_prefix():

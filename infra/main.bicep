@@ -79,12 +79,6 @@ param softDeleteRetentionInDays int = 90
 @description('Gate public network access to backing services. Defaults to false (off). Enable only for dev environments lacking private endpoint connectivity.')
 param allowPublicNetworkAccess bool = false
 
-@description('Provision Grounding with Bing Search (Microsoft.Bing/accounts) plus a Foundry project + connection so the WebIQ source agent can research the web. Set false where the tenant policy blocks the Microsoft.Bing provider.')
-param enableBingGrounding bool = true
-
-@description('SKU (tier) for the Grounding with Bing Search account.')
-param bingGroundingSkuName string = 'G1'
-
 // ---------------------------------------------------------------------------
 // Variables
 // ---------------------------------------------------------------------------
@@ -107,15 +101,6 @@ var keyVaultSecretsOfficerRoleId = 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7' // Key
 var appConfigDataReaderRoleId = '516239f1-63e1-4d78-a4de-a74fb236a071' // App Configuration Data Reader
 var appConfigDataOwnerRoleId = '5ae67dd6-50cb-40e7-96ff-dc2bfa4b606b' // App Configuration Data Owner
 var cognitiveServicesOpenAIUserRoleId = '5e0bd9bd-7b93-4f28-af87-19fc36ad61bd' // Cognitive Services OpenAI User
-var cognitiveServicesUserRoleId = 'a97b65f3-24c7-4388-baec-2e87135dc908' // Cognitive Services User (Foundry projects + Agents)
-
-// Foundry project that hosts the Grounding with Bing Search connection. The
-// azure-ai-agents BingGroundingTool the WebIQ agent uses targets this project
-// endpoint (AZURE_AI_PROJECT_ENDPOINT) and resolves the connection by id.
-var aiProjectName = '${namePrefix}-proj-${suffix}'
-var bingConnectionName = '${namePrefix}-bing-conn-${suffix}'
-var bingConnectionResourceId = enableBingGrounding ? resourceId('Microsoft.CognitiveServices/accounts/projects/connections', '${namePrefix}-aif-${suffix}', aiProjectName, bingConnectionName) : ''
-var aiProjectEndpoint = enableBingGrounding ? 'https://${namePrefix}-aif-${suffix}.services.ai.azure.com/api/projects/${aiProjectName}' : ''
 
 // ---------------------------------------------------------------------------
 // Observability: Log Analytics + Application Insights
@@ -313,7 +298,7 @@ resource foundry 'Microsoft.CognitiveServices/accounts@2025-06-01' = {
     customSubDomainName: '${namePrefix}-aif-${suffix}'
     publicNetworkAccess: allowPublicNetworkAccess ? 'Enabled' : 'Disabled'
     disableLocalAuth: true
-    // Enable the Foundry project sub-resource that hosts the Bing grounding connection.
+    // Allow Foundry project sub-resources on this account.
     allowProjectManagement: true
   }
 }
@@ -361,51 +346,6 @@ resource foundryOpenAIUserAssignment 'Microsoft.Authorization/roleAssignments@20
     principalId: runtimeIdentity.properties.principalId
     principalType: 'ServicePrincipal'
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', cognitiveServicesOpenAIUserRoleId)
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Grounding with Bing Search (issue #85): gives the WebIQ source agent real web
-// research for greenfield products with no telemetry yet. The Bing grounding
-// account is exposed to the runtime through a Foundry *project* connection; the
-// azure-ai-agents BingGroundingTool resolves it by connection id. Gated by
-// enableBingGrounding so tenants that block the Microsoft.Bing provider can opt out.
-// ---------------------------------------------------------------------------
-
-resource bingAccount 'Microsoft.Bing/accounts@2025-05-01-preview' = if (enableBingGrounding) {
-  name: '${namePrefix}-bing-${suffix}'
-  location: 'global'
-  tags: tags
-  kind: 'Bing.Grounding'
-  sku: {
-    name: bingGroundingSkuName
-  }
-}
-
-// Foundry project (child of the account) that owns the grounding connection.
-resource aiProject 'Microsoft.CognitiveServices/accounts/projects@2025-06-01' = if (enableBingGrounding) {
-  parent: foundry
-  name: aiProjectName
-  location: location
-  tags: tags
-  identity: {
-    type: 'SystemAssigned'
-  }
-  properties: {
-    displayName: 'DSF ${product} WebIQ'
-    description: 'Feature Council WebIQ web-research project for ${product}.'
-  }
-}
-
-// The runtime identity needs Cognitive Services User on the account to use the
-// Foundry Agents/project data plane (the grounding tool runs as an agent).
-resource foundryAgentsUserAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (enableBingGrounding) {
-  name: guid(foundry.id, runtimeIdentity.id, cognitiveServicesUserRoleId)
-  scope: foundry
-  properties: {
-    principalId: runtimeIdentity.properties.principalId
-    principalType: 'ServicePrincipal'
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', cognitiveServicesUserRoleId)
   }
 }
 
@@ -467,9 +407,8 @@ resource orchestratorApp 'Microsoft.App/containerApps@2025-01-01' = {
             { name: 'AZURE_OPENAI_ENDPOINT', value: foundry.properties.endpoint }
             { name: 'AZURE_OPENAI_DEPLOYMENT', value: chatModel }
             { name: 'AZURE_OPENAI_EMBEDDING_DEPLOYMENT', value: embeddingModel }
-            { name: 'AZURE_AI_PROJECT_ENDPOINT', value: aiProjectEndpoint }
-            { name: 'WEBIQ_BING_CONNECTION_ID', value: bingConnectionResourceId }
-            { name: 'WEBIQ_PROVIDER', value: 'foundry' }
+            { name: 'WEBIQ_PROVIDER', value: 'webiq' }
+            { name: 'WEBIQ_API_KEY_SECRET', value: 'webiq-api-key' }
             { name: 'GITHUB_APP_ID', value: githubAppId }
             { name: 'GITHUB_INSTALLATION_ID', value: githubInstallationId }
             { name: 'GITHUB_REPOSITORY', value: githubRepository }
@@ -528,15 +467,3 @@ output appInsightsId string = appInsights.id
 
 @description('Log Analytics workspace resource id (consumed by the SRE agent connector + RBAC).')
 output logAnalyticsId string = logAnalytics.id
-
-@description('Foundry project endpoint the WebIQ source agent calls (empty when Bing grounding is disabled).')
-output aiProjectEndpoint string = aiProjectEndpoint
-
-@description('Grounding with Bing Search connection id for WEBIQ_BING_CONNECTION_ID (empty when disabled).')
-output bingConnectionId string = bingConnectionResourceId
-
-@description('Grounding with Bing Search account resource id (Microsoft.Bing/accounts) for the out-of-band connection step (empty when disabled).')
-output bingAccountId string = enableBingGrounding ? bingAccount.id : ''
-
-@description('Grounding with Bing Search account endpoint used as the connection target (empty when disabled).')
-output bingAccountEndpoint string = enableBingGrounding ? bingAccount!.properties.endpoint : ''
