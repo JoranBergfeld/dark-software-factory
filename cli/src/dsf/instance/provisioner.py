@@ -493,7 +493,7 @@ class InstanceProvisioner:
                     [
                         "az", "containerapp", "update",
                         "--resource-group", self.spec.resource_group(),
-                        "--name", f"dsf-orchestrator-{self.spec.product}",
+                        "--name", f"{self.spec.name_prefix}-orchestrator",
                         "--image", self.spec.runtime_image,
                     ],
                     check=True,

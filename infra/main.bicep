@@ -429,7 +429,8 @@ resource containerEnv 'Microsoft.App/managedEnvironments@2025-01-01' = {
 }
 
 resource orchestratorApp 'Microsoft.App/containerApps@2025-01-01' = {
-  name: 'dsf-orchestrator-${product}'
+  // Lead with the bounded namePrefix (<=12 chars) so the name stays under Azure's 32-char Container App limit for long product names (raw product overflowed).
+  name: '${namePrefix}-orchestrator'
   location: location
   tags: tags
   dependsOn: [

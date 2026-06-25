@@ -64,7 +64,7 @@ def test_render_env_scopes_product_and_maps_endpoints(tmp_path):
 def test_render_app_config_scopes_product(tmp_path):
     bundle = render_runtime_bundle(_manifest(tmp_path), repo_root=tmp_path)
     app = bundle.app_config_path.read_text(encoding="utf-8")
-    assert "dsf-orchestrator-microbi" in app
+    assert "microbi-orchestrator" in app
     assert "image:" in app
     assert "DSF_PRODUCT" in app
     assert "microbi" in app

@@ -456,7 +456,7 @@ def test_apply_execute_surfaces_failed_operation_reason(tmp_path):
             "statusMessage": {"error": {"code": "QuotaExceeded", "message": quota}},
             "targetResource": {
                 "resourceType": "Microsoft.App/containerApps",
-                "resourceName": "dsf-orchestrator-demo",
+                "resourceName": "dsf-orchestrator",
             },
         }}
     ])
@@ -484,7 +484,7 @@ def test_apply_execute_records_failure_and_stops_without_raising(tmp_path):
         failed_ops = json.dumps([{"properties": {
             "provisioningState": "Failed",
             "targetResource": {"resourceType": "Microsoft.App/containerApps",
-                               "resourceName": "dsf-orchestrator-demo"},
+                               "resourceName": "dsf-orchestrator"},
         }}])
         hit = _az_deploy(cmd, "{}", state="Failed", ops_json=failed_ops)
         if hit is not None:
@@ -543,7 +543,7 @@ def test_apply_execute_emits_error_event_on_failure(tmp_path):
         failed_ops = json.dumps([{"properties": {
             "provisioningState": "Failed",
             "targetResource": {"resourceType": "Microsoft.App/containerApps",
-                               "resourceName": "dsf-orchestrator-demo"},
+                               "resourceName": "dsf-orchestrator"},
         }}])
         hit = _az_deploy(cmd, "{}", state="Failed", ops_json=failed_ops)
         if hit is not None:
@@ -635,12 +635,38 @@ def test_apply_execute_aca_updates_container_app(tmp_path):
     update = next(
         c for c in calls
         if c[:3] == ["az", "containerapp", "update"]
-        and c[c.index("--name") + 1] == "dsf-orchestrator-demo"
+        and c[c.index("--name") + 1] == "dsf-orchestrator"
     )
     assert "--image" in update
     results = {s.name: s.result for s in manifest.plan.steps}
     assert results["deploy_council"] == "deployed"
     assert "deploy_sre_agent" in results
+
+
+def test_apply_execute_aca_update_uses_bounded_name_prefix_for_long_product(tmp_path):
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[:3] == ["gh", "repo", "view"]:
+            return MagicMock(returncode=1, stdout="{}")
+        hit = _az_deploy(cmd, _AZURE_OUTPUTS_JSON)
+        if hit is not None:
+            return hit
+        return MagicMock(returncode=0, stdout="{}")
+
+    spec = InstanceSpec(
+        product="pets-cool-clinic2",
+        owner="acme",
+        name_prefix="petscoolm3ye",
+    )
+    prov = InstanceProvisioner(spec, run=fake_run, repo_root=tmp_path)
+    prov.apply(execute=True)
+
+    update = next(c for c in calls if c[:3] == ["az", "containerapp", "update"])
+    name = update[update.index("--name") + 1]
+    assert name == "petscoolm3ye-orchestrator"
+    assert len(name) <= 32
 
 
 def test_removed_one_shot_squad_steps_are_gone():
@@ -1649,3 +1675,9 @@ def test_main_bicep_bing_connection_id_is_constructed():
         r"\s+bingAccount!\.properties\.endpoint\s+:\s+''",
         bicep,
     )
+
+
+def test_main_bicep_orchestrator_app_uses_bounded_name_prefix():
+    bicep = (_default_repo_root() / "infra" / "main.bicep").read_text()
+    assert re.search(r"name:\s*'\$\{namePrefix\}-orchestrator'", bicep)
+    assert "dsf-orchestrator-${product}" not in bicep

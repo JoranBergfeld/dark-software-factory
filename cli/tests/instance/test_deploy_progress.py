@@ -119,7 +119,7 @@ def test_stream_raises_with_failed_operation_reason():
             "statusMessage": {"error": {"message": quota}},
             "targetResource": {
                 "resourceType": "Microsoft.App/containerApps",
-                "resourceName": "dsf-orchestrator-demo",
+                "resourceName": "dsf-orchestrator",
             },
         }
     }]
@@ -127,7 +127,7 @@ def test_stream_raises_with_failed_operation_reason():
         _poller(_ScriptedAz([ops], ["Failed"]), lambda _l: None).stream("rg-x", "dep-x")
     message = str(excinfo.value)
     assert quota in message
-    assert "dsf-orchestrator-demo" in message
+    assert "dsf-orchestrator" in message
 
 
 def test_stream_surfaces_deployment_level_error_when_no_failed_operation():
@@ -167,14 +167,14 @@ def test_stream_raises_on_canceled_terminal_state():
             "provisioningState": "Canceled",
             "targetResource": {
                 "resourceType": "Microsoft.App/containerApps",
-                "resourceName": "dsf-orchestrator-demo",
+                "resourceName": "dsf-orchestrator",
             },
         }
     }]
     with pytest.raises(DeploymentFailedError) as excinfo:
         _poller(_ScriptedAz([ops], ["Canceled"]), lambda _l: None).stream("rg-x", "dep-x")
     assert "Canceled" in str(excinfo.value)
-    assert "dsf-orchestrator-demo" in str(excinfo.value)
+    assert "dsf-orchestrator" in str(excinfo.value)
 
 
 def test_stream_tolerates_malformed_outputs_json():

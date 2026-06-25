@@ -12,7 +12,7 @@ run. This page covers the deployed runtime and the surfaces you govern it with.
 ## The runtime
 
 `dsf new` deploys the council runtime as an **Azure Container App**
-(`dsf-orchestrator-<product>`) in the product's resource group, authenticating with a
+(`<namePrefix>-orchestrator`) in the product's resource group, authenticating with a
 user-assigned managed identity and reading every endpoint from its environment — App
 Configuration, Cosmos, Key Vault, App Insights (ADR 0004). Secrets never land in the
 descriptor; they stay in Key Vault and are fetched at runtime through the identity. The

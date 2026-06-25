@@ -335,7 +335,7 @@ def test_new_execute_indents_provision_progress(capsys, tmp_path, monkeypatch):
                 on_event("start", 5, 11, step, None)
             if on_progress is not None:
                 on_progress(
-                    "· Microsoft.App/containerApps dsf-orchestrator-demo: ✓ Succeeded (1m04s)"
+                    "· Microsoft.App/containerApps dsf-orchestrator: ✓ Succeeded (1m04s)"
                 )
             if on_event is not None:
                 on_event("done", 5, 11, step, None)
@@ -350,7 +350,7 @@ def test_new_execute_indents_provision_progress(capsys, tmp_path, monkeypatch):
     out = capsys.readouterr().out
     assert rc == 0
     assert (
-        "[dsf]     · Microsoft.App/containerApps dsf-orchestrator-demo: ✓ Succeeded" in out
+        "[dsf]     · Microsoft.App/containerApps dsf-orchestrator: ✓ Succeeded" in out
     )
 
 

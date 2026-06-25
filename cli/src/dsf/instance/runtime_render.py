@@ -115,7 +115,7 @@ def render_runtime_bundle(
     env_path.write_text(_render_env(product, outputs), encoding="utf-8")
     app_config_path.write_text(
         _render_containerapp(
-            app=f"dsf-orchestrator-{product}",
+            app=f"{manifest.spec.name_prefix}-orchestrator",
             container="orchestrator",
             product=product,
             image=manifest.spec.runtime_image,

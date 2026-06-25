@@ -27,7 +27,7 @@ exposure — it is a worker that reaches its sources over their authenticated en
 | Cosmos DB (NoSQL + `EnableNoSQLVectorSearch`) | Unified memory; `dsf` db + TTL `memory` container w/ vector index |
 | Azure AI Foundry (`AIServices`) + chat & embedding deployments | The models the runtime calls; runtime identity gets **Cognitive Services OpenAI User** |
 | User-assigned managed identity | The runtime's identity; holds all data-plane roles below |
-| Container Apps environment + `dsf-orchestrator-<product>` app | The feature-council orchestrator worker (no ingress) |
+| Container Apps environment + `<namePrefix>-orchestrator` app | The feature-council orchestrator worker (no ingress) |
 
 **Runtime identity & roles.** A **user-assigned managed identity** is created and
 attached to the orchestrator Container App; it holds the data-plane roles: Cosmos
@@ -36,8 +36,8 @@ Cognitive Services OpenAI User (to call the Foundry models). (A
 user-assigned — not system-assigned — identity has a stable
 principalId known before the app, avoiding a dependency cycle between the app's env
 and the resources it references; see ADR 0004.) `DefaultAzureCredential` selects it
-via the `AZURE_CLIENT_ID` env the Bicep wires in. The `product` and `runtimeImage`
-params name the app (`dsf-orchestrator-<product>`) and choose its image.
+via the `AZURE_CLIENT_ID` env the Bicep wires in. The `namePrefix` and `runtimeImage`
+params name the app (`<namePrefix>-orchestrator`) and choose its image.
 
 **Azure AI Foundry (created).** The runtime's `build_services()` **requires**
 `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_DEPLOYMENT`, and
@@ -79,7 +79,7 @@ The Azure SRE Agent (Phase 3) is a separate subscription-scoped deployment in
 `cosmosEndpoint`, `appConfigEndpoint`, `keyVaultUri`, `appInsightsConnectionString`,
 `appInsightsId`, `logAnalyticsId` — these feed the runtime config and the SRE agent
 connectors — plus `runtimePrincipalId` (the managed identity), `orchestratorAppName`
-(`dsf-orchestrator-<product>`, used for `az containerapp` image rolls), and the
+(`<namePrefix>-orchestrator`, used for `az containerapp` image rolls), and the
 `openaiEndpoint` / `openaiDeployment` / `openaiEmbeddingDeployment` of the created
 Azure AI Foundry account + deployments (so the rendered `.env.orchestrator` record
 matches the deployed container env).
@@ -142,7 +142,7 @@ service deployment, by design). Tear down: `az group delete -n rg-dsf`.
 
 ## Runtime (Azure Container Apps)
 
-The orchestrator runs as the `dsf-orchestrator-<product>` Container App created by
+The orchestrator runs as the `<namePrefix>-orchestrator` Container App created by
 `main.bicep`, with the user-assigned identity attached. It reads its endpoints from
 the template outputs (wired into the app's env) and gets work by **sweeping the source
 agents on a schedule** (pull-only, ADR 0014) — there is no ingress. The agent images
