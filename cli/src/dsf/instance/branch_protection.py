@@ -24,6 +24,9 @@ from dsf.instance.spec import InstanceSpec
 RULESET_NAME = "dsf-creation"
 _REQUIRED_CHECK_CONTEXT = "ci"
 
+#: Path of the baseline CI workflow seeded into a freshly provisioned repo.
+CI_WORKFLOW_PATH = ".github/workflows/ci.yml"
+
 #: Result string recorded when the repo's plan/visibility doesn't support rulesets
 #: (a private repo on a Free GitHub plan returns HTTP 403). Provisioning continues.
 RULESET_UNSUPPORTED_RESULT = "skipped (rulesets need GitHub Pro or a public repo)"
@@ -79,3 +82,26 @@ def auto_merge_command(spec: InstanceSpec) -> list[str]:
         "gh", "api", "--method", "PATCH", f"repos/{spec.github_repo()}",
         "-F", f"allow_auto_merge={enabled}",
     ]
+
+
+def baseline_ci_workflow() -> str:
+    """Return a baseline GitHub Actions workflow publishing the required ``ci`` check.
+
+    A greenfield product repo has no pipeline, so the ruleset's required ``ci``
+    status check could never be produced and the first PR could never merge. This
+    no-op workflow defines a job named ``ci`` that always succeeds, making the
+    required check satisfiable from the repo's first commit; the Coding Squad
+    later replaces it with the product's real build and test steps.
+    """
+    return (
+        "name: ci\n"
+        "on:\n"
+        "  pull_request:\n"
+        "  push:\n"
+        "    branches: [main]\n"
+        "jobs:\n"
+        "  ci:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    steps:\n"
+        '      - run: echo "baseline ci check - replace with real build and test steps"\n'
+    )

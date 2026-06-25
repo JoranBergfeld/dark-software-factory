@@ -82,6 +82,7 @@ def test_plan_step_order_and_names():
     assert plan.product == "demo"
     assert [s.name for s in plan.steps] == [
         "create_repo",
+        "seed_repo",
         "create_labels",
         "install_app",
         "create_resource_group",
@@ -464,10 +465,10 @@ def test_apply_execute_emits_start_and_done_events_per_step(tmp_path):
     assert ("start", "deploy_sre_agent") in phases
     assert ("done", "deploy_sre_agent") in phases
     assert not any(phase == "error" for phase, *_ in events)
-    # 1-based index, stable total = the 11 non-write_config steps.
+    # 1-based index, stable total = the 12 non-write_config steps.
     starts = [e for e in events if e[0] == "start"]
     assert starts[0][1] == 1
-    assert all(total == 11 for _p, _i, total, _s, _e in starts)
+    assert all(total == 12 for _p, _i, total, _s, _e in starts)
 
 
 def test_apply_execute_emits_error_event_on_failure(tmp_path):
@@ -1149,3 +1150,51 @@ def test_apply_execute_branch_protection_other_403_still_fails(tmp_path, monkeyp
     bp = next(s for s in manifest.plan.steps if s.name == "branch_protection")
     assert bp.result == "failed"
     assert bp.error
+
+
+def test_seed_repo_puts_baseline_ci_workflow_when_absent():
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if "--jq" in cmd and cmd[-1] == ".sha":
+            # The workflow file does not exist yet -> gh api exits non-zero.
+            raise subprocess.CalledProcessError(1, cmd, stderr="Not Found")
+        return _completed(stdout="")
+
+    prov = InstanceProvisioner(
+        InstanceSpec(product="demo", owner="acme", creation_maturity="low"),
+        run=fake_run,
+    )
+    prov._seed_repo()
+
+    puts = [c for c in calls if "--method" in c and "PUT" in c]
+    assert len(puts) == 1
+    put = puts[0]
+    assert put[:5] == [
+        "gh", "api", "--method", "PUT",
+        "/repos/acme/demo/contents/.github/workflows/ci.yml",
+    ]
+    assert "-f" in put and "branch=main" in put
+    content = next(a for a in put if a.startswith("content="))[len("content="):]
+    import base64
+
+    assert base64.b64decode(content).decode("utf-8").startswith("name: ci")
+
+
+def test_seed_repo_is_idempotent_when_workflow_present():
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if "--jq" in cmd and cmd[-1] == ".sha":
+            return _completed(stdout="abc123\n")  # already seeded
+        return _completed(stdout="")
+
+    prov = InstanceProvisioner(
+        InstanceSpec(product="demo", owner="acme", creation_maturity="low"),
+        run=fake_run,
+    )
+    prov._seed_repo()
+
+    assert not [c for c in calls if "--method" in c and "PUT" in c]

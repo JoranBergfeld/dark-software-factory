@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from dsf.instance.branch_protection import (
+    CI_WORKFLOW_PATH,
     RULESET_NAME,
     auto_merge_command,
+    baseline_ci_workflow,
     is_unsupported_ruleset_error,
     ruleset_payload,
 )
@@ -62,3 +64,16 @@ def test_is_unsupported_ruleset_error_ignores_other_failures():
     assert is_unsupported_ruleset_error("HTTP 404: Not Found") is False
     assert is_unsupported_ruleset_error("gh: Bad credentials (HTTP 401)") is False
     assert is_unsupported_ruleset_error("") is False
+
+
+def test_baseline_ci_workflow_defines_a_ci_job():
+    wf = baseline_ci_workflow()
+    # The job id is the status-check context the ruleset requires.
+    assert "\n  ci:\n" in wf
+    assert "runs-on: ubuntu-latest" in wf
+    assert wf.startswith("name: ci\n")
+    assert wf.endswith("\n")
+
+
+def test_ci_workflow_path_is_under_github_workflows():
+    assert CI_WORKFLOW_PATH == ".github/workflows/ci.yml"

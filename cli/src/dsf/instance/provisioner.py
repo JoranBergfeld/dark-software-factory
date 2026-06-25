@@ -7,6 +7,7 @@ mirroring :class:`dsf.github_client.RealGitHubClient`.
 
 from __future__ import annotations
 
+import base64
 import json
 import shutil
 import subprocess
@@ -26,9 +27,11 @@ from dsf.contracts.handoff import (
     INCIDENT_LABEL_DESCRIPTION,
 )
 from dsf.instance.branch_protection import (
+    CI_WORKFLOW_PATH,
     RULESET_NAME,
     RULESET_UNSUPPORTED_RESULT,
     auto_merge_command,
+    baseline_ci_workflow,
     is_unsupported_ruleset_error,
     ruleset_payload,
 )
@@ -222,6 +225,13 @@ class InstanceProvisioner:
                     "gh", "repo", "create", s.github_repo(),
                     f"--{s.visibility}", "--clone",
                 ],
+            ),
+            ProvisionStep(
+                name="seed_repo",
+                description=(
+                    f"Seed {s.github_repo()} with a baseline ci workflow so the "
+                    "required 'ci' check is producible before branch protection"
+                ),
             ),
             ProvisionStep(
                 name="create_labels",
@@ -453,6 +463,12 @@ class InstanceProvisioner:
                     check=True,
                 )
                 step.executed, step.result = True, "deployed"
+        elif step.name == "seed_repo":
+            if not execute:
+                step.result = "seeded (dry-run)"
+            else:
+                self._seed_repo()
+                step.executed, step.result = True, "seeded"
         elif step.name == "branch_protection":
             if not execute:
                 step.result = "ruleset planned (dry-run)"
@@ -570,6 +586,37 @@ class InstanceProvisioner:
             app_id=self._github_app_id,
             installation_id=self._github_installation_id,
             repository_id=repository_id,
+        )
+
+    def _seed_repo(self) -> None:
+        """Seed the repo's first commit with a baseline ``ci`` workflow.
+
+        The branch ruleset requires a green ``ci`` status check, but a greenfield
+        repo has no pipeline to publish it, so the first PR could never merge.
+        Committing the baseline workflow (job ``ci``) as the initial commit - via
+        the operator's ``gh`` auth, before ``branch_protection`` runs - makes the
+        required check producible from the start. Idempotent: skips when the file
+        is already present so a retry doesn't 422 on the missing blob sha.
+        """
+        repo = self.spec.github_repo()
+        try:
+            self._run(
+                ["gh", "api", f"/repos/{repo}/contents/{CI_WORKFLOW_PATH}", "--jq", ".sha"],
+                check=True, capture_output=True, text=True,
+            )
+            return
+        except subprocess.CalledProcessError:
+            pass
+        content = base64.b64encode(baseline_ci_workflow().encode("utf-8")).decode("ascii")
+        self._run(
+            [
+                "gh", "api", "--method", "PUT",
+                f"/repos/{repo}/contents/{CI_WORKFLOW_PATH}",
+                "-f", "message=chore: seed baseline ci workflow",
+                "-f", f"content={content}",
+                "-f", "branch=main",
+            ],
+            check=True,
         )
 
     def _apply_branch_protection(self) -> str | None:
