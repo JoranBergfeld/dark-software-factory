@@ -180,10 +180,15 @@ def _cmd_offboard(args: argparse.Namespace) -> int:
     root = Path(args.config_root) if args.config_root else None
     execute = not args.dry_run
     if execute and not args.yes:
-        confirmation = input(
-            f"[dsf] Offboard '{args.product}'? This deletes Azure resources and local instance "
-            f"artifacts but keeps the GitHub repo. Type '{args.product}' to confirm: "
-        )
+        try:
+            confirmation = input(
+                f"[dsf] Offboard '{args.product}'? This deletes Azure resources and local "
+                f"instance artifacts but keeps the GitHub repo. "
+                f"Type '{args.product}' to confirm: "
+            )
+        except (KeyboardInterrupt, EOFError):
+            print("\n[dsf] offboard aborted.")
+            return 1
         if confirmation.strip() != args.product:
             print("[dsf] offboard aborted (confirmation mismatch)")
             return 1
@@ -232,11 +237,15 @@ def _cmd_delete(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             return 1
-        confirm = input(
-            f"[dsf] DANGER: this will permanently destroy '{args.product}' "
-            f"including the GitHub repo.\n"
-            f"[dsf] Type the product name to confirm: "
-        )
+        try:
+            confirm = input(
+                f"[dsf] DANGER: this will permanently destroy '{args.product}' "
+                f"including the GitHub repo.\n"
+                f"[dsf] Type the product name to confirm: "
+            )
+        except (KeyboardInterrupt, EOFError):
+            print("\n[dsf] deletion cancelled.", file=sys.stderr)
+            return 1
         if confirm.strip() != args.product:
             print("[dsf] deletion cancelled (product name did not match).", file=sys.stderr)
             return 1
