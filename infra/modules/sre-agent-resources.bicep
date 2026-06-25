@@ -44,7 +44,7 @@ param tags object = {}
 // User-assigned managed identity — the agent authenticates to Azure with this.
 // ---------------------------------------------------------------------------
 
-resource agentIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+resource agentIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' = {
   name: '${agentName}-id'
   location: location
   tags: tags

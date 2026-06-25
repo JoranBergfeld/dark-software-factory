@@ -78,7 +78,7 @@ var monitoringContributorRoleId = '749f88d5-cbae-40b8-bcfc-e573ddc772fa'
 // Dedicated resource group for the SRE agent
 // ---------------------------------------------------------------------------
 
-resource agentRg 'Microsoft.Resources/resourceGroups@2024-03-01' = {
+resource agentRg 'Microsoft.Resources/resourceGroups@2024-11-01' = {
   name: agentResourceGroup
   location: sreAgentLocation
   tags: tags

@@ -119,7 +119,7 @@ var aiProjectEndpoint = enableBingGrounding ? 'https://${namePrefix}-aif-${suffi
 // Observability: Log Analytics + Application Insights
 // ---------------------------------------------------------------------------
 
-resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
+resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2025-07-01' = {
   name: '${namePrefix}-log-${suffix}'
   location: location
   tags: tags
@@ -149,7 +149,7 @@ resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
 // App Config endpoints, while those resources' role assignments need this id).
 // ---------------------------------------------------------------------------
 
-resource runtimeIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+resource runtimeIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' = {
   name: '${namePrefix}-runtime-${suffix}'
   location: location
   tags: tags
@@ -159,7 +159,7 @@ resource runtimeIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-
 // Key Vault (RBAC auth, soft-delete) + data-plane role to the runtime identity
 // ---------------------------------------------------------------------------
 
-resource keyVault 'Microsoft.KeyVault/vaults@2024-04-01-preview' = {
+resource keyVault 'Microsoft.KeyVault/vaults@2024-11-01' = {
   name: keyVaultName
   location: location
   tags: tags
@@ -226,7 +226,7 @@ resource keyVaultDeployerAssignment 'Microsoft.Authorization/roleAssignments@202
 // App Configuration + seeded feature flags
 // ---------------------------------------------------------------------------
 
-resource appConfig 'Microsoft.AppConfiguration/configurationStores@2024-05-01' = {
+resource appConfig 'Microsoft.AppConfiguration/configurationStores@2024-06-01' = {
   name: '${namePrefix}-appcs-${suffix}'
   location: location
   tags: tags
@@ -433,7 +433,7 @@ resource foundryAgentsUserAssignment 'Microsoft.Authorization/roleAssignments@20
 // Runtime compute: Azure Container Apps environment + orchestrator app (ADR 0004)
 // ---------------------------------------------------------------------------
 
-resource containerEnv 'Microsoft.App/managedEnvironments@2024-03-01' = {
+resource containerEnv 'Microsoft.App/managedEnvironments@2025-01-01' = {
   name: '${namePrefix}-cae-${suffix}'
   location: location
   tags: tags
@@ -448,7 +448,7 @@ resource containerEnv 'Microsoft.App/managedEnvironments@2024-03-01' = {
   }
 }
 
-resource orchestratorApp 'Microsoft.App/containerApps@2024-03-01' = {
+resource orchestratorApp 'Microsoft.App/containerApps@2025-01-01' = {
   name: 'dsf-orchestrator-${product}'
   location: location
   tags: tags
