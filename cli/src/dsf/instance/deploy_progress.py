@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from collections.abc import Callable
 from typing import Any
 
@@ -38,6 +39,10 @@ _DEFAULT_POLL_INTERVAL = 5.0
 #: ``time.sleep`` (ValueError) when a caller passes ``interval`` directly.
 _MIN_POLL_INTERVAL = 1.0
 
+#: Wall-clock cap on a single ``stream`` run. ``DSF_DEPLOY_TIMEOUT`` (seconds)
+#: overrides it; a value <= 0 disables the bound (wait indefinitely).
+_DEFAULT_TIMEOUT = 600.0
+
 #: ISO-8601 duration as Azure emits for an operation (e.g. ``PT1M4S``).
 _DURATION_RE = re.compile(r"PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)(?:\.\d+)?S)?$")
 
@@ -50,6 +55,15 @@ class DeploymentFailedError(RuntimeError):
     """
 
 
+class DeploymentTimeoutError(RuntimeError):
+    """A deployment stayed non-terminal past the poll timeout.
+
+    ``str()`` names the still-running resource operation(s) so the provisioner's
+    ``_format_step_error`` surfaces which resource wedged (e.g. a Foundry/Bing
+    grounding connection whose secret materialization 500s server-side).
+    """
+
+
 def _resolve_poll_interval() -> float:
     """Poll cadence in seconds: ``DSF_DEPLOY_POLL_INTERVAL`` env > 5s, min 1s."""
     raw = os.environ.get("DSF_DEPLOY_POLL_INTERVAL", "").strip()
@@ -59,6 +73,21 @@ def _resolve_poll_interval() -> float:
         except ValueError:
             pass
     return _DEFAULT_POLL_INTERVAL
+
+
+def _resolve_timeout() -> float:
+    """Deploy timeout in seconds: ``DSF_DEPLOY_TIMEOUT`` env > ``_DEFAULT_TIMEOUT``.
+
+    A value ``<= 0`` is returned as-is and disables the bound in
+    :meth:`DeploymentProgressPoller._timed_out` (wait indefinitely).
+    """
+    raw = os.environ.get("DSF_DEPLOY_TIMEOUT", "").strip()
+    if raw:
+        try:
+            return float(raw)
+        except ValueError:
+            pass
+    return _DEFAULT_TIMEOUT
 
 
 def _format_duration(raw: Any) -> str:
@@ -162,6 +191,8 @@ class DeploymentProgressPoller:
         sleep: Callable[[float], None],
         emit: Callable[[str], None] | None = None,
         interval: float | None = None,
+        timeout: float | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self._run = run
         self._sleep = sleep
@@ -171,26 +202,73 @@ class DeploymentProgressPoller:
             if interval is not None
             else _resolve_poll_interval()
         )
+        self._timeout = _resolve_timeout() if timeout is None else timeout
+        self._monotonic = monotonic
 
     def stream(self, resource_group: str, deployment_name: str) -> dict[str, Any]:
         """Drive the deployment to a terminal state, emitting progress lines.
 
         Returns the deployment's parsed ``properties.outputs`` on success; raises
-        :class:`DeploymentFailedError` otherwise.
+        :class:`DeploymentFailedError` on a non-``Succeeded`` terminal state, or
+        :class:`DeploymentTimeoutError` if it stays non-terminal past the timeout
+        (after best-effort cancelling the deployment).
         """
         seen: dict[str, str] = {}
         ops: list[dict[str, Any]] = []
         state: str | None = None
+        start = self._monotonic() if self._timeout > 0 else 0.0
         while state not in _TERMINAL_STATES:
             if state is not None:
                 self._sleep(self._interval)
             ops = self._list_operations(resource_group, deployment_name)
             self._emit_changes(ops, seen)
             state = self._deployment_state(resource_group, deployment_name)
+            if state not in _TERMINAL_STATES and self._timed_out(start):
+                self._cancel(resource_group, deployment_name)
+                raise DeploymentTimeoutError(
+                    f"deployment {deployment_name} did not reach a terminal state "
+                    f"within {self._timeout:.0f}s; canceled. Still running: "
+                    f"{self._running_summary(ops)}"
+                )
         if state == "Succeeded":
             return self._fetch_outputs(resource_group, deployment_name)
         detail = self._failure_summary(resource_group, deployment_name, ops)
         raise DeploymentFailedError(f"deployment {deployment_name} {state}: {detail}")
+
+    def _timed_out(self, start: float) -> bool:
+        """True once the wall-clock budget is spent. ``timeout <= 0`` never trips."""
+        return self._timeout > 0 and (self._monotonic() - start) >= self._timeout
+
+    def _cancel(self, rg: str, name: str) -> None:
+        """Best-effort ``az deployment group cancel``; never raises.
+
+        Frees the wedged ARM deployment so a re-run starts clean. A failed cancel
+        must not mask the :class:`DeploymentTimeoutError`, so errors are swallowed.
+        """
+        try:
+            self._run(
+                ["az", "deployment", "group", "cancel", "-g", rg, "-n", name],
+                check=False, capture_output=True, text=True,
+            )
+        except Exception:  # noqa: BLE001 - best-effort cancel on the timeout path
+            pass
+
+    def _running_summary(self, ops: list[dict[str, Any]]) -> str:
+        """Label the operations still non-terminal at timeout (``type name``)."""
+        running: list[str] = []
+        for op in ops:
+            props = op.get("properties", {}) if isinstance(op, dict) else {}
+            if props.get("provisioningState") in _TERMINAL_STATES:
+                continue
+            target = props.get("targetResource") or {}
+            key = target.get("id") or target.get("resourceName")
+            if not key:
+                continue  # the deployment's own / untargeted operation
+            label = (
+                f"{target.get('resourceType', '')} {target.get('resourceName', '')}".strip()
+            )
+            running.append(label or str(key))
+        return ", ".join(running) if running else "(no in-flight resource named)"
 
     def _list_operations(self, rg: str, name: str) -> list[dict[str, Any]]:
         proc = self._run(

@@ -9,11 +9,14 @@ import pytest
 
 from dsf.instance.deploy_progress import (
     _DEFAULT_POLL_INTERVAL,
+    _DEFAULT_TIMEOUT,
     DeploymentFailedError,
     DeploymentProgressPoller,
+    DeploymentTimeoutError,
     _format_duration,
     _parse_json,
     _resolve_poll_interval,
+    _resolve_timeout,
     _status_message,
 )
 
@@ -50,10 +53,23 @@ class _ScriptedAz:
         return MagicMock(returncode=0, stdout="")
 
 
-def _poller(run, emit):
-    return DeploymentProgressPoller(
-        run=run, sleep=lambda *_a: None, emit=emit, interval=0
-    )
+def _poller(run, emit, *, timeout=None, monotonic=None):
+    kwargs = {"run": run, "sleep": lambda *_a: None, "emit": emit, "interval": 0}
+    if timeout is not None:
+        kwargs["timeout"] = timeout
+    if monotonic is not None:
+        kwargs["monotonic"] = monotonic
+    return DeploymentProgressPoller(**kwargs)
+
+
+def _stub_clock(*values):
+    """A ``monotonic()`` stub: yields each value once, then repeats the last."""
+    seq = list(values)
+
+    def _now():
+        return seq.pop(0) if len(seq) > 1 else seq[0]
+
+    return _now
 
 
 def test_stream_emits_running_then_succeeded_per_resource():
@@ -201,3 +217,111 @@ def test_resolve_poll_interval_env_override_and_floor(monkeypatch):
     assert _resolve_poll_interval() == 12.0
     monkeypatch.setenv("DSF_DEPLOY_POLL_INTERVAL", "bad")
     assert _resolve_poll_interval() == _DEFAULT_POLL_INTERVAL
+
+
+def test_stream_times_out_cancels_and_names_wedged_resource():
+    conn = {
+        "resourceType": "Microsoft.CognitiveServices/accounts/projects/connections",
+        "resourceName": "aif/proj/bing-conn",
+    }
+    ops = [{"properties": {"provisioningState": "Running", "targetResource": conn}}]
+    calls: list[list[str]] = []
+
+    def run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[:5] == ["az", "deployment", "operation", "group", "list"]:
+            return MagicMock(returncode=0, stdout=json.dumps(ops))
+        if cmd[:4] == ["az", "deployment", "group", "show"]:
+            return MagicMock(returncode=0, stdout="Running")  # never terminal
+        return MagicMock(returncode=0, stdout="")
+
+    with pytest.raises(DeploymentTimeoutError) as excinfo:
+        _poller(
+            run, lambda _l: None, timeout=600,
+            monotonic=_stub_clock(0.0, 50.0, 700.0),
+        ).stream("rg-x", "dep-x")
+    msg = str(excinfo.value)
+    assert "bing-conn" in msg
+    assert "600s" in msg
+    assert ["az", "deployment", "group", "cancel", "-g", "rg-x", "-n", "dep-x"] in calls
+
+
+def test_stream_timeout_tolerates_cancel_failure():
+    ops = [{"properties": {
+        "provisioningState": "Running",
+        "targetResource": {"resourceType": "T", "resourceName": "r"},
+    }}]
+
+    def run(cmd, **kwargs):
+        if cmd[:4] == ["az", "deployment", "group", "cancel"]:
+            raise RuntimeError("cancel boom")
+        if cmd[:5] == ["az", "deployment", "operation", "group", "list"]:
+            return MagicMock(returncode=0, stdout=json.dumps(ops))
+        if cmd[:4] == ["az", "deployment", "group", "show"]:
+            return MagicMock(returncode=0, stdout="Running")
+        return MagicMock(returncode=0, stdout="")
+
+    with pytest.raises(DeploymentTimeoutError):
+        _poller(
+            run, lambda _l: None, timeout=600, monotonic=_stub_clock(0.0, 700.0)
+        ).stream("rg-x", "dep-x")
+
+
+def test_stream_success_before_timeout_does_not_cancel():
+    calls: list[list[str]] = []
+
+    def run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[:5] == ["az", "deployment", "operation", "group", "list"]:
+            return MagicMock(returncode=0, stdout="[]")
+        if cmd[:4] == ["az", "deployment", "group", "show"]:
+            query = cmd[cmd.index("--query") + 1]
+            if query == "properties.provisioningState":
+                return MagicMock(returncode=0, stdout="Succeeded")
+            if query == "properties.outputs":
+                return MagicMock(returncode=0, stdout="{}")
+        return MagicMock(returncode=0, stdout="")
+
+    out = _poller(
+        run, lambda _l: None, timeout=600, monotonic=_stub_clock(0.0, 1.0)
+    ).stream("rg-x", "dep-x")
+    assert out == {}
+    assert not any(c[:4] == ["az", "deployment", "group", "cancel"] for c in calls)
+
+
+def test_stream_timeout_disabled_when_nonpositive():
+    op_run = [{"properties": {
+        "provisioningState": "Running",
+        "targetResource": {"resourceType": "T", "resourceName": "r"},
+    }}]
+    op_done = [{"properties": {
+        "provisioningState": "Succeeded",
+        "targetResource": {"resourceType": "T", "resourceName": "r"},
+    }}]
+    out = _poller(
+        _ScriptedAz([op_run, op_done], ["Running", "Succeeded"]),
+        lambda _l: None, timeout=0, monotonic=_stub_clock(0.0, 9999.0),
+    ).stream("rg-x", "dep-x")
+    assert out == {}
+
+
+def test_stream_timeout_disabled_does_not_read_clock():
+    def monotonic():
+        raise AssertionError("disabled timeout must not read monotonic clock")
+
+    out = _poller(
+        _ScriptedAz([[]], ["Succeeded"]),
+        lambda _l: None, timeout=0, monotonic=monotonic,
+    ).stream("rg-x", "dep-x")
+    assert out == {}
+
+
+def test_resolve_timeout_env_override_and_disable(monkeypatch):
+    monkeypatch.delenv("DSF_DEPLOY_TIMEOUT", raising=False)
+    assert _resolve_timeout() == _DEFAULT_TIMEOUT
+    monkeypatch.setenv("DSF_DEPLOY_TIMEOUT", "120")
+    assert _resolve_timeout() == 120.0
+    monkeypatch.setenv("DSF_DEPLOY_TIMEOUT", "0")
+    assert _resolve_timeout() == 0.0  # disables the bound
+    monkeypatch.setenv("DSF_DEPLOY_TIMEOUT", "garbage")
+    assert _resolve_timeout() == _DEFAULT_TIMEOUT
