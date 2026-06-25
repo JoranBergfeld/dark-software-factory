@@ -59,8 +59,8 @@ class DeploymentTimeoutError(RuntimeError):
     """A deployment stayed non-terminal past the poll timeout.
 
     ``str()`` names the still-running resource operation(s) so the provisioner's
-    ``_format_step_error`` surfaces which resource wedged (e.g. a Foundry/Bing
-    grounding connection whose secret materialization 500s server-side).
+    ``_format_step_error`` surfaces which resource wedged (e.g. a Key Vault or
+    Cognitive Services resource whose secret materialization 500s server-side).
     """
 
 

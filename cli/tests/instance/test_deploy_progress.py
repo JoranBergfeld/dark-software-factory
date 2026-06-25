@@ -221,8 +221,8 @@ def test_resolve_poll_interval_env_override_and_floor(monkeypatch):
 
 def test_stream_times_out_cancels_and_names_wedged_resource():
     conn = {
-        "resourceType": "Microsoft.CognitiveServices/accounts/projects/connections",
-        "resourceName": "aif/proj/bing-conn",
+        "resourceType": "Microsoft.KeyVault/vaults",
+        "resourceName": "petkv-demo",
     }
     ops = [{"properties": {"provisioningState": "Running", "targetResource": conn}}]
     calls: list[list[str]] = []
@@ -241,7 +241,7 @@ def test_stream_times_out_cancels_and_names_wedged_resource():
             monotonic=_stub_clock(0.0, 50.0, 700.0),
         ).stream("rg-x", "dep-x")
     msg = str(excinfo.value)
-    assert "bing-conn" in msg
+    assert "petkv-demo" in msg
     assert "600s" in msg
     assert ["az", "deployment", "group", "cancel", "-g", "rg-x", "-n", "dep-x"] in calls
 
