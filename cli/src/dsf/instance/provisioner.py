@@ -203,6 +203,7 @@ class InstanceProvisioner:
         owner_keyvault_uri: str = "",
         github_app_id: str = "",
         github_installation_id: str = "",
+        admin_principal_id: str = "",
     ) -> None:
         self.spec = spec
         self._run = run or subprocess.run
@@ -212,11 +213,15 @@ class InstanceProvisioner:
         self._github_app_id = github_app_id
         self._github_installation_id = github_installation_id
         self._app_binding: GitHubAppBinding | None = None
+        # Explicit override for the human owner/governance principal object id (for
+        # service-principal / CI runs). When empty, it is resolved lazily at execute
+        # time via `az ad signed-in-user show`. ``None`` means "not yet resolved".
+        self._admin_principal_id_override = admin_principal_id
+        self._admin_principal_id_cache: str | None = None
 
     def plan(self) -> InstancePlan:
         """Return the ordered provisioning plan (pure — no side effects)."""
         s = self.spec
-        bicep = str((self._repo_root or _default_repo_root()) / "infra" / "main.bicep")
         steps = [
             ProvisionStep(
                 name="create_repo",
@@ -261,22 +266,7 @@ class InstanceProvisioner:
                 description=(
                     f"Deploy backing services into {s.resource_group()} from infra/main.bicep"
                 ),
-                command=[
-                    "az", "deployment", "group", "create",
-                    "-g", s.resource_group(),
-                    "-n", s.deployment_name(),
-                    "-f", bicep,
-                    "-p",
-                    f"namePrefix={s.name_prefix}",
-                    f"environmentName={s.environment}",
-                    f"location={s.location}",
-                    f"product={s.product}",
-                    f"runtimeImage={s.runtime_image}",
-                    f"githubAppId={self._github_app_id}",
-                    f"githubInstallationId={self._github_installation_id}",
-                    f"githubRepository={s.github_repo()}",
-                    "--no-wait",
-                ],
+                command=self._provision_azure_command(self._admin_principal_id_override),
             ),
             ProvisionStep(
                 name="seed_appconfig",
@@ -487,7 +477,10 @@ class InstanceProvisioner:
                 step.result = "deployed (dry-run)"
             else:
                 outputs = azure_result.outputs if azure_result else {}
-                self._run(self._sre_deploy_command(outputs), check=True)
+                self._run(
+                    self._sre_deploy_command(outputs, self._resolve_admin_principal_id()),
+                    check=True,
+                )
                 note = self._connect_repo(azure_result)
                 step.executed = True
                 step.result = note or "deployed"
@@ -516,6 +509,9 @@ class InstanceProvisioner:
         elif step.name == "provision_azure":
             # Kick off the deployment asynchronously, then poll its operations so
             # each resource streams to the console; outputs are read post-deploy.
+            # Resolve + thread the human owner principal now (kept out of plan() so
+            # dry-run stays pure); a missing/SP principal cleanly omits adminPrincipalId.
+            step.command = self._provision_azure_command(self._resolve_admin_principal_id())
             self._run(step.command, check=True, capture_output=True, text=True)
             poller = DeploymentProgressPoller(
                 run=self._run, sleep=self._sleep, emit=on_progress
@@ -657,17 +653,76 @@ class InstanceProvisioner:
         self._run(auto_merge_command(self.spec), check=True)
         return None
 
-    def _sre_deploy_command(self, outputs: dict[str, str]) -> list[str]:
-        """`az deployment sub create` for the SRE agent, from provision_azure outputs."""
+    def _resolve_admin_principal_id(self) -> str:
+        """Object id of the human owner/governance principal, or ``""`` if none.
+
+        An explicit override (constructor / ``--admin-principal-id`` / env) always
+        wins. Otherwise the signed-in user's object id is read via
+        ``az ad signed-in-user show`` — which fails for service principals, so CI runs
+        resolve to ``""`` and every human grant cleanly no-ops. The result is cached
+        so the two deployments share one lookup.
+        """
+        if self._admin_principal_id_cache is not None:
+            return self._admin_principal_id_cache
+        oid = (self._admin_principal_id_override or "").strip()
+        if not oid:
+            proc = self._run(
+                ["az", "ad", "signed-in-user", "show", "--query", "id", "-o", "tsv"],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            out = getattr(proc, "stdout", "")
+            if getattr(proc, "returncode", 1) == 0 and isinstance(out, str):
+                oid = out.strip()
+            else:
+                oid = ""
+        self._admin_principal_id_cache = oid
+        return oid
+
+    def _provision_azure_command(self, admin_principal_id: str = "") -> list[str]:
+        """`az deployment group create` for infra/main.bicep.
+
+        ``admin_principal_id`` (when non-empty) is threaded as ``adminPrincipalId`` so the
+        human owner gets the Key Vault Secrets Officer / App Config Data Owner grants the
+        template already wires behind ``if (!empty(adminPrincipalId))``.
+        """
+        s = self.spec
+        bicep = str((self._repo_root or _default_repo_root()) / "infra" / "main.bicep")
+        params = [
+            f"namePrefix={s.name_prefix}",
+            f"environmentName={s.environment}",
+            f"location={s.location}",
+            f"product={s.product}",
+            f"runtimeImage={s.runtime_image}",
+            f"githubAppId={self._github_app_id}",
+            f"githubInstallationId={self._github_installation_id}",
+            f"githubRepository={s.github_repo()}",
+        ]
+        if admin_principal_id:
+            params.append(f"adminPrincipalId={admin_principal_id}")
+        return [
+            "az", "deployment", "group", "create",
+            "-g", s.resource_group(),
+            "-n", s.deployment_name(),
+            "-f", bicep,
+            "-p",
+            *params,
+            "--no-wait",
+        ]
+
+    def _sre_deploy_command(
+        self, outputs: dict[str, str], owner_principal_id: str = ""
+    ) -> list[str]:
+        """`az deployment sub create` for the SRE agent, from provision_azure outputs.
+
+        ``owner_principal_id`` (when non-empty) is threaded as ``ownerPrincipalId`` so the
+        human owner gets Reader on the agent's resource group (portal/CLI "lift the hood").
+        """
         s = self.spec
         bicep = str((self._repo_root or _default_repo_root()) / "infra" / "sre-agent.bicep")
         target_rgs = json.dumps(s.monitored_rgs())
-        return [
-            "az", "deployment", "sub", "create",
-            "-l", s.sre_agent_location,
-            "-n", f"dsf-sre-{s.product}",
-            "-f", bicep,
-            "-p",
+        params = [
             f"product={s.product}",
             f"agentName={s.sre_agent_name()}",
             f"sreAgentLocation={s.sre_agent_location}",
@@ -676,6 +731,16 @@ class InstanceProvisioner:
             f"appInsightsId={outputs.get('appInsightsId', '')}",
             f"logAnalyticsId={outputs.get('logAnalyticsId', '')}",
             "permissionLevel=Reader",
+        ]
+        if owner_principal_id:
+            params.append(f"ownerPrincipalId={owner_principal_id}")
+        return [
+            "az", "deployment", "sub", "create",
+            "-l", s.sre_agent_location,
+            "-n", f"dsf-sre-{s.product}",
+            "-f", bicep,
+            "-p",
+            *params,
             "--query", "properties.outputs", "-o", "json",
         ]
 

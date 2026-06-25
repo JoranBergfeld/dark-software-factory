@@ -488,6 +488,55 @@ def test_new_parser_has_owner_keyvault_uri():
     assert args.owner_keyvault_uri == "https://kv-dsf-app.vault.azure.net/"
 
 
+def test_new_parser_has_admin_principal_id():
+    args = build_parser().parse_args(
+        ["new", "--product", "demo", "--owner", "acme", "--admin-principal-id", "oid-123"]
+    )
+    assert args.admin_principal_id == "oid-123"
+    # Defaults to empty so CI / service-principal runs skip the human grants.
+    default = build_parser().parse_args(["new", "--product", "demo", "--owner", "acme"])
+    assert default.admin_principal_id == ""
+
+
+class _CapturingProvisioner:
+    """Records the kwargs `dsf new` threads into InstanceProvisioner."""
+
+    last_kwargs: dict = {}
+
+    def __init__(self, spec, repo_root=None, **kwargs):
+        type(self).last_kwargs = kwargs
+        self.spec = spec
+
+    def plan(self):
+        return InstancePlan(product=self.spec.product, steps=[])
+
+
+def test_new_threads_admin_principal_id_from_flag(tmp_path, monkeypatch):
+    from dsf.instance import provisioner as prov_mod
+
+    monkeypatch.delenv("DSF_ADMIN_PRINCIPAL_ID", raising=False)
+    monkeypatch.setattr(prov_mod, "InstanceProvisioner", _CapturingProvisioner)
+    rc = main([
+        "new", "--product", "demo", "--owner", "acme", "--name-prefix", "demopfx",
+        "--dry-run", "--config-root", str(tmp_path), "--admin-principal-id", "oid-flag",
+    ])
+    assert rc == 0
+    assert _CapturingProvisioner.last_kwargs["admin_principal_id"] == "oid-flag"
+
+
+def test_new_admin_principal_id_falls_back_to_env(tmp_path, monkeypatch):
+    from dsf.instance import provisioner as prov_mod
+
+    monkeypatch.setenv("DSF_ADMIN_PRINCIPAL_ID", "oid-env")
+    monkeypatch.setattr(prov_mod, "InstanceProvisioner", _CapturingProvisioner)
+    rc = main([
+        "new", "--product", "demo", "--owner", "acme", "--name-prefix", "demopfx",
+        "--dry-run", "--config-root", str(tmp_path),
+    ])
+    assert rc == 0
+    assert _CapturingProvisioner.last_kwargs["admin_principal_id"] == "oid-env"
+
+
 def test_read_owner_app_pointers_reads_id_and_installation(monkeypatch):
     import subprocess
 

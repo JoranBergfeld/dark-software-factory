@@ -123,6 +123,9 @@ def _cmd_new(args: argparse.Namespace) -> int:
         creation_maturity=args.creation_maturity,
     )
     owner_kv = args.owner_keyvault_uri or os.environ.get("DSF_OWNER_KEYVAULT_URI", "")
+    admin_principal_id = args.admin_principal_id or os.environ.get(
+        "DSF_ADMIN_PRINCIPAL_ID", ""
+    )
     app_id, installation_id = "", ""
     if owner_kv and not args.dry_run:
         app_id, installation_id = _read_owner_app_pointers(owner_kv)
@@ -132,6 +135,7 @@ def _cmd_new(args: argparse.Namespace) -> int:
         owner_keyvault_uri=owner_kv,
         github_app_id=app_id,
         github_installation_id=installation_id,
+        admin_principal_id=admin_principal_id,
     )
     execute = not args.dry_run
     if execute:
@@ -339,6 +343,14 @@ def build_parser() -> argparse.ArgumentParser:
         default="",
         help="owner Key Vault holding the DSF App credentials "
         "(default: $DSF_OWNER_KEYVAULT_URI; required to install the App)",
+    )
+    p_new.add_argument(
+        "--admin-principal-id",
+        default="",
+        help="object id of the human owner/governance principal to grant data-plane "
+        "admin (App Config / Key Vault) + Reader on the SRE agent RG "
+        "(default: $DSF_ADMIN_PRINCIPAL_ID, else the signed-in user; leave unset in "
+        "CI / service-principal runs to skip the human grants)",
     )
     p_new.set_defaults(func=_cmd_new)
 
