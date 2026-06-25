@@ -8,6 +8,7 @@ dependencies = [
     "fastapi>=0.110",
     "uvicorn>=0.29",
     "mcp>=1.2",
+    "webiq>=0.1.0",
 ]
 
 [project.scripts]
