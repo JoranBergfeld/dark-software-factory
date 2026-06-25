@@ -415,6 +415,23 @@ resource bingConnection 'Microsoft.CognitiveServices/accounts/projects/connectio
       location: 'global'
     }
   }
+  // Serialize this ApiKey connection LAST. On a brand-new Foundry account the
+  // platform's async workspace/managed-Key-Vault registration (account-rp) lags
+  // ARM's `Succeeded` on the account + project, so the secret write
+  // (credential.vienna -> account-rp -> vault.azure.net token) 500s until it
+  // completes. Gating on the slowest resources (Cosmos ~2.5m, the managed env,
+  // the model deployments + Foundry role grants) buys that settling time without
+  // adding infra. Mirrors the official Foundry baseline ("Single thread ... else
+  // conflict errors"). None of these read bingConnection, so there is no cycle —
+  // the orchestrator app DOES read bingConnection.id and must stay downstream.
+  dependsOn: [
+    cosmos
+    containerEnv
+    chatDeployment
+    embeddingDeployment
+    foundryOpenAIUserAssignment
+    foundryAgentsUserAssignment
+  ]
 }
 
 // The runtime identity needs Cognitive Services User on the account to use the

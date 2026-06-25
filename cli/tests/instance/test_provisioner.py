@@ -1418,3 +1418,31 @@ def test_main_bicep_deployer_grants_guard_against_admin_collision():
             "against the admin==deployer collision (its condition must reference "
             "adminPrincipalId so the redundant grant is skipped)"
         )
+
+
+def test_main_bicep_bing_connection_serialized_after_slow_resources():
+    """Serialize the Grounding-with-Bing connection LAST.
+
+    On a brand-new Foundry account the platform's async managed-Key-Vault
+    registration (account-rp) lags ARM's `Succeeded` on the account+project, so the
+    connection's ApiKey secret write 500s for ~10 min then fails (observed twice in
+    swedencentral). Gating the connection on the slowest resources (Cosmos ~2.5m,
+    the managed env, model deployments) buys that settling time. Mirrors the official
+    Foundry baseline, which creates the Bing connection dead-last.
+    """
+    bicep = (_default_repo_root() / "infra" / "main.bicep").read_text()
+    m = re.search(
+        r"resource\s+bingConnection\s+'[^']*'\s*=\s*(?:if\s*\([^)]*\)\s*)?\{(?P<body>.*?)\n\}",
+        bicep,
+        re.DOTALL,
+    )
+    assert m, "bingConnection resource not found in infra/main.bicep"
+    body = m.group("body")
+    assert "dependsOn:" in body, (
+        "bingConnection must declare a dependsOn that serializes it behind the slow "
+        "resources so account-rp's managed-KV registration settles before the secret write"
+    )
+    # Cosmos is the longest-running resource (~2.5m) — it must gate the connection.
+    assert "cosmos" in body, (
+        "bingConnection.dependsOn must include the Cosmos module (the longest pole)"
+    )
