@@ -218,33 +218,22 @@ class GitHubAppClient:
 
         GitHub answers ref reads with 409 ("Git Repository is empty") until the
         first commit exists, so a freshly provisioned product repo cannot be
-        branched from. Create a minimal initial commit (a single ``.gitkeep``)
-        and point ``base`` at it; the caller then branches off the returned sha.
+        branched from. The git data API (blobs/trees/commits) is likewise
+        unavailable on an empty repo; the Contents API is the one endpoint that
+        can bootstrap it. Create a minimal initial commit (an empty ``.gitkeep``)
+        on ``base`` and return its commit sha for the caller to branch off.
         """
-        tree = await client.post(
-            f"/repos/{repo}/git/trees",
+        seed = await client.put(
+            f"/repos/{repo}/contents/.gitkeep",
             headers=headers,
             json={
-                "tree": [
-                    {"path": ".gitkeep", "mode": "100644", "type": "blob", "content": ""}
-                ]
+                "message": "chore: initialize repository",
+                "content": "",
+                "branch": base,
             },
         )
-        tree.raise_for_status()
-        commit = await client.post(
-            f"/repos/{repo}/git/commits",
-            headers=headers,
-            json={"message": "chore: initialize repository", "tree": tree.json()["sha"]},
-        )
-        commit.raise_for_status()
-        commit_sha = commit.json()["sha"]
-        ref = await client.post(
-            f"/repos/{repo}/git/refs",
-            headers=headers,
-            json={"ref": f"refs/heads/{base}", "sha": commit_sha},
-        )
-        ref.raise_for_status()
-        return commit_sha
+        seed.raise_for_status()
+        return seed.json()["commit"]["sha"]
 
     async def open_file_pr(
         self,
