@@ -47,11 +47,12 @@ Run `uv run dsf new --help` for the full flag list.
     The poll is **bounded** by `DSF_DEPLOY_TIMEOUT` (seconds, default 600 = 10 min; set
     `<= 0` to wait indefinitely). If the deployment is still running at the bound, `dsf new`
     cancels it and fails the step naming the still-running resource(s) — rather than hanging.
-    The Foundry **Grounding with Bing Search** connection is created after ARM by the
-    `connect_bing_grounding` step. It retries transient `account-rp` 500s until the new
-    Foundry account's managed Key Vault registration settles, avoiding the old inline
-    deployment wedge. `dsf new --no-enable-bing-grounding` skips it entirely (the WebIQ agent
-    then runs without web research).
+    The WebIQ source agent uses the Microsoft **WebIQ SDK** (API-key auth). After the
+    Azure deployment, the `seed_webiq_key` step copies the `webiq-api-key` secret from the
+    owner Key Vault into the product Key Vault (mirroring the GitHub App key seed); the agent
+    reads it at runtime via the Container App managed identity. Pre-seed `webiq-api-key` in
+    the owner vault before `dsf new` (see Prerequisites). The seed carries a 30-day expiry
+    (a Key Vault policy requirement), so it is re-seeded on every `dsf new`.
 
 ## Prerequisites
 
@@ -63,12 +64,17 @@ running `dsf new` needs:
 - **Azure subscription RBAC:** **Owner**, or **Contributor + User Access Administrator**, on
   the subscription — the cross-resource-group role assignments (runtime identity, SRE Agent)
   require it.
-- **Key Vault reachability for the one-time token seed:** the squad's GitHub token is written
-  to the product Key Vault via `az keyvault secret set` as the operator, so the principal is
-  granted **Key Vault Secrets Officer** on the vault. Because the vault defaults to
-  network-`Deny` (`allowPublicNetworkAccess=false`), run provisioning from a host that can
-  reach the vault data plane — deploy with `allowPublicNetworkAccess=true` for a dev instance,
-  or provision from inside the vault's network.
+- **Key Vault reachability for the one-time secret seed:** the squad's GitHub token and the
+  WebIQ API key are written to the product Key Vault via `az keyvault secret set` as the
+  operator, so the principal is granted **Key Vault Secrets Officer** on the vault. Because
+  the vault defaults to network-`Deny` (`allowPublicNetworkAccess=false`), run provisioning
+  from a host that can reach the vault data plane — deploy with
+  `allowPublicNetworkAccess=true` for a dev instance, or provision from inside the vault's
+  network.
+- **Owner vault secrets:** the owner Key Vault must contain `github-app-private-key` (the
+  GitHub App's private key) and `webiq-api-key` (the WebIQ SDK API key) before `dsf new`.
+  Both must be set with `--content-type text/plain` and a `--expires` date ≤30 days out to
+  satisfy the tenant's Key Vault secret policy (re-seed on rotation/expiry).
 
 ## What gets provisioned
 
