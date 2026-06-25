@@ -217,6 +217,7 @@ def _cmd_new(args: argparse.Namespace) -> int:
         environment=args.environment,
         location=args.location,
         creation_maturity=args.creation_maturity,
+        enable_bing_grounding=args.enable_bing_grounding,
     )
     owner_kv = args.owner_keyvault_uri or os.environ.get("DSF_OWNER_KEYVAULT_URI", "")
     admin_principal_id = args.admin_principal_id or os.environ.get(
@@ -426,6 +427,15 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["low", "high"],
         help="creation-phase autonomy: 'low' routes every PR to a human, "
         "'high' auto-merges on green CI",
+    )
+    p_new.add_argument(
+        "--enable-bing-grounding",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="provision Grounding with Bing Search (a Foundry project + connection) for "
+        "the WebIQ source agent; pass --no-enable-bing-grounding to skip it (e.g. the "
+        "tenant blocks the Microsoft.Bing provider, or the Foundry connection deploy is "
+        "flaky)",
     )
     p_new.add_argument(
         "--dry-run",
