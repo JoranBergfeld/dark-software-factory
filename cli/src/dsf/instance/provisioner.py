@@ -9,12 +9,12 @@ from __future__ import annotations
 
 import base64
 import json
-import re
 import shutil
 import subprocess
 import tempfile
 import time
 from collections.abc import Callable, Iterator
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -79,23 +79,20 @@ _MAX_ERROR_DETAIL = 2000
 #: lands, then the whole batch succeeds. Bound: ~2 min of propagation tolerance.
 _SEED_MAX_ATTEMPTS = 8
 _SEED_RETRY_DELAY = 15.0
-_BING_CONNECT_MAX_ATTEMPTS = 20
-_BING_CONNECT_RETRY_DELAY = 30.0
-_TRANSIENT_BING_STATUS = re.compile(r"\b(429|500|502|503|504)\b")
-_TRANSIENT_BING_TOKENS = (
-    "serviceerror",
-    "internalservererror",
-    "internal server error",
-    "serviceunavailable",
-    "service unavailable",
-    "toomanyrequests",
-    "too many requests",
-    "bad gateway",
-    "gateway timeout",
-    "temporarily unavailable",
-    "connection reset",
-    "timed out",
-)
+#: Key Vault secret holding the WebIQ API key (owner + product vaults share the
+#: name; the bicep container env points the agent at it via WEBIQ_API_KEY_SECRET).
+_WEBIQ_KEY_SECRET = "webiq-api-key"
+#: The product Key Vaults inherit the same MG-scoped Azure Policy as the owner
+#: vault: secret writes must set a content type and an expiry. 30 days is the
+#: verified-acceptable window; the secret is re-seeded on every `dsf new`.
+_KV_SECRET_CONTENT_TYPE = "text/plain"
+_KV_SECRET_EXPIRY_DAYS = 30
+
+
+def _kv_secret_expiry_utc() -> str:
+    """ISO-8601 UTC expiry stamp satisfying the Key Vault secret-expiry policy."""
+    expiry = datetime.now(UTC) + timedelta(days=_KV_SECRET_EXPIRY_DAYS)
+    return expiry.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _flatten_config(node: Any, prefix: str = "") -> Iterator[tuple[str, Any]]:
@@ -159,18 +156,6 @@ def _format_step_error(exc: BaseException) -> str:
     return "\n".join(parts)
 
 
-def _is_transient_bing_error(exc: subprocess.CalledProcessError) -> bool:
-    details: list[str] = [str(exc)]
-    for attr in ("stderr", "stdout"):
-        detail = getattr(exc, attr, None)
-        if isinstance(detail, bytes):
-            detail = detail.decode(errors="replace")
-        if isinstance(detail, str):
-            details.append(detail)
-    text = "\n".join(details).lower()
-    if _TRANSIENT_BING_STATUS.search(text):
-        return True
-    return any(token in text for token in _TRANSIENT_BING_TOKENS)
 
 
 def _label_commands(spec: InstanceSpec) -> list[list[str]]:
@@ -300,13 +285,6 @@ class InstanceProvisioner:
                 command=self._provision_azure_command(self._admin_principal_id_override),
             ),
             ProvisionStep(
-                name="connect_bing_grounding",
-                description=(
-                    "Create the Grounding-with-Bing connection on the Foundry project for "
-                    f"{s.product} out-of-band, with retry (skipped with --no-enable-bing-grounding)"
-                ),
-            ),
-            ProvisionStep(
                 name="seed_appconfig",
                 description=(
                     "Seed the canonical config/defaults.json into App Configuration "
@@ -317,6 +295,13 @@ class InstanceProvisioner:
                 name="seed_app_key",
                 description=(
                     "Seed the DSF App private key from the owner Key Vault into the "
+                    f"product Key Vault for {s.product}"
+                ),
+            ),
+            ProvisionStep(
+                name="seed_webiq_key",
+                description=(
+                    "Seed the WebIQ API key from the owner Key Vault into the "
                     f"product Key Vault for {s.product}"
                 ),
             ),
@@ -455,14 +440,6 @@ class InstanceProvisioner:
             else:
                 self._seed_appconfig(azure_result)
                 step.executed, step.result = True, "seeded"
-        elif step.name == "connect_bing_grounding":
-            if not self.spec.enable_bing_grounding:
-                step.result = "skipped (bing grounding disabled)"
-            elif not execute:
-                step.result = "connected (dry-run)"
-            else:
-                self._connect_bing_grounding(azure_result)
-                step.executed, step.result = True, "connected"
         elif step.name == "seed_app_key":
             if not self._owner_keyvault_uri:
                 step.result = "skipped (no owner App configured)"
@@ -470,6 +447,14 @@ class InstanceProvisioner:
                 step.result = "seeded (dry-run)"
             else:
                 self._seed_app_key(azure_result)
+                step.executed, step.result = True, "seeded"
+        elif step.name == "seed_webiq_key":
+            if not self._owner_keyvault_uri:
+                step.result = "skipped (no owner App configured)"
+            elif not execute:
+                step.result = "seeded (dry-run)"
+            else:
+                self._seed_webiq_key(azure_result)
                 step.executed, step.result = True, "seeded"
         elif step.name == "install_app":
             if not self._owner_keyvault_uri:
@@ -744,7 +729,6 @@ class InstanceProvisioner:
             f"githubAppId={self._github_app_id}",
             f"githubInstallationId={self._github_installation_id}",
             f"githubRepository={s.github_repo()}",
-            f"enableBingGrounding={'true' if s.enable_bing_grounding else 'false'}",
         ]
         if admin_principal_id:
             params.append(f"adminPrincipalId={admin_principal_id}")
@@ -848,86 +832,6 @@ class InstanceProvisioner:
         assert last_error is not None  # loop ran at least once
         raise last_error
 
-    def _connect_bing_grounding(self, azure_result: AzureProvisionResult | None) -> None:
-        """Create the Foundry Grounding-with-Bing connection out-of-band with retry."""
-        outputs = azure_result.outputs if azure_result else {}
-        connection_id = outputs.get("bingConnectionId", "")
-        account_id = outputs.get("bingAccountId", "")
-        endpoint = outputs.get("bingAccountEndpoint", "")
-        missing = [
-            name
-            for name, value in (
-                ("bingConnectionId", connection_id),
-                ("bingAccountId", account_id),
-                ("bingAccountEndpoint", endpoint),
-            )
-            if not value
-        ]
-        if missing:
-            raise RuntimeError(
-                "provision_azure returned no "
-                + ", ".join(missing)
-                + "; cannot create Bing grounding connection"
-            )
-
-        key_result = self._run(
-            [
-                "az", "rest",
-                "--method", "post",
-                "--url",
-                f"https://management.azure.com{account_id}/listKeys?api-version=2025-05-01-preview",
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        key = str(json.loads(getattr(key_result, "stdout", "") or "{}").get("key1") or "")
-        if not key:
-            raise RuntimeError("Bing account listKeys returned no key1")
-
-        body = {
-            "properties": {
-                "category": "GroundingWithBingSearch",
-                "authType": "ApiKey",
-                "target": endpoint,
-                "isSharedToAll": False,
-                "credentials": {"key": key},
-                "metadata": {
-                    "type": "bing_grounding",
-                    "ApiType": "Azure",
-                    "ResourceId": account_id,
-                    "location": "global",
-                },
-            }
-        }
-        fd, body_path = tempfile.mkstemp(prefix="dsf-bing-conn-", suffix=".json")
-        try:
-            with open(fd, "w", encoding="utf-8") as fh:
-                json.dump(body, fh)
-            Path(body_path).chmod(0o600)
-            url = f"https://management.azure.com{connection_id}?api-version=2025-06-01"
-            cmd = [
-                "az", "rest",
-                "--method", "put",
-                "--url", url,
-                "--headers", "Content-Type=application/json",
-                "--body", f"@{body_path}",
-            ]
-            last_error: subprocess.CalledProcessError | None = None
-            for attempt in range(1, _BING_CONNECT_MAX_ATTEMPTS + 1):
-                try:
-                    self._run(cmd, check=True, capture_output=True, text=True)
-                    return
-                except subprocess.CalledProcessError as exc:
-                    last_error = exc
-                    if not _is_transient_bing_error(exc):
-                        raise
-                    if attempt < _BING_CONNECT_MAX_ATTEMPTS:
-                        self._sleep(_BING_CONNECT_RETRY_DELAY)
-            assert last_error is not None
-            raise last_error
-        finally:
-            Path(body_path).unlink(missing_ok=True)
 
     def _seed_app_key(self, azure_result: AzureProvisionResult | None) -> None:
         """Copy the App private key from the owner KV into the product KV (with retry).
@@ -965,6 +869,8 @@ class InstanceProvisioner:
             cmd = [
                 "az", "keyvault", "secret", "set", "--vault-name", product_kv,
                 "--name", "github-app-private-key", "--file", pem_path,
+                "--content-type", _KV_SECRET_CONTENT_TYPE,
+                "--expires", _kv_secret_expiry_utc(),
             ]
             last_error: subprocess.CalledProcessError | None = None
             for attempt in range(1, _SEED_MAX_ATTEMPTS + 1):
@@ -979,6 +885,61 @@ class InstanceProvisioner:
             raise last_error
         finally:
             Path(pem_path).unlink(missing_ok=True)
+
+    def _seed_webiq_key(self, azure_result: AzureProvisionResult | None) -> None:
+        """Copy the WebIQ API key from the owner KV into the product KV (with retry).
+
+        Mirrors :meth:`_seed_app_key`: the product Key Vault's role grant and this
+        data-plane write race, so the (idempotent) set is retried until the grant
+        propagates. The key is materialized to a 0600 temp file (stripped of any
+        trailing newline so the API key is exact) only long enough to push it in,
+        then unlinked; both the owner read and product write capture output so the
+        key is never echoed. The write sets a content type + expiry to satisfy the
+        Key Vault secret policy.
+        """
+        if not self._owner_keyvault_uri:
+            raise RuntimeError(
+                "no owner Key Vault configured; set DSF_OWNER_KEYVAULT_URI or "
+                "--owner-keyvault-uri (run `dsf bootstrap` first)"
+            )
+        product_kv = azure_result.outputs.get("keyVaultName", "") if azure_result else ""
+        if not product_kv:
+            raise RuntimeError("provision_azure returned no keyVaultName; cannot seed WebIQ key")
+        owner_kv = self._owner_keyvault_uri.split("//", 1)[-1].split(".", 1)[0]
+
+        secret = self._run(
+            [
+                "az", "keyvault", "secret", "show", "--vault-name", owner_kv,
+                "--name", _WEBIQ_KEY_SECRET, "--query", "value", "-o", "tsv",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        fd, key_path = tempfile.mkstemp(prefix="dsf-webiq-", suffix=".txt")
+        try:
+            with open(fd, "w", encoding="utf-8") as fh:
+                fh.write(getattr(secret, "stdout", "").strip())
+            Path(key_path).chmod(0o600)
+            cmd = [
+                "az", "keyvault", "secret", "set", "--vault-name", product_kv,
+                "--name", _WEBIQ_KEY_SECRET, "--file", key_path,
+                "--content-type", _KV_SECRET_CONTENT_TYPE,
+                "--expires", _kv_secret_expiry_utc(),
+            ]
+            last_error: subprocess.CalledProcessError | None = None
+            for attempt in range(1, _SEED_MAX_ATTEMPTS + 1):
+                try:
+                    self._run(cmd, check=True, capture_output=True, text=True)
+                    return
+                except subprocess.CalledProcessError as exc:
+                    last_error = exc
+                    if attempt < _SEED_MAX_ATTEMPTS:
+                        self._sleep(_SEED_RETRY_DELAY)
+            assert last_error is not None
+            raise last_error
+        finally:
+            Path(key_path).unlink(missing_ok=True)
 
 
 class InstanceOffboarder:
