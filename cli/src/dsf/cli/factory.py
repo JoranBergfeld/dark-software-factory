@@ -220,6 +220,9 @@ def _cmd_new(args: argparse.Namespace) -> int:
         creation_maturity=args.creation_maturity,
     )
     owner_kv = args.owner_keyvault_uri or os.environ.get("DSF_OWNER_KEYVAULT_URI", "")
+    owner_appconfig = args.owner_appconfig_endpoint or os.environ.get(
+        "DSF_OWNER_APPCONFIG_ENDPOINT", ""
+    )
     admin_principal_id = args.admin_principal_id or os.environ.get(
         "DSF_ADMIN_PRINCIPAL_ID", ""
     )
@@ -230,6 +233,7 @@ def _cmd_new(args: argparse.Namespace) -> int:
         spec,
         repo_root=root,
         owner_keyvault_uri=owner_kv,
+        owner_appconfig_endpoint=owner_appconfig,
         github_app_id=app_id,
         github_installation_id=installation_id,
         admin_principal_id=admin_principal_id,
@@ -505,6 +509,12 @@ def build_parser() -> argparse.ArgumentParser:
         default="",
         help="owner Key Vault holding the DSF App credentials "
         "(default: $DSF_OWNER_KEYVAULT_URI; required to install the App)",
+    )
+    p_new.add_argument(
+        "--owner-appconfig-endpoint",
+        default=None,
+        help="owner App Configuration endpoint to publish this product's runtime env "
+        "into (default: DSF_OWNER_APPCONFIG_ENDPOINT)",
     )
     p_new.add_argument(
         "--admin-principal-id",

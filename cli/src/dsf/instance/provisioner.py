@@ -215,6 +215,8 @@ class InstanceProvisioner:
         repo_root: Path | None = None,
         sleep: Callable[[float], None] | None = None,
         owner_keyvault_uri: str = "",
+        owner_appconfig_endpoint: str = "",
+        appconfig_gateway: object | None = None,
         github_app_id: str = "",
         github_installation_id: str = "",
         admin_principal_id: str = "",
@@ -224,6 +226,8 @@ class InstanceProvisioner:
         self._repo_root = repo_root
         self._sleep = sleep or time.sleep
         self._owner_keyvault_uri = owner_keyvault_uri
+        self._owner_appconfig_endpoint = owner_appconfig_endpoint
+        self._appconfig_gateway = appconfig_gateway
         self._github_app_id = github_app_id
         self._github_installation_id = github_installation_id
         self._app_binding: GitHubAppBinding | None = None
@@ -310,6 +314,13 @@ class InstanceProvisioner:
                 description=(
                     f"Register {s.product} -> {s.github_repo()} in the routing "
                     "registry (config/products.json)"
+                ),
+            ),
+            ProvisionStep(
+                name="publish_runtime_index",
+                description=(
+                    f"Publish {s.product} runtime env (endpoints + pointers) to the "
+                    "owner App Configuration index"
                 ),
             ),
             ProvisionStep(
@@ -466,6 +477,21 @@ class InstanceProvisioner:
             else:
                 self._app_binding = self._install_app()
                 step.executed, step.result = True, "installed"
+        elif step.name == "publish_runtime_index":
+            if not self._owner_appconfig_endpoint:
+                step.result = "skipped (no owner App Config configured)"
+            elif not execute:
+                step.result = "published (dry-run)"
+            else:
+                provisional = InstanceManifest(
+                    spec=self.spec,
+                    plan=plan,
+                    executed=executed,
+                    azure=azure_result,
+                    github_app=self._app_binding,
+                )
+                self._publish_runtime_index(provisional)
+                step.executed, step.result = True, "published"
         elif step.name == "deploy_council":
             provisional = InstanceManifest(
                 spec=self.spec, plan=plan, executed=executed, azure=azure_result
@@ -833,6 +859,17 @@ class InstanceProvisioner:
         assert last_error is not None  # loop ran at least once
         raise last_error
 
+    def _publish_runtime_index(self, manifest: InstanceManifest) -> None:
+        """Publish this product's runtime env into the owner App Config index."""
+        from dsf.config.owner_index import publish_runtime_config
+        from dsf.instance.runtime_index import runtime_index_values
+
+        publish_runtime_config(
+            self._owner_appconfig_endpoint,
+            self.spec.product,
+            runtime_index_values(manifest),
+            gateway=self._appconfig_gateway,
+        )
 
     def _seed_app_key(self, azure_result: AzureProvisionResult | None) -> None:
         """Copy the App private key from the owner KV into the product KV (with retry).

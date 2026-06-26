@@ -102,6 +102,7 @@ def test_plan_step_order_and_names():
         "seed_app_key",
         "seed_webiq_key",
         "register_product",
+        "publish_runtime_index",
         "deploy_council",
         "branch_protection",
         "deploy_sre_agent",
@@ -113,6 +114,63 @@ def test_plan_deferred_flags():
     plan = InstanceProvisioner(_spec()).plan()
     deferred = {s.name for s in plan.steps if s.deferred}
     assert deferred == set()
+
+
+def test_plan_includes_publish_runtime_index_step():
+    from dsf.instance.provisioner import InstanceProvisioner
+    from dsf.instance.spec import InstanceSpec
+
+    spec = InstanceSpec(product="pets", owner="acme", repo="pets")
+    prov = InstanceProvisioner(
+        spec, owner_appconfig_endpoint="https://owner-index.azconfig.io"
+    )
+    names = [s.name for s in prov.plan().steps]
+    assert "publish_runtime_index" in names
+    # must run after the App is installed and before the council is deployed
+    assert names.index("publish_runtime_index") < names.index("deploy_council")
+
+
+def test_publish_runtime_index_writes_payload_under_product_label(tmp_path):
+    from dsf.instance.provisioner import InstanceProvisioner
+    from dsf.instance.spec import (
+        AzureProvisionResult,
+        GitHubAppBinding,
+        InstanceManifest,
+        InstancePlan,
+        InstanceSpec,
+    )
+    from dsf_testing.azure_doubles import InMemoryConfigGateway
+
+    gateway = InMemoryConfigGateway()
+    spec = InstanceSpec(product="pets", owner="acme", repo="pets")
+    prov = InstanceProvisioner(
+        spec,
+        owner_appconfig_endpoint="https://owner-index.azconfig.io",
+        appconfig_gateway=gateway,
+    )
+    manifest = InstanceManifest(
+        spec=spec,
+        plan=InstancePlan(product="pets", steps=[]),
+        azure=AzureProvisionResult(
+            resource_group="rg-dsf-pets",
+            deployment_name="dsf-pets",
+            location="swedencentral",
+            outputs={"appConfigEndpoint": "https://pets.azconfig.io"},
+        ),
+        github_app=GitHubAppBinding(
+            app_id="1",
+            installation_id="2",
+            repository_id=789,
+            private_key_secret="dsf-app-private-key",
+        ),
+    )
+
+    prov._publish_runtime_index(manifest)
+
+    stored = {k: v for k, v, label in gateway.list() if label == "pets"}
+    assert stored["AZURE_APPCONFIG_ENDPOINT"] == "https://pets.azconfig.io"
+    assert stored["DSF_PRODUCT"] == "pets"
+    assert stored["GITHUB_APP_ID"] == "1"
 
 
 def test_plan_create_resource_group_command():
@@ -497,10 +555,10 @@ def test_apply_execute_emits_start_and_done_events_per_step(tmp_path):
     assert ("start", "deploy_sre_agent") in phases
     assert ("done", "deploy_sre_agent") in phases
     assert not any(phase == "error" for phase, *_ in events)
-    # 1-based index, stable total = the 13 non-write_config steps.
+    # 1-based index, stable total = the 14 non-write_config steps.
     starts = [e for e in events if e[0] == "start"]
     assert starts[0][1] == 1
-    assert all(total == 13 for _p, _i, total, _s, _e in starts)
+    assert all(total == 14 for _p, _i, total, _s, _e in starts)
 
 
 def test_apply_execute_emits_error_event_on_failure(tmp_path):
