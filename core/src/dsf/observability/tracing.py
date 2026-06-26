@@ -1,10 +1,12 @@
 """Tracing wiring — the real OpenTelemetry Tracer behind the :class:`dsf.ports.Tracer` port.
 
-This module must import cleanly *without* the ``opentelemetry`` packages
-installed (they are not declared dependencies). Every OpenTelemetry import is
-therefore guarded inside the function/class that needs it. :func:`build_tracer`
-constructs the real :class:`OtelTracer`, which raises ``RuntimeError`` when
-OpenTelemetry is not installed — there is no no-op fallback in ``src``.
+The ``opentelemetry`` packages and the Azure Monitor exporter ship in the core
+``azure`` extra, but every import is still guarded inside the function/class that
+needs it, so importing this module never requires them. :func:`build_tracer`
+constructs the real :class:`OtelTracer` and, given an Application Insights
+connection string, configures Azure Monitor export first. It raises
+``RuntimeError`` when the required packages are absent — there is no no-op
+fallback in ``src``.
 """
 
 from __future__ import annotations
@@ -13,7 +15,7 @@ from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Callable, Iterator
 
     from dsf.contracts.models import Run
     from dsf.ports import Tracer
@@ -22,13 +24,48 @@ if TYPE_CHECKING:
 _GENAI_NS = "gen_ai"
 
 
-def build_tracer() -> Tracer:
-    """Build the real :class:`~dsf.ports.Tracer`.
+#: Module-level guard so Azure Monitor is configured at most once per process.
+_azure_monitor_configured = False
 
-    Returns an :class:`OtelTracer`, whose constructor raises ``RuntimeError``
-    when the ``opentelemetry`` packages are not installed (fail loud — there is
-    no no-op fallback).
+
+def _configure_azure_monitor(connection_string: str) -> None:
+    """Configure the global OTel provider to export to Azure Monitor (App Insights).
+
+    Real-only: lazily imports ``azure-monitor-opentelemetry`` (shipped in the
+    core ``azure`` extra) and raises ``RuntimeError`` if it is absent. Idempotent
+    per process — repeated calls after the first are no-ops.
     """
+    global _azure_monitor_configured
+    if _azure_monitor_configured:
+        return
+    try:
+        from azure.monitor.opentelemetry import configure_azure_monitor
+    except ImportError as exc:  # pragma: no cover - exercised only sans azure extra
+        raise RuntimeError(
+            "Azure Monitor trace export requires azure-monitor-opentelemetry "
+            "(install the core 'azure' extra)"
+        ) from exc
+    configure_azure_monitor(connection_string=connection_string)
+    _azure_monitor_configured = True
+
+
+def build_tracer(
+    connection_string: str = "",
+    *,
+    configure: Callable[[str], None] | None = None,
+) -> Tracer:
+    """Build the real :class:`~dsf.ports.Tracer`, optionally exporting to Azure Monitor.
+
+    When ``connection_string`` is non-empty, configure the global OpenTelemetry
+    provider to export spans to that Application Insights resource before
+    constructing the tracer (``configure`` is injectable for tests; it defaults
+    to the real :func:`_configure_azure_monitor`). Without a connection string the
+    tracer is still real but no exporter is wired. Constructing the tracer raises
+    ``RuntimeError`` when the ``opentelemetry`` packages are not installed (fail
+    loud — there is no no-op fallback).
+    """
+    if connection_string:
+        (configure or _configure_azure_monitor)(connection_string)
     return OtelTracer()
 
 
@@ -36,9 +73,9 @@ class OtelTracer:
     """Tracer that emits OpenTelemetry GenAI-convention spans.
 
     The OpenTelemetry imports are deferred to construction / span open so that
-    importing this module never requires the optional packages. If OTel becomes
-    unavailable at construction, this raises ``RuntimeError`` — callers should
-    use :func:`build_tracer`, which guards against that and falls back.
+    importing this module never requires the optional packages. If OTel is
+    unavailable at construction, this raises ``RuntimeError`` (fail loud — there
+    is no no-op fallback); callers build it via :func:`build_tracer`.
     """
 
     def __init__(self, tracer_name: str = "dsf") -> None:
