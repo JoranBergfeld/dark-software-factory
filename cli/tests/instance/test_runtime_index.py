@@ -56,12 +56,32 @@ def test_payload_carries_endpoints_pointers_and_product():
     assert values["WEBIQ_API_KEY_SECRET"] == "webiq-api-key"
 
 
-def test_payload_never_contains_secret_values():
+def test_payload_is_exactly_the_nonsecret_allow_list():
     values = runtime_index_values(_manifest())
+    assert set(values) == {
+        # endpoints (from runtime_endpoint_env / _ENDPOINT_MAP)
+        "AZURE_APPCONFIG_ENDPOINT",
+        "AZURE_KEYVAULT_URI",
+        "APPLICATIONINSIGHTS_CONNECTION_STRING",
+        "AZURE_COSMOS_ENDPOINT",
+        "AZURE_OPENAI_ENDPOINT",
+        "AZURE_OPENAI_DEPLOYMENT",
+        "AZURE_OPENAI_EMBEDDING_DEPLOYMENT",
+        # static WebIQ pointers
+        "WEBIQ_PROVIDER",
+        "WEBIQ_API_KEY_SECRET",
+        # product + repo
+        "DSF_PRODUCT",
+        "GITHUB_REPOSITORY",
+        # GitHub App binding POINTERS (no secret material)
+        "GITHUB_APP_ID",
+        "GITHUB_INSTALLATION_ID",
+        "GITHUB_APP_PRIVATE_KEY_SECRET",
+    }
+    # The only secret-related keys are NAMES/pointers, never secret VALUES:
+    # no PEM bytes, no repository_id, no client secret leaked into the payload.
     joined = "\n".join(f"{k}={v}" for k, v in values.items())
-    # The private-key *secret name* is allowed; PEM material is not.
-    assert "BEGIN" not in joined
-    assert "PRIVATE KEY-----" not in joined
+    assert "BEGIN" not in joined and "PRIVATE KEY" not in joined
 
 
 def test_payload_omits_app_keys_when_no_binding():
