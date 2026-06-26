@@ -57,3 +57,55 @@ def test_forward_passes_through_nonzero_exit_code(monkeypatch):
         factory.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=3)
     )
     assert factory.main(["sweep"]) == 3
+
+
+def test_serve_agent_forwards_kind_host_port(monkeypatch):
+    calls = _capture_forward(monkeypatch)
+    rc = factory.main(
+        ["serve-agent", "--kind", "grafana", "--host", "127.0.0.1", "--port", "9000"]
+    )
+    assert rc == 0
+    assert calls[0] == [
+        sys.executable,
+        "-m",
+        "dsf.runtime.control",
+        "serve-agent",
+        "--kind",
+        "grafana",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "9000",
+    ]
+
+    rc = factory.main(["serve-agent"])
+    assert rc == 0
+    assert calls[1] == [
+        sys.executable,
+        "-m",
+        "dsf.runtime.control",
+        "serve-agent",
+        "--kind",
+        "sentry",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8080",
+    ]
+
+
+def test_omits_optional_flags_when_absent(monkeypatch):
+    calls = _capture_forward(monkeypatch)
+
+    assert factory.main(["sweep"]) == 0
+    assert factory.main(["run"]) == 0
+    assert factory.main(["serve-orchestrator"]) == 0
+
+    assert calls[0] == [sys.executable, "-m", "dsf.runtime.control", "sweep"]
+    assert calls[1] == [sys.executable, "-m", "dsf.runtime.control", "run"]
+    assert calls[2] == [
+        sys.executable,
+        "-m",
+        "dsf.runtime.control",
+        "serve-orchestrator",
+    ]
