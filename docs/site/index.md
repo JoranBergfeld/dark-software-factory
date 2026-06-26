@@ -24,7 +24,7 @@ what happens in production comes back to the start.
 ```mermaid
 flowchart LR
     signals(["market and operational signals"]) --> FC["Feature Council<br/>decide what to build"]
-    FC -->|issues| CS["Coding Squad<br/>build it"]
+    FC -->|issues| CS["Creation<br/>build it"]
     CS -->|PRs| SRE["SRE Agent<br/>operate and feed back"]
     SRE --> prod(["production"])
     SRE -->|fix-forward incidents| CS
@@ -43,4 +43,4 @@ command. This repository is the blueprint, not a factory that's already running.
   [operate it](get-started/operate.md).
 - **Each phase in depth:** [Feature Council](concept/feature-council.md),
   [Product Charter](concept/product-charter.md),
-  [Coding Squad](concept/coding-squad.md), [SRE Agent](concept/sre-agent.md).
+  [Creation phase](concept/creation.md), [SRE Agent](concept/sre-agent.md).

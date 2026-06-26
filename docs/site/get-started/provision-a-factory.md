@@ -59,12 +59,12 @@ Run `uv run dsf new --help` for the full flag list.
 Provisioning spans three planes — GitHub, Azure resources, and Azure RBAC — so the principal
 running `dsf new` needs:
 
-- **GitHub:** a `gh auth login` session that can create repos under `--owner` and push the
-  Coding Squad workflows.
+- **GitHub:** a `gh auth login` session that can create repos under `--owner` and seed the
+  baseline CI workflow.
 - **Azure subscription RBAC:** **Owner**, or **Contributor + User Access Administrator**, on
   the subscription — the cross-resource-group role assignments (runtime identity, SRE Agent)
   require it.
-- **Key Vault reachability for the one-time secret seed:** the squad's GitHub token and the
+- **Key Vault reachability for the one-time secret seed:** the GitHub App key and the
   WebIQ API key are written to the product Key Vault via `az keyvault secret set` as the
   operator, so the principal is granted **Key Vault Secrets Officer** on the vault. Because
   the vault defaults to network-`Deny` (`allowPublicNetworkAccess=false`), run provisioning
@@ -80,7 +80,8 @@ running `dsf new` needs:
 
 A complete, isolated factory for the product:
 
-- a GitHub repo (`<owner>/<product>`) with the DSF label taxonomy and a **Coding Squad**,
+- a GitHub repo (`<owner>/<product>`) with baseline CI, the DSF label taxonomy, the DSF
+  GitHub App, and the `dsf-creation` branch-protection ruleset,
 - a dedicated Azure resource group (`rg-dsf-<product>`) with the runtime deployed from
   `infra/main.bicep`,
 - the product registered in the routing registry (`config/products.json`),

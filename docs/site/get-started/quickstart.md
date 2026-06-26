@@ -15,10 +15,10 @@ For the big picture (the decide → build → operate loop and the governance ha
   `uv run` — never call bare `python`/`pip`/`pytest`.
 - The [**GitHub CLI**](https://cli.github.com/) (`gh`), authenticated with `gh auth login`.
   DSF uses it to infer the repo owner (when you omit `--owner`) and to create the product
-  repo and its Coding Squad.
+  repo and wire the Creation phase.
 - For a real (non `--dry-run`) provision: the
   [**Azure CLI**](https://learn.microsoft.com/cli/azure/) (`az`) logged in to a subscription
-  (`az login`), and the `squad` CLI on your `PATH`.
+  (`az login`).
 
 ## Install
 

@@ -123,9 +123,9 @@ Upstream, the Council consumes signals. Some come from outside the factory
 (market and operational telemetry), and over time the SRE Agent feeds production
 lessons back in as new signals.
 
-Downstream, the Council hands to the Coding Squad. The contract is one label:
-every filed issue carries `creation:ready`, and the Squad's triage keys on exactly
-that label. The Council does not call the Squad directly. It files an issue and
+Downstream, the Council hands to the Creation phase. The contract is one label:
+every filed issue carries `creation:ready`, and the Copilot Coding Agent picks up issues carrying exactly
+that label. The Council does not call the Coding Agent directly. It files an issue and
 the label does the wiring, which keeps the two phases independent.
 
 ## Harness and steering
@@ -169,11 +169,11 @@ weighted vote the factory shipped before. Intake is a governed pull: the webhook
 endpoint only enqueues and the scheduled worker drains the buffer on the Council's
 own cadence (Plan 3, landed). The whole redesign is grounded in the multi-agent
 literature and designed in ADR 0011 and its spec. Architecture decisions for this
-phase live in ADR 0006 (data adapters), ADR 0007 (the squad handoff), and ADR 0011
+phase live in ADR 0006 (data adapters), ADR 0007 (the creation handoff), and ADR 0011
 (the deliberative redesign).
 
 **See also:** the [loop overview](the-loop.md), the next phase
-[Coding Squad](coding-squad.md), and the decision-path redesign in
+[Creation phase](creation.md), and the decision-path redesign in
 [ADR 0011](https://github.com/JoranBergfeld/dark-software-factory/blob/main/docs/adr/0011-feature-council-deliberative-redesign.md)
 and its
 [design spec](https://github.com/JoranBergfeld/dark-software-factory/blob/main/docs/superpowers/specs/2026-06-19-feature-council-deliberative-redesign-design.md).

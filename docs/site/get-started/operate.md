@@ -1,7 +1,7 @@
 # Operate the factory
 
 A factory you have [provisioned](provision-a-factory.md) runs itself. The council sweeps its
-sources on a schedule, files grounded `creation:ready` issues, the Coding Squad builds them, and
+sources on a schedule, files grounded `creation:ready` issues, the Creation phase builds them, and
 the SRE Agent watches production and feeds incidents back to the start. No one stands inside
 the pipeline.
 
@@ -61,6 +61,13 @@ from the registry — no other GitHub env vars are needed. Explicit `GITHUB_APP_
 `GITHUB_INSTALLATION_ID` / `GITHUB_APP_PRIVATE_KEY_SECRET` / `AZURE_KEYVAULT_URI`
 override it when set.
 
+The Azure backing-service endpoints (App Configuration, Cosmos, and Azure OpenAI)
+are auto-loaded the same way: `dsf charter` reads them from the product's instance
+manifest (`config/instances/<product>.json`, written by `dsf new`), so a
+freshly-provisioned product needs no `AZURE_*` exports. Explicit
+`AZURE_OPENAI_ENDPOINT` / `AZURE_OPENAI_DEPLOYMENT` / `AZURE_APPCONFIG_ENDPOINT` /
+`AZURE_COSMOS_ENDPOINT` override the manifest when set.
+
 The charter is **advisory**: it informs the council's value and strategic-fit
 reasoning and adds a non-blocking "possible non-goal conflict" note to a
 verdict's rationale. It never vetoes a proposal and never changes the score.
@@ -112,26 +119,26 @@ The orchestrator emits OpenTelemetry traces to **Application Insights** automati
 The read-only dashboard at `core/src/dsf/observability/grafana/dashboard.json` imports into
 Grafana once App Insights is wired.
 
-## The closed loop: council → squad
+## The closed loop: council → creation
 
-The council files issues into the product repo; the Coding Squad triages and implements them.
-The whole contract is one system label — `dsf.contracts.handoff.HANDOFF_LABEL` (`creation:ready`)
-— that S6 stamps on **every** routed issue and that the squad's watch loop filters on
-(ADR 0007, ADR 0012).
+The council files issues into the product repo and assigns the GitHub Copilot Coding Agent
+through the DSF GitHub App. The whole contract is one system label —
+`dsf.contracts.handoff.HANDOFF_LABEL` (`creation:ready`) — that S6 stamps on **every**
+routed issue and that the Coding Agent picks up (ADR 0007, ADR 0016).
 
 `dsf new` wires this end to end: `register_product` upserts the product (repo + label taxonomy
 + confidence threshold) into the routing registry that S1 scoping and S6 routing read;
 `create_labels` idempotently creates the taxonomy + `creation:ready` so filing never fails on a
-missing label; and `deploy_squad_ralph` brings up the per-product **Ralph watch loop** on AKS
-(`squad watch --execute`), which **KEDA** scales 0→1 on the open `creation:ready` issue count
-(ADR 0012). The squad reads its GitHub credential from the product Key Vault under AKS workload
-identity, seeded once during provisioning.
+missing label; and the DSF GitHub App assigns the Copilot Coding Agent when S7 files the issue.
+`dsf new` also creates the `dsf-creation` branch-protection ruleset from the
+`creation_maturity` dial: low means required human review plus green `ci`; high means
+auto-merge on required checks.
 
 The full loop:
 
 ```
-council files issue (creation:ready) → KEDA wakes the Ralph loop → squad watch →
-PR → review or auto-merge → council feedback-watcher → Lesson → next council run
+council files issue (creation:ready) + assigns Copilot Coding Agent → Coding Agent PR →
+creation_maturity ruleset gates merge → feedback-watcher → Lesson → next council run
 ```
 
 ## Production: the SRE Agent
@@ -144,13 +151,13 @@ resource groups plus Monitoring Contributor at subscription scope, and the Azure
 connectors (ADR 0015). The agent can be scoped to a resource group or to a whole subscription.
 
 It investigates incidents (Azure Monitor / App Insights) and files issues/PRs carrying
-`creation:ready` — so the Ralph loop picks them up — plus an `incident` label that the council's
+`creation:ready` — so the Copilot Coding Agent picks them up — plus an `incident` label that the council's
 `incidents` and `azuremonitor` sources pull on the council's own schedule. Recurring
 production faults therefore become systemic hardening proposals, not just one-off fixes
 (ADR 0013).
 
 ```
-prod telemetry → Azure SRE Agent → investigate → issue/PR (creation:ready) → Ralph → PR
+prod telemetry → Azure SRE Agent → investigate → issue/PR (creation:ready) → Copilot Coding Agent → PR
 prod incidents  → issue (incident) + Azure Monitor → council incidents/azuremonitor
                   → S1–S7 → creation:ready proposal
 ```

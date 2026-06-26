@@ -1,6 +1,6 @@
 # ADR 0012: Coding squad runs as a per-product Ralph watch loop on AKS + KEDA
 
-- Status: Accepted
+- Status: Superseded by ADR 0016
 - Date: 2026-06-19
 - Fulfils: charter SP4 execution; builds on ADR 0007 (council->squad handoff),
   ADR 0004 (ACA runtime, contrasted), ADR 0010 (uv-workspace monorepo). Supersedes

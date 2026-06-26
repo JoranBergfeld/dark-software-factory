@@ -6,7 +6,7 @@ what happens in production comes back to the start.
 ```mermaid
 flowchart LR
     signals(["market and operational signals"]) --> FC["Feature Council<br/>decide what to build"]
-    FC -->|issues| CS["Coding Squad<br/>build it"]
+    FC -->|issues| CS["Creation<br/>build it"]
     CS -->|PRs| SRE["SRE Agent<br/>operate and feed back"]
     SRE --> prod(["production"])
     SRE -->|fix-forward incidents| CS
@@ -22,16 +22,16 @@ worth building.
 
 → [Feature Council](feature-council.md)
 
-## Coding Squad: build it
+## Creation: build it
 
-It takes the Council's issues, writes the software, and opens pull requests. A coding agent
-does the work, backed by a knowledge base that grows as it goes.
+It takes the Council's issues and assigns the GitHub Copilot Coding Agent. The agent opens
+pull requests, and the maturity ruleset decides how far the merge can run unattended.
 
-→ [Coding Squad](coding-squad.md)
+→ [Creation phase](creation.md)
 
 ## SRE Agent: operate and feed back
 
-It watches production, sends incidents straight back to the Squad as fixes, and passes what
+It watches production, sends incidents straight back to the Creation phase as fixes, and passes what
 it learns to the Council as new signals and lessons. It keeps the product running and teaches
 the factory how that product actually behaves.
 

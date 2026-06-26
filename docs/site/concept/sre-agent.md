@@ -1,7 +1,7 @@
 # SRE Agent
 
 > Operate and feed back. The SRE Agent watches the product in production, turns
-> incidents into fixes by filing them back into the Squad, and feeds what it
+> incidents into fixes by filing them back into the Creation phase, and feeds what it
 > learns to the Council.
 
 ## Why this phase
@@ -10,7 +10,7 @@ A product that ships is not done. It runs, and running surfaces things no plan
 predicted: regressions, outages, slow degradations. The SRE Agent is the part of
 the factory that lives with the product in production. When something breaks, it
 does not just alert. It investigates and files the fix as an issue back into the
-same intake the Squad already watches, so the break becomes the next pull
+same intake the Creation phase already watches, so the break becomes the next pull
 request. It also closes the loop: what production teaches goes back to the
 Council as new signal, so the factory learns how the product actually behaves,
 not only how it was meant to.
@@ -25,7 +25,7 @@ per product and keep it pointed at the same handoff the rest of the loop uses.
   product.
 - Investigate incidents rather than only reporting them.
 - Fix-forward: file an issue or pull request for the fix, carrying the handoff
-  label, so the Squad picks it up.
+  label, so the Coding Agent picks it up.
 - Feed operational signals and lessons back to the Feature Council: the SRE
   Agent stamps `incident`, and the council's `incidents` and `azuremonitor`
   sources pull incidents and telemetry on the council's schedule (ADR 0013).
@@ -36,7 +36,7 @@ per product and keep it pointed at the same handoff the rest of the loop uses.
 
 **Out:** incident issues and pull requests in the product repo, carrying
 `creation:ready` and, for incident issues, `incident`. The fast path sends incidents
-to the Squad; the council's `incidents` and `azuremonitor` sources also pull
+to the Creation phase; the council's `incidents` and `azuremonitor` sources also pull
 incidents and telemetry on the council's schedule (ADR 0013).
 
 ## Handoffs
@@ -44,8 +44,8 @@ incidents and telemetry on the council's schedule (ADR 0013).
 Upstream, the SRE Agent takes from production itself: the running system is its
 input.
 
-Downstream, it hands to the Coding Squad through the same `creation:ready` label
-the Council uses, so a production incident and a planned feature reach the Squad
+Downstream, it hands to the Creation phase through the same `creation:ready` label
+the Council uses, so a production incident and a planned feature reach the Coding Agent
 the same way and need no separate path. The second downstream hand, back to the
 Feature Council as signal, uses the `incident` label plus the council's
 `incidents` and `azuremonitor` sources (ADR 0013), so recurring incidents become
@@ -80,11 +80,11 @@ that product's resource group and repo. It is not code in this repository. What
 DSF provides is the Bicep (`infra/sre-agent.bicep`) and the `deploy_sre_agent`
 provisioner step that runs it. After provisioning, `dsf new` writes a short
 `sre-agent.md` summary (what got created, the agent portal link, a one-time
-`what-if`/verify note). The fix-forward handoff into the Squad uses the shared
+`what-if`/verify note). The fix-forward handoff into the Creation phase uses the shared
 `creation:ready` label. The feedback path into the Council is built through the
 `incident` marker plus the `incidents` and `azuremonitor` sources (ADR 0013; ADR
 0015 supersedes ADR 0009's render-only approach).
 
 **See also:** the [loop overview](the-loop.md), the
-[Coding Squad](coding-squad.md) it fixes forward into, and the
+[Creation phase](creation.md) it fixes forward into, and the
 [Feature Council](feature-council.md) it feeds.
