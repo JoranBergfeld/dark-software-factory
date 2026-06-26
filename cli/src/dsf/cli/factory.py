@@ -266,6 +266,7 @@ def _cmd_bootstrap(args: argparse.Namespace) -> int:
         app_name=args.app_name,
         resource_group=args.resource_group,
         keyvault_name=args.keyvault_name,
+        appconfig_name=args.appconfig_name,
         location=args.location,
     )
     result = bootstrap_app(cfg, capture_code=_browser_capture_code)
@@ -274,7 +275,12 @@ def _cmd_bootstrap(args: argparse.Namespace) -> int:
         f"installation_id={result.installation_id}"
     )
     print(f"[dsf] master credentials stored in owner Key Vault {result.keyvault_name}")
+    print(f"[dsf] owner App Configuration index ready: {result.appconfig_name}")
     print(f"[dsf] now export DSF_OWNER_KEYVAULT_URI={result.keyvault_uri} for `dsf new`")
+    print(
+        f"[dsf] and  export DSF_OWNER_APPCONFIG_ENDPOINT={result.appconfig_endpoint} "
+        "for `dsf new` / `dsf sweep --product`"
+    )
     return 0
 
 
@@ -574,6 +580,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_boot.add_argument("--app-name", required=True, help="GitHub App name (globally unique)")
     p_boot.add_argument(
         "--keyvault-name", required=True, help="owner Key Vault name for App credentials"
+    )
+    p_boot.add_argument(
+        "--appconfig-name",
+        required=True,
+        help="owner App Configuration store name for the runtime-config index",
     )
     p_boot.add_argument(
         "--resource-group", default="rg-dsf-app", help="resource group for the owner Key Vault"

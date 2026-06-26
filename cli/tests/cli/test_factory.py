@@ -55,11 +55,32 @@ def test_bootstrap_subcommand_is_wired():
             "kv-dsf-app",
             "--resource-group",
             "rg-dsf-app",
+            "--appconfig-name",
+            "dsf-owner-index",
         ]
     )
     assert args.command == "bootstrap"
     assert args.app_name == "dsf-acme"
     assert args.keyvault_name == "kv-dsf-app"
+    assert args.appconfig_name == "dsf-owner-index"
+
+
+def test_bootstrap_parser_requires_appconfig_name():
+    import dsf.cli.factory as factory
+
+    args = factory.build_parser().parse_args(
+        [
+            "bootstrap",
+            "--app-name",
+            "DSF",
+            "--keyvault-name",
+            "kv-dsf",
+            "--appconfig-name",
+            "dsf-owner-index",
+        ]
+    )
+    assert args.appconfig_name == "dsf-owner-index"
+    assert args.func is factory._cmd_bootstrap
 
 
 def test_charter_next_action_message():

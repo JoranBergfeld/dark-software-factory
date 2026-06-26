@@ -30,6 +30,7 @@ _APP_ID_SECRET = "github-app-id"
 _INSTALLATION_SECRET = "github-app-installation-id"
 _JWT_TTL = timedelta(minutes=9)
 _SECRETS_OFFICER = "Key Vault Secrets Officer"
+_APPCONFIG_DATA_OWNER = "App Configuration Data Owner"
 _SEED_ATTEMPTS = 8
 _SEED_RETRY_DELAY = 15.0
 
@@ -154,6 +155,28 @@ def owner_kv_ensure_commands(
     ]
 
 
+def owner_appconfig_ensure_commands(
+    *, resource_group: str, appconfig_name: str, location: str, operator_object_id: str
+) -> list[list[str]]:
+    """Build `az` commands creating the owner App Config (RBAC, local auth off)."""
+    return [
+        [
+            "az", "appconfig", "create", "--name", appconfig_name,
+            "--resource-group", resource_group, "--location", location,
+            "--sku", "Standard", "--disable-local-auth", "true",
+        ],
+        [
+            "az", "role", "assignment", "create",
+            "--role", _APPCONFIG_DATA_OWNER,
+            "--assignee-object-id", operator_object_id,
+            "--assignee-principal-type", "User",
+            "--scope",
+            f"/subscriptions/{{subscription}}/resourceGroups/{resource_group}"
+            f"/providers/Microsoft.AppConfiguration/configurationStores/{appconfig_name}",
+        ],
+    ]
+
+
 def owner_kv_store_commands(
     *, keyvault_name: str, app_id: str, installation_id: str, pem_path: str
 ) -> list[list[str]]:
@@ -183,6 +206,7 @@ class BootstrapConfig:
     app_name: str
     resource_group: str
     keyvault_name: str
+    appconfig_name: str
     location: str = "swedencentral"
 
 
@@ -194,6 +218,8 @@ class BootstrapResult:
     installation_id: str
     keyvault_name: str
     keyvault_uri: str
+    appconfig_name: str
+    appconfig_endpoint: str
 
 
 def _default_write_pem(pem: str) -> str:
@@ -247,6 +273,15 @@ def bootstrap_app(
         cmd = [part.replace("{subscription}", subscription) for part in cmd]
         runner(cmd, check=True)
 
+    for cmd in owner_appconfig_ensure_commands(
+        resource_group=cfg.resource_group,
+        appconfig_name=cfg.appconfig_name,
+        location=cfg.location,
+        operator_object_id=operator_oid,
+    ):
+        cmd = [part.replace("{subscription}", subscription) for part in cmd]
+        runner(cmd, check=True)
+
     pem_path = write_pem(creds.pem)
     store_cmds = owner_kv_store_commands(
         keyvault_name=cfg.keyvault_name,
@@ -275,6 +310,8 @@ def bootstrap_app(
         installation_id=installation_id,
         keyvault_name=cfg.keyvault_name,
         keyvault_uri=f"https://{cfg.keyvault_name}.vault.azure.net/",
+        appconfig_name=cfg.appconfig_name,
+        appconfig_endpoint=f"https://{cfg.appconfig_name}.azconfig.io",
     )
 
 

@@ -184,6 +184,7 @@ def test_bootstrap_app_runs_ensure_then_store_with_resolved_scope(tmp_path):
         app_name="dsf-acme",
         resource_group="rg-dsf-app",
         keyvault_name="kv-dsf-app",
+        appconfig_name="dsf-owner-index",
         location="swedencentral",
     )
     result = bootstrap_app(
@@ -228,7 +229,7 @@ def test_bootstrap_app_retries_secret_writes_on_rbac_propagation(tmp_path):
 
     slept: list[float] = []
     result = bootstrap_app(
-        BootstrapConfig(app_name="s", resource_group="rg", keyvault_name="kv"),
+        BootstrapConfig(app_name="s", resource_group="rg", keyvault_name="kv", appconfig_name="ac"),
         run=fake_run,
         capture_code=lambda manifest: "tempcode",
         exchange=lambda code, **_: creds,
