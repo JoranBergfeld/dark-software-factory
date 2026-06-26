@@ -20,6 +20,7 @@ class ConfigGateway(Protocol):
     def get(self, key: str, label: str | None) -> str | None: ...
     def set(self, key: str, value: str, label: str | None) -> None: ...
     def list(self) -> list[tuple[str, str, str | None]]: ...
+    def delete(self, key: str, label: str | None) -> None: ...
 
 
 class AppConfigStore:
@@ -123,3 +124,7 @@ class _SdkConfigGateway:
     def list(self) -> list[tuple[str, str, str | None]]:  # pragma: no cover
         client = self._client_or_build()
         return [(s.key, s.value, s.label) for s in client.list_configuration_settings()]
+
+    def delete(self, key: str, label: str | None) -> None:  # pragma: no cover
+        client = self._client_or_build()
+        client.delete_configuration_setting(key=key, label=label)

@@ -25,6 +25,9 @@ class InMemoryConfigGateway:
     def list(self) -> list[tuple[str, str, str | None]]:
         return [(k, v, lbl) for (k, lbl), v in self._d.items()]
 
+    def delete(self, key: str, label: str | None) -> None:
+        self._d.pop((key, label), None)
+
 
 class InMemoryCosmosGateway:
     """Dict-backed CosmosGateway: ``container -> list[item dict]``.
