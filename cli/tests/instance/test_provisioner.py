@@ -173,6 +173,35 @@ def test_publish_runtime_index_writes_payload_under_product_label(tmp_path):
     assert stored["GITHUB_APP_ID"] == "1"
 
 
+def test_publish_runtime_index_skipped_in_apply_when_no_owner_endpoint(tmp_path):
+    prov = InstanceProvisioner(_spec(), run=MagicMock(returncode=0), repo_root=tmp_path)
+    manifest = prov.apply(execute=False)
+
+    step = next(s for s in manifest.plan.steps if s.name == "publish_runtime_index")
+    assert step.result == "skipped (no owner App Config configured)"
+    assert step.executed is False
+
+
+def test_publish_runtime_index_dry_run_records_without_publishing(tmp_path):
+    from dsf_testing.azure_doubles import InMemoryConfigGateway
+
+    gateway = InMemoryConfigGateway()
+    prov = InstanceProvisioner(
+        _spec(),
+        run=MagicMock(returncode=0),
+        repo_root=tmp_path,
+        owner_appconfig_endpoint="https://owner-index.azconfig.io",
+        appconfig_gateway=gateway,
+    )
+    manifest = prov.apply(execute=False)
+
+    step = next(s for s in manifest.plan.steps if s.name == "publish_runtime_index")
+    assert step.result == "published (dry-run)"
+    assert step.executed is False
+    # dry-run must publish nothing into the owner index
+    assert [entry for entry in gateway.list() if entry[2] == "demo"] == []
+
+
 def test_plan_create_resource_group_command():
     plan = InstanceProvisioner(_spec()).plan()
     rg = next(s for s in plan.steps if s.name == "create_resource_group")
