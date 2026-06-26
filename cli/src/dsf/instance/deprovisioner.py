@@ -89,6 +89,8 @@ class InstanceDeprovisioner:
         repo_root: Path | None = None,
         purge: bool = False,
         delete_repo: bool = True,
+        owner_appconfig_endpoint: str = "",
+        appconfig_gateway: object | None = None,
     ) -> None:
         self.manifest = manifest
         self.spec = manifest.spec
@@ -96,6 +98,8 @@ class InstanceDeprovisioner:
         self._repo_root = repo_root
         self._purge = purge
         self._delete_repo = delete_repo
+        self._owner_appconfig_endpoint = owner_appconfig_endpoint
+        self._appconfig_gateway = appconfig_gateway
         self._az = AzureTeardown(self._run)
 
     # ------------------------------------------------------------------
@@ -154,6 +158,12 @@ class InstanceDeprovisioner:
                 name="deregister_product",
                 description=(
                     f"Remove {s.product} from config/products.json routing registry"
+                ),
+            ),
+            ProvisionStep(
+                name="remove_runtime_index",
+                description=(
+                    f"Remove {s.product} from the owner App Configuration index"
                 ),
             ),
             ProvisionStep(
@@ -240,6 +250,18 @@ class InstanceDeprovisioner:
             deregister_product(self.spec.product, path=products_json)
             step.executed, step.result = True, "deregistered"
 
+        elif step.name == "remove_runtime_index":
+            if not self._owner_appconfig_endpoint:
+                step.executed, step.result = True, "skipped (no owner App Config configured)"
+            else:
+                from dsf.config.owner_index import delete_runtime_config
+
+                delete_runtime_config(
+                    self._owner_appconfig_endpoint, self.spec.product,
+                    gateway=self._appconfig_gateway,
+                )
+                step.executed, step.result = True, "removed"
+
         elif step.name == "delete_config":
             self._delete_config_files()
             step.executed, step.result = True, "deleted"
@@ -312,6 +334,8 @@ class InstanceDeprovisioner:
         repo_root: Path | None = None,
         purge: bool = False,
         delete_repo: bool = True,
+        owner_appconfig_endpoint: str = "",
+        appconfig_gateway: object | None = None,
     ) -> InstanceDeprovisioner:
         """Load the persisted manifest for ``product`` and return a deprovisioner.
 
@@ -327,4 +351,6 @@ class InstanceDeprovisioner:
             repo_root=repo_root,
             purge=purge,
             delete_repo=delete_repo,
+            owner_appconfig_endpoint=owner_appconfig_endpoint,
+            appconfig_gateway=appconfig_gateway,
         )

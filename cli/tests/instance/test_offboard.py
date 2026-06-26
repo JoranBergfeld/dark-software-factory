@@ -59,10 +59,32 @@ def test_offboard_plan_step_order_and_purge_default(tmp_path):
         "delete_product_resource_group",
         "purge_soft_deleted",
         "unregister_product",
+        "remove_runtime_index",
         "remove_instance_artifacts",
     ]
     purge_step = next(s for s in plan.steps if s.name == "purge_soft_deleted")
     assert purge_step.deferred is True
+
+
+def test_offboard_removes_runtime_index_entry(tmp_path):
+    from dsf.config.owner_index import publish_runtime_config, read_runtime_config
+    from dsf_testing.azure_doubles import InMemoryConfigGateway
+
+    _seed_manifest(tmp_path)
+    gateway = InMemoryConfigGateway()
+    publish_runtime_config("https://o.azconfig.io", "demo", {"A": "1"}, gateway=gateway)
+
+    off = InstanceOffboarder(
+        "demo",
+        repo_root=tmp_path,
+        owner_appconfig_endpoint="https://o.azconfig.io",
+        appconfig_gateway=gateway,
+    )
+    step = next(s for s in off.plan().steps if s.name == "remove_runtime_index")
+    off._execute_step(step, execute=True)
+
+    assert step.result == "removed"
+    assert read_runtime_config("https://o.azconfig.io", "demo", gateway=gateway) == {}
 
 
 def test_offboard_dry_run_runs_nothing(tmp_path):

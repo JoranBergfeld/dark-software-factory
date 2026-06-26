@@ -80,6 +80,7 @@ def test_plan_step_order_and_names():
         "delete_sre_agent",
         "delete_resource_group",
         "deregister_product",
+        "remove_runtime_index",
         "delete_config",
         "delete_repo",
     ]
@@ -246,6 +247,25 @@ def test_apply_execute_deregisters_product(tmp_path):
 
     registry = load_registry(products_json)
     assert "demo" not in registry
+
+
+def test_deprovisioner_removes_runtime_index_entry():
+    from dsf.config.owner_index import publish_runtime_config, read_runtime_config
+    from dsf_testing.azure_doubles import InMemoryConfigGateway
+
+    gateway = InMemoryConfigGateway()
+    publish_runtime_config("https://o.azconfig.io", "demo", {"A": "1"}, gateway=gateway)
+
+    deprv = InstanceDeprovisioner(
+        _manifest(),
+        owner_appconfig_endpoint="https://o.azconfig.io",
+        appconfig_gateway=gateway,
+    )
+    step = next(s for s in deprv.plan().steps if s.name == "remove_runtime_index")
+    deprv._execute_step(step)
+
+    assert step.result == "removed"
+    assert read_runtime_config("https://o.azconfig.io", "demo", gateway=gateway) == {}
 
 
 def test_apply_execute_deletes_manifest_and_runtime(tmp_path):

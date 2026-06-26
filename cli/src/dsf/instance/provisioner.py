@@ -990,11 +990,15 @@ class InstanceOffboarder:
         run: Runner | None = None,
         repo_root: Path | None = None,
         purge: bool = False,
+        owner_appconfig_endpoint: str = "",
+        appconfig_gateway: object | None = None,
     ) -> None:
         self.product = product
         self._run = run or subprocess.run
         self._repo_root = repo_root
         self._purge = purge
+        self._owner_appconfig_endpoint = owner_appconfig_endpoint
+        self._appconfig_gateway = appconfig_gateway
         self._manifest: InstanceManifest | None = None
         self._az = AzureTeardown(self._run)
 
@@ -1033,6 +1037,12 @@ class InstanceOffboarder:
                 ProvisionStep(
                     name="unregister_product",
                     description=f"Unregister {self.product} from config/products.json",
+                ),
+                ProvisionStep(
+                    name="remove_runtime_index",
+                    description=(
+                        f"Remove {self.product} from the owner App Configuration index"
+                    ),
                 ),
                 ProvisionStep(
                     name="remove_instance_artifacts",
@@ -1093,6 +1103,17 @@ class InstanceOffboarder:
             render_product_unregistration(self.product, repo_root=self._repo_root)
             step.executed = True
             step.result = "unregistered"
+        elif step.name == "remove_runtime_index":
+            if not self._owner_appconfig_endpoint:
+                step.result = "skipped (no owner App Config configured)"
+            else:
+                from dsf.config.owner_index import delete_runtime_config
+
+                delete_runtime_config(
+                    self._owner_appconfig_endpoint, self.product,
+                    gateway=self._appconfig_gateway,
+                )
+                step.executed, step.result = True, "removed"
         elif step.name == "remove_instance_artifacts":
             mpath = manifest_path(self.product, self._repo_root)
             mpath.unlink(missing_ok=True)

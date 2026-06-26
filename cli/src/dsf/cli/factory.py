@@ -280,9 +280,14 @@ def _cmd_bootstrap(args: argparse.Namespace) -> int:
 
 def _cmd_offboard(args: argparse.Namespace) -> int:
     """Remove Azure/runtime/registry artifacts for one product."""
+    import os
+
     from dsf.instance.provisioner import InstanceOffboarder
 
     root = Path(args.config_root) if args.config_root else None
+    owner_appconfig = args.owner_appconfig_endpoint or os.environ.get(
+        "DSF_OWNER_APPCONFIG_ENDPOINT", ""
+    )
     execute = not args.dry_run
     if execute and not args.yes:
         try:
@@ -302,6 +307,7 @@ def _cmd_offboard(args: argparse.Namespace) -> int:
         args.product,
         repo_root=root,
         purge=args.purge,
+        owner_appconfig_endpoint=owner_appconfig,
     )
     plan = offboarder.apply(execute=execute, on_event=_print_step_event)
     _print_plan(plan, execute=execute)
@@ -318,10 +324,15 @@ def _cmd_delete(args: argparse.Namespace) -> int:
     Reads the persisted manifest to resolve all resource names, then runs the
     teardown in safe order: Azure resources first, GitHub repo last.
     """
+    import os
+
     from dsf.instance.deprovisioner import InstanceDeprovisioner
     from dsf.instance.spec import manifest_path
 
     root = Path(args.config_root) if args.config_root else None
+    owner_appconfig = args.owner_appconfig_endpoint or os.environ.get(
+        "DSF_OWNER_APPCONFIG_ENDPOINT", ""
+    )
 
     if not manifest_path(args.product, root).exists():
         print(
@@ -360,6 +371,7 @@ def _cmd_delete(args: argparse.Namespace) -> int:
             args.product,
             repo_root=root,
             purge=args.purge,
+            owner_appconfig_endpoint=owner_appconfig,
         )
     except (FileNotFoundError, OSError, ValueError) as exc:
         print(f"[dsf] error: could not load manifest: {exc}", file=sys.stderr)
@@ -548,6 +560,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="override repo root where config/instances/ and config/products.json live",
     )
+    p_offboard.add_argument(
+        "--owner-appconfig-endpoint",
+        default=None,
+        help="owner App Configuration endpoint to remove this product's runtime env "
+        "from (default: DSF_OWNER_APPCONFIG_ENDPOINT)",
+    )
     p_offboard.set_defaults(func=_cmd_offboard)
     p_boot = sub.add_parser(
         "bootstrap",
@@ -590,6 +608,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--config-root",
         default=None,
         help="override repo root where config/instances/ is read from (tests/CI)",
+    )
+    p_delete.add_argument(
+        "--owner-appconfig-endpoint",
+        default=None,
+        help="owner App Configuration endpoint to remove this product's runtime env "
+        "from (default: DSF_OWNER_APPCONFIG_ENDPOINT)",
     )
     p_delete.set_defaults(func=_cmd_delete)
 

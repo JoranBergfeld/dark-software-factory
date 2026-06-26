@@ -411,7 +411,7 @@ def test_delete_execute_with_yes_bypasses_confirmation(capsys, tmp_path, monkeyp
     from dsf.instance import deprovisioner as dep_mod
 
     class _FakeDeprovisioner:
-        def __init__(self, manifest, *, run=None, repo_root=None, purge=False, delete_repo=True):
+        def __init__(self, manifest, **kwargs):
             self.manifest = manifest
             self.spec = manifest.spec
 
@@ -425,10 +425,11 @@ def test_delete_execute_with_yes_bypasses_confirmation(capsys, tmp_path, monkeyp
             return TeardownPlan(product=self.spec.product, steps=[step])
 
         @classmethod
-        def from_product(cls, product, *, run=None, repo_root=None, purge=False, delete_repo=True):
+        def from_product(cls, product, **kwargs):
             from dsf.instance.spec import read_manifest
+            repo_root = kwargs.get("repo_root")
             manifest = read_manifest(product, repo_root)
-            return cls(manifest, repo_root=repo_root, purge=purge)
+            return cls(manifest, **kwargs)
 
     _write_demo_manifest(tmp_path)
     monkeypatch.setattr(dep_mod, "InstanceDeprovisioner", _FakeDeprovisioner)
@@ -481,7 +482,7 @@ def test_delete_execute_failure_exits_nonzero(capsys, tmp_path, monkeypatch):
     from dsf.instance import deprovisioner as dep_mod
 
     class _FailingDeprovisioner:
-        def __init__(self, manifest, *, run=None, repo_root=None, purge=False, delete_repo=True):
+        def __init__(self, manifest, **kwargs):
             self.manifest = manifest
             self.spec = manifest.spec
 
@@ -499,10 +500,11 @@ def test_delete_execute_failure_exits_nonzero(capsys, tmp_path, monkeypatch):
             return TeardownPlan(product=self.spec.product, steps=[step])
 
         @classmethod
-        def from_product(cls, product, *, run=None, repo_root=None, purge=False, delete_repo=True):
+        def from_product(cls, product, **kwargs):
             from dsf.instance.spec import read_manifest
+            repo_root = kwargs.get("repo_root")
             manifest = read_manifest(product, repo_root)
-            return cls(manifest, repo_root=repo_root, purge=purge)
+            return cls(manifest, **kwargs)
 
     _write_demo_manifest(tmp_path)
     monkeypatch.setattr(dep_mod, "InstanceDeprovisioner", _FailingDeprovisioner)
