@@ -21,6 +21,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
+from dsf.config.owner_index import runtime_env_for_product
 from dsf.container import build_services
 from dsf.contracts.enums import SourceKind, TriggerKind
 from dsf.contracts.models import Run
@@ -88,9 +89,16 @@ def _print_run_summary(run) -> None:
         print(f"[dsf]   audit[{rec.station}] {rec.message}")
 
 
-def _get_services():
-    """Build the real services bundle or exit cleanly on misconfiguration."""
+def _get_services(args: argparse.Namespace | None = None):
+    """Build the real services bundle or exit cleanly on misconfiguration.
+
+    With ``--product`` the env is resolved from the owner App Config index
+    (endpoints + non-secret pointers) before wiring the real Azure adapters.
+    """
+    product = getattr(args, "product", None) if args is not None else None
     try:
+        if product:
+            return build_services(env=runtime_env_for_product(product))
         return build_services()
     except ValueError as exc:
         print(f"[dsf] error: {exc}", file=sys.stderr)
@@ -101,7 +109,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     """Run the intake line for one signal JSON file."""
     from dsf.orchestrator.conveyor import run_line
 
-    services = _get_services()
+    services = _get_services(args)
     if not args.signal:
         print("--signal <path> is required for `run`", file=sys.stderr)
         return 1
@@ -122,7 +130,7 @@ def _cmd_sweep(args: argparse.Namespace) -> int:
     """Run a scheduled sweep across enabled sources."""
     from dsf.triggers.scheduler import run_sweep
 
-    services = _get_services()
+    services = _get_services(args)
     final = asyncio.run(run_sweep(services))
     _print_run_summary(final)
     return 0
@@ -195,7 +203,7 @@ def _cmd_serve_orchestrator(args: argparse.Namespace) -> int:
     sleeping ``--interval`` seconds (or ``DSF_SWEEP_INTERVAL``, default 300)
     between ticks and surviving per-tick errors.
     """
-    services = _get_services()
+    services = _get_services(args)
     if getattr(args, "loop", False):
         run_orchestrator_loop(services, interval=_resolve_sweep_interval(args.interval))
         return 0
@@ -232,9 +240,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_run = sub.add_parser("run", help="run the intake line for one signal")
     p_run.add_argument("--dry-run", action="store_true", help="run line, skip filing")
     p_run.add_argument("--signal", help="path to a signal JSON file")
+    p_run.add_argument(
+        "--product", help="resolve runtime env for this product from the owner index"
+    )
     p_run.set_defaults(func=_cmd_run)
 
     p_sweep = sub.add_parser("sweep", help="run a scheduled sweep")
+    p_sweep.add_argument(
+        "--product", help="resolve runtime env for this product from the owner index"
+    )
     p_sweep.set_defaults(func=_cmd_sweep)
 
 
@@ -252,6 +266,9 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help="seconds between sweeps in --loop mode (default: DSF_SWEEP_INTERVAL env, else 300)",
+    )
+    p_orch.add_argument(
+        "--product", help="resolve runtime env for this product from the owner index"
     )
     p_orch.set_defaults(func=_cmd_serve_orchestrator)
 
