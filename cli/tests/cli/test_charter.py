@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
 from dsf.charter.markdown import git_blob_sha, render_charter
 from dsf.charter.sync import CHARTER_PATH
@@ -29,6 +30,10 @@ def _put(store: InMemoryCharterStore, charter: Charter, status: CharterStatus) -
     asyncio.run(
         store.put_charter(StoredCharter(product="alpha", charter=charter, status=status))
     )
+
+
+def _fake_manifest(outputs):
+    return SimpleNamespace(azure=SimpleNamespace(outputs=outputs))
 
 
 def test_charter_parser_wires_all_subcommands():
@@ -196,6 +201,91 @@ def test_app_settings_derives_app_creds_from_owner_kv(monkeypatch):
     assert settings.github_app_private_key_secret == "github-app-private-key"
     assert settings.keyvault_uri == "https://owner-kv.vault.azure.net/"
     assert settings.github_repository == "org/alpha"
+
+
+def test_settings_fills_azure_endpoints_from_manifest(monkeypatch):
+    from dsf.cli.charter import _settings
+
+    for var in (
+        "AZURE_OPENAI_ENDPOINT",
+        "AZURE_OPENAI_DEPLOYMENT",
+        "AZURE_APPCONFIG_ENDPOINT",
+        "AZURE_COSMOS_ENDPOINT",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setattr(
+        "dsf.cli.charter.read_manifest",
+        lambda product: _fake_manifest(
+            {
+                "openaiEndpoint": "https://aif.example.com/",
+                "openaiDeployment": "gpt-4o",
+                "appConfigEndpoint": "https://appcs.example.io",
+                "cosmosEndpoint": "https://cosmos.example.com:443/",
+            }
+        ),
+    )
+    s = _settings("pets")
+    assert s.openai_endpoint == "https://aif.example.com/"
+    assert s.openai_deployment == "gpt-4o"
+    assert s.appconfig_endpoint == "https://appcs.example.io"
+    assert s.cosmos_endpoint == "https://cosmos.example.com:443/"
+
+
+def test_settings_explicit_env_overrides_manifest(monkeypatch):
+    from dsf.cli.charter import _settings
+
+    monkeypatch.setenv("AZURE_OPENAI_DEPLOYMENT", "explicit-deploy")
+    monkeypatch.setattr(
+        "dsf.cli.charter.read_manifest",
+        lambda product: _fake_manifest({"openaiDeployment": "gpt-4o"}),
+    )
+    assert _settings("pets").openai_deployment == "explicit-deploy"
+
+
+def test_settings_missing_manifest_is_blank(monkeypatch):
+    from dsf.cli.charter import _settings
+
+    for var in ("AZURE_OPENAI_ENDPOINT", "AZURE_OPENAI_DEPLOYMENT"):
+        monkeypatch.delenv(var, raising=False)
+
+    def _missing(product):
+        raise FileNotFoundError(product)
+
+    monkeypatch.setattr("dsf.cli.charter.read_manifest", _missing)
+    s = _settings("ghost")
+    assert s.openai_endpoint == "" and s.openai_deployment == ""
+
+
+def test_app_settings_fills_endpoints_but_owner_kv_wins_for_keyvault(monkeypatch):
+    from dsf.cli.charter import _app_settings
+
+    for var in (
+        "GITHUB_APP_ID",
+        "GITHUB_INSTALLATION_ID",
+        "GITHUB_APP_PRIVATE_KEY_SECRET",
+        "AZURE_KEYVAULT_URI",
+        "GITHUB_REPOSITORY",
+        "AZURE_OPENAI_ENDPOINT",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("DSF_OWNER_KEYVAULT_URI", "https://owner-kv.vault.azure.net/")
+    monkeypatch.setattr("dsf.cli.charter._resolve_repo", lambda product: "org/alpha")
+    monkeypatch.setattr(
+        "dsf.cli.charter.read_manifest",
+        lambda product: _fake_manifest(
+            {
+                "keyVaultUri": "https://product-kv.vault.azure.net/",
+                "openaiEndpoint": "https://aif.example.com/",
+            }
+        ),
+    )
+    secrets = {"github-app-id": "111", "github-app-installation-id": "222"}
+    settings = _app_settings("alpha", secret_reader=lambda kv, name: secrets[name])
+    # owner KV backs the App private key, NOT the product vault from the manifest
+    assert settings.keyvault_uri == "https://owner-kv.vault.azure.net/"
+    # ...but the OpenAI endpoint is still gap-filled from the manifest
+    assert settings.openai_endpoint == "https://aif.example.com/"
+    assert settings.github_app_id == "111"
 
 
 def test_app_settings_respects_explicit_env(monkeypatch):

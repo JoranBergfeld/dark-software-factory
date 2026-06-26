@@ -33,13 +33,40 @@ from dsf.container import (
 )
 from dsf.contracts.charter import Charter, StoredCharter
 from dsf.contracts.enums import CharterStatus
+from dsf.instance.runtime_render import runtime_endpoint_env
+from dsf.instance.spec import read_manifest
+
+
+def _manifest_runtime_env(product: str) -> dict[str, str]:
+    """Azure backing-service endpoints for ``product`` from its instance manifest.
+
+    ``dsf new`` persists each product's Azure deployment outputs to
+    ``config/instances/<product>.json``. Translate them to the ``AZURE_*`` env the
+    charter clients read, so a freshly-provisioned product works without
+    re-exporting endpoints. A missing or unreadable manifest yields ``{}`` (the
+    operator can still export the env explicitly).
+    """
+    try:
+        manifest = read_manifest(product)
+    except (OSError, ValueError):
+        return {}
+    outputs = manifest.azure.outputs if manifest.azure else {}
+    return runtime_endpoint_env(outputs)
+
+
+def _base_env(product: str) -> dict[str, str]:
+    """``os.environ`` layered over manifest-derived endpoints, product forced last.
+
+    Manifest values only fill gaps; an explicitly exported env var always wins.
+    """
+    import os
+
+    return {**_manifest_runtime_env(product), **os.environ, "DSF_PRODUCT": product}
 
 
 def _settings(product: str) -> AzureRuntimeSettings:
     """Runtime settings with the operator's ``--product`` as the active product."""
-    import os
-
-    return AzureRuntimeSettings.from_env({**os.environ, "DSF_PRODUCT": product})
+    return AzureRuntimeSettings.from_env(_base_env(product))
 
 
 # The one master DSF GitHub App identity is seeded into the owner Key Vault by
@@ -76,20 +103,20 @@ def _app_settings(
 ) -> AzureRuntimeSettings:
     """Settings for the App-backed charter paths (``init`` and ``--ref``).
 
-    The factory authenticates to a product repo with the single master DSF GitHub
-    App, whose credentials ``dsf bootstrap`` seeds into the owner Key Vault. When
-    the operator has not set the App env vars explicitly but
-    ``DSF_OWNER_KEYVAULT_URI`` is exported (as it is for ``dsf new``), derive the
-    App id, installation id, private-key pointer and Key Vault from that owner
-    vault, and resolve the product repo from the registry — so ``dsf charter
-    init`` works straight after provisioning without re-exporting five more
-    variables. Explicit env always wins.
+    Backing-service endpoints (App Configuration, Cosmos, Azure OpenAI) are
+    gap-filled from the product's instance manifest via :func:`_base_env`. The
+    GitHub App credentials are derived from the owner Key Vault: when the operator
+    has not set the App env explicitly but ``DSF_OWNER_KEYVAULT_URI`` is exported
+    (as it is for ``dsf new``), read the App id, installation id and private-key
+    pointer from that owner vault and resolve the product repo from the registry —
+    so ``dsf charter init`` works straight after provisioning. Explicit env always
+    wins, and the owner Key Vault always backs the App private key.
     """
     import os
 
-    env = {**os.environ, "DSF_PRODUCT": product}
+    env = _base_env(product)
     already_set = all(
-        env.get(name)
+        os.environ.get(name)
         for name in (
             "GITHUB_APP_ID",
             "GITHUB_INSTALLATION_ID",
@@ -97,7 +124,7 @@ def _app_settings(
             "AZURE_KEYVAULT_URI",
         )
     )
-    owner_kv = (env.get(_OWNER_KV_ENV) or "").strip()
+    owner_kv = (os.environ.get(_OWNER_KV_ENV) or "").strip()
     if owner_kv and not already_set:
         env["AZURE_KEYVAULT_URI"] = owner_kv
         env["GITHUB_APP_PRIVATE_KEY_SECRET"] = _PRIVATE_KEY_SECRET
