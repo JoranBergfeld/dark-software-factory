@@ -1,7 +1,6 @@
 // cosmos.bicep
 // Cosmos DB for NoSQL account with native vector search enabled, plus the
-// unified institutional-memory database and a TTL-enabled 'memory' container.
-// Vector search backs dedup / lessons / prior-art retrieval (design §7.2).
+// product-scoped runtime database and containers.
 
 @description('Cosmos DB account name (must be globally unique, 3-44 lowercase chars).')
 param accountName string
@@ -12,14 +11,16 @@ param location string
 @description('Database name for unified memory.')
 param databaseName string = 'dsf'
 
-@description('Container name for the memory store.')
-param containerName string = 'memory'
+@description('Container names for the runtime stores.')
+param containerNames array = [
+  'working'
+  'records'
+  'lessons'
+  'charters'
+]
 
-@description('Partition key path for the memory container.')
-param partitionKeyPath string = '/partitionKey'
-
-@description('Default TTL (seconds) for the working-memory tier. -1 = on but no default expiry; items set their own ttl.')
-param defaultTtlSeconds int = -1
+@description('Shared autoscale maximum RU/s for the runtime database.')
+param maxThroughput int = 1000
 
 @description('Principal IDs to grant Cosmos data-plane Data Contributor (account-scoped). Empty list = skip.')
 param dataPlanePrincipalIds array = []
@@ -66,66 +67,39 @@ resource database 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-11-15
     resource: {
       id: databaseName
     }
+    // Shared autoscale throughput: all runtime containers draw from one RU/s pool
+    // (cheaper than provisioning each container separately).
+    options: {
+      autoscaleSettings: {
+        maxThroughput: maxThroughput
+      }
+    }
   }
 }
 
-resource container 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {
-  parent: database
-  name: containerName
-  properties: {
-    resource: {
-      id: containerName
-      partitionKey: {
-        paths: [
-          partitionKeyPath
-        ]
-        kind: 'Hash'
-      }
-      // TTL enabled so the working-memory tier expires automatically.
-      defaultTtl: defaultTtlSeconds
-      indexingPolicy: {
-        indexingMode: 'consistent'
-        automatic: true
-        includedPaths: [
-          {
-            path: '/*'
-          }
-        ]
-        excludedPaths: [
-          {
-            path: '/embedding/*'
-          }
-          {
-            path: '/_etag/?'
-          }
-        ]
-        // Vector index over the embedding field used for similarity search.
-        vectorIndexes: [
-          {
-            path: '/embedding'
-            type: 'diskANN'
-          }
-        ]
-      }
-      // Vector embedding policy: 1536-dim cosine vectors (text-embedding-3-small).
-      vectorEmbeddingPolicy: {
-        vectorEmbeddings: [
-          {
-            path: '/embedding'
-            dataType: 'float32'
-            distanceFunction: 'cosine'
-            dimensions: 1536
-          }
-        ]
-      }
-    }
-    options: {
-      autoscaleSettings: {
-        maxThroughput: 1000
+// One container per runtime store (memory: working/records/lessons; charter: charters).
+// Partition key '/id' -- every persisted item carries a unique 'id' and the runtime never
+// sets a separate partition field. TTL is enabled (defaultTtl -1) so items that set their
+// own 'ttl' (the working-memory tier) expire while the rest persist. Similarity ranking is
+// done client-side, so no Cosmos-native vector index is provisioned here.
+resource containers 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = [
+  for containerName in containerNames: {
+    parent: database
+    name: containerName
+    properties: {
+      resource: {
+        id: containerName
+        partitionKey: {
+          paths: [
+            '/id'
+          ]
+          kind: 'Hash'
+        }
+        defaultTtl: -1
       }
     }
   }
-}
+]
 
 // Data-plane role assignments (SQL RBAC): grant each principal the account-scoped
 // Data Contributor role. Includes the runtime identity AND the human operator so both
@@ -154,6 +128,3 @@ output endpoint string = account.properties.documentEndpoint
 
 @description('Database name.')
 output databaseName string = database.name
-
-@description('Container name.')
-output containerName string = container.name

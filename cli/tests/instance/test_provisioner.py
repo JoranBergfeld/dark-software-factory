@@ -1693,6 +1693,33 @@ def test_cosmos_module_grants_each_data_plane_principal():
     )
 
 
+def test_cosmos_module_creates_runtime_containers():
+    """The cosmos module provisions exactly the containers the runtime reads/writes
+    (memory: working/records/lessons; charter: charters), partition-keyed on /id with
+    TTL enabled. The runtime assumes these exist -- nothing creates them at runtime."""
+    bicep = (_default_repo_root() / "infra" / "modules" / "cosmos.bicep").read_text()
+    for name in ("working", "records", "lessons", "charters"):
+        assert f"'{name}'" in bicep, f"cosmos module must create the '{name}' container"
+    assert "for containerName in containerNames" in bicep, (
+        "containers must be created from the containerNames array"
+    )
+    assert "'/id'" in bicep, "containers must be partition-keyed on /id"
+    assert "defaultTtl: -1" in bicep, "containers must enable TTL for the working-memory tier"
+
+
+def test_main_bicep_cosmos_database_is_per_product():
+    """The Cosmos database name must be the product key (DSF_PRODUCT): the runtime
+    connects to database=settings.product (container.py). A fixed default like 'dsf'
+    would 404 the blackboard's first write."""
+    bicep = (_default_repo_root() / "infra" / "main.bicep").read_text()
+    m = re.search(r"module cosmos 'modules/cosmos\.bicep'\s*=\s*\{.*?\n\}", bicep, re.DOTALL)
+    assert m, "cosmos module block not found in infra/main.bicep"
+    assert "databaseName: product" in m.group(0), (
+        "main.bicep must pass databaseName: product so the Cosmos DB matches the "
+        "runtime's database=settings.product"
+    )
+
+
 def test_main_bicep_has_no_inline_bing_connection():
     bicep = (_default_repo_root() / "infra" / "main.bicep").read_text()
     assert not re.search(

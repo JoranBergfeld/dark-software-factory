@@ -270,6 +270,7 @@ module cosmos 'modules/cosmos.bicep' = {
   name: 'cosmos'
   params: {
     accountName: '${namePrefix}cos${suffix}'
+    databaseName: product
     location: location
     tags: tags
     // Grant Cosmos data-plane access (account-scoped SQL role) to the runtime identity
