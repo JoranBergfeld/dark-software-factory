@@ -228,6 +228,92 @@ def test_offboard_dry_run_prints_plan_without_side_effects(capsys, tmp_path, mon
     assert not (tmp_path / "config" / "products.json").exists()
 
 
+def test_offboard_threads_owner_appconfig_endpoint_flag(tmp_path, monkeypatch):
+    from dsf.instance import provisioner as prov_mod
+
+    captured: dict = {}
+
+    class _CapturingOffboarder:
+        def __init__(self, product, **kwargs):
+            self.product = product
+            captured.update(kwargs)
+
+        def apply(self, *, execute=False, on_event=None):
+            step = ProvisionStep(
+                name="remove_runtime_index", description="x", result="dry-run"
+            )
+            return InstancePlan(product=self.product, steps=[step])
+
+    monkeypatch.delenv("DSF_OWNER_APPCONFIG_ENDPOINT", raising=False)
+    monkeypatch.setattr(prov_mod, "InstanceOffboarder", _CapturingOffboarder)
+    rc = main([
+        "offboard", "demo", "--dry-run", "--config-root", str(tmp_path),
+        "--owner-appconfig-endpoint", "https://o.azconfig.io",
+    ])
+
+    assert rc == 0
+    assert captured["owner_appconfig_endpoint"] == "https://o.azconfig.io"
+
+
+def test_offboard_owner_appconfig_endpoint_falls_back_to_env(tmp_path, monkeypatch):
+    from dsf.instance import provisioner as prov_mod
+
+    captured: dict = {}
+
+    class _CapturingOffboarder:
+        def __init__(self, product, **kwargs):
+            self.product = product
+            captured.update(kwargs)
+
+        def apply(self, *, execute=False, on_event=None):
+            step = ProvisionStep(
+                name="remove_runtime_index", description="x", result="dry-run"
+            )
+            return InstancePlan(product=self.product, steps=[step])
+
+    monkeypatch.setenv("DSF_OWNER_APPCONFIG_ENDPOINT", "https://env.azconfig.io")
+    monkeypatch.setattr(prov_mod, "InstanceOffboarder", _CapturingOffboarder)
+    rc = main(["offboard", "demo", "--dry-run", "--config-root", str(tmp_path)])
+
+    assert rc == 0
+    assert captured["owner_appconfig_endpoint"] == "https://env.azconfig.io"
+
+
+def test_delete_threads_owner_appconfig_endpoint_flag(tmp_path, monkeypatch):
+    from dsf.instance import deprovisioner as dep_mod
+    from dsf.instance.spec import TeardownPlan
+
+    captured: dict = {}
+
+    class _CapturingDeprovisioner:
+        def __init__(self, manifest, **kwargs):
+            self.manifest = manifest
+            self.spec = manifest.spec
+
+        @classmethod
+        def from_product(cls, product, **kwargs):
+            captured.update(kwargs)
+            manifest = read_manifest(product, kwargs.get("repo_root"))
+            return cls(manifest, **kwargs)
+
+        def apply(self, *, execute=False, on_event=None):
+            step = ProvisionStep(
+                name="remove_runtime_index", description="x", result="dry-run"
+            )
+            return TeardownPlan(product=self.spec.product, steps=[step])
+
+    _write_demo_manifest(tmp_path)
+    monkeypatch.delenv("DSF_OWNER_APPCONFIG_ENDPOINT", raising=False)
+    monkeypatch.setattr(dep_mod, "InstanceDeprovisioner", _CapturingDeprovisioner)
+    rc = main([
+        "delete", "demo", "--dry-run", "--config-root", str(tmp_path),
+        "--owner-appconfig-endpoint", "https://o.azconfig.io",
+    ])
+
+    assert rc == 0
+    assert captured["owner_appconfig_endpoint"] == "https://o.azconfig.io"
+
+
 def test_offboard_execute_surfaces_step_failure_and_exits_nonzero(capsys, tmp_path, monkeypatch):
     from dsf.instance import provisioner as prov_mod
     from dsf.instance.spec import InstancePlan, ProvisionStep
