@@ -1,4 +1,4 @@
-"""``dsfctl`` — operate a running instance's feature-council runtime.
+"""Runtime control — operate a running instance's feature-council runtime.
 
 ``run``/``sweep`` execute the conveyor in-process. ``serve-agent``/
 ``serve-orchestrator`` launch the respective ASGI services via uvicorn. Every
@@ -7,7 +7,7 @@ command wires the real per-product service bundle via
 environment (``DSF_PRODUCT`` plus the data-plane endpoints).
 
 The Control Center web UI ships as its own ``dsf-control-center`` console script
-(the ``dsf-control-center`` package), not as a ``dsfctl`` subcommand.
+(the ``dsf-control-center`` package), not as a runtime subcommand.
 """
 
 from __future__ import annotations
@@ -69,7 +69,7 @@ def signal_to_run(payload: dict) -> Run:
       :class:`SourceKind` (unknown kinds dropped; missing -> ``[]``).
 
     The run executes by default. Dry-run is a user-invoked preview only, set via
-    the ``dsfctl run --dry-run`` flag, not a payload field or system default.
+    the ``dsf run --dry-run`` flag, not a payload field or system default.
     """
     payload = payload or {}
     return Run(
@@ -230,9 +230,9 @@ def _cmd_serve_agent(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """Build the ``dsfctl`` parser with all runtime subcommands."""
+    """Build the runtime-control parser with all runtime subcommands."""
     parser = argparse.ArgumentParser(
-        prog="dsfctl",
+        prog="dsf",
         description="Dark Software Factory — instance control CLI (feature-council runtime)",
     )
     sub = parser.add_subparsers(dest="command", required=True)

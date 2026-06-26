@@ -4,7 +4,7 @@ Pulls active Grafana-managed alerts (and, when a spec carries a PromQL `query` +
 `datasource_uid`, instant query results) and maps each to an `EvidenceItem`, served over
 A2A for the conveyor's S2 investigation station.
 
-Serve it with `dsfctl serve-agent --kind grafana` (ASGI app: `dsf.agents.grafana.main:app`).
+Serve it with `dsf serve-agent --kind grafana` (ASGI app: `dsf.agents.grafana.main:app`).
 
 ## Backend selection (`DSF_MODE`)
 

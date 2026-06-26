@@ -35,7 +35,7 @@ one PEP 420 namespace package `dsf` (no member ships its own top-level package):
   `observability`, `a2a`, `container`, `learning`, `github_client`. Imports no
   application member.
 - **feature-council/** (`dsf-feature-council`) — the runtime: `agents`, `council`,
-  `orchestrator`, `triggers`, `evals`, `runtime`. Console script `dsfctl`.
+  `orchestrator`, `triggers`, `evals`, `runtime`. Runs as a module (`python -m dsf.runtime.control`); fronted by the `dsf` CLI.
 - **cli/** (`dsf-cli`) — factory CLI + instance provisioning: `cli`, `instance`. Console
   script `dsf`.
 - **control-center/** (`dsf-control-center`) — governance web UI (FastAPI + Jinja).
@@ -102,7 +102,7 @@ double still in `src/` (the source agents default to it) and is on its way out u
 
 ### Entry points
 
-- `dsfctl` (`runtime/control.py`) — operate a running instance: `run --signal <json>`
+- `dsf <verb>` (fronts `runtime/control.py` via `python -m dsf.runtime.control`) — operate a running instance: `run --signal <json>`
   (executes for real; `--dry-run` previews), `sweep`, `serve-orchestrator` (one tick:
   sweep sources), `serve-agent --kind <kind>`. DSF is pull-only: it gets work by sweeping
   source agents, not from a pushed signal inbox (a durable push queue is future scope).

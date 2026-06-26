@@ -81,12 +81,12 @@ def charter_guidance(product: str) -> list[str]:
     """Framed next-step guidance for a factory that has no intent (charter) yet.
 
     Names the full path to a *charted* factory so the operator knows provisioning
-    alone is not enough: provisioning -> charter PR -> merge -> ``dsfctl sweep``.
+    alone is not enough: provisioning -> charter PR -> merge -> ``dsf sweep``.
     """
     return [
         "[dsf] your factory has no intent yet — seed it with a product charter:",
         f"[dsf]   {charter_next_action(product)}",
-        "[dsf] then review & MERGE the charter PR; the next `dsfctl sweep` makes it "
+        "[dsf] then review & MERGE the charter PR; the next `dsf sweep` makes it "
         "authoritative.",
     ]
 
@@ -166,7 +166,7 @@ def _maybe_seed_charter(product: str, *, no_charter: bool) -> None:
     rc = charter_init(product)
     if rc == 0:
         print(
-            "[dsf] charter PR opened — review & MERGE it; the next `dsfctl sweep` "
+            "[dsf] charter PR opened — review & MERGE it; the next `dsf sweep` "
             "makes it authoritative."
         )
     else:

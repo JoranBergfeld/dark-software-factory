@@ -113,11 +113,11 @@ seeding intent:
   so a failure in the interview never fails `dsf new` itself.
 
 Opening the PR is not the finish line. The charter only becomes authoritative once you
-**review and merge** it, after which the next `dsfctl sweep` syncs it into the runtime. The
+**review and merge** it, after which the next `dsf sweep` syncs it into the runtime. The
 full path to a *charted* factory is:
 
 ```text
-dsf new  →  charter PR  →  review & merge  →  dsfctl sweep
+dsf new  →  charter PR  →  review & merge  →  dsf sweep
 ```
 
 See [Operate it › The product charter](operate.md#the-product-charter) for the charter

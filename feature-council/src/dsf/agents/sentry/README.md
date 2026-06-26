@@ -4,7 +4,7 @@ Pulls Sentry issues (regressions, high-frequency errors, newly seen issues) and 
 each to an `EvidenceItem`, served over A2A so the conveyor's S2 investigation station
 can gather from it.
 
-Serve it with `dsfctl serve-agent --kind sentry` (ASGI app: `dsf.agents.sentry.main:app`).
+Serve it with `dsf serve-agent --kind sentry` (ASGI app: `dsf.agents.sentry.main:app`).
 
 ## Backend selection (`DSF_MODE`)
 

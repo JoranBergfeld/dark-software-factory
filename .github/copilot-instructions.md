@@ -31,8 +31,8 @@ source is under `<member>/src/dsf/...`:
   `observability`, `a2a`, `signals`, `learning`, plus `container.py`, `github_client.py`.
   Imports no application member.
 - **feature-council/** (`dsf-feature-council`) — the runtime: `agents`, `council`,
-  `orchestrator`, `triggers`, `evals`, `runtime`. Console script `dsfctl`
-  (`dsf.runtime.control:main`).
+  `orchestrator`, `triggers`, `evals`, `runtime`. Runs as a module
+  (`python -m dsf.runtime.control`); the `dsf` front-door fronts its verbs.
 - **cli/** (`dsf-cli`) — factory CLI + instance provisioning: `cli`, `instance`. Console
   script `dsf` (`dsf.cli.factory:main`).
 - **control-center/** (`dsf-control-center`) — governance web UI (FastAPI + Jinja). Console
@@ -96,7 +96,7 @@ issue, never left as a stub.
 
 ### Entry points
 
-- `dsfctl` (`runtime/control.py`) — operate a running instance: `run --signal <json>`
+- `dsf <verb>` (fronts `runtime/control.py` via `python -m dsf.runtime.control`) — operate a running instance: `run --signal <json>`
   (`--dry-run` previews), `sweep`, `serve-orchestrator`, `serve-agent --kind <kind>`. DSF is
   pull-only: it gets work by sweeping source agents, not from a pushed inbox.
 - `dsf new` (`cli/factory.py`) — provision an isolated product factory (GitHub repo + Coding

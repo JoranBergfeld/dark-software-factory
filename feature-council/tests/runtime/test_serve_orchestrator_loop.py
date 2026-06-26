@@ -1,8 +1,9 @@
 """Tests for ``serve-orchestrator``'s continuous sweep loop (the deployed mode).
 
-The deployed Container App runs ``dsfctl serve-orchestrator --loop`` so the ACA
-revision stays healthy: it sweeps the enabled sources on an interval and a single
-failed tick must never tear the worker down.
+The deployed Container App runs
+``python -m dsf.runtime.control serve-orchestrator --loop`` so the ACA revision stays
+healthy: it sweeps the enabled sources on an interval and a single failed tick must never
+tear the worker down.
 """
 
 from __future__ import annotations

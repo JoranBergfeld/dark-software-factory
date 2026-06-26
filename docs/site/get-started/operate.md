@@ -29,7 +29,7 @@ continuously:
 
 ```bash
 # how the Container App runs (sweep forever; tune cadence with DSF_SWEEP_INTERVAL):
-DSF_PRODUCT=<product> uv run dsfctl serve-orchestrator --loop
+DSF_PRODUCT=<product> uv run dsf serve-orchestrator --loop
 ```
 
 The runtime image is built from `feature-council/src/dsf/runtime/Dockerfile`; `dsf new` rolls
@@ -51,7 +51,7 @@ Operator commands:
 - `dsf charter init --product <p>` — interview, then open a PR adding the charter.
   `dsf new` offers to chain into this automatically on a greenfield factory (skip it
   with `--no-charter` or a non-interactive shell); the charter only becomes
-  authoritative once the PR is **merged** and the next `dsfctl sweep` syncs it.
+  authoritative once the PR is **merged** and the next `dsf sweep` syncs it.
 - `dsf charter sync --product <p>` — force a sync now (otherwise the next sweep
   does it).
 - `dsf charter status --product <p>` — print the stored charter's status and any

@@ -4,7 +4,7 @@ Retrieves knowledge chunks from an Azure AI Search index (the knowledge index be
 FoundryIQ) and maps each to an `EvidenceItem`, served over A2A for the conveyor's S2
 investigation station.
 
-Serve it with `dsfctl serve-agent --kind foundryiq` (ASGI app:
+Serve it with `dsf serve-agent --kind foundryiq` (ASGI app:
 `dsf.agents.foundryiq.main:app`).
 
 ## Backend selection (`DSF_MODE`)

@@ -92,7 +92,7 @@ async def test_line_files_real_issue_when_dry_run_off(payload: dict) -> None:
 
 
 def test_cli_run_dry_run_exits_zero(capsys, monkeypatch) -> None:
-    # dsfctl builds the real bundle; point it at the in-memory test bundle.
+    # the runtime builds the real bundle; point it at the in-memory test bundle.
     monkeypatch.setattr(
         "dsf.runtime.control.build_services", lambda: build_test_services()
     )

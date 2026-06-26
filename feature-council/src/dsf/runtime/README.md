@@ -4,7 +4,7 @@ The per-product runtime image (`dsf-runtime`). The two-stage `Dockerfile` bundle
 + `feature-council/` and runs the orchestrator worker:
 
 ```
-CMD ["dsfctl", "serve-orchestrator", "--loop"]
+CMD ["python", "-m", "dsf.runtime.control", "serve-orchestrator", "--loop"]
 ```
 
 DSF is pull-only: each tick sweeps the enabled source agents through the conveyor. `--loop`

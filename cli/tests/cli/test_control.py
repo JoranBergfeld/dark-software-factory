@@ -1,4 +1,7 @@
-"""Tests for the `dsfctl` instance-control CLI (feature-council runtime ops)."""
+"""Tests for the runtime instance-control CLI.
+
+(`dsf` runtime verbs / `python -m dsf.runtime.control`).
+"""
 
 from __future__ import annotations
 
@@ -14,7 +17,7 @@ from dsf_testing import build_test_services
 def _real_services(monkeypatch):
     """Swap the real Azure-backed bundle for the in-memory test bundle.
 
-    ``dsfctl`` builds real services via :func:`dsf.container.build_services`,
+    The runtime control CLI builds real services via :func:`dsf.container.build_services`,
     which needs the Azure runtime env. The CLI plumbing tests only exercise the
     wiring, so we point the runtime at a test bundle instead.
     """

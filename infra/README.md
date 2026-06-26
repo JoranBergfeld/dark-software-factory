@@ -50,7 +50,7 @@ Services OpenAI User**. The model names/versions/capacities and the deployment S
 OpenAI data plane with its managed identity (AAD token, no keys); the container env
 and outputs point at the created account, so `dsf new` needs no OpenAI flags.
 
-**Runtime is a continuous worker.** The image runs `dsfctl serve-orchestrator
+**Runtime is a continuous worker.** The image runs `python -m dsf.runtime.control serve-orchestrator
 --loop`: it sweeps the enabled sources every `DSF_SWEEP_INTERVAL` seconds (default
 300), surviving per-tick errors, so the always-on Container App revision stays
 healthy (DSF is pull-only — there is no inbound ingress).

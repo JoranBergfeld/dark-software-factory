@@ -3,7 +3,7 @@
 Runs web searches (external/market signals) via a real provider and maps each result to
 an `EvidenceItem`, served over A2A for the conveyor's S2 investigation station.
 
-Serve it with `dsfctl serve-agent --kind webiq` (ASGI app: `dsf.agents.webiq.main:app`).
+Serve it with `dsf serve-agent --kind webiq` (ASGI app: `dsf.agents.webiq.main:app`).
 
 ## Backend selection (`DSF_MODE`)
 
