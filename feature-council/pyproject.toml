@@ -11,9 +11,6 @@ dependencies = [
     "webiq>=0.1.0",
 ]
 
-[project.scripts]
-dsfctl = "dsf.runtime.control:main"
-
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
