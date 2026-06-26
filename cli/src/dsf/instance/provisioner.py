@@ -729,6 +729,7 @@ class InstanceProvisioner:
             f"githubAppId={self._github_app_id}",
             f"githubInstallationId={self._github_installation_id}",
             f"githubRepository={s.github_repo()}",
+            "allowPublicNetworkAccess=true",
         ]
         if admin_principal_id:
             params.append(f"adminPrincipalId={admin_principal_id}")

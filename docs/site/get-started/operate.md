@@ -16,7 +16,11 @@ run. This page covers the deployed runtime and the surfaces you govern it with.
 user-assigned managed identity and reading every endpoint from its environment — App
 Configuration, Cosmos, Key Vault, App Insights (ADR 0004). Secrets never land in the
 descriptor; they stay in Key Vault and are fetched at runtime through the identity. The
-runtime is **real-only**: `build_services()` requires `DSF_PRODUCT` plus the Azure endpoints
+`dsf new` laptop flow enables public network access for the backing services so the CLI,
+runtime, and `dsf charter` commands can reach them; AAD/RBAC still gate access and local auth
+stays disabled. Private-endpoint deployments should deploy `infra/main.bicep` directly with
+`allowPublicNetworkAccess=false`.
+The runtime is **real-only**: `build_services()` requires `DSF_PRODUCT` plus the Azure endpoints
 and never falls back to a stub (ADR 0014).
 
 DSF is **pull-only**. The orchestrator gets work by *sweeping* its enabled source agents —

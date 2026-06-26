@@ -153,6 +153,17 @@ def test_provision_azure_passes_github_repository_param():
     assert f"githubRepository={spec.github_repo()}" in step.command
 
 
+def test_provision_azure_enables_public_network_access():
+    """`dsf new` provisions from the operator's laptop and seeds secrets into the
+    product Key Vault over the public `az` data plane, so it must opt the backing
+    services out of private-only networking. The bicep default stays `false` for
+    direct private-endpoint deployments; the CLI flow explicitly enables it."""
+    spec = _spec()
+    plan = InstanceProvisioner(spec).plan()
+    step = next(s for s in plan.steps if s.name == "provision_azure")
+    assert "allowPublicNetworkAccess=true" in step.command
+
+
 
 
 def test_plan_create_repo_command():
