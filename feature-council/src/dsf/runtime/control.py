@@ -21,7 +21,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
-from dsf.config.owner_index import runtime_env_for_product
+from dsf.config.owner_index import OWNER_APPCONFIG_ENV, runtime_env_for_product
 from dsf.container import build_services
 from dsf.contracts.enums import SourceKind, TriggerKind
 from dsf.contracts.models import Run
@@ -94,11 +94,27 @@ def _get_services(args: argparse.Namespace | None = None):
 
     With ``--product`` the env is resolved from the owner App Config index
     (endpoints + non-secret pointers) before wiring the real Azure adapters.
+    A failure to reach or authenticate to that index exits cleanly too, rather
+    than surfacing a raw traceback.
     """
     product = getattr(args, "product", None) if args is not None else None
     try:
         if product:
-            return build_services(env=runtime_env_for_product(product))
+            try:
+                env = runtime_env_for_product(product)
+            except Exception as exc:
+                # The owner App Config index read is remote I/O; surface any
+                # auth/network/configuration failure as a clean operator message
+                # (parity with the build_services clean-exit below) instead of a
+                # raw traceback on the headline `dsf sweep --product` path.
+                print(
+                    f"[dsf] error: could not resolve runtime env for product "
+                    f"'{product}' from the owner App Config index "
+                    f"({OWNER_APPCONFIG_ENV}): {exc}",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            return build_services(env=env)
         return build_services()
     except ValueError as exc:
         print(f"[dsf] error: {exc}", file=sys.stderr)
