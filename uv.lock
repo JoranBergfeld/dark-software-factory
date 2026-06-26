@@ -517,18 +517,18 @@ name = "dsf-cli"
 version = "0.1.0"
 source = { editable = "cli" }
 dependencies = [
-    { name = "dsf-core" },
+    { name = "dsf-core", extra = ["azure"] },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "dsf-core", editable = "core" }]
+requires-dist = [{ name = "dsf-core", extras = ["azure"], editable = "core" }]
 
 [[package]]
 name = "dsf-control-center"
 version = "0.1.0"
 source = { editable = "control-center" }
 dependencies = [
-    { name = "dsf-core" },
+    { name = "dsf-core", extra = ["azure"] },
     { name = "fastapi" },
     { name = "jinja2" },
     { name = "uvicorn" },
@@ -536,7 +536,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "dsf-core", editable = "core" },
+    { name = "dsf-core", extras = ["azure"], editable = "core" },
     { name = "fastapi", specifier = ">=0.110" },
     { name = "jinja2", specifier = ">=3.1" },
     { name = "uvicorn", specifier = ">=0.29" },
@@ -585,7 +585,7 @@ name = "dsf-feature-council"
 version = "0.1.0"
 source = { editable = "feature-council" }
 dependencies = [
-    { name = "dsf-core" },
+    { name = "dsf-core", extra = ["azure"] },
     { name = "fastapi" },
     { name = "mcp" },
     { name = "uvicorn" },
@@ -594,7 +594,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "dsf-core", editable = "core" },
+    { name = "dsf-core", extras = ["azure"], editable = "core" },
     { name = "fastapi", specifier = ">=0.110" },
     { name = "mcp", specifier = ">=1.2" },
     { name = "uvicorn", specifier = ">=0.29" },

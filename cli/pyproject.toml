@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Dark Software Factory — factory CLI and instance provisioning (dsf new)"
 requires-python = ">=3.12"
 dependencies = [
-    "dsf-core",
+    "dsf-core[azure]",
 ]
 
 [project.scripts]

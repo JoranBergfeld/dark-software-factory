@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Dark Software Factory — feature council runtime (agents, council, orchestrator, triggers, evals, runtime)"
 requires-python = ">=3.12"
 dependencies = [
-    "dsf-core",
+    "dsf-core[azure]",
     "fastapi>=0.110",
     "uvicorn>=0.29",
     "mcp>=1.2",

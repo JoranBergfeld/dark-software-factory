@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Dark Software Factory — Control Center web UI (runtime governance surface)"
 requires-python = ">=3.12"
 dependencies = [
-    "dsf-core",
+    "dsf-core[azure]",
     "fastapi>=0.110",
     "uvicorn>=0.29",
     "jinja2>=3.1",
