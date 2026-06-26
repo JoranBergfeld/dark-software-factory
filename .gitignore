@@ -20,3 +20,5 @@ config/instances/*.runtime/
 infra/*.json
 infra/modules/*.json
 !infra/*.parameters.json
+
+config/
