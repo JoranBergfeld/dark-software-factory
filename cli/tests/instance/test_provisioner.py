@@ -1527,6 +1527,37 @@ def test_main_bicep_deployer_grants_guard_against_admin_collision():
         )
 
 
+def test_main_bicep_grants_operator_openai_user_on_foundry():
+    """The human operator (admin + deployer) must also get Cognitive Services OpenAI
+    User on the Foundry account, not just the runtime identity — otherwise operator
+    commands that call Azure OpenAI under the az-login identity (e.g. `dsf charter
+    init`) are 401'd. Mirrors the Key Vault / App Configuration operator grants."""
+    grants = _role_assignments()
+    admin = [
+        ra
+        for ra in grants
+        if "foundry.id" in (ra["guid_args"] or "")
+        and "adminPrincipalId" in (ra["guid_args"] or "")
+        and "cognitiveServicesOpenAIUserRoleId" in (ra["guid_args"] or "")
+    ]
+    deployer = [
+        ra
+        for ra in grants
+        if "foundry.id" in (ra["guid_args"] or "")
+        and "deployer().objectId" in (ra["guid_args"] or "")
+        and "cognitiveServicesOpenAIUserRoleId" in (ra["guid_args"] or "")
+    ]
+    assert admin, (
+        "infra/main.bicep must grant the human admin (adminPrincipalId) the "
+        "Cognitive Services OpenAI User role on the Foundry account so operator "
+        "commands calling Azure OpenAI (dsf charter init) are not 401'd"
+    )
+    assert deployer, (
+        "infra/main.bicep must grant the deployer the Cognitive Services OpenAI "
+        "User role on the Foundry account, mirroring the KV / App Config deployer grants"
+    )
+
+
 def test_main_bicep_has_no_inline_bing_connection():
     bicep = (_default_repo_root() / "infra" / "main.bicep").read_text()
     assert not re.search(

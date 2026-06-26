@@ -349,6 +349,31 @@ resource foundryOpenAIUserAssignment 'Microsoft.Authorization/roleAssignments@20
   }
 }
 
+// The human operator (Control Center, `dsf charter init`) calls inference over AAD
+// under their own identity, so the admin principal needs the same OpenAI User role.
+// Mirrors the Key Vault and App Configuration admin grants above.
+resource foundryOpenAIUserAdminAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(adminPrincipalId)) {
+  name: guid(foundry.id, adminPrincipalId, cognitiveServicesOpenAIUserRoleId)
+  scope: foundry
+  properties: {
+    principalId: adminPrincipalId
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', cognitiveServicesOpenAIUserRoleId)
+  }
+}
+
+// The principal running the deployment (the `dsf` CLI's `az login`) gets the same
+// OpenAI User role so `dsf charter init` works straight after provisioning. Skipped
+// when the deployer IS the admin: that grant above is identical (same scope, role,
+// and principal) so emitting both would collide on the deterministic guid() name.
+resource foundryOpenAIUserDeployerAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (empty(adminPrincipalId) || toLower(deployer().objectId) != toLower(adminPrincipalId)) {
+  name: guid(foundry.id, deployer().objectId, cognitiveServicesOpenAIUserRoleId)
+  scope: foundry
+  properties: {
+    principalId: deployer().objectId
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', cognitiveServicesOpenAIUserRoleId)
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Runtime compute: Azure Container Apps environment + orchestrator app (ADR 0004)
 // ---------------------------------------------------------------------------
