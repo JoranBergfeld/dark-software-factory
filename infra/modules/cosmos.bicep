@@ -21,8 +21,8 @@ param partitionKeyPath string = '/partitionKey'
 @description('Default TTL (seconds) for the working-memory tier. -1 = on but no default expiry; items set their own ttl.')
 param defaultTtlSeconds int = -1
 
-@description('Principal ID (managed identity) to grant Cosmos data-plane Data Contributor. Empty = skip.')
-param dataPlanePrincipalId string = ''
+@description('Principal IDs to grant Cosmos data-plane Data Contributor (account-scoped). Empty list = skip.')
+param dataPlanePrincipalIds array = []
 
 @description('Tags applied to the resources.')
 param tags object = {}
@@ -127,16 +127,21 @@ resource container 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/container
   }
 }
 
-// Data-plane role assignment for the managed identity (SQL RBAC).
-resource cosmosDataAssignment 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments@2024-11-15' = if (!empty(dataPlanePrincipalId)) {
-  parent: account
-  name: guid(account.id, dataPlanePrincipalId, cosmosDataContributorRoleId)
-  properties: {
-    roleDefinitionId: '${account.id}/sqlRoleDefinitions/${cosmosDataContributorRoleId}'
-    principalId: dataPlanePrincipalId
-    scope: account.id
+// Data-plane role assignments (SQL RBAC): grant each principal the account-scoped
+// Data Contributor role. Includes the runtime identity AND the human operator so both
+// the deployed runtime and a laptop `dsf sweep` (operator's az-login principal) can
+// read/write institutional memory.
+resource cosmosDataAssignments 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments@2024-11-15' = [
+  for principalId in dataPlanePrincipalIds: if (!empty(principalId)) {
+    parent: account
+    name: guid(account.id, principalId, cosmosDataContributorRoleId)
+    properties: {
+      roleDefinitionId: '${account.id}/sqlRoleDefinitions/${cosmosDataContributorRoleId}'
+      principalId: principalId
+      scope: account.id
+    }
   }
-}
+]
 
 @description('The Cosmos account resource ID.')
 output id string = account.id

@@ -1656,6 +1656,43 @@ def test_main_bicep_grants_operator_openai_user_on_foundry():
     )
 
 
+def test_main_bicep_grants_operator_cosmos_data_contributor():
+    """The human operator (admin + deployer) must also get Cosmos data-plane Data
+    Contributor, not just the runtime identity -- otherwise operator commands that
+    persist runs to Cosmos under the az-login identity (e.g. `dsf sweep`) are 403'd.
+    Mirrors the Key Vault / App Configuration / Foundry operator grants."""
+    bicep = (_default_repo_root() / "infra" / "main.bicep").read_text()
+    m = re.search(r"module cosmos 'modules/cosmos\.bicep'\s*=\s*\{.*?\n\}", bicep, re.DOTALL)
+    assert m, "cosmos module block not found in infra/main.bicep"
+    block = m.group(0)
+    assert "dataPlanePrincipalIds" in block, "cosmos module must receive dataPlanePrincipalIds"
+    assert "runtimeIdentity.properties.principalId" in block, (
+        "runtime identity must retain Cosmos data-plane access"
+    )
+    assert "adminPrincipalId" in block, (
+        "operator (adminPrincipalId) must get Cosmos data-plane Data Contributor so "
+        "`dsf sweep` under the operator's az-login identity can persist runs"
+    )
+    assert "deployer().objectId" in block, (
+        "deployer must get Cosmos data-plane access, mirroring the App Config / Foundry grants"
+    )
+
+
+def test_cosmos_module_grants_each_data_plane_principal():
+    """The cosmos module fans the Data Contributor role out over every principal in
+    dataPlanePrincipalIds (runtime + operator), keyed on a per-principal guid()."""
+    bicep = (_default_repo_root() / "infra" / "modules" / "cosmos.bicep").read_text()
+    assert "param dataPlanePrincipalIds array" in bicep, (
+        "cosmos module must accept a dataPlanePrincipalIds array"
+    )
+    assert "for principalId in dataPlanePrincipalIds" in bicep, (
+        "cosmos module must create one role assignment per data-plane principal"
+    )
+    assert "00000000-0000-0000-0000-000000000002" in bicep, (
+        "must use the Cosmos built-in Data Contributor role id"
+    )
+
+
 def test_main_bicep_has_no_inline_bing_connection():
     bicep = (_default_repo_root() / "infra" / "main.bicep").read_text()
     assert not re.search(

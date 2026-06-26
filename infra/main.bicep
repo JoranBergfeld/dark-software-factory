@@ -272,8 +272,15 @@ module cosmos 'modules/cosmos.bicep' = {
     accountName: '${namePrefix}cos${suffix}'
     location: location
     tags: tags
-    // Grant the runtime identity Cosmos data-plane access (account-scoped SQL role).
-    dataPlanePrincipalId: runtimeIdentity.properties.principalId
+    // Grant Cosmos data-plane access (account-scoped SQL role) to the runtime identity
+    // AND the human operator (admin + deployer), mirroring the operator's App Config /
+    // Foundry data-plane grants so a laptop `dsf sweep` can persist runs. toLower + union
+    // dedup the admin==deployer case (the same human running `dsf new`).
+    dataPlanePrincipalIds: union(
+      [toLower(runtimeIdentity.properties.principalId)],
+      empty(adminPrincipalId) ? [] : [toLower(adminPrincipalId)],
+      [toLower(deployer().objectId)]
+    )
   }
 }
 
