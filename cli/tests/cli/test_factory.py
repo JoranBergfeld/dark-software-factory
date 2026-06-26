@@ -186,10 +186,11 @@ def test_new_effective_prefix_is_stable_across_runs(tmp_path):
     assert len(first) == 12
 
 
-def test_factory_parser_rejects_runtime_command():
-    # the factory CLI must NOT expose runtime ops — those live in dsfctl
-    with pytest.raises(SystemExit):
-        build_parser().parse_args(["run"])
+def test_factory_parser_accepts_runtime_command():
+    # the factory now fronts the runtime ops (subprocessing python -m dsf.runtime.control)
+    args = build_parser().parse_args(["sweep", "--product", "pets"])
+    assert args.product == "pets"
+    assert args.func.__name__ == "_cmd_sweep"
 
 
 def test_offboard_parser_wiring():

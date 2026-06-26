@@ -9,6 +9,7 @@ the repo but removes Azure/runtime/registry artifacts.
 from __future__ import annotations
 
 import argparse
+import subprocess
 import sys
 from pathlib import Path
 
@@ -375,6 +376,56 @@ def _cmd_delete(args: argparse.Namespace) -> int:
     return 0
 
 
+_RUNTIME_MODULE = "dsf.runtime.control"
+
+
+def _forward_to_runtime(forward: list[str]) -> int:
+    """Run a feature-council runtime verb in a subprocess and pass through its code.
+
+    The cli member must not import the runtime (import-linter forbids it), so the
+    front-door run/sweep/serve verbs shell out to
+    ``python -m dsf.runtime.control <forward...>``.
+    """
+    completed = subprocess.run([sys.executable, "-m", _RUNTIME_MODULE, *forward])
+    return completed.returncode
+
+
+def _cmd_run(args: argparse.Namespace) -> int:
+    forward = ["run"]
+    if args.signal:
+        forward += ["--signal", args.signal]
+    if args.dry_run:
+        forward.append("--dry-run")
+    if args.product:
+        forward += ["--product", args.product]
+    return _forward_to_runtime(forward)
+
+
+def _cmd_sweep(args: argparse.Namespace) -> int:
+    forward = ["sweep"]
+    if args.product:
+        forward += ["--product", args.product]
+    return _forward_to_runtime(forward)
+
+
+def _cmd_serve_orchestrator(args: argparse.Namespace) -> int:
+    forward = ["serve-orchestrator"]
+    if args.loop:
+        forward.append("--loop")
+    if args.interval is not None:
+        forward += ["--interval", str(args.interval)]
+    if args.product:
+        forward += ["--product", args.product]
+    return _forward_to_runtime(forward)
+
+
+def _cmd_serve_agent(args: argparse.Namespace) -> int:
+    forward = [
+        "serve-agent", "--kind", args.kind, "--host", args.host, "--port", str(args.port)
+    ]
+    return _forward_to_runtime(forward)
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the ``dsf`` parser with the instance-lifecycle subcommands."""
     parser = argparse.ArgumentParser(
@@ -531,6 +582,30 @@ def build_parser() -> argparse.ArgumentParser:
         help="override repo root where config/instances/ is read from (tests/CI)",
     )
     p_delete.set_defaults(func=_cmd_delete)
+
+    p_run = sub.add_parser("run", help="run the intake line for one signal (runtime)")
+    p_run.add_argument("--signal", help="path to a signal JSON file")
+    p_run.add_argument("--dry-run", action="store_true", help="run the line but skip filing")
+    p_run.add_argument("--product", help="resolve runtime env for this product")
+    p_run.set_defaults(func=_cmd_run)
+
+    p_sweep = sub.add_parser("sweep", help="sweep enabled source agents once (runtime)")
+    p_sweep.add_argument("--product", help="resolve runtime env for this product")
+    p_sweep.set_defaults(func=_cmd_sweep)
+
+    p_orch = sub.add_parser(
+        "serve-orchestrator", help="run the orchestrator worker (runtime)"
+    )
+    p_orch.add_argument("--loop", action="store_true", help="sweep continuously")
+    p_orch.add_argument("--interval", type=int, default=None, help="seconds between sweeps")
+    p_orch.add_argument("--product", help="resolve runtime env for this product")
+    p_orch.set_defaults(func=_cmd_serve_orchestrator)
+
+    p_serve = sub.add_parser("serve-agent", help="serve a source agent over A2A (runtime)")
+    p_serve.add_argument("--kind", default="sentry", help="source agent kind")
+    p_serve.add_argument("--host", default="0.0.0.0", help="bind host")
+    p_serve.add_argument("--port", type=int, default=8080, help="bind port")
+    p_serve.set_defaults(func=_cmd_serve_agent)
 
     from dsf.cli.charter import add_charter_subcommands
 
