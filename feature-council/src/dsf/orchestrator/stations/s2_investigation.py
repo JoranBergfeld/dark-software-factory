@@ -14,8 +14,7 @@ from typing import TYPE_CHECKING
 import httpx
 
 from dsf.a2a import client as a2a_client
-from dsf.config.flags import agent_enabled
-from dsf.config.registry import load_registry, route_product
+from dsf.config.flags import agent_enabled, product_record
 from dsf.contracts.enums import RunStatus
 from dsf.observability.tracing import span_attrs_for_run
 from dsf.orchestrator.agent_registry import build_agents
@@ -29,13 +28,13 @@ if TYPE_CHECKING:
 STATION = "S2:investigation"
 
 
-def _run_scope(run: Run) -> dict:
+def _run_scope(run: Run, services: Services) -> dict:
     """Serialize the subset of the run that source agents need.
 
-    Threads the resolved product-registry entry (when the run's hints match a
-    registered product) under ``product_registry`` so live source backends —
-    grafana, sentry, foundryiq, azuremonitor — can scope their queries by the
-    product's registry fields instead of falling back to their empty path.
+    Threads the factory's own product record (from its per-product App Config)
+    under ``product_registry`` so live source backends scope their queries to the
+    product. The run is always scoped to its product; a missing record raises
+    (the station then audits an ERROR) rather than sweeping unscoped.
     """
     scope = {
         "run_id": run.id,
@@ -43,9 +42,8 @@ def _run_scope(run: Run) -> dict:
         "source_kinds": [k.value for k in run.source_kinds],
         "signal_payload": dict(run.signal_payload),
     }
-    product = route_product(list(run.scope_product_hints), load_registry())
-    if product is not None:
-        scope["product_registry"] = product.model_dump()
+    record = product_record(services.config, services.product)
+    scope["product_registry"] = record.model_dump()
     return scope
 
 
@@ -73,7 +71,7 @@ async def run(run: Run, services: Services) -> Run:
             run.audit.append(_audit(f"source {kind.value} disabled — skipped"))
 
         agents = build_agents(enabled, services.config)
-        scope = _run_scope(run)
+        scope = _run_scope(run, services)
 
         results = await asyncio.gather(
             *(_gather_one(kind, agents[kind], scope) for kind in enabled if kind in agents)

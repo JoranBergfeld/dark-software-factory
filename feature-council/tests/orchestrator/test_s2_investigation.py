@@ -2,72 +2,64 @@
 
 from __future__ import annotations
 
-from dsf.config.registry import Product
+import pytest
+
 from dsf.contracts.enums import RunStatus, SourceKind, TriggerKind
 from dsf.contracts.models import Run
 from dsf.orchestrator.stations import s2_investigation
-from dsf_testing import build_test_services
+from dsf_testing import build_test_services, config_with_product_record
 
 
-def _demo_registry() -> dict[str, Product]:
-    return {
-        "demo": Product(
-            key="demo",
+def _demo_services():
+    return build_test_services(
+        product="demo",
+        config=config_with_product_record(
+            "demo",
             github_repo="acme/demo",
             azure_monitor_scope="appinsights-demo",
             grafana_dashboards=["dash-1"],
             foundryiq_scope="kb-demo",
             sentry_projects=["proj-demo"],
-        )
-    }
-
-
-def test_run_scope_injects_resolved_product_registry(monkeypatch) -> None:
-    monkeypatch.setattr(
-        s2_investigation, "load_registry", lambda: _demo_registry(), raising=False
+        ),
     )
+
+
+def test_run_scope_injects_product_record():
+    services = _demo_services()
     run = Run(
         trigger=TriggerKind.SIGNAL,
         scope_product_hints=["demo"],
         source_kinds=[SourceKind.AZUREMONITOR],
     )
-
-    scope = s2_investigation._run_scope(run)
-
-    registry_scope = scope.get("product_registry", {})
-    assert registry_scope.get("azure_monitor_scope") == "appinsights-demo"
-    assert registry_scope.get("grafana_dashboards") == ["dash-1"]
-    assert registry_scope.get("foundryiq_scope") == "kb-demo"
-    assert registry_scope.get("sentry_projects") == ["proj-demo"]
+    scope = s2_investigation._run_scope(run, services)
+    rs = scope["product_registry"]
+    assert rs["azure_monitor_scope"] == "appinsights-demo"
+    assert rs["grafana_dashboards"] == ["dash-1"]
+    assert rs["foundryiq_scope"] == "kb-demo"
+    assert rs["sentry_projects"] == ["proj-demo"]
 
 
-def test_run_scope_omits_registry_when_no_product_matches(monkeypatch) -> None:
-    monkeypatch.setattr(
-        s2_investigation, "load_registry", lambda: _demo_registry(), raising=False
-    )
+def test_run_scope_fails_loud_when_record_missing():
+    services = build_test_services(product="demo")  # default config, no product.* keys
     run = Run(
         trigger=TriggerKind.SIGNAL,
-        scope_product_hints=["no-such-product"],
+        scope_product_hints=["demo"],
         source_kinds=[SourceKind.AZUREMONITOR],
     )
-
-    scope = s2_investigation._run_scope(run)
-
-    assert "product_registry" not in scope
+    with pytest.raises(ValueError):
+        s2_investigation._run_scope(run, services)
 
 
-def test_live_azuremonitor_backend_resolves_scope_from_run_scope(monkeypatch) -> None:
+def test_live_azuremonitor_backend_resolves_scope_from_run_scope():
     from dsf.agents.azuremonitor.backend import AzureMonitorBackend
 
-    monkeypatch.setattr(
-        s2_investigation, "load_registry", lambda: _demo_registry(), raising=False
-    )
+    services = _demo_services()
     run = Run(
         trigger=TriggerKind.SIGNAL,
         scope_product_hints=["demo"],
         source_kinds=[SourceKind.AZUREMONITOR],
     )
-    scope = s2_investigation._run_scope(run)
+    scope = s2_investigation._run_scope(run, services)
 
     async def _dummy_mcp(spec: dict):
         return []
@@ -77,7 +69,10 @@ def test_live_azuremonitor_backend_resolves_scope_from_run_scope(monkeypatch) ->
 
 
 async def test_collects_evidence_from_enabled_agents() -> None:
-    services = build_test_services()
+    services = build_test_services(
+        product="microbi",
+        config=config_with_product_record("microbi", github_repo="o/microbi"),
+    )
     run = Run(
         trigger=TriggerKind.SIGNAL,
         scope_product_hints=["microbi"],
@@ -94,7 +89,10 @@ async def test_collects_evidence_from_enabled_agents() -> None:
 
 
 async def test_disabled_agent_contributes_nothing_and_is_audited() -> None:
-    services = build_test_services()
+    services = build_test_services(
+        product="microbi",
+        config=config_with_product_record("microbi", github_repo="o/microbi"),
+    )
     # Disable grafana; sentry stays enabled.
     services.config.set_flag(f"agent.{SourceKind.GRAFANA.value}", False)
 
