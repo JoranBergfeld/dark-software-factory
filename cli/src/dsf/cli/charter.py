@@ -136,11 +136,13 @@ def _app_settings(
 
 
 def _resolve_repo(product: str) -> str | None:
-    """Resolve ``product`` to its ``owner/name`` repo via the product registry."""
-    from dsf.config.registry import load_registry, route_product
+    """Resolve ``product`` to its ``owner/name`` repo via the owner App Config index."""
+    import os
 
-    match = route_product([product], load_registry())
-    return match.github_repo if match else None
+    from dsf.config.owner_index import OWNER_APPCONFIG_ENV, repo_for_product
+
+    endpoint = (os.environ.get(OWNER_APPCONFIG_ENV) or "").strip()
+    return repo_for_product(endpoint, product)
 
 
 async def _run_interview(

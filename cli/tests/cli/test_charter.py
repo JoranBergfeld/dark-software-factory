@@ -203,6 +203,35 @@ def test_app_settings_derives_app_creds_from_owner_kv(monkeypatch):
     assert settings.github_repository == "org/alpha"
 
 
+def test_resolve_repo_reads_owner_index(monkeypatch):
+    from dsf.cli import charter as charter_mod
+
+    monkeypatch.setenv("DSF_OWNER_APPCONFIG_ENDPOINT", "https://owner")
+    seen = {}
+
+    def _fake_repo_for_product(endpoint, product, **_):
+        seen["endpoint"] = endpoint
+        seen["product"] = product
+        return "org/alpha" if product == "alpha" else None
+
+    monkeypatch.setattr("dsf.config.owner_index.repo_for_product", _fake_repo_for_product)
+
+    assert charter_mod._resolve_repo("alpha") == "org/alpha"
+    assert seen == {"endpoint": "https://owner", "product": "alpha"}
+    assert charter_mod._resolve_repo("missing") is None
+
+
+def test_resolve_repo_returns_none_without_owner_endpoint(monkeypatch):
+    from dsf.cli import charter as charter_mod
+
+    monkeypatch.delenv("DSF_OWNER_APPCONFIG_ENDPOINT", raising=False)
+    monkeypatch.setattr(
+        "dsf.config.owner_index.repo_for_product",
+        lambda endpoint, product, **_: ("SHOULD-NOT-BE-USED" if endpoint else None),
+    )
+    assert charter_mod._resolve_repo("alpha") is None
+
+
 def test_settings_fills_azure_endpoints_from_manifest(monkeypatch):
     from dsf.cli.charter import _settings
 
