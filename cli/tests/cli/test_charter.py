@@ -122,7 +122,9 @@ def test_sync_ref_unknown_product(monkeypatch, capsys):
     monkeypatch.setattr("dsf.cli.charter.build_charter_store", lambda s: InMemoryCharterStore())
     monkeypatch.setattr("dsf.cli.charter._resolve_repo", lambda product: None)
     rc = main(["charter", "sync", "--product", "ghost", "--ref", "main"])
-    assert rc == 1 and "not in registry" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert rc == 1 and "cannot resolve repo for product" in err
+    assert "DSF_OWNER_APPCONFIG_ENDPOINT" in err
 
 
 async def test_run_interview_drives_to_draft():

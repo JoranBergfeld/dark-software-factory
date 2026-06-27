@@ -108,7 +108,8 @@ def _app_settings(
     GitHub App credentials are derived from the owner Key Vault: when the operator
     has not set the App env explicitly but ``DSF_OWNER_KEYVAULT_URI`` is exported
     (as it is for ``dsf new``), read the App id, installation id and private-key
-    pointer from that owner vault and resolve the product repo from the registry —
+    pointer from that owner vault and resolve the product repo from the owner App
+    Configuration index —
     so ``dsf charter init`` works straight after provisioning. Explicit env always
     wins, and the owner Key Vault always backs the App private key.
     """
@@ -171,7 +172,10 @@ def _live_blob_sha(args: argparse.Namespace, product: str) -> tuple[str | None, 
     if args.ref is not None:
         repo_full = _resolve_repo(product)
         if not repo_full:
-            return None, f"product {product!r} is not in registry"
+            return None, (
+                f"cannot resolve repo for product {product!r} from the owner App "
+                "Config index (is DSF_OWNER_APPCONFIG_ENDPOINT set?)"
+            )
         try:
             app = build_repo_app_client(_app_settings(product))
         except ValueError as exc:
@@ -239,7 +243,11 @@ def _cmd_charter_sync(args: argparse.Namespace) -> int:
         if args.ref is not None:
             repo_full = _resolve_repo(product)
             if not repo_full:
-                print(f"[dsf] error: product {product!r} is not in registry", file=sys.stderr)
+                print(
+                    f"[dsf] error: cannot resolve repo for product {product!r} from the "
+                    "owner App Config index (is DSF_OWNER_APPCONFIG_ENDPOINT set?)",
+                    file=sys.stderr,
+                )
                 return 1
             app = build_repo_app_client(_app_settings(product))
             stored = asyncio.run(
@@ -276,7 +284,11 @@ def _cmd_charter_init(args: argparse.Namespace) -> int:
     product = args.product
     repo_full = _resolve_repo(product)
     if not repo_full:
-        print(f"[dsf] error: product {product!r} is not in registry", file=sys.stderr)
+        print(
+            f"[dsf] error: cannot resolve repo for product {product!r} from the "
+            "owner App Config index (is DSF_OWNER_APPCONFIG_ENDPOINT set?)",
+            file=sys.stderr,
+        )
         return 1
 
     settings = _app_settings(product)
