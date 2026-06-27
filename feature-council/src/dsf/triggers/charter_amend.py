@@ -17,7 +17,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from dsf.charter.amendment import AmendmentReason, propose_charter_amendment
-from dsf.config.registry import load_registry, route_product
+from dsf.config.flags import product_record
 from dsf.contracts.models import AuditRecord
 
 if TYPE_CHECKING:
@@ -41,17 +41,14 @@ async def propose_amendment_on_sweep(services: Services, run: Run) -> None:
         _audit(run, "charter amendment skipped: no GitHub App configured")
         return
     try:
-        routed = route_product([product], load_registry())
-        if routed is None:
-            _audit(run, f"charter amendment skipped: '{product}' not in registry")
-            return
+        record = product_record(services.config, product)
         outcome = await propose_charter_amendment(
             charter_store=services.charter,
             memory=services.memory,
             model=services.model,
             repo_client=services.repo,
             product=product,
-            repo=routed.github_repo,
+            repo=record.github_repo,
             config=services.config,
             now=datetime.now(UTC),
         )

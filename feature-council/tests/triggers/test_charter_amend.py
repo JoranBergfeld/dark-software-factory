@@ -3,26 +3,16 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from dsf.charter.amendment import AMENDMENT_BRANCH_PREFIX, AmendmentDraft
-from dsf.config.registry import Product
 from dsf.contracts.charter import Charter, StoredCharter
 from dsf.contracts.enums import CharterStatus, TriggerKind
 from dsf.contracts.models import Run
 from dsf.triggers import charter_amend
 from dsf.triggers.charter_amend import STATION, propose_amendment_on_sweep
-from dsf_testing import DeterministicModelClient, build_test_services
+from dsf_testing import DeterministicModelClient, build_test_services, config_with_product_record
 from dsf_testing.charter import InMemoryCharterStore
 from dsf_testing.config import InMemoryConfigStore
 from dsf_testing.github import RecordingRepoClient
 from dsf_testing.memory import InMemoryMemoryStore
-
-
-def _route_alpha(monkeypatch) -> None:
-    monkeypatch.setattr(charter_amend, "load_registry", lambda: {})
-    monkeypatch.setattr(
-        charter_amend,
-        "route_product",
-        lambda hints, registry: Product(key="alpha", github_repo="org/alpha"),
-    )
 
 
 def _charter() -> Charter:
@@ -32,7 +22,7 @@ def _charter() -> Charter:
 
 
 def _enabled_config() -> InMemoryConfigStore:
-    cfg = InMemoryConfigStore.from_defaults()
+    cfg = config_with_product_record("alpha", github_repo="org/alpha")
     cfg.set_flag("charter.amendment.enabled", True)
     return cfg
 
@@ -74,8 +64,7 @@ def _sweep_run() -> Run:
     return Run(trigger=TriggerKind.SCHEDULED)
 
 
-async def test_proposes_amendment_and_audits_pr(monkeypatch):
-    _route_alpha(monkeypatch)
+async def test_proposes_amendment_and_audits_pr():
     amended = Charter(
         product="alpha", vision="V2", target_users="U", goals=["g", "g2"], success_metrics=["m"]
     )
@@ -91,8 +80,7 @@ async def test_proposes_amendment_and_audits_pr(monkeypatch):
     )
 
 
-async def test_no_change_is_audited_without_a_pr(monkeypatch):
-    _route_alpha(monkeypatch)
+async def test_no_change_is_audited_without_a_pr():
     services = await _services_for_proposal(changed=None)
     run = _sweep_run()
 
@@ -102,8 +90,7 @@ async def test_no_change_is_audited_without_a_pr(monkeypatch):
     assert any(r.station == STATION and "no_change" in r.message for r in run.audit)
 
 
-async def test_disabled_is_audited(monkeypatch):
-    _route_alpha(monkeypatch)
+async def test_disabled_is_audited():
     services = await _services_for_proposal(changed=_charter())
     services.config.set_flag("charter.amendment.enabled", False)
     run = _sweep_run()
@@ -113,8 +100,7 @@ async def test_disabled_is_audited(monkeypatch):
     assert any(r.station == STATION and "disabled" in r.message for r in run.audit)
 
 
-async def test_without_app_audits_and_skips(monkeypatch):
-    _route_alpha(monkeypatch)
+async def test_without_app_audits_and_skips():
     services = build_test_services(
         product="alpha", charter=InMemoryCharterStore(), config=_enabled_config(), repo=None
     )
@@ -125,20 +111,20 @@ async def test_without_app_audits_and_skips(monkeypatch):
     assert any(r.station == STATION and "no GitHub App" in r.message for r in run.audit)
 
 
-async def test_unregistered_product_skips(monkeypatch):
-    monkeypatch.setattr(charter_amend, "load_registry", lambda: {})
-    monkeypatch.setattr(charter_amend, "route_product", lambda hints, registry: None)
+async def test_missing_record_is_audited():
+    cfg = InMemoryConfigStore.from_defaults()
+    cfg.set_flag("charter.amendment.enabled", True)
     services = build_test_services(
         product="alpha",
         charter=InMemoryCharterStore(),
-        config=_enabled_config(),
+        config=cfg,
         repo=RecordingRepoClient(),
     )
     run = _sweep_run()
 
-    await propose_amendment_on_sweep(services, run)
+    await propose_amendment_on_sweep(services, run)  # must not raise
 
-    assert any(r.station == STATION and "not in registry" in r.message for r in run.audit)
+    assert any(r.station == STATION and "error" in r.message.lower() for r in run.audit)
 
 
 async def test_no_product_is_noop():
@@ -148,9 +134,7 @@ async def test_no_product_is_noop():
     assert run.audit == []
 
 
-async def test_never_raises(monkeypatch):
-    _route_alpha(monkeypatch)
-
+async def test_never_raises():
     class Boom:
         async def latest_pr_with_head_prefix(self, *args, **kwargs):
             raise RuntimeError("network down")

@@ -2,13 +2,12 @@ from __future__ import annotations
 
 from dsf.charter.markdown import render_charter
 from dsf.charter.sync import CHARTER_PATH
-from dsf.config.registry import Product
 from dsf.contracts.charter import Charter
 from dsf.contracts.enums import CharterStatus, TriggerKind
 from dsf.contracts.models import Run
 from dsf.triggers import charter_sync
 from dsf.triggers.charter_sync import STATION, sync_charter_on_sweep
-from dsf_testing import build_test_services
+from dsf_testing import build_test_services, config_with_product_record
 from dsf_testing.charter import InMemoryCharterStore
 from dsf_testing.github import RecordingRepoClient
 
@@ -19,12 +18,11 @@ def _charter_md() -> str:
     )
 
 
-def _route_alpha(monkeypatch) -> None:
-    monkeypatch.setattr(charter_sync, "load_registry", lambda: {})
-    monkeypatch.setattr(
-        charter_sync,
-        "route_product",
-        lambda hints, registry: Product(key="alpha", github_repo="org/alpha"),
+def _services_alpha(**kw):
+    return build_test_services(
+        product="alpha",
+        config=config_with_product_record("alpha", github_repo="org/alpha"),
+        **kw,
     )
 
 
@@ -32,11 +30,10 @@ def _sweep_run() -> Run:
     return Run(trigger=TriggerKind.SCHEDULED)
 
 
-async def test_sync_on_sweep_reconciles_ok(monkeypatch):
-    _route_alpha(monkeypatch)
+async def test_sync_on_sweep_reconciles_ok():
     store = InMemoryCharterStore()
     repo = RecordingRepoClient({CHARTER_PATH: (_charter_md(), "blobsha")})
-    services = build_test_services(product="alpha", charter=store, repo=repo)
+    services = _services_alpha(charter=store, repo=repo)
     run = _sweep_run()
 
     await sync_charter_on_sweep(services, run)
@@ -46,9 +43,8 @@ async def test_sync_on_sweep_reconciles_ok(monkeypatch):
     assert any(r.station == STATION and "status=OK" in r.message for r in run.audit)
 
 
-async def test_sync_on_sweep_without_app_audits_and_skips(monkeypatch):
-    _route_alpha(monkeypatch)
-    services = build_test_services(product="alpha", charter=InMemoryCharterStore(), repo=None)
+async def test_sync_on_sweep_without_app_audits_and_skips():
+    services = _services_alpha(charter=InMemoryCharterStore(), repo=None)
     run = _sweep_run()
 
     await sync_charter_on_sweep(services, run)
@@ -57,23 +53,7 @@ async def test_sync_on_sweep_without_app_audits_and_skips(monkeypatch):
     assert any(r.station == STATION and "no GitHub App" in r.message for r in run.audit)
 
 
-async def test_sync_on_sweep_unregistered_product_skips(monkeypatch):
-    monkeypatch.setattr(charter_sync, "load_registry", lambda: {})
-    monkeypatch.setattr(charter_sync, "route_product", lambda hints, registry: None)
-    repo = RecordingRepoClient({CHARTER_PATH: (_charter_md(), "s")})
-    services = build_test_services(product="alpha", charter=InMemoryCharterStore(), repo=repo)
-    run = _sweep_run()
-
-    await sync_charter_on_sweep(services, run)
-
-    assert any(r.station == STATION and "not in registry" in r.message for r in run.audit)
-
-
-async def test_sync_on_sweep_registry_failure_is_audited(monkeypatch):
-    def _boom():
-        raise RuntimeError("registry unreadable")
-
-    monkeypatch.setattr(charter_sync, "load_registry", _boom)
+async def test_sync_on_sweep_missing_record_is_audited():
     repo = RecordingRepoClient({CHARTER_PATH: (_charter_md(), "s")})
     services = build_test_services(product="alpha", charter=InMemoryCharterStore(), repo=repo)
     run = _sweep_run()
@@ -90,14 +70,12 @@ async def test_sync_on_sweep_no_product_is_noop():
     assert run.audit == []
 
 
-async def test_sync_on_sweep_never_raises(monkeypatch):
-    _route_alpha(monkeypatch)
-
+async def test_sync_on_sweep_never_raises():
     class Boom:
         async def read_file(self, *args, **kwargs):
             raise RuntimeError("network down")
 
-    services = build_test_services(product="alpha", charter=InMemoryCharterStore(), repo=Boom())
+    services = _services_alpha(charter=InMemoryCharterStore(), repo=Boom())
     run = _sweep_run()
 
     await sync_charter_on_sweep(services, run)  # must not raise
