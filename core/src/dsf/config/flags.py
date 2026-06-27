@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from dsf.config.registry import Product
 from dsf.contracts.enums import SourceKind, TriggerKind
 
 if TYPE_CHECKING:
@@ -91,6 +92,32 @@ def weights(cfg: ConfigStore, critics: list[str]) -> dict[str, float]:
     :data:`DEFAULT_WEIGHT`.
     """
     return {name: float(cfg.get_value(f"weight.{name}", DEFAULT_WEIGHT)) for name in critics}
+
+
+def product_record(cfg: ConfigStore, product: str) -> Product:
+    """Load ``product``'s :class:`Product` record from its per-product App Config.
+
+    Reads the unlabelled ``product.*`` keys the provisioner seeds and reuses the
+    :func:`threshold` accessor for ``confidence_threshold``. Raises ``ValueError``
+    if the record is absent (``product.github_repo`` unset) — a missing record is
+    a provisioning fault that must fail loud, not silently de-scope the run.
+    """
+    github_repo = cfg.get_value("product.github_repo", "")
+    if not github_repo:
+        raise ValueError(
+            f"no product record for {product!r} in App Configuration "
+            "(product.github_repo is unset) — reprovision the factory"
+        )
+    return Product(
+        key=product,
+        github_repo=github_repo,
+        label_taxonomy=cfg.get_value("product.label_taxonomy", {}) or {},
+        foundryiq_scope=cfg.get_value("product.foundryiq_scope", "") or "",
+        sentry_projects=cfg.get_value("product.sentry_projects", []) or [],
+        grafana_dashboards=cfg.get_value("product.grafana_dashboards", []) or [],
+        azure_monitor_scope=cfg.get_value("product.azure_monitor_scope", "") or "",
+        confidence_threshold=threshold(cfg, product),
+    )
 
 
 def maturity_level(cfg: ConfigStore, product: str | None = None) -> str:
@@ -190,6 +217,7 @@ __all__ = [
     "deliberation_rounds",
     "jury_roster",
     "maturity_level",
+    "product_record",
     "threshold",
     "triggers_paused",
     "weights",
