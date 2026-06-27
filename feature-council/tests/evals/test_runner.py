@@ -12,12 +12,19 @@ from dsf.evals.runner import (
     run_case,
     run_suite,
 )
-from dsf_testing import build_test_services
+from dsf_testing import build_test_services, config_with_product_record
+
+
+def _services():
+    return build_test_services(
+        product="microbi",
+        config=config_with_product_record("microbi", github_repo="joranbergfeld/microbi"),
+    )
 
 
 async def test_run_suite_returns_metrics_dict() -> None:
     """run_suite over the golden set yields the aggregate metrics dict with all four keys."""
-    result = await run_suite(None, build_test_services)
+    result = await run_suite(None, _services)
 
     assert set(result["metrics"]) == set(METRIC_KEYS)
     assert len(result["cases"]) == len(load_cases())
@@ -28,7 +35,7 @@ async def test_run_suite_returns_metrics_dict() -> None:
 
 async def test_groundedness_is_perfect_on_golden() -> None:
     """The dry-run line only files grounded issues -> groundedness == 1.0."""
-    result = await run_suite(None, build_test_services)
+    result = await run_suite(None, _services)
     assert result["metrics"]["groundedness"] == 1.0
 
 
@@ -41,7 +48,7 @@ async def test_killed_case_is_not_filed() -> None:
     """The all-agents-disabled / debounced case terminates not-FILED."""
     cases = {c["id"]: c for c in load_cases()}
     case = cases["all-agents-disabled-killed"]
-    result = await run_case(case, build_test_services)
+    result = await run_case(case, _services)
 
     assert result["status"] != "FILED"
     # verdict_match rewards the matched not-filed expectation.
@@ -50,7 +57,7 @@ async def test_killed_case_is_not_filed() -> None:
 
 def test_main_gate_returns_zero_on_good_golden_set() -> None:
     """main(['--gate']) passes on the healthy golden set."""
-    assert main(["--gate"], build_test_services) == 0
+    assert main(["--gate"], _services) == 0
 
 
 def test_gate_returns_nonzero_on_injected_regression() -> None:
@@ -222,7 +229,7 @@ async def test_adversarial_cases_exist_in_golden_set() -> None:
 async def test_adversarial_debounce_burst_is_killed() -> None:
     """Debounce burst case terminates KILLED (not FILED)."""
     cases = {c["id"]: c for c in load_cases()}
-    result = await run_case(cases["adversarial-debounce-burst"], build_test_services)
+    result = await run_case(cases["adversarial-debounce-burst"], _services)
     assert result["status"] == "KILLED"
     assert result["metrics"]["verdict_match"] == 1.0
 
@@ -230,7 +237,7 @@ async def test_adversarial_debounce_burst_is_killed() -> None:
 async def test_adversarial_ungrounded_proposal_is_grounded() -> None:
     """Ungrounded-proposal case: S4 kills the fake proposal -> groundedness 1.0."""
     cases = {c["id"]: c for c in load_cases()}
-    result = await run_case(cases["adversarial-ungrounded-proposal"], build_test_services)
+    result = await run_case(cases["adversarial-ungrounded-proposal"], _services)
     assert result["status"] == "FILED"
     assert result["metrics"]["groundedness"] == 1.0
 
@@ -238,7 +245,7 @@ async def test_adversarial_ungrounded_proposal_is_grounded() -> None:
 async def test_adversarial_routing_word_boundary_routes_correctly() -> None:
     """Word-boundary routing case: compound hint routes to expected product."""
     cases = {c["id"]: c for c in load_cases()}
-    result = await run_case(cases["adversarial-routing-word-boundary"], build_test_services)
+    result = await run_case(cases["adversarial-routing-word-boundary"], _services)
     assert result["status"] == "FILED"
     assert result["metrics"]["routing_accuracy"] == 1.0
 
@@ -246,6 +253,6 @@ async def test_adversarial_routing_word_boundary_routes_correctly() -> None:
 async def test_adversarial_duplicate_veto_vetoes_proposal() -> None:
     """Duplicate veto case: council vetoes the proposal -> veto_accuracy 1.0."""
     cases = {c["id"]: c for c in load_cases()}
-    result = await run_case(cases["adversarial-duplicate-veto"], build_test_services)
+    result = await run_case(cases["adversarial-duplicate-veto"], _services)
     assert result["status"] == "FILED"
     assert result["metrics"]["veto_accuracy"] == 1.0

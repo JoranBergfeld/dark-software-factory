@@ -8,7 +8,7 @@ from dsf.contracts.enums import TriggerKind
 from dsf.contracts.models import Run
 from dsf.observability.tracing import build_tracer, span_attrs_for_run
 from dsf.orchestrator.conveyor import run_line
-from dsf_testing import build_test_services
+from dsf_testing import build_test_services, config_with_product_record
 
 #: The seven station span names the conveyor must emit.
 STATION_SPANS = {
@@ -81,7 +81,10 @@ def test_span_attrs_for_run_flattens_enums() -> None:
 
 
 async def test_conveyor_records_all_station_spans() -> None:
-    services = build_test_services()
+    services = build_test_services(
+        product="microbi",
+        config=config_with_product_record("microbi", github_repo="joranbergfeld/microbi"),
+    )
     run = Run(
         trigger=TriggerKind.SIGNAL,
         signal_payload={"product_hints": ["microbi"], "text": "checkout error spike"},

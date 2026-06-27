@@ -7,11 +7,14 @@ from dsf.contracts.models import Run
 from dsf.orchestrator.blackboard import Blackboard
 from dsf.orchestrator.conveyor import STATIONS, run_line
 from dsf.orchestrator.stations.s1_triage import SIGNAL_KIND
-from dsf_testing import build_test_services
+from dsf_testing import build_test_services, config_with_product_record
 
 
 async def test_full_line_reaches_filed_and_files_for_real() -> None:
-    services = build_test_services()
+    services = build_test_services(
+        product="microbi",
+        config=config_with_product_record("microbi", github_repo="joranbergfeld/microbi"),
+    )
     run = Run(
         trigger=TriggerKind.SIGNAL,
         signal_payload={"product_hints": ["microbi"], "text": "checkout error spike"},
