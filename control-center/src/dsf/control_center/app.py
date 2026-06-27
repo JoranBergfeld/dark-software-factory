@@ -192,9 +192,9 @@ def _state(services: Services) -> dict[str, Any]:
     # Product list drives the per-product critic capability note.
     products: list[str] = []
     try:
-        from dsf.config.registry import load_registry
+        from dsf.config.owner_index import OWNER_APPCONFIG_ENV, list_products
 
-        products = sorted(load_registry().keys())
+        products = list_products(os.environ.get(OWNER_APPCONFIG_ENV, ""))
     except Exception:
         products = []
 
