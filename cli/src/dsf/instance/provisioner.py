@@ -40,8 +40,6 @@ from dsf.instance.branch_protection import (
 from dsf.instance.deploy_progress import DeploymentProgressPoller
 from dsf.instance.runtime_render import (
     product_from_spec,
-    render_product_registration,  # noqa: F401 - kept until file-registry removal task
-    render_product_unregistration,
     render_runtime_bundle,
     render_sre_summary,
     runtime_dir,
@@ -1090,10 +1088,6 @@ class InstanceOffboarder:
                 ),
                 purge_step,
                 ProvisionStep(
-                    name="unregister_product",
-                    description=f"Unregister {self.product} from config/products.json",
-                ),
-                ProvisionStep(
                     name="remove_runtime_index",
                     description=(
                         f"Remove {self.product} from the owner App Configuration index"
@@ -1154,10 +1148,6 @@ class InstanceOffboarder:
         elif step.name == "purge_soft_deleted":
             step.executed = True
             step.result = self._purge_soft_deleted()
-        elif step.name == "unregister_product":
-            render_product_unregistration(self.product, repo_root=self._repo_root)
-            step.executed = True
-            step.result = "unregistered"
         elif step.name == "remove_runtime_index":
             if not self._owner_appconfig_endpoint:
                 step.result = "skipped (no owner App Config configured)"

@@ -19,13 +19,11 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from dsf.config.registry import deregister_product
 from dsf.instance.runtime_render import runtime_dir
 from dsf.instance.spec import (
     InstanceManifest,
     ProvisionStep,
     TeardownPlan,
-    _default_repo_root,
     manifest_path,
 )
 from dsf.instance.teardown_common import (
@@ -155,12 +153,6 @@ class InstanceDeprovisioner:
 
         steps += [
             ProvisionStep(
-                name="deregister_product",
-                description=(
-                    f"Remove {s.product} from config/products.json routing registry"
-                ),
-            ),
-            ProvisionStep(
                 name="remove_runtime_index",
                 description=(
                     f"Remove {s.product} from the owner App Configuration index"
@@ -242,13 +234,6 @@ class InstanceDeprovisioner:
         if step.name == "remove_sre_rbac":
             step.executed = True
             step.result = self._az.remove_sre_rbac(self.spec)
-
-        elif step.name == "deregister_product":
-            products_json = (
-                (self._repo_root or _default_repo_root()) / "config" / "products.json"
-            )
-            deregister_product(self.spec.product, path=products_json)
-            step.executed, step.result = True, "deregistered"
 
         elif step.name == "remove_runtime_index":
             if not self._owner_appconfig_endpoint:

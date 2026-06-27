@@ -15,12 +15,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from dsf.config.registry import Product, register_product, unregister_product
+from dsf.config.registry import Product
 from dsf.contracts.handoff import HANDOFF_LABEL, INCIDENT_LABEL
 from dsf.instance.spec import (
     InstanceManifest,
     InstanceSpec,
-    _default_repo_root,
     instances_dir,
 )
 
@@ -210,32 +209,10 @@ def product_from_spec(spec: InstanceSpec) -> Product:
     )
 
 
-def render_product_registration(
-    manifest: InstanceManifest, *, repo_root: Path | None = None
-) -> Path:
-    """Register the product into ``config/products.json`` (the routing registry).
-
-    Derives a :class:`~dsf.config.registry.Product` from the instance spec and
-    upserts it idempotently, so S1 scoping and S6 routing can resolve the product
-    to its repo as a byproduct of ``dsf new``. Pure local file IO (no network),
-    so it runs in both dry-run and execute. Returns the registry path.
-    """
-    products_json = (repo_root or _default_repo_root()) / "config" / "products.json"
-    return register_product(product_from_spec(manifest.spec), path=products_json)
-
-
-def render_product_unregistration(product: str, *, repo_root: Path | None = None) -> Path:
-    """Unregister ``product`` from ``config/products.json`` (idempotent)."""
-    products_json = (repo_root or _default_repo_root()) / "config" / "products.json"
-    return unregister_product(product, path=products_json)
-
-
 __all__ = [
     "RuntimeBundle",
     "SreSummary",
     "product_from_spec",
-    "render_product_registration",
-    "render_product_unregistration",
     "render_runtime_bundle",
     "render_sre_summary",
     "runtime_dir",
