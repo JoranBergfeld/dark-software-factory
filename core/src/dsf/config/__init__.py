@@ -1,20 +1,20 @@
-"""Feature flags + product registry (control-center config layer)."""
+"""Feature flags + product record (control-center config layer)."""
 
 from dsf.config.flags import (
     agent_enabled,
     critic_enabled,
+    product_record,
     threshold,
     triggers_paused,
     weights,
 )
-from dsf.config.registry import Product, load_registry, route_product
+from dsf.config.registry import Product
 
 __all__ = [
     "Product",
     "agent_enabled",
     "critic_enabled",
-    "load_registry",
-    "route_product",
+    "product_record",
     "threshold",
     "triggers_paused",
     "weights",
