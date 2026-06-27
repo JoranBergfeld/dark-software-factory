@@ -130,11 +130,11 @@ def test_sre_summary_instructs_incident_label(tmp_path):
 
 
 def test_product_from_spec_threads_azure_monitor_scope():
-    from dsf.instance.runtime_render import _product_from_spec
+    from dsf.instance.runtime_render import product_from_spec
     from dsf.instance.spec import InstanceSpec
 
     spec = InstanceSpec(product="microbi", owner="acme")
-    product = _product_from_spec(spec)
+    product = product_from_spec(spec)
     # Defaults to the product key so the telemetry source has a non-empty scope to
     # resolve in azure mode; the live Application Insights id is filled in during
     # observability onboarding.

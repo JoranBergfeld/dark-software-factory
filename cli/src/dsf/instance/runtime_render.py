@@ -191,7 +191,7 @@ def render_sre_summary(
     return SreSummary(runtime_dir=rdir, summary_path=summary_path)
 
 
-def _product_from_spec(spec: InstanceSpec) -> Product:
+def product_from_spec(spec: InstanceSpec) -> Product:
     """Map an instance spec to its runtime :class:`Product` registry entry.
 
     Observability scopes (``sentry_projects`` / ``grafana_dashboards``) are left
@@ -221,7 +221,7 @@ def render_product_registration(
     so it runs in both dry-run and execute. Returns the registry path.
     """
     products_json = (repo_root or _default_repo_root()) / "config" / "products.json"
-    return register_product(_product_from_spec(manifest.spec), path=products_json)
+    return register_product(product_from_spec(manifest.spec), path=products_json)
 
 
 def render_product_unregistration(product: str, *, repo_root: Path | None = None) -> Path:
@@ -233,6 +233,7 @@ def render_product_unregistration(product: str, *, repo_root: Path | None = None
 __all__ = [
     "RuntimeBundle",
     "SreSummary",
+    "product_from_spec",
     "render_product_registration",
     "render_product_unregistration",
     "render_runtime_bundle",
