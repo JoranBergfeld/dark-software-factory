@@ -50,6 +50,8 @@ for the merges.
 3. A new `dsf charter implement` subcommand that commits the constitution and
    files a single `creation:ready` **bootstrap issue** assigned to the Copilot
    Coding Agent.
+4. Update the provisioning **prerequisites docs** for the new `specify-cli`
+   dependency.
 
 **Out of scope (deferred, tracked):**
 
@@ -100,7 +102,7 @@ flowchart TB
 ```
 
 1. **`dsf new`** — creates the GitHub repo, seeds the baseline `ci` workflow (as
-   today), **and** runs `specify init <product> --integration copilot` into the
+   today), **and** runs `specify init --here --integration copilot --script sh` into the
    clone, committing the `.specify/` scaffold + Copilot command files in the same
    initial push.
 2. **`dsf charter init`** — unchanged: interviews the owner, opens the
@@ -135,15 +137,21 @@ Each unit has one clear purpose and a narrow interface.
 
 - **Where:** `cli/src/dsf/instance/provisioner.py` (the `seed_repo` step).
 - **What:** in addition to the baseline `ci` workflow, run
-  `specify init <product> --integration copilot` (non-interactively, into the repo
-  clone) and commit the resulting `.specify/` scaffold + Copilot command files with
-  the initial push. Because `specify init` writes many files, this step moves from
+  `specify init --here --integration copilot --script sh --ignore-agent-tools --force`
+  in the repo clone and commit the resulting `.specify/` scaffold + Copilot command
+  files with the initial push. `--here` targets the existing clone, `--script sh`
+  picks the bash helpers, `--ignore-agent-tools` skips the local Copilot-CLI check
+  (the seeding host only needs the scaffold), and `--force` skips the
+  non-empty-directory confirmation. Because `specify init` writes many files, this
+  step moves from
   the current single `gh api PUT contents` to a **clone → write → commit → push**
   flow.
 - **Dependency:** `specify-cli` becomes an operator prerequisite, installed via
   `uv tool install specify-cli --from git+https://github.com/github/spec-kit.git@<pinned-tag>`.
-  The tag is **pinned** so seeding is reproducible (Spec Kit fetches its templates
-  at init time).
+  Templates are **bundled inside the `specify-cli` package** (verified against the
+  locally installed `specify 0.11.9`, whose `init --help` states it "does not need
+  network access and templates match the installed CLI version"): so **pinning the
+  tag pins the templates** and makes seeding fully reproducible and offline.
 - **Determinism / tests:** the provisioner records the command in dry-run and runs
   it under `--execute`, exactly like the existing `gh`/`az` steps. Unit tests assert
   the command list; no live `specify` run in the suite.
@@ -185,6 +193,15 @@ Each unit has one clear purpose and a narrow interface.
   and points at `.dsf/charter.md` and `.specify/memory/constitution.md`. The
   charter is embedded as `UNTRUSTED` data (ADR 0017). The body **requests** a large
   model (e.g. Opus 4.8); see Risks for why this is a request, not a guarantee.
+
+### 5. Documentation — provisioning prerequisites
+
+- **Where:** `docs/site/get-started/provision-a-factory.md` (the `## Prerequisites`
+  list) and `docs/site/get-started/quickstart.md`.
+- **What:** add the pinned `specify-cli` install (`uv tool install specify-cli
+  --from git+https://github.com/github/spec-kit.git@<pinned-tag>`) as a tool the
+  principal running `dsf new` needs, and note that `dsf charter implement` follows a
+  merged charter. Keeps the docs honest with the new external dependency.
 
 ## Constitution mapping (detail)
 
@@ -243,9 +260,10 @@ Offline/unit per DSF norms (`dsf_testing` doubles; no fakes in `src/`):
 - **Copilot model selection is not dictatable per-issue.** "Use Opus 4.8" is a
   Copilot repo/account setting; the bootstrap issue *requests* it. Mitigation:
   set it where the repo allows and state the request in the body.
-- **`specify init` is a new external dependency that fetches templates at run
-  time.** Mitigation: pin the specify-cli tag; document the prerequisite; the
-  offline suite never runs it live.
+- **`specify init` is a new operator prerequisite.** Mitigation: pin the
+  specify-cli tag (templates are bundled in the package, so the scaffold is
+  reproducible and needs no network at init); document the prerequisite in the
+  provisioning docs; the unit suite asserts the command without running it live.
 - **Single-session lifecycle reliability for large charters.** Acceptable for v1;
   the escape hatch is `/speckit.taskstoissues` fan-out + dependency orchestration
   (explicitly deferred).
