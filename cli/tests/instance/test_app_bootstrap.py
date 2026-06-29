@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 from datetime import UTC, datetime
 
@@ -10,14 +11,17 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 from dsf.instance.app_bootstrap import (
+    _OWNER_KV_ARM_TEMPLATE,
     AppCredentials,
     BootstrapConfig,
+    BootstrapResult,
     app_manifest,
     bootstrap_app,
     discover_installation_id,
     exchange_manifest_code,
     owner_kv_ensure_commands,
     owner_kv_store_commands,
+    read_owner_kv_credentials,
 )
 
 
@@ -41,8 +45,6 @@ def test_app_manifest_describes_least_privilege_app():
         "contents": "write",
         "administration": "write",
     }
-    # No webhook events: GitHub rejects a manifest that declares events without a
-    # hook URL, and the App needs none (installation-token REST/GraphQL only).
     assert "default_events" not in manifest
     assert "hook_attributes" not in manifest
 
@@ -93,8 +95,14 @@ def test_app_credentials_repr_hides_secrets():
 
 
 def test_discover_installation_id_polls_until_present():
-    creds = AppCredentials(app_id="42", slug="s", pem=_rsa_pem(), webhook_secret="",
-                           client_id="", client_secret="")
+    creds = AppCredentials(
+        app_id="42",
+        slug="s",
+        pem=_rsa_pem(),
+        webhook_secret="",
+        client_id="",
+        client_secret="",
+    )
     responses = iter([
         httpx.Response(200, json=[]),
         httpx.Response(200, json=[{"id": 9001}]),
@@ -127,33 +135,123 @@ def test_owner_kv_ensure_commands_create_rbac_vault_and_grant_operator():
         location="swedencentral",
         operator_object_id="oid-1",
     )
-    assert ["az", "group", "create", "--name", "rg-dsf-app",
-            "--location", "swedencentral"] in cmds
-    create = next(c for c in cmds if c[:3] == ["az", "keyvault", "create"])
-    assert "--enable-rbac-authorization" in create
-    assert "--enable-purge-protection" in create
-    assert "--retention-days" in create
+    assert [
+        "az",
+        "group",
+        "create",
+        "--name",
+        "rg-dsf-app",
+        "--location",
+        "swedencentral",
+    ] in cmds
+    deploy = next(c for c in cmds if c[:4] == ["az", "deployment", "group", "create"])
+    assert "--template" in deploy
+    assert "--parameters" in deploy
+    template = json.loads(deploy[deploy.index("--template") + 1])
+    assert template["resources"][0]["properties"]["enableRbacAuthorization"] is True
     grant = next(c for c in cmds if c[:4] == ["az", "role", "assignment", "create"])
     assert "Key Vault Secrets Officer" in grant
     assert "oid-1" in grant
 
 
-def test_owner_kv_store_commands_set_id_installation_and_keyfile():
+def test_owner_kv_ensure_commands_uses_arm_deployment_for_policy_compliance():
+    cmds = owner_kv_ensure_commands(
+        resource_group="rg-dsf-app",
+        keyvault_name="kv-dsf-app",
+        location="swedencentral",
+        operator_object_id="oid-1",
+    )
+    assert [
+        "az",
+        "group",
+        "create",
+        "--name",
+        "rg-dsf-app",
+        "--location",
+        "swedencentral",
+    ] in cmds
+    assert not any(c[:3] == ["az", "keyvault", "create"] for c in cmds)
+    deploy = next(c for c in cmds if c[:4] == ["az", "deployment", "group", "create"])
+    assert "--template" in deploy
+    template_idx = deploy.index("--template")
+    template = json.loads(deploy[template_idx + 1])
+    props = template["resources"][0]["properties"]
+    assert props["enableSoftDelete"] is True
+    assert props["enablePurgeProtection"] is True
+    assert props["softDeleteRetentionInDays"] == 90
+    assert props["enableRbacAuthorization"] is True
+    assert template == _OWNER_KV_ARM_TEMPLATE
+    grant = next(c for c in cmds if c[:4] == ["az", "role", "assignment", "create"])
+    assert "Key Vault Secrets Officer" in grant
+    assert "oid-1" in grant
+
+
+def test_owner_kv_store_commands_set_id_installation_and_keyfile(tmp_path):
+    pem_path = str(tmp_path / "app.pem")
     cmds = owner_kv_store_commands(
         keyvault_name="kv-dsf-app",
         app_id="42",
         installation_id="9001",
-        pem_path="/tmp/app.pem",
+        pem_path=pem_path,
     )
-    assert ["az", "keyvault", "secret", "set", "--vault-name", "kv-dsf-app",
-            "--name", "github-app-id", "--value", "42", "-o", "none"] in cmds
-    assert ["az", "keyvault", "secret", "set", "--vault-name", "kv-dsf-app",
-            "--name", "github-app-installation-id", "--value", "9001", "-o", "none"] in cmds
+    assert [
+        "az",
+        "keyvault",
+        "secret",
+        "set",
+        "--vault-name",
+        "kv-dsf-app",
+        "--name",
+        "github-app-id",
+        "--value",
+        "42",
+        "-o",
+        "none",
+    ] in cmds
+    assert [
+        "az",
+        "keyvault",
+        "secret",
+        "set",
+        "--vault-name",
+        "kv-dsf-app",
+        "--name",
+        "github-app-installation-id",
+        "--value",
+        "9001",
+        "-o",
+        "none",
+    ] in cmds
     keyset = next(c for c in cmds if "github-app-private-key" in c)
-    assert "--file" in keyset and "/tmp/app.pem" in keyset
+    assert "--file" in keyset and pem_path in keyset
     assert "--value" not in keyset
-    # The private-key write must not echo the stored secret bundle to stdout.
     assert keyset[-2:] == ["-o", "none"]
+
+
+def test_read_owner_kv_credentials_returns_existing_values():
+    vault_secrets = {
+        "github-app-id": "99",
+        "github-app-installation-id": "8000",
+        "github-app-private-key": "EXISTINGPEM",
+    }
+
+    def fake_run(cmd, **kwargs):
+        class R:
+            stdout = ""
+            returncode = 0
+
+        if cmd[:4] == ["az", "keyvault", "secret", "show"]:
+            name = cmd[cmd.index("--name") + 1]
+            R.stdout = vault_secrets.get(name, "") + "\n"
+        return R()
+
+    result = read_owner_kv_credentials("kv-dsf-app", run=fake_run)
+    assert result == BootstrapResult(
+        app_id="99",
+        installation_id="8000",
+        keyvault_name="kv-dsf-app",
+        keyvault_uri="https://kv-dsf-app.vault.azure.net/",
+    )
 
 
 def test_bootstrap_app_runs_ensure_then_store_with_resolved_scope(tmp_path):
@@ -199,17 +297,54 @@ def test_bootstrap_app_runs_ensure_then_store_with_resolved_scope(tmp_path):
     assert result.app_id == "42"
     assert result.installation_id == "9001"
     assert "kv-dsf-app" in result.keyvault_uri
-    # Secrets Officer scope had its subscription id substituted before running.
     grant = next(c for c in calls if c[:4] == ["az", "role", "assignment", "create"])
     assert "/subscriptions/sub-123/resourceGroups/rg-dsf-app/" in " ".join(grant)
-    # The private key was stored from a file, not as a CLI value.
-    keyset = next(c for c in calls if "github-app-private-key" in c)
+    keyset = next(
+        c
+        for c in calls
+        if c[:4] == ["az", "keyvault", "secret", "set"] and "github-app-private-key" in c
+    )
     assert "--file" in keyset and "--value" not in keyset
 
 
+def test_bootstrap_app_returns_existing_credentials_if_vault_already_has_them():
+    vault_secrets = {
+        "github-app-id": "99",
+        "github-app-installation-id": "8000",
+        "github-app-private-key": "EXISTINGPEM",
+    }
+
+    def fake_run(cmd, **kwargs):
+        class R:
+            stdout = ""
+            returncode = 0
+
+        if cmd[:4] == ["az", "keyvault", "secret", "show"]:
+            name = cmd[cmd.index("--name") + 1]
+            R.stdout = vault_secrets.get(name, "") + "\n"
+        return R()
+
+    capture_called: list[int] = []
+    result = bootstrap_app(
+        BootstrapConfig(app_name="dsf-acme", resource_group="rg", keyvault_name="kv-dsf-app"),
+        run=fake_run,
+        capture_code=lambda manifest: capture_called.append(1) or "unused",
+    )
+    assert result.app_id == "99"
+    assert result.installation_id == "8000"
+    assert "kv-dsf-app" in result.keyvault_uri
+    assert len(capture_called) == 0
+
+
 def test_bootstrap_app_retries_secret_writes_on_rbac_propagation(tmp_path):
-    creds = AppCredentials(app_id="42", slug="s", pem="PEMDATA", webhook_secret="",
-                           client_id="", client_secret="")
+    creds = AppCredentials(
+        app_id="42",
+        slug="s",
+        pem="PEMDATA",
+        webhook_secret="",
+        client_id="",
+        client_secret="",
+    )
     failures = {"left": 2}
 
     def fake_run(cmd, **kwargs):
@@ -221,7 +356,8 @@ def test_bootstrap_app_retries_secret_writes_on_rbac_propagation(tmp_path):
             R.stdout = "sub-123\n"
         if cmd[:4] == ["az", "ad", "signed-in-user", "show"]:
             R.stdout = "oid-1\n"
-        # The data-plane secret writes 403 until the Secrets Officer grant propagates.
+        if cmd[:4] == ["az", "keyvault", "secret", "show"]:
+            raise subprocess.CalledProcessError(1, cmd)
         if "github-app-private-key" in cmd and failures["left"] > 0:
             failures["left"] -= 1
             raise subprocess.CalledProcessError(1, cmd)
@@ -238,5 +374,94 @@ def test_bootstrap_app_retries_secret_writes_on_rbac_propagation(tmp_path):
         sleep=slept.append,
     )
     assert result.installation_id == "9001"
-    assert failures["left"] == 0  # both 403s were absorbed
-    assert len(slept) == 2  # backed off once per failed attempt
+    assert failures["left"] == 0
+    assert len(slept) == 2
+
+
+def test_bootstrap_app_writes_recovery_file_and_cleans_up_on_success(tmp_path, monkeypatch):
+    from dsf.instance import app_bootstrap
+
+    monkeypatch.setattr(app_bootstrap, "_recovery_file", lambda name: tmp_path / f"rec-{name}.json")
+
+    creds = AppCredentials(
+        app_id="42",
+        slug="s",
+        pem="PEMDATA",
+        webhook_secret="",
+        client_id="",
+        client_secret="",
+    )
+
+    def fake_run(cmd, **kwargs):
+        class R:
+            stdout = ""
+            returncode = 0
+
+        if cmd[:3] == ["az", "account", "show"]:
+            R.stdout = "sub-123\n"
+        if cmd[:4] == ["az", "ad", "signed-in-user", "show"]:
+            R.stdout = "oid-1\n"
+        if cmd[:4] == ["az", "keyvault", "secret", "show"]:
+            raise subprocess.CalledProcessError(1, cmd)
+        return R()
+
+    result = bootstrap_app(
+        BootstrapConfig(app_name="dsf-acme", resource_group="rg", keyvault_name="kv"),
+        run=fake_run,
+        capture_code=lambda manifest: "tempcode",
+        exchange=lambda code, **_: creds,
+        discover=lambda c, **_: "9001",
+        write_pem=lambda pem: str(tmp_path / "app.pem"),
+    )
+    rec = tmp_path / "rec-dsf-acme.json"
+    assert not rec.exists()
+    assert result.app_id == "42"
+
+
+def test_bootstrap_app_leaves_recovery_file_when_store_fails(tmp_path, monkeypatch):
+    from dsf.instance import app_bootstrap
+
+    monkeypatch.setattr(app_bootstrap, "_recovery_file", lambda name: tmp_path / f"rec-{name}.json")
+
+    creds = AppCredentials(
+        app_id="42",
+        slug="s",
+        pem="PEMDATA",
+        webhook_secret="",
+        client_id="",
+        client_secret="",
+    )
+
+    def fake_run(cmd, **kwargs):
+        class R:
+            stdout = ""
+            returncode = 0
+
+        if cmd[:3] == ["az", "account", "show"]:
+            R.stdout = "sub-123\n"
+        if cmd[:4] == ["az", "ad", "signed-in-user", "show"]:
+            R.stdout = "oid-1\n"
+        if cmd[:4] == ["az", "keyvault", "secret", "show"]:
+            raise subprocess.CalledProcessError(1, cmd)
+        if cmd[:4] == ["az", "keyvault", "secret", "set"]:
+            raise subprocess.CalledProcessError(1, cmd)
+        return R()
+
+    with pytest.raises(subprocess.CalledProcessError):
+        bootstrap_app(
+            BootstrapConfig(app_name="dsf-acme", resource_group="rg", keyvault_name="kv"),
+            run=fake_run,
+            capture_code=lambda manifest: "tempcode",
+            exchange=lambda code, **_: creds,
+            discover=lambda c, **_: "9001",
+            write_pem=lambda pem: str(tmp_path / "app.pem"),
+            sleep=lambda _: None,
+        )
+
+    rec = tmp_path / "rec-dsf-acme.json"
+    assert rec.exists()
+    assert json.loads(rec.read_text(encoding="utf-8")) == {
+        "app_id": "42",
+        "pem": "PEMDATA",
+        "installation_id": "9001",
+    }
