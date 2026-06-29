@@ -1,5 +1,12 @@
 # Provision a factory
 
+!!! warning "Bootstrap the owner first (one-time)"
+    `dsf new` reuses the master DSF GitHub App and the owner Key Vault / App Configuration
+    created by [`dsf bootstrap`](quickstart.md#bootstrap-the-owner-one-time). Run that once
+    per owner and export `DSF_OWNER_KEYVAULT_URI` + `DSF_OWNER_APPCONFIG_ENDPOINT` before
+    provisioning any product — without them `dsf new` cannot install the App or resolve the
+    owner product index.
+
 The factory CLI is `dsf`. Provisioning a product needs only `--product`:
 
 ```bash
@@ -59,6 +66,9 @@ Run `uv run dsf new --help` for the full flag list.
 Provisioning spans three planes — GitHub, Azure resources, and Azure RBAC — so the principal
 running `dsf new` needs:
 
+- **The owner bootstrap has run:** [`dsf bootstrap`](quickstart.md#bootstrap-the-owner-one-time)
+  has created the master DSF GitHub App, the owner Key Vault, and the owner App Configuration,
+  and `DSF_OWNER_KEYVAULT_URI` / `DSF_OWNER_APPCONFIG_ENDPOINT` are exported in this shell.
 - **GitHub:** a `gh auth login` session that can create repos under `--owner` and seed the
   baseline CI workflow.
 - **Azure subscription RBAC:** **Owner**, or **Contributor + User Access Administrator**, on
@@ -86,6 +96,23 @@ A complete, isolated factory for the product:
   `infra/main.bicep`,
 - the product registered in the routing registry (`config/products.json`),
 - an **SRE Agent** wired to its production.
+
+```mermaid
+flowchart TD
+    boot["owner bootstrap<br/>App + owner Key Vault + App Configuration"] -.->|reused| new
+    new["uv run dsf new --product PRODUCT"]
+    new --> ghp["GitHub plane"]
+    new --> azp["Azure plane"]
+    new --> regp["routing registry"]
+    ghp --> repo["product repo owner/product<br/>+ baseline CI"]
+    ghp --> labels["DSF label taxonomy<br/>+ handoff / incident labels"]
+    ghp --> appinst["DSF App installed on the repo"]
+    ghp --> ruleset["dsf-creation branch-protection ruleset"]
+    azp --> rg["resource group rg-dsf-product"]
+    rg --> runtime["Feature Council runtime on ACA<br/>Cosmos, App Config, Key Vault, Azure OpenAI"]
+    rg --> sre["SRE Agent wired to production"]
+    regp --> rec["config/products.json<br/>+ config/instances/product.json"]
+```
 
 The persisted manifest lives under `config/instances/<product>.json`; re-running `dsf new`
 for the same product is idempotent (it reuses the persisted name prefix).
@@ -122,5 +149,17 @@ dsf new  →  charter PR  →  review & merge  →  dsf sweep
 
 See [Operate it › The product charter](operate.md#the-product-charter) for the charter
 commands in full.
+
+The interview-to-merge path for `dsf charter init` is:
+
+```mermaid
+flowchart LR
+    A["dsf charter init --product PRODUCT"] --> B["resolve product repo<br/>via owner App Config index"]
+    B --> C["interview<br/>model asks, you answer"]
+    C --> D["render .dsf/charter.md draft"]
+    D --> E["open PR on charter/init-* branch<br/>via the DSF App"]
+    E --> F["you review, edit and merge"]
+    F --> G["next dsf sweep syncs the charter<br/>into runtime memory"]
+```
 
 Once a factory exists, move on to [Operate it](operate.md).
