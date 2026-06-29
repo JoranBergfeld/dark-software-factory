@@ -413,6 +413,191 @@ async def test_open_file_pr_applies_labels_when_given():
     assert ("POST", "/repos/org/alpha/issues/5/labels") in seen
 
 
+async def test_open_file_pr_enables_auto_merge_when_requested():
+    graphql_bodies: list[dict] = []
+
+    def extra(request: httpx.Request) -> httpx.Response:
+        method, path = request.method, request.url.path
+        if method == "GET" and path.endswith("/git/ref/heads/main"):
+            return httpx.Response(200, json={"object": {"sha": "basesha"}})
+        if method == "POST" and path.endswith("/git/refs"):
+            return httpx.Response(201, json={})
+        if method == "GET" and "/contents/" in path:
+            return httpx.Response(404, json={})
+        if method == "PUT" and "/contents/" in path:
+            return httpx.Response(201, json={})
+        if method == "POST" and path.endswith("/pulls"):
+            return httpx.Response(
+                201,
+                json={
+                    "html_url": "https://github.com/org/alpha/pull/7",
+                    "number": 7,
+                    "node_id": "PR_kw7",
+                },
+            )
+        if method == "POST" and path == "/graphql":
+            graphql_bodies.append(json.loads(request.read()))
+            return httpx.Response(
+                200,
+                json={
+                    "data": {
+                        "enablePullRequestAutoMerge": {
+                            "pullRequest": {
+                                "autoMergeRequest": {
+                                    "enabledAt": "now",
+                                }
+                            }
+                        }
+                    }
+                },
+            )
+        return httpx.Response(500, json={"unexpected": path})
+
+    client = _app_client(_token_handler(extra))
+    url = await client.open_file_pr(
+        "org/alpha",
+        path=".specify/memory/constitution.md",
+        content="C",
+        branch="charter/constitution/x",
+        title="T",
+        body="B",
+        message="m",
+        enable_auto_merge=True,
+    )
+    assert url == "https://github.com/org/alpha/pull/7"
+    assert graphql_bodies and "enablePullRequestAutoMerge" in graphql_bodies[0]["query"]
+    assert graphql_bodies[0]["variables"] == {"pullRequestId": "PR_kw7"}
+
+
+async def test_open_file_pr_auto_merge_degrades_when_not_allowed():
+    def extra(request: httpx.Request) -> httpx.Response:
+        method, path = request.method, request.url.path
+        if method == "GET" and path.endswith("/git/ref/heads/main"):
+            return httpx.Response(200, json={"object": {"sha": "basesha"}})
+        if method == "POST" and path.endswith("/git/refs"):
+            return httpx.Response(201, json={})
+        if method == "GET" and "/contents/" in path:
+            return httpx.Response(404, json={})
+        if method == "PUT" and "/contents/" in path:
+            return httpx.Response(201, json={})
+        if method == "POST" and path.endswith("/pulls"):
+            return httpx.Response(
+                201,
+                json={
+                    "html_url": "https://github.com/org/alpha/pull/8",
+                    "number": 8,
+                    "node_id": "PR_x",
+                },
+            )
+        if method == "POST" and path == "/graphql":
+            return httpx.Response(
+                200,
+                json={
+                    "errors": [
+                        {
+                            "message": (
+                                "Pull request Auto merge is not allowed for this repository"
+                            )
+                        }
+                    ]
+                },
+            )
+        return httpx.Response(500, json={"unexpected": path})
+
+    client = _app_client(_token_handler(extra))
+    url = await client.open_file_pr(
+        "org/alpha",
+        path=".specify/memory/constitution.md",
+        content="C",
+        branch="b",
+        title="T",
+        body="B",
+        message="m",
+        enable_auto_merge=True,
+    )
+    # The GraphQL error is swallowed; the PR is still reported (a human will merge it).
+    assert url == "https://github.com/org/alpha/pull/8"
+
+
+async def test_open_file_pr_auto_merge_degrades_on_http_error():
+    def extra(request: httpx.Request) -> httpx.Response:
+        method, path = request.method, request.url.path
+        if method == "GET" and path.endswith("/git/ref/heads/main"):
+            return httpx.Response(200, json={"object": {"sha": "basesha"}})
+        if method == "POST" and path.endswith("/git/refs"):
+            return httpx.Response(201, json={})
+        if method == "GET" and "/contents/" in path:
+            return httpx.Response(404, json={})
+        if method == "PUT" and "/contents/" in path:
+            return httpx.Response(201, json={})
+        if method == "POST" and path.endswith("/pulls"):
+            return httpx.Response(
+                201,
+                json={
+                    "html_url": "https://github.com/org/alpha/pull/9",
+                    "number": 9,
+                    "node_id": "PR_y",
+                },
+            )
+        if method == "POST" and path == "/graphql":
+            return httpx.Response(502, json={"message": "Bad Gateway"})
+        return httpx.Response(500, json={"unexpected": path})
+
+    client = _app_client(_token_handler(extra))
+    url = await client.open_file_pr(
+        "org/alpha",
+        path=".specify/memory/constitution.md",
+        content="C",
+        branch="b",
+        title="T",
+        body="B",
+        message="m",
+        enable_auto_merge=True,
+    )
+    # A non-2xx GraphQL response raises HTTPStatusError, which is swallowed too.
+    assert url == "https://github.com/org/alpha/pull/9"
+
+
+async def test_open_file_pr_auto_merge_degrades_on_transport_error():
+    def extra(request: httpx.Request) -> httpx.Response:
+        method, path = request.method, request.url.path
+        if method == "GET" and path.endswith("/git/ref/heads/main"):
+            return httpx.Response(200, json={"object": {"sha": "basesha"}})
+        if method == "POST" and path.endswith("/git/refs"):
+            return httpx.Response(201, json={})
+        if method == "GET" and "/contents/" in path:
+            return httpx.Response(404, json={})
+        if method == "PUT" and "/contents/" in path:
+            return httpx.Response(201, json={})
+        if method == "POST" and path.endswith("/pulls"):
+            return httpx.Response(
+                201,
+                json={
+                    "html_url": "https://github.com/org/alpha/pull/10",
+                    "number": 10,
+                    "node_id": "PR_z",
+                },
+            )
+        if method == "POST" and path == "/graphql":
+            raise httpx.ConnectError("connection reset", request=request)
+        return httpx.Response(500, json={"unexpected": path})
+
+    client = _app_client(_token_handler(extra))
+    url = await client.open_file_pr(
+        "org/alpha",
+        path=".specify/memory/constitution.md",
+        content="C",
+        branch="b",
+        title="T",
+        body="B",
+        message="m",
+        enable_auto_merge=True,
+    )
+    # A transport fault (httpx.RequestError) on the trailing auto-merge call must
+    # not abort open_file_pr after the PR already exists.
+    assert url == "https://github.com/org/alpha/pull/10"
+
+
 async def test_latest_pr_with_head_prefix_returns_first_match_newest_first():
     def extra(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/repos/org/alpha/pulls"

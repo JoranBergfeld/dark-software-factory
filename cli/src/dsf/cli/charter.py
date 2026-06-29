@@ -16,6 +16,7 @@ import uuid
 from collections.abc import Callable
 from pathlib import Path
 
+from dsf.charter.constitution import CONSTITUTION_PATH, render_constitution
 from dsf.charter.interview import (
     DEFAULT_MAX_TURNS,
     MAX_TURNS_KEY,
@@ -33,8 +34,11 @@ from dsf.container import (
 )
 from dsf.contracts.charter import Charter, StoredCharter
 from dsf.contracts.enums import CharterStatus
+from dsf.contracts.handoff import HANDOFF_LABEL
+from dsf.instance.bootstrap_issue import render_bootstrap_issue
 from dsf.instance.runtime_render import runtime_endpoint_env
 from dsf.instance.spec import read_manifest
+from dsf.ports import CodingAgentAssignmentError
 
 
 def _manifest_runtime_env(product: str) -> dict[str, str]:
@@ -334,6 +338,84 @@ def _cmd_charter_init(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_charter_implement(args: argparse.Namespace) -> int:
+    """Seed the Spec Kit build from an accepted charter.
+
+    Renders the constitution from the synced charter and lands it via an
+    auto-merged PR (``main`` is branch-protected), then files one ``creation:ready``
+    bootstrap issue assigned to the Copilot Coding Agent. Refuses unless the charter
+    is present and synced OK against ``main`` (reusing the ``status`` drift logic),
+    so we never seed from a non-accepted charter.
+    """
+    product = args.product
+    repo_full = _resolve_repo(product)
+    if not repo_full:
+        print(f"[dsf] error: product {product!r} is not in registry", file=sys.stderr)
+        return 1
+
+    try:
+        store = build_charter_store(_settings(product))
+    except ValueError as exc:
+        print(f"[dsf] error: {exc}", file=sys.stderr)
+        return 1
+
+    stored = asyncio.run(store.get_charter(product))
+    live_sha, note = _live_blob_sha(argparse.Namespace(ref="main", file=None), product)
+    label = _status_label(stored, live_sha)
+    if label != "ok":
+        print(
+            f"[dsf] error: charter for {product} is {label}; merge it and run "
+            "`dsf charter sync --product "
+            f"{product} --ref main` before implementing.",
+            file=sys.stderr,
+        )
+        if note:
+            print(f"[dsf]   note: {note}", file=sys.stderr)
+        return 1
+
+    charter = stored.charter  # non-None when label == "ok"
+    try:
+        app = build_repo_app_client(_app_settings(product))
+    except ValueError as exc:
+        print(f"[dsf] error: {exc}", file=sys.stderr)
+        return 1
+
+    constitution = render_constitution(charter)
+    branch = f"charter/constitution-{uuid.uuid4().hex[:8]}"
+    pr_url = asyncio.run(
+        app.open_file_pr(
+            repo_full,
+            path=CONSTITUTION_PATH,
+            content=constitution,
+            branch=branch,
+            title=f"Add Spec Kit constitution for {product}",
+            body=(
+                "Constitution derived from the product charter by "
+                "`dsf charter implement`. Auto-merge is requested: on repos where "
+                "it is enabled this merges once the `ci` check is green, otherwise "
+                "it awaits a human review. (Creation-maturity gating is future "
+                "scope.)"
+            ),
+            message=f"docs: add spec kit constitution for {product}",
+            enable_auto_merge=True,
+        )
+    )
+    print(f"[dsf] opened constitution PR (auto-merge requested): {pr_url}")
+
+    title, body = render_bootstrap_issue(charter)
+    try:
+        issue_url = asyncio.run(app.create_issue(repo_full, title, body, [HANDOFF_LABEL]))
+        print(f"[dsf] filed bootstrap issue + assigned Copilot: {issue_url}")
+    except CodingAgentAssignmentError as exc:
+        print(f"[dsf] filed bootstrap issue: {exc.issue_url}")
+        print(
+            f"[dsf] warning: Copilot coding agent assignment FAILED ({exc}); "
+            "assign Copilot manually once enabled.",
+            file=sys.stderr,
+        )
+    return 0
+
+
 def charter_init(product: str) -> int:
     """Run the charter interview and open the PR for ``product``.
 
@@ -353,6 +435,13 @@ def add_charter_subcommands(sub: argparse._SubParsersAction) -> None:
     )
     init_parser.add_argument("--product", required=True, help="product key")
     init_parser.set_defaults(func=_cmd_charter_init)
+
+    implement_parser = charter_sub.add_parser(
+        "implement",
+        help="render the constitution + file the Spec Kit bootstrap issue",
+    )
+    implement_parser.add_argument("--product", required=True, help="product key")
+    implement_parser.set_defaults(func=_cmd_charter_implement)
 
     for name, func, help_text in (
         ("sync", _cmd_charter_sync, "pull .dsf/charter.md (local file or --ref) into Cosmos"),

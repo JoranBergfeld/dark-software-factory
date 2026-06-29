@@ -8,6 +8,7 @@ from dsf.charter.sync import CHARTER_PATH
 from dsf.cli.factory import build_parser, main
 from dsf.contracts.charter import Charter, StoredCharter
 from dsf.contracts.enums import CharterStatus
+from dsf.contracts.handoff import HANDOFF_LABEL
 from dsf_testing.charter import InMemoryCharterStore
 from dsf_testing.config import InMemoryConfigStore
 from dsf_testing.github import RecordingRepoClient
@@ -354,3 +355,81 @@ def test_app_settings_no_owner_kv_stays_offline(monkeypatch):
     settings = _app_settings("alpha", secret_reader=_boom)
     assert settings.github_app_id == ""
     assert settings.product == "alpha"
+
+
+def _seed_ok_implement(monkeypatch, *, create_issue_error=None):
+    """Wire an OK, non-drifted charter + an App double for `charter implement`."""
+    charter = _ok_charter("blobsha")
+    store = InMemoryCharterStore()
+    _put(store, charter, CharterStatus.OK)
+    client = RecordingRepoClient(
+        {CHARTER_PATH: (render_charter(charter), "blobsha")},
+        create_issue_error=create_issue_error,
+    )
+    monkeypatch.setattr("dsf.cli.charter.build_charter_store", lambda s: store)
+    monkeypatch.setattr("dsf.cli.charter.build_repo_app_client", lambda s: client)
+    monkeypatch.setattr("dsf.cli.charter._resolve_repo", lambda product: "org/alpha")
+    return client
+
+
+def test_implement_subcommand_parses():
+    parser = build_parser()
+    args = parser.parse_args(["charter", "implement", "--product", "alpha"])
+    assert args.command == "charter" and args.product == "alpha"
+
+
+def test_implement_opens_constitution_pr_and_files_issue(monkeypatch, capsys):
+    client = _seed_ok_implement(monkeypatch)
+    rc = main(["charter", "implement", "--product", "alpha"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert len(client.prs) == 1
+    assert client.prs[0]["path"] == ".specify/memory/constitution.md"
+    assert client.prs[0]["enable_auto_merge"] is True
+    assert len(client.issues) == 1
+    assert client.issues[0]["labels"] == [HANDOFF_LABEL]
+    assert "opened constitution PR" in out and "filed bootstrap issue" in out
+
+
+def test_implement_refuses_when_charter_stale(monkeypatch, capsys):
+    store = InMemoryCharterStore()
+    _put(store, _ok_charter("oldsha"), CharterStatus.OK)
+    client = RecordingRepoClient({CHARTER_PATH: (render_charter(_ok_charter("newsha")), "newsha")})
+    monkeypatch.setattr("dsf.cli.charter.build_charter_store", lambda s: store)
+    monkeypatch.setattr("dsf.cli.charter.build_repo_app_client", lambda s: client)
+    monkeypatch.setattr("dsf.cli.charter._resolve_repo", lambda product: "org/alpha")
+    rc = main(["charter", "implement", "--product", "alpha"])
+    assert rc == 1 and "stale" in capsys.readouterr().err
+    assert not client.prs and not client.issues
+
+
+def test_implement_refuses_when_charter_missing(monkeypatch, capsys):
+    store = InMemoryCharterStore()
+    client = RecordingRepoClient({})  # read_file -> None -> live_sha None -> "missing"
+    monkeypatch.setattr("dsf.cli.charter.build_charter_store", lambda s: store)
+    monkeypatch.setattr("dsf.cli.charter.build_repo_app_client", lambda s: client)
+    monkeypatch.setattr("dsf.cli.charter._resolve_repo", lambda product: "org/alpha")
+    rc = main(["charter", "implement", "--product", "alpha"])
+    assert rc == 1 and "missing" in capsys.readouterr().err
+    assert not client.prs and not client.issues
+
+
+def test_implement_unknown_product(monkeypatch, capsys):
+    monkeypatch.setattr("dsf.cli.charter._resolve_repo", lambda product: None)
+    rc = main(["charter", "implement", "--product", "ghost"])
+    assert rc == 1 and "not in registry" in capsys.readouterr().err
+
+
+def test_implement_reports_copilot_assignment_failure(monkeypatch, capsys):
+    from dsf.ports import CodingAgentAssignmentError
+
+    boom = CodingAgentAssignmentError(
+        "no copilot", issue_url="local://issue/1", issue_node_id="N"
+    )
+    client = _seed_ok_implement(monkeypatch, create_issue_error=boom)
+    rc = main(["charter", "implement", "--product", "alpha"])
+    captured = capsys.readouterr()
+    assert rc == 0  # filing succeeded; assignment failure is a warning, not a hard fail
+    assert "filed bootstrap issue: local://issue/1" in captured.out
+    assert "assignment FAILED" in captured.err
+    assert len(client.prs) == 1  # constitution PR still opened

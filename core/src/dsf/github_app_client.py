@@ -34,6 +34,11 @@ _REPLACE_ACTORS_MUTATION = (
     "replaceActorsForAssignable(input:{assignableId:$assignableId,actorIds:$actorIds}){"
     "assignable{__typename}}}"
 )
+_ENABLE_AUTO_MERGE_MUTATION = (
+    "mutation($pullRequestId:ID!){"
+    "enablePullRequestAutoMerge(input:{pullRequestId:$pullRequestId,mergeMethod:SQUASH}){"
+    "pullRequest{autoMergeRequest{enabledAt}}}}"
+)
 
 
 def _utcnow() -> datetime:
@@ -235,6 +240,24 @@ class GitHubAppClient:
         seed.raise_for_status()
         return seed.json()["commit"]["sha"]
 
+    async def _enable_auto_merge(
+        self, client: httpx.AsyncClient, token: str, pr_node_id: str
+    ) -> None:
+        """Best-effort enable PR auto-merge.
+
+        A repo without auto-merge (low creation maturity) rejects the mutation; we
+        swallow that so the constitution PR simply waits for a human merge instead
+        of failing the seeding (the maturity-gated switch is tracked in #97). Any
+        transient transport fault on this trailing call is swallowed too, so it can
+        never abort an otherwise-successful ``open_file_pr`` after the PR exists.
+        """
+        try:
+            await self._graphql(
+                client, token, _ENABLE_AUTO_MERGE_MUTATION, {"pullRequestId": pr_node_id}
+            )
+        except (RuntimeError, httpx.HTTPError):
+            pass
+
     async def open_file_pr(
         self,
         repo: str,
@@ -247,6 +270,7 @@ class GitHubAppClient:
         body: str,
         message: str,
         labels: list[str] | None = None,
+        enable_auto_merge: bool = False,
     ) -> str:
         """Create ``branch`` off ``base``, write ``path``, open a PR; return its URL.
 
@@ -254,6 +278,8 @@ class GitHubAppClient:
         blob ``sha`` as the Contents API requires). When ``labels`` are given they
         are applied to the PR (PRs are issues) — used to stamp the governance class
         on charter-amendment PRs.
+        When ``enable_auto_merge`` is set, best-effort enable auto-merge on the PR
+        (a no-op on repos without auto-merge enabled).
         """
         token = self.installation_token()
         headers = self._token_headers(token)
@@ -301,6 +327,8 @@ class GitHubAppClient:
                     json={"labels": list(labels)},
                 )
                 applied.raise_for_status()
+            if enable_auto_merge:
+                await self._enable_auto_merge(client, token, created["node_id"])
             return created["html_url"]
 
     async def latest_pr_with_head_prefix(

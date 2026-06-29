@@ -182,6 +182,35 @@ def test_new_dry_run_prints_plan_without_side_effects(capsys, tmp_path):
     assert not (tmp_path / "config" / "products.json").exists()
 
 
+def test_new_warns_when_owner_keyvault_is_missing(capsys, tmp_path, monkeypatch):
+    monkeypatch.delenv("DSF_OWNER_KEYVAULT_URI", raising=False)
+    monkeypatch.delenv("DSF_OWNER_APPCONFIG_ENDPOINT", raising=False)
+    rc = main([
+        "new", "--product", "demo", "--owner", "acme",
+        "--name-prefix", "demopfx", "--dry-run", "--config-root", str(tmp_path),
+    ])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "DSF_OWNER_KEYVAULT_URI is unset" in out
+    assert "install_app, seed_app_key, seed_webiq_key, publish_runtime_index" in out
+    assert "`dsf charter init` and runtime GitHub access will fail" in out
+
+
+def test_new_does_not_warn_when_owner_keyvault_is_provided(capsys, tmp_path, monkeypatch):
+    monkeypatch.delenv("DSF_OWNER_KEYVAULT_URI", raising=False)
+    monkeypatch.delenv("DSF_OWNER_APPCONFIG_ENDPOINT", raising=False)
+    rc = main([
+        "new", "--product", "demo", "--owner", "acme",
+        "--name-prefix", "demopfx", "--dry-run", "--config-root", str(tmp_path),
+        "--owner-keyvault-uri", "https://kv-dsf-app.vault.azure.net/",
+        "--owner-appconfig-endpoint", "https://owner.azconfig.io",
+    ])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "DSF_OWNER_KEYVAULT_URI is unset" not in out
+    assert "`dsf charter init` and runtime GitHub access will fail" not in out
+
+
 def test_new_write_plan_writes_manifest(tmp_path):
     rc = main([
         "new", "--product", "demo", "--owner", "acme",
