@@ -12,9 +12,9 @@ from __future__ import annotations
 import http.server
 import json
 import subprocess
-import tempfile
 import time
 import urllib.parse
+import uuid
 import webbrowser
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -33,6 +33,34 @@ _SECRETS_OFFICER = "Key Vault Secrets Officer"
 _APPCONFIG_DATA_OWNER = "App Configuration Data Owner"
 _SEED_ATTEMPTS = 8
 _SEED_RETRY_DELAY = 15.0
+_OWNER_KV_ARM_TEMPLATE: dict = {
+    "$schema": (
+        "https://schema.management.azure.com/schemas/2019-04-01/"
+        "deploymentTemplate.json#"
+    ),
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "vaultName": {"type": "string"},
+        "location": {"type": "string"},
+    },
+    "resources": [
+        {
+            "type": "Microsoft.KeyVault/vaults",
+            "apiVersion": "2022-07-01",
+            "name": "[parameters('vaultName')]",
+            "location": "[parameters('location')]",
+            "properties": {
+                "sku": {"family": "A", "name": "standard"},
+                "tenantId": "[subscription().tenantId]",
+                "enableRbacAuthorization": True,
+                "enableSoftDelete": True,
+                "enablePurgeProtection": True,
+                "softDeleteRetentionInDays": 90,
+                "accessPolicies": [],
+            },
+        }
+    ],
+}
 
 
 @dataclass(frozen=True)
@@ -137,11 +165,13 @@ def owner_kv_ensure_commands(
     return [
         ["az", "group", "create", "--name", resource_group, "--location", location],
         [
-            "az", "keyvault", "create", "--name", keyvault_name,
-            "--resource-group", resource_group, "--location", location,
-            "--enable-rbac-authorization", "true",
-            "--enable-purge-protection", "true",
-            "--retention-days", "90",
+            "az", "deployment", "group", "create",
+            "--resource-group", resource_group,
+            "--name", f"dsf-owner-kv-{keyvault_name}",
+            "--template", json.dumps(_OWNER_KV_ARM_TEMPLATE),
+            "--parameters",
+            f"vaultName={keyvault_name}",
+            f"location={location}",
         ],
         [
             "az", "role", "assignment", "create",
@@ -223,12 +253,89 @@ class BootstrapResult:
 
 
 def _default_write_pem(pem: str) -> str:
-    """Write the PEM to a private (0600) temp file; caller unlinks it."""
-    fd, path = tempfile.mkstemp(prefix="dsf-app-", suffix=".pem")
-    with open(fd, "w", encoding="utf-8") as fh:
-        fh.write(pem)
-    Path(path).chmod(0o600)
+    """Write the PEM to a private (0600) file; caller unlinks it."""
+    path = _runtime_dir() / f"app-private-key-{uuid.uuid4().hex}.pem"
+    path.write_text(pem, encoding="utf-8")
+    path.chmod(0o600)
+    return str(path)
+
+
+def _runtime_dir() -> Path:
+    path = Path.home() / ".dsf"
+    path.mkdir(mode=0o700, parents=True, exist_ok=True)
     return path
+
+
+def _recovery_file(app_name: str) -> Path:
+    return _runtime_dir() / f"bootstrap-{app_name}.recovery.json"
+
+
+def _capture_browser_html(manifest: dict) -> Path:
+    path = _runtime_dir() / f"app-manifest-{uuid.uuid4().hex}.html"
+    path.write_text(
+        (
+            "<form action='https://github.com/settings/apps/new' method='post'>"
+            f"<input type='hidden' name='manifest' value='{json.dumps(manifest)}'>"
+            "</form><script>document.forms[0].submit()</script>"
+        ),
+        encoding="utf-8",
+    )
+    path.chmod(0o600)
+    return path
+
+
+def _parse_pasted_code(raw: str) -> str:
+    """Extract the GitHub ``code`` from a pasted value.
+
+    Accepts three forms:
+    - bare code: ``abc123``
+    - query fragment: ``?code=abc123`` or ``code=abc123``
+    - full redirect URL: ``http://127.0.0.1:8765/callback?code=abc123&...``
+    """
+    raw = raw.strip()
+    if "code=" not in raw:
+        # Assume the user pasted the bare code value directly.
+        return raw
+    # Full URL or bare query string — parse the query component.
+    parsed = urllib.parse.urlparse(raw)
+    query = parsed.query or raw.lstrip("?")
+    return urllib.parse.parse_qs(query).get("code", [""])[0]
+
+
+def read_owner_kv_credentials(
+    keyvault_name: str,
+    *,
+    run: Runner | None = None,
+) -> BootstrapResult | None:
+    """Return stored credentials from an existing owner Key Vault, or None if absent."""
+    runner = run or subprocess.run
+
+    def _try_secret(name: str) -> str:
+        try:
+            res = runner(
+                [
+                    "az", "keyvault", "secret", "show", "--vault-name", keyvault_name,
+                    "--name", name, "--query", "value", "-o", "tsv",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            return getattr(res, "stdout", "").strip()
+        except subprocess.CalledProcessError:
+            return ""
+
+    app_id = _try_secret(_APP_ID_SECRET)
+    installation_id = _try_secret(_INSTALLATION_SECRET)
+    pem = _try_secret(_PRIVATE_KEY_SECRET)
+    if app_id and installation_id and pem:
+        return BootstrapResult(
+            app_id=app_id,
+            installation_id=installation_id,
+            keyvault_name=keyvault_name,
+            keyvault_uri=f"https://{keyvault_name}.vault.azure.net/",
+        )
+    return None
 
 
 def bootstrap_app(
@@ -249,15 +356,48 @@ def bootstrap_app(
     it into the owner Key Vault, then unlinked.
     """
     runner = run or subprocess.run
+    existing = read_owner_kv_credentials(cfg.keyvault_name, run=run)
+    if existing is not None:
+        print(
+            f"[dsf] owner Key Vault '{cfg.keyvault_name}' already has all App credentials; "
+            "skipping bootstrap."
+        )
+        return existing
 
     def _capture(cmd: list[str]) -> str:
         res = runner(cmd, check=True, capture_output=True, text=True)
         return getattr(res, "stdout", "").strip()
 
-    manifest = app_manifest(name=cfg.app_name, callback_url="http://127.0.0.1:8765/callback")
-    code = capture_code(manifest)
-    creds = exchange(code)
-    installation_id = discover(creds)
+    rec = _recovery_file(cfg.app_name)
+    if rec.exists():
+        print(f"[dsf] recovery file found at {rec}; resuming from saved credentials")
+        saved = json.loads(rec.read_text(encoding="utf-8"))
+        creds = AppCredentials(
+            app_id=saved["app_id"],
+            slug="",
+            pem=saved["pem"],
+            webhook_secret="",
+            client_id="",
+            client_secret="",
+        )
+        installation_id = saved["installation_id"]
+    else:
+        manifest = app_manifest(name=cfg.app_name, callback_url="http://127.0.0.1:8765/callback")
+        code = capture_code(manifest)
+        creds = exchange(code)
+        installation_id = discover(creds)
+        rec.write_text(
+            json.dumps(
+                {
+                    "app_id": creds.app_id,
+                    "pem": creds.pem,
+                    "installation_id": installation_id,
+                }
+            ),
+            encoding="utf-8",
+        )
+        rec.chmod(0o600)
+        print(f"[dsf] credentials saved to {rec} (deleted on success)")
 
     subscription = _capture(["az", "account", "show", "--query", "id", "-o", "tsv"])
     operator_oid = _capture(
@@ -289,6 +429,7 @@ def bootstrap_app(
         installation_id=installation_id,
         pem_path=pem_path,
     )
+    stored_ok = False
     try:
         # The owner just granted itself Secrets Officer above; the data-plane RBAC
         # assignment can take tens of seconds to propagate, so retry the (idempotent)
@@ -302,8 +443,11 @@ def bootstrap_app(
                 if attempt == _SEED_ATTEMPTS:
                     raise
                 sleep(_SEED_RETRY_DELAY)
+        stored_ok = True
     finally:
         Path(pem_path).unlink(missing_ok=True)
+        if stored_ok:
+            rec.unlink(missing_ok=True)
 
     return BootstrapResult(
         app_id=creds.app_id,
@@ -331,23 +475,27 @@ def _browser_capture_code(manifest: dict) -> str:
             pass
 
     server = http.server.HTTPServer(("127.0.0.1", 8765), _Handler)
+    server.timeout = 120
     html_path: Path | None = None
     try:
-        page = (
-            "<form action='https://github.com/settings/apps/new' method='post'>"
-            f"<input type='hidden' name='manifest' value='{json.dumps(manifest)}'>"
-            "</form><script>document.forms[0].submit()</script>"
-        )
-        fd, html_name = tempfile.mkstemp(prefix="dsf-app-", suffix=".html")
-        with open(fd, "w", encoding="utf-8") as fh:
-            fh.write(page)
-        html_path = Path(html_name)
-        webbrowser.open(html_path.as_uri())
-        server.handle_request()  # one callback
+        html_path = _capture_browser_html(manifest)
+        print("[dsf] Opening the GitHub App creation page in your browser...")
+        print("[dsf] If the browser does not open or the redirect fails, copy the '?code=...'")
+        print("[dsf]   value from the redirect URL and paste it when prompted.")
+        try:
+            webbrowser.open(html_path.as_uri())
+        except Exception:
+            print("[dsf] Could not open a browser automatically.")
+            print(f"[dsf] Open this file manually: {html_path}")
+        server.handle_request()
     finally:
         server.server_close()
         if html_path is not None:
             html_path.unlink(missing_ok=True)
+    if not captured.get("code"):
+        captured["code"] = _parse_pasted_code(
+            input("[dsf] Paste the '?code=...' value (or the full redirect URL): ").strip()
+        )
     if not captured.get("code"):
         raise RuntimeError("App-manifest callback returned no code")
     return captured["code"]
