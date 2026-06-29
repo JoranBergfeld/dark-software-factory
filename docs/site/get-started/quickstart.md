@@ -16,6 +16,9 @@ For the big picture (the decide → build → operate loop and the governance ha
 - The [**GitHub CLI**](https://cli.github.com/) (`gh`), authenticated with `gh auth login`.
   DSF uses it to infer the repo owner (when you omit `--owner`) and to create the product
   repo and wire the Creation phase.
+- The [**Spec Kit CLI**](https://github.com/github/spec-kit) (`specify`), used by `dsf new`
+  to scaffold product repos for Spec-Driven Development. Install it pinned:
+  `uv tool install specify-cli --from git+https://github.com/github/spec-kit.git@v0.11.9`.
 - For a real (non `--dry-run`) provision: the
   [**Azure CLI**](https://learn.microsoft.com/cli/azure/) (`az`) logged in to a subscription
   (`az login`).

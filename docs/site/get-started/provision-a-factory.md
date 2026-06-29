@@ -61,6 +61,16 @@ running `dsf new` needs:
 
 - **GitHub:** a `gh auth login` session that can create repos under `--owner` and seed the
   baseline CI workflow.
+- **Spec Kit CLI:** the [`specify`](https://github.com/github/spec-kit) CLI, used by `dsf
+  new` to scaffold each product repo for Spec-Driven Development. Install it pinned:
+
+    ```bash
+    uv tool install specify-cli \
+      --from git+https://github.com/github/spec-kit.git@v0.11.9
+    ```
+
+    The templates are bundled in the package (no network at `init`), so the pinned tag pins
+    the scaffold. Ensure `specify` is on `PATH` (uv installs it to `~/.local/bin`).
 - **Azure subscription RBAC:** **Owner**, or **Contributor + User Access Administrator**, on
   the subscription — the cross-resource-group role assignments (runtime identity, SRE Agent)
   require it.
@@ -122,11 +132,15 @@ seeding intent:
   so a failure in the interview never fails `dsf new` itself.
 
 Opening the PR is not the finish line. The charter only becomes authoritative once you
-**review and merge** it, after which the next `dsf sweep` syncs it into the runtime. The
-full path to a *charted* factory is:
+**review and merge** it, after which the next `dsf sweep` syncs it into the runtime. For a
+**greenfield** product you then turn intent into a build with `dsf charter implement`: it
+renders a charter-derived Spec Kit constitution (landed via an auto-merged PR) and files a
+single `creation:ready` bootstrap issue assigned to the Copilot Coding Agent, which runs the
+Spec Kit lifecycle (`/speckit.specify → plan → tasks → implement`) in one session. The full
+path to a *building* factory is:
 
 ```text
-dsf new  →  charter PR  →  review & merge  →  dsf sweep
+dsf new  →  charter PR  →  review & merge  →  dsf sweep  →  dsf charter implement
 ```
 
 See [Operate it › The product charter](operate.md#the-product-charter) for the charter
