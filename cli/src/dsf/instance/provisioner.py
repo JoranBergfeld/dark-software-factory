@@ -252,8 +252,9 @@ class InstanceProvisioner:
             ProvisionStep(
                 name="seed_repo",
                 description=(
-                    f"Seed {s.github_repo()} with a baseline ci workflow so the "
-                    "required 'ci' check is producible before branch protection"
+                    f"Seed {s.github_repo()} with the Spec Kit scaffold (specify "
+                    "init) and a baseline ci workflow so the required 'ci' check is "
+                    "producible before branch protection"
                 ),
             ),
             ProvisionStep(
@@ -642,14 +643,67 @@ class InstanceProvisioner:
         )
 
     def _seed_repo(self) -> None:
-        """Seed the repo's first commit with a baseline ``ci`` workflow.
+        """Seed the repo before ``branch_protection``: Spec Kit scaffold + baseline ci.
 
-        The branch ruleset requires a green ``ci`` status check, but a greenfield
-        repo has no pipeline to publish it, so the first PR could never merge.
-        Committing the baseline workflow (job ``ci``) as the initial commit - via
-        the operator's ``gh`` auth, before ``branch_protection`` runs - makes the
-        required check producible from the start. Idempotent: skips when the file
-        is already present so a retry doesn't 422 on the missing blob sha.
+        With a local clone (``create_repo --clone``), commit the ``specify init``
+        scaffold and the baseline ``ci`` workflow from it and push to ``main``.
+        Without a local clone (e.g. a re-run on a host that never cloned), fall back
+        to seeding just the baseline ``ci`` workflow via the Contents API so the
+        ruleset's required ``ci`` check stays producible. Both run under the
+        operator's ``gh`` auth before ``branch_protection``, so pushing ``main`` is
+        unobstructed.
+        """
+        clone_dir = self.spec.resolved_repo()
+        if Path(clone_dir).is_dir():
+            self._seed_repo_from_clone(clone_dir)
+        else:
+            self._seed_ci_workflow_via_api()
+
+    def _seed_repo_from_clone(self, clone_dir: str) -> None:
+        """Commit the Spec Kit scaffold + baseline ci workflow from the clone.
+
+        ``specify init`` writes the ``.specify/`` scaffold and the Copilot command
+        files; ``--force`` makes the re-run idempotent. When the resulting tree has
+        no diff (a clean re-run), the commit/push is skipped.
+        """
+        self._run(
+            [
+                "specify", "init", "--here",
+                "--integration", "copilot",
+                "--script", "sh",
+                "--ignore-agent-tools",
+                "--force",
+            ],
+            check=True,
+            cwd=clone_dir,
+        )
+        workflow = Path(clone_dir) / CI_WORKFLOW_PATH
+        workflow.parent.mkdir(parents=True, exist_ok=True)
+        workflow.write_text(baseline_ci_workflow(), encoding="utf-8")
+
+        self._run(["git", "add", "-A"], check=True, cwd=clone_dir)
+        status = self._run(
+            ["git", "status", "--porcelain"],
+            check=True, capture_output=True, text=True, cwd=clone_dir,
+        )
+        if not (getattr(status, "stdout", "") or "").strip():
+            return
+        self._run(
+            [
+                "git",
+                "-c", "user.name=dsf-factory",
+                "-c", "user.email=dsf-factory@users.noreply.github.com",
+                "commit", "-m", "chore: seed spec kit scaffold and baseline ci workflow",
+            ],
+            check=True, cwd=clone_dir,
+        )
+        self._run(["git", "push", "origin", "HEAD:main"], check=True, cwd=clone_dir)
+
+    def _seed_ci_workflow_via_api(self) -> None:
+        """Seed only the baseline ``ci`` workflow via the Contents API (no clone).
+
+        Idempotent: skips when the file is already present so a retry doesn't 422 on
+        the missing blob sha.
         """
         repo = self.spec.github_repo()
         try:

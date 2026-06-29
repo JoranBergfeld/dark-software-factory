@@ -1426,6 +1426,70 @@ def test_seed_repo_is_idempotent_when_workflow_present():
     assert not [c for c in calls if "--method" in c and "PUT" in c]
 
 
+def test_seed_repo_from_clone_runs_specify_and_pushes(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "demo").mkdir()  # the clone created by create_repo --clone
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[:3] == ["git", "status", "--porcelain"]:
+            return _completed(stdout=" M .specify/memory/constitution.md\n")
+        return _completed(stdout="")
+
+    prov = InstanceProvisioner(
+        InstanceSpec(product="demo", owner="acme"), run=fake_run
+    )
+    prov._seed_repo()
+
+    specify = [c for c in calls if c[:2] == ["specify", "init"]]
+    assert specify, "specify init should run in the clone"
+    assert "--here" in specify[0] and "--force" in specify[0]
+    assert "--integration" in specify[0] and "copilot" in specify[0]
+    assert "--script" in specify[0] and "sh" in specify[0]
+    workflow = tmp_path / "demo" / ".github" / "workflows" / "ci.yml"
+    assert workflow.read_text(encoding="utf-8").startswith("name: ci")
+    assert ["git", "push", "origin", "HEAD:main"] in calls
+
+
+def test_seed_repo_from_clone_skips_commit_when_no_diff(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "demo").mkdir()
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return _completed(stdout="")  # `git status --porcelain` clean -> nothing to do
+
+    prov = InstanceProvisioner(
+        InstanceSpec(product="demo", owner="acme"), run=fake_run
+    )
+    prov._seed_repo()
+
+    assert not any("commit" in c for c in calls)
+    assert not any(c[:2] == ["git", "push"] for c in calls)
+
+
+def test_seed_repo_without_clone_falls_back_to_contents_api(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)  # no demo/ clone present
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if "--jq" in cmd and cmd[-1] == ".sha":
+            raise subprocess.CalledProcessError(1, cmd, stderr="Not Found")
+        return _completed(stdout="")
+
+    prov = InstanceProvisioner(
+        InstanceSpec(product="demo", owner="acme"), run=fake_run
+    )
+    prov._seed_repo()
+
+    puts = [c for c in calls if "--method" in c and "PUT" in c]
+    assert len(puts) == 1  # baseline ci workflow seeded via Contents API
+    assert not any(c[:2] == ["specify", "init"] for c in calls)
+
+
 # ---------------------------------------------------------------------------
 # Human owner/governance principal grants (adminPrincipalId + ownerPrincipalId)
 # ---------------------------------------------------------------------------
