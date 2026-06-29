@@ -377,8 +377,10 @@ def _cmd_charter_implement(args: argparse.Namespace) -> int:
             title=f"Add Spec Kit constitution for {product}",
             body=(
                 "Constitution derived from the product charter by "
-                "`dsf charter implement`. Auto-merges on a green `ci` check at high "
-                "creation maturity; awaits a human review at low maturity."
+                "`dsf charter implement`. Auto-merge is requested: on repos where "
+                "it is enabled this merges once the `ci` check is green, otherwise "
+                "it awaits a human review. (Creation-maturity gating is future "
+                "scope.)"
             ),
             message=f"docs: add spec kit constitution for {product}",
             enable_auto_merge=True,
