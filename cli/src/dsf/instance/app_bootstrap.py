@@ -248,8 +248,8 @@ class BootstrapResult:
     installation_id: str
     keyvault_name: str
     keyvault_uri: str
-    appconfig_name: str
-    appconfig_endpoint: str
+    appconfig_name: str = ""
+    appconfig_endpoint: str = ""
 
 
 def _default_write_pem(pem: str) -> str:

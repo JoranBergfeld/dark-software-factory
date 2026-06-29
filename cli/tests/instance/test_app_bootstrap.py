@@ -326,7 +326,10 @@ def test_bootstrap_app_returns_existing_credentials_if_vault_already_has_them():
 
     capture_called: list[int] = []
     result = bootstrap_app(
-        BootstrapConfig(app_name="dsf-acme", resource_group="rg", keyvault_name="kv-dsf-app"),
+        BootstrapConfig(
+            app_name="dsf-acme", resource_group="rg", keyvault_name="kv-dsf-app",
+            appconfig_name="ac",
+        ),
         run=fake_run,
         capture_code=lambda manifest: capture_called.append(1) or "unused",
     )
@@ -406,7 +409,9 @@ def test_bootstrap_app_writes_recovery_file_and_cleans_up_on_success(tmp_path, m
         return R()
 
     result = bootstrap_app(
-        BootstrapConfig(app_name="dsf-acme", resource_group="rg", keyvault_name="kv"),
+        BootstrapConfig(
+            app_name="dsf-acme", resource_group="rg", keyvault_name="kv", appconfig_name="ac",
+        ),
         run=fake_run,
         capture_code=lambda manifest: "tempcode",
         exchange=lambda code, **_: creds,
@@ -449,7 +454,10 @@ def test_bootstrap_app_leaves_recovery_file_when_store_fails(tmp_path, monkeypat
 
     with pytest.raises(subprocess.CalledProcessError):
         bootstrap_app(
-            BootstrapConfig(app_name="dsf-acme", resource_group="rg", keyvault_name="kv"),
+            BootstrapConfig(
+                app_name="dsf-acme", resource_group="rg", keyvault_name="kv",
+                appconfig_name="ac",
+            ),
             run=fake_run,
             capture_code=lambda manifest: "tempcode",
             exchange=lambda code, **_: creds,

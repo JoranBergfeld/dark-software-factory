@@ -189,6 +189,14 @@ def _format_step_error(exc: BaseException) -> str:
 
 
 
+def _stdout_lines(result: Any) -> list[str]:
+    """Non-empty stripped lines of a ``run`` result's stdout (empty if not text)."""
+    stdout = getattr(result, "stdout", "")
+    if not isinstance(stdout, str):
+        return []
+    return [line.strip() for line in stdout.splitlines() if line.strip()]
+
+
 def _label_commands(spec: InstanceSpec) -> list[list[str]]:
     """Build idempotent ``gh label create --force`` commands for an instance.
 
@@ -503,8 +511,16 @@ class InstanceProvisioner:
             elif not self._github_installation_id:
                 step.result = "skipped (owner App pointer unavailable)"
             else:
-                self._app_binding = self._install_app()
-                step.executed, step.result = True, "installed"
+                self._app_binding, already_installed = self._install_app()
+                step.executed = True
+                step.result = "already installed" if already_installed else "installed"
+        elif step.name == "create_labels":
+            if not execute:
+                step.result = "dry-run"
+            else:
+                step.executed, step.result = True, self._create_labels()
+        elif step.name == "create_resource_group" and execute and self._resource_group_exists():
+            step.executed, step.result = True, "exists"
         elif step.name == "publish_runtime_index":
             if not self._owner_appconfig_endpoint:
                 step.result = "skipped (no owner App Config configured)"
@@ -647,14 +663,26 @@ class InstanceProvisioner:
             outputs={k: str(val) for k, val in outputs.items() if val is not None},
         )
 
-    def _install_app(self) -> GitHubAppBinding:
-        """Add the product repo to the single owner installation; capture the binding."""
+    def _install_app(self) -> tuple[GitHubAppBinding, bool]:
+        """Add the product repo to the single owner installation; capture the binding.
+
+        Returns ``(binding, already_installed)``: short-circuits the PUT when the repo
+        is already in the installation so a re-run reports ``already installed`` instead
+        of re-issuing a redundant write.
+        """
         repo = self.spec.github_repo()
         lookup = self._run(
             ["gh", "api", f"/repos/{repo}", "--jq", ".id"],
             check=True, capture_output=True, text=True,
         )
         repository_id = int(getattr(lookup, "stdout", "0").strip())
+        binding = GitHubAppBinding(
+            app_id=self._github_app_id,
+            installation_id=self._github_installation_id,
+            repository_id=repository_id,
+        )
+        if self._repo_in_installation(repository_id):
+            return binding, True
         self._run(
             [
                 "gh", "api", "--method", "PUT",
@@ -663,11 +691,50 @@ class InstanceProvisioner:
             ],
             check=True,
         )
-        return GitHubAppBinding(
-            app_id=self._github_app_id,
-            installation_id=self._github_installation_id,
-            repository_id=repository_id,
+        return binding, False
+
+    def _repo_in_installation(self, repository_id: int) -> bool:
+        """Return True if ``repository_id`` is already in the owner installation."""
+        result = self._run(
+            [
+                "gh", "api", "--paginate",
+                f"/user/installations/{self._github_installation_id}/repositories",
+                "--jq", ".repositories[].id",
+            ],
+            check=False, capture_output=True, text=True,
         )
+        return str(repository_id) in _stdout_lines(result)
+
+    def _resource_group_exists(self) -> bool:
+        """Return True if the product resource group already exists (``az group exists``)."""
+        result = self._run(
+            ["az", "group", "exists", "--name", self.spec.resource_group()],
+            check=False, capture_output=True, text=True,
+        )
+        return getattr(result, "stdout", "").strip().lower() == "true"
+
+    def _create_labels(self) -> str:
+        """Create only the missing labels; report ``unchanged`` when all exist."""
+        commands = _label_commands(self.spec)
+        desired = [cmd[3] for cmd in commands]
+        existing = self._existing_labels()
+        missing = [cmd for cmd in commands if cmd[3] not in existing]
+        for cmd in missing:
+            self._run(cmd, check=True)
+        if not missing:
+            return "unchanged"
+        return f"created {len(missing)}/{len(desired)}"
+
+    def _existing_labels(self) -> set[str]:
+        """Return the set of label names already present on the product repo."""
+        result = self._run(
+            [
+                "gh", "label", "list", "--repo", self.spec.github_repo(),
+                "--limit", "200", "--json", "name", "--jq", ".[].name",
+            ],
+            check=False, capture_output=True, text=True,
+        )
+        return set(_stdout_lines(result))
 
     def _seed_repo(self) -> None:
         """Seed the repo's first commit with a baseline ``ci`` workflow.

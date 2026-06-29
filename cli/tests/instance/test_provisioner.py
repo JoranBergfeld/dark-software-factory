@@ -15,6 +15,7 @@ from dsf.instance.provisioner import (
     _SEED_RETRY_DELAY,
     InstanceProvisioner,
     _appconfig_seed_commands,
+    _label_commands,
 )
 from dsf.instance.spec import InstanceSpec, _default_repo_root, read_manifest
 
@@ -287,6 +288,8 @@ def test_apply_execute_creates_labels(tmp_path):
     def fake_run(cmd, **kwargs):
         calls.append((cmd, kwargs.get("cwd")))
         returncode = 1 if cmd[:3] == ["gh", "repo", "view"] else 0
+        if cmd[:3] == ["gh", "label", "list"]:
+            return MagicMock(returncode=0, stdout="")  # no labels yet
         hit = _az_deploy(cmd, _AZURE_OUTPUTS_JSON)
         if hit is not None:
             return hit
@@ -300,7 +303,61 @@ def test_apply_execute_creates_labels(tmp_path):
     assert any(c[3] == HANDOFF_LABEL for c in label_creates)
     assert len(label_creates) >= 1
     results = {s.name: s.result for s in manifest.plan.steps}
-    assert results["create_labels"] == "executed"
+    assert results["create_labels"].startswith("created")
+
+
+def test_apply_execute_create_labels_unchanged_when_all_present(tmp_path):
+    spec = _spec()
+    desired = {c[3] for c in _label_commands(spec)}
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[:3] == ["gh", "repo", "view"]:
+            return MagicMock(returncode=1)
+        if cmd[:3] == ["gh", "label", "list"]:
+            return MagicMock(returncode=0, stdout="\n".join(desired))
+        hit = _az_deploy(cmd, _AZURE_OUTPUTS_JSON)
+        if hit is not None:
+            return hit
+        return MagicMock(returncode=0)
+
+    manifest = InstanceProvisioner(spec, run=fake_run, repo_root=tmp_path).apply(execute=True)
+
+    # every label already exists -> no create issued, reported unchanged:
+    assert not any(c[:3] == ["gh", "label", "create"] for c in calls)
+    results = {s.name: s.result for s in manifest.plan.steps}
+    assert results["create_labels"] == "unchanged"
+
+
+def test_apply_execute_create_labels_creates_only_missing(tmp_path):
+    spec = _spec()
+    desired = [c[3] for c in _label_commands(spec)]
+    present = set(desired[:-1])  # all but the last label already exist
+    missing_name = desired[-1]
+
+    def fake_run(cmd, **kwargs):
+        if cmd[:3] == ["gh", "repo", "view"]:
+            return MagicMock(returncode=1)
+        if cmd[:3] == ["gh", "label", "list"]:
+            return MagicMock(returncode=0, stdout="\n".join(present))
+        hit = _az_deploy(cmd, _AZURE_OUTPUTS_JSON)
+        if hit is not None:
+            return hit
+        return MagicMock(returncode=0)
+
+    creates = []
+
+    def recording(cmd, **kwargs):
+        if cmd[:3] == ["gh", "label", "create"]:
+            creates.append(cmd[3])
+        return fake_run(cmd, **kwargs)
+
+    manifest = InstanceProvisioner(spec, run=recording, repo_root=tmp_path).apply(execute=True)
+
+    assert creates == [missing_name]
+    results = {s.name: s.result for s in manifest.plan.steps}
+    assert results["create_labels"].startswith("created 1/")
 
 
 def test_apply_dry_run_records_labels(tmp_path):
@@ -513,6 +570,49 @@ def test_apply_dry_run_leaves_azure_unset(tmp_path):
     results = {s.name: s.result for s in manifest.plan.steps}
     assert results["create_resource_group"] == "dry-run"
     assert results["provision_azure"] == "dry-run"
+
+
+def test_apply_execute_resource_group_exists_reports_exists(tmp_path):
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[:3] == ["gh", "repo", "view"]:
+            return MagicMock(returncode=1)
+        if cmd[:4] == ["az", "group", "exists", "--name"]:
+            return MagicMock(returncode=0, stdout="true\n")
+        hit = _az_deploy(cmd, _AZURE_OUTPUTS_JSON)
+        if hit is not None:
+            return hit
+        return MagicMock(returncode=0, stdout="")
+
+    manifest = InstanceProvisioner(_spec(), run=fake_run, repo_root=tmp_path).apply(execute=True)
+
+    # group already exists -> no az group create, reported exists:
+    assert not any(c[:3] == ["az", "group", "create"] for c in calls)
+    results = {s.name: s.result for s in manifest.plan.steps}
+    assert results["create_resource_group"] == "exists"
+
+
+def test_apply_execute_resource_group_created_when_missing(tmp_path):
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[:3] == ["gh", "repo", "view"]:
+            return MagicMock(returncode=1)
+        if cmd[:4] == ["az", "group", "exists", "--name"]:
+            return MagicMock(returncode=0, stdout="false\n")
+        hit = _az_deploy(cmd, _AZURE_OUTPUTS_JSON)
+        if hit is not None:
+            return hit
+        return MagicMock(returncode=0, stdout="")
+
+    manifest = InstanceProvisioner(_spec(), run=fake_run, repo_root=tmp_path).apply(execute=True)
+
+    assert any(c[:3] == ["az", "group", "create"] for c in calls)
+    results = {s.name: s.result for s in manifest.plan.steps}
+    assert results["create_resource_group"] == "executed"
 
 
 def test_apply_execute_surfaces_failed_operation_reason(tmp_path):
@@ -1249,6 +1349,37 @@ def test_install_app_adds_repo_to_owner_installation_and_records_binding(tmp_pat
     assert manifest.github_app.app_id == "42"
     assert manifest.github_app.installation_id == "9001"
     assert manifest.github_app.repository_id == 555
+
+
+def test_install_app_already_installed_skips_put_and_reports(tmp_path):
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[:3] == ["gh", "repo", "view"]:
+            return MagicMock(returncode=1)
+        if cmd[:3] == ["gh", "api", "/repos/acme/demo"]:
+            return MagicMock(returncode=0, stdout="555\n")
+        if cmd[:2] == ["gh", "api"] and "/user/installations/9001/repositories" in " ".join(cmd):
+            return MagicMock(returncode=0, stdout="111\n555\n222\n")  # already present
+        hit = _az_deploy(cmd, _AZURE_OUTPUTS_JSON)
+        if hit is not None:
+            return hit
+        return MagicMock(returncode=0, stdout="")
+
+    prov = InstanceProvisioner(
+        _spec(), run=fake_run, repo_root=tmp_path,
+        owner_keyvault_uri="https://kv-dsf-app.vault.azure.net/",
+        github_app_id="42", github_installation_id="9001",
+    )
+    manifest = prov.apply(execute=True)
+
+    # repo already in the installation -> no PUT issued, binding still recorded:
+    assert not any("/user/installations/9001/repositories/" in " ".join(c) for c in calls)
+    assert manifest.github_app is not None
+    assert manifest.github_app.repository_id == 555
+    install = next(s for s in manifest.plan.steps if s.name == "install_app")
+    assert install.result == "already installed"
 
 
 def test_install_app_step_skips_when_no_owner_app_configured(tmp_path):
