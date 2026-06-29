@@ -2,8 +2,9 @@
 
 - Status: Approved (brainstorming)
 - Date: 2026-06-29
-- Issue: #96 (paved-road / tech-stack selection feeding `/speckit.plan` — deferred
-  follow-up created with this design)
+- Issues: #96 (paved-road / tech-stack selection feeding `/speckit.plan`) and #97
+  (maturity-gate the constitution PR's auto-merge) — deferred follow-ups created
+  with this design
 - Relates to: the Creation phase (`docs/site/concept/creation.md`), the Product
   Charter (`dsf charter init|sync|status`)
 - ADRs: 0017 (product charter — human-owned intent), 0016 (creation phase on the
@@ -89,13 +90,14 @@ flowchart TB
     N["dsf new<br/>repo + baseline CI + specify init scaffold"] --> CI["dsf charter init<br/>interview → charter PR"]
     CI --> M{"human merges<br/>charter PR?"}
     M -->|accepted| IMPL["dsf charter implement"]
-    IMPL --> C["render + commit<br/>.specify/memory/constitution.md"]
+    IMPL --> C["render + open auto-merged PR<br/>.specify/memory/constitution.md"]
     IMPL --> B["file ONE creation:ready<br/>bootstrap issue + assign Copilot"]
     B --> AG["Copilot Coding Agent — one session"]
     AG --> S1["/speckit.specify (charter)"]
     S1 --> S2["/speckit.plan (paved road: agent's choice, #96)"]
     S2 --> S3["/speckit.tasks"]
     S3 --> S4["implement → PR(s)"]
+    C --> G
     S4 --> G{"creation_maturity ruleset"}
     G -->|low| H["human review + green ci"]
     G -->|high| AM["auto-merge on required checks"]
@@ -109,9 +111,10 @@ flowchart TB
    `.dsf/charter.md` PR. A human reviews, edits, and **merges** it. Merging is the
    acceptance of intent.
 3. **`dsf charter implement`** (new) — once the charter is merged/synced OK:
-   renders `.specify/memory/constitution.md` from the charter and commits it via
-   the GitHub App, then files **one** `creation:ready` bootstrap issue assigned to
-   the Copilot Coding Agent.
+   renders `.specify/memory/constitution.md` from the charter and lands it via an
+   **auto-merged PR** opened by the GitHub App (`main` is branch-protected, so a
+   direct push is rejected — the charter itself uses the same PR path), then files
+   **one** `creation:ready` bootstrap issue assigned to the Copilot Coding Agent.
 4. **Copilot Coding Agent** (existing handoff) — in a single session with a large
    model, runs `/speckit.specify` (charter input) → `/speckit.plan` (paved road
    left to the agent for now) → `/speckit.tasks` → implements the tasks → opens
@@ -147,7 +150,7 @@ Each unit has one clear purpose and a narrow interface.
   the current single `gh api PUT contents` to a **clone → write → commit → push**
   flow.
 - **Dependency:** `specify-cli` becomes an operator prerequisite, installed via
-  `uv tool install specify-cli --from git+https://github.com/github/spec-kit.git@<pinned-tag>`.
+  `uv tool install specify-cli --from git+https://github.com/github/spec-kit.git@v0.11.9`.
   Templates are **bundled inside the `specify-cli` package** (verified against the
   locally installed `specify 0.11.9`, whose `init --help` states it "does not need
   network access and templates match the installed CLI version"): so **pinning the
@@ -175,9 +178,14 @@ Each unit has one clear purpose and a narrow interface.
   2. Verify the charter is present and **synced OK** (reuse the `status` drift
      logic); refuse with a clear message if missing/invalid/stale so we never seed
      from a non-accepted charter.
-  3. Render the constitution from the stored/merged charter and **commit it
-     directly via the GitHub App** to `.specify/memory/constitution.md` on `main`
-     (idempotent: skip if unchanged).
+  3. Render the constitution from the stored/merged charter and **land it via an
+     auto-merged PR** opened by the GitHub App to `.specify/memory/constitution.md`
+     (`open_file_pr(..., enable_auto_merge=True)`). A direct push to `main` is
+     impossible — the `dsf-creation` ruleset requires a PR — so the constitution
+     follows the same PR path the charter uses. At **high** maturity the repo has
+     auto-merge on, so the PR self-merges on green `ci`; at **low** maturity
+     auto-merge is off, so enabling it is a no-op and the PR waits for a human
+     (the maturity-gated switch is tracked in #97). v1 always *requests* auto-merge.
   4. File **one** `creation:ready` bootstrap issue (body from the template below)
      and assign the Copilot Coding Agent via the existing App assignment path
      (`replaceActorsForAssignable`). If Copilot is not enabled on the repo, file
@@ -199,7 +207,7 @@ Each unit has one clear purpose and a narrow interface.
 - **Where:** `docs/site/get-started/provision-a-factory.md` (the `## Prerequisites`
   list) and `docs/site/get-started/quickstart.md`.
 - **What:** add the pinned `specify-cli` install (`uv tool install specify-cli
-  --from git+https://github.com/github/spec-kit.git@<pinned-tag>`) as a tool the
+  --from git+https://github.com/github/spec-kit.git@v0.11.9`) as a tool the
   principal running `dsf new` needs, and note that `dsf charter implement` follows a
   merged charter. Keeps the docs honest with the new external dependency.
 
@@ -218,15 +226,17 @@ constitution template (`# … Constitution` / `## Core Principles` /
   faithful to intent" means).
 
 The constitution is a **derived projection** of the charter: re-rendering it
-introduces no new intent, which is why `dsf charter implement` (an explicit,
-operator-invoked action) commits it directly rather than opening it for review.
+introduces no new intent. Because `main` is branch-protected, `dsf charter
+implement` lands it via an **auto-merged PR** (not a direct push) — the same PR
+path the human-owned charter uses — so it merges without human review at high
+maturity and waits for a human at low maturity (#97).
 
 ## Ownership and trust
 
 - **Charter:** human-owned, agents never write it (ADR 0017) — unchanged.
-- **Constitution:** DSF-rendered deterministically from the charter; committed
-  directly by the operator-invoked `dsf charter implement` (human-in-the-loop via
-  the invocation).
+- **Constitution:** DSF-rendered deterministically from the charter; landed via an
+  **auto-merged PR** opened by the operator-invoked `dsf charter implement` (branch
+  protection requires a PR; auto-merges at high maturity, human-merged at low — #97).
 - **Specs / plan / tasks / code:** authored by the Copilot Coding Agent, governed
   by the existing maturity-dial merge path.
 - **Prompt safety:** the charter is rendered into the bootstrap issue as
@@ -249,9 +259,10 @@ Offline/unit per DSF norms (`dsf_testing` doubles; no fakes in `src/`):
   assert each charter field lands in the right constitution section; empty/optional
   fields render cleanly.
 - **`dsf charter implement`:** drive it with `dsf_testing` doubles — assert it
-  refuses on missing/invalid/stale charter, commits the rendered constitution
-  (App double records the write), files exactly one `creation:ready` issue, and
-  assigns Copilot (with the no-Copilot fallback note).
+  refuses on missing/invalid/stale charter, opens exactly one constitution PR with
+  `enable_auto_merge=True` (App double records the PR + the auto-merge request),
+  files exactly one `creation:ready` issue, and assigns Copilot (with the
+  no-Copilot fallback note).
 - **Boundaries:** `uv run lint-imports` stays green (no new cross-member imports;
   the renderer lives in `core`, the command and templates in `cli`).
 
@@ -273,6 +284,7 @@ Offline/unit per DSF norms (`dsf_testing` doubles; no fakes in `src/`):
 ## Deferred work (tracked)
 
 - Paved-road / tech-stack selection feeding `/speckit.plan` — **#96**.
+- Maturity-gated constitution PR auto-merge (high = auto, low = human) — **#97**.
 - Per-task issue fan-out + dependency orchestration via `/speckit.taskstoissues`.
 - Deploy → URL → smoke-test → validate-faithful-to-intent → present loop.
 - Feature Council → "Intent Council" rename for day-2 development.
