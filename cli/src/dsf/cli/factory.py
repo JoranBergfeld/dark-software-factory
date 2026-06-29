@@ -72,6 +72,31 @@ def _print_step_progress(line: str) -> None:
     print(f"[dsf]     {line}", flush=True)
 
 
+def _owner_app_wiring_warnings(
+    owner_keyvault_uri: str, owner_appconfig_endpoint: str
+) -> list[str]:
+    """Return warnings for owner-level App wiring inputs missing from ``dsf new``."""
+    if not owner_keyvault_uri:
+        return [
+            "[dsf] WARNING: DSF_OWNER_KEYVAULT_URI is unset and --owner-keyvault-uri "
+            "was not passed.",
+            "[dsf] WARNING: install_app, seed_app_key, seed_webiq_key, "
+            "publish_runtime_index will be SKIPPED.",
+            "[dsf] WARNING: the GitHub App won't be wired; `dsf charter init` and "
+            "runtime GitHub access will fail.",
+            "[dsf] WARNING: fix: run `dsf bootstrap` once, then export "
+            "DSF_OWNER_KEYVAULT_URI and DSF_OWNER_APPCONFIG_ENDPOINT, then re-run "
+            "`dsf new`.",
+        ]
+    if not owner_appconfig_endpoint:
+        return [
+            "[dsf] note: DSF_OWNER_APPCONFIG_ENDPOINT is unset and "
+            "--owner-appconfig-endpoint was not passed; publish_runtime_index will "
+            "be SKIPPED.",
+        ]
+    return []
+
+
 def charter_next_action(product: str) -> str:
     """The bare, copy-pasteable command that seeds a factory's product charter."""
     return f"uv run dsf charter init --product {product}"
@@ -223,6 +248,8 @@ def _cmd_new(args: argparse.Namespace) -> int:
     owner_appconfig = args.owner_appconfig_endpoint or os.environ.get(
         "DSF_OWNER_APPCONFIG_ENDPOINT", ""
     )
+    for warning in _owner_app_wiring_warnings(owner_kv, owner_appconfig):
+        print(warning)
     admin_principal_id = args.admin_principal_id or os.environ.get(
         "DSF_ADMIN_PRINCIPAL_ID", ""
     )

@@ -75,13 +75,22 @@ running `dsf new` needs:
   GitHub App's private key) and `webiq-api-key` (the WebIQ SDK API key) before `dsf new`.
   Both must be set with `--content-type text/plain` and a `--expires` date ≤30 days out to
   satisfy the tenant's Key Vault secret policy (re-seed on rotation/expiry).
+- **Owner App wiring:** run `dsf bootstrap` once before the first `dsf new`, then export
+  `DSF_OWNER_KEYVAULT_URI` and `DSF_OWNER_APPCONFIG_ENDPOINT` in the provisioning shell.
+
+!!! warning "Configure the owner App before `dsf new`"
+    If `DSF_OWNER_KEYVAULT_URI` is unset (and `--owner-keyvault-uri` is not passed),
+    `dsf new` skips GitHub App wiring: `install_app`, `seed_app_key`, `seed_webiq_key`,
+    and `publish_runtime_index`. The factory provisions, but `dsf charter init` and
+    runtime GitHub access fail until you bootstrap, export both owner endpoints, and
+    re-run `dsf new`.
 
 ## What gets provisioned
 
 A complete, isolated factory for the product:
 
 - a GitHub repo (`<owner>/<product>`) with baseline CI, the DSF label taxonomy, the DSF
-  GitHub App, and the `dsf-creation` branch-protection ruleset,
+  GitHub App wired from the owner Key Vault, and the `dsf-creation` branch-protection ruleset,
 - a dedicated Azure resource group (`rg-dsf-<product>`) with the runtime deployed from
   `infra/main.bicep`,
 - the product registered in the routing registry (`config/products.json`),
