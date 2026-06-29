@@ -78,3 +78,29 @@ def runtime_env_for_product(
     if endpoint:
         index = read_runtime_config(endpoint, product, gateway=gateway)
     return {**index, **env, "DSF_PRODUCT": product}
+
+
+def list_products(
+    owner_endpoint: str,
+    *,
+    gateway: ConfigGateway | None = None,
+) -> list[str]:
+    """Return the distinct product labels published in the owner index (sorted)."""
+    if not owner_endpoint:
+        return []
+    gw = _gateway(owner_endpoint, gateway)
+    return sorted({label for _key, _value, label in gw.list() if label})
+
+
+def repo_for_product(
+    owner_endpoint: str,
+    product: str,
+    *,
+    gateway: ConfigGateway | None = None,
+) -> str | None:
+    """Resolve ``product``'s ``owner/name`` repo from the owner index (or ``None``)."""
+    if not owner_endpoint:
+        return None
+    return read_runtime_config(owner_endpoint, product, gateway=gateway).get(
+        "GITHUB_REPOSITORY"
+    ) or None

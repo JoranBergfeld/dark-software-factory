@@ -122,7 +122,9 @@ def test_sync_ref_unknown_product(monkeypatch, capsys):
     monkeypatch.setattr("dsf.cli.charter.build_charter_store", lambda s: InMemoryCharterStore())
     monkeypatch.setattr("dsf.cli.charter._resolve_repo", lambda product: None)
     rc = main(["charter", "sync", "--product", "ghost", "--ref", "main"])
-    assert rc == 1 and "not in registry" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert rc == 1 and "cannot resolve repo for product" in err
+    assert "DSF_OWNER_APPCONFIG_ENDPOINT" in err
 
 
 async def test_run_interview_drives_to_draft():
@@ -201,6 +203,35 @@ def test_app_settings_derives_app_creds_from_owner_kv(monkeypatch):
     assert settings.github_app_private_key_secret == "github-app-private-key"
     assert settings.keyvault_uri == "https://owner-kv.vault.azure.net/"
     assert settings.github_repository == "org/alpha"
+
+
+def test_resolve_repo_reads_owner_index(monkeypatch):
+    from dsf.cli import charter as charter_mod
+
+    monkeypatch.setenv("DSF_OWNER_APPCONFIG_ENDPOINT", "https://owner")
+    seen = {}
+
+    def _fake_repo_for_product(endpoint, product, **_):
+        seen["endpoint"] = endpoint
+        seen["product"] = product
+        return "org/alpha" if product == "alpha" else None
+
+    monkeypatch.setattr("dsf.config.owner_index.repo_for_product", _fake_repo_for_product)
+
+    assert charter_mod._resolve_repo("alpha") == "org/alpha"
+    assert seen == {"endpoint": "https://owner", "product": "alpha"}
+    assert charter_mod._resolve_repo("missing") is None
+
+
+def test_resolve_repo_returns_none_without_owner_endpoint(monkeypatch):
+    from dsf.cli import charter as charter_mod
+
+    monkeypatch.delenv("DSF_OWNER_APPCONFIG_ENDPOINT", raising=False)
+    monkeypatch.setattr(
+        "dsf.config.owner_index.repo_for_product",
+        lambda endpoint, product, **_: ("SHOULD-NOT-BE-USED" if endpoint else None),
+    )
+    assert charter_mod._resolve_repo("alpha") is None
 
 
 def test_settings_fills_azure_endpoints_from_manifest(monkeypatch):

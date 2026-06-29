@@ -65,6 +65,23 @@ def test_api_state_has_seeded_flags(client):
     assert "_overrides" in data["snapshot"]
 
 
+def test_state_lists_products_from_owner_index(monkeypatch, services):
+    monkeypatch.setenv("DSF_OWNER_APPCONFIG_ENDPOINT", "https://owner")
+    monkeypatch.setattr(
+        "dsf.config.owner_index.list_products",
+        lambda endpoint, **_: ["alpha", "beta"],
+    )
+    client = TestClient(create_app(services), follow_redirects=False)
+    data = client.get("/api/state").json()
+    assert data["products"] == ["alpha", "beta"]
+
+
+def test_state_products_empty_when_no_owner_endpoint(monkeypatch, services):
+    monkeypatch.delenv("DSF_OWNER_APPCONFIG_ENDPOINT", raising=False)
+    client = TestClient(create_app(services), follow_redirects=False)
+    assert client.get("/api/state").json()["products"] == []
+
+
 # ---------------------------------------------------------------------------
 # Issue #7 -- unauthenticated writes must return 401
 # ---------------------------------------------------------------------------

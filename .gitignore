@@ -22,3 +22,6 @@ infra/modules/*.json
 !infra/*.parameters.json
 
 config/
+
+# Local git worktrees (superpowers)
+.worktrees/

@@ -10,7 +10,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from dsf.config.registry import load_registry, route_product
 from dsf.contracts.handoff import HANDOFF_LABEL, HANDOFF_LABEL_COLOR, INCIDENT_LABEL
 from dsf.instance.provisioner import (
     _SEED_RETRY_DELAY,
@@ -101,7 +100,7 @@ def test_plan_step_order_and_names():
         "seed_appconfig",
         "seed_app_key",
         "seed_webiq_key",
-        "register_product",
+        "seed_product_record",
         "publish_runtime_index",
         "deploy_council",
         "branch_protection",
@@ -339,39 +338,55 @@ def test_apply_dry_run_writes_manifest_and_runs_nothing(tmp_path):
     assert (tmp_path / "config" / "instances" / "demo.json").exists()
 
 
-def test_apply_execute_registers_product_into_routing_registry(tmp_path):
+def test_seed_product_record_writes_product_keys(tmp_path):
+    calls = []
+
     def fake_run(cmd, **kwargs):
+        calls.append(cmd)
         if cmd[:3] == ["gh", "repo", "view"]:
             return MagicMock(returncode=1)
         hit = _az_deploy(cmd, _AZURE_OUTPUTS_JSON)
         if hit is not None:
             return hit
-        return MagicMock(returncode=0)
+        return MagicMock(returncode=0, stdout="")
 
     prov = InstanceProvisioner(_spec(), run=fake_run, repo_root=tmp_path)
     manifest = prov.apply(execute=True)
 
-    products = tmp_path / "config" / "products.json"
-    assert products.exists()
-    registry = load_registry(products)
-    assert registry["demo"].github_repo == "acme/demo"
-    # The freshly-registered product is now routable by S6.
-    routed = route_product(["demo"], registry)
-    assert routed is not None and routed.key == "demo"
-    assert {s.name: s.result for s in manifest.plan.steps}["register_product"] == "registered"
+    seed = next(s for s in manifest.plan.steps if s.name == "seed_product_record")
+    assert seed.result == "seeded"
+    assert seed.executed is True
+    kv_sets = [c for c in calls if c[:4] == ["az", "appconfig", "kv", "set"]]
+    keys = {c[c.index("--key") + 1] for c in kv_sets}
+    assert "product.github_repo" in keys
+    assert "product.label_taxonomy" in keys
+    assert "threshold.demo" in keys
+    # The product record is seeded to the same endpoint threaded from outputs.
+    product_sets = [c for c in kv_sets if c[c.index("--key") + 1].startswith("product.")]
+    assert all(c[c.index("--endpoint") + 1] == _APPCONFIG_ENDPOINT for c in product_sets)
+    # github_repo value is JSON-encoded (the store json.loads it).
+    repo_set = next(c for c in kv_sets if c[c.index("--key") + 1] == "product.github_repo")
+    assert repo_set[repo_set.index("--value") + 1] == json.dumps("acme/demo")
 
 
-def test_apply_dry_run_also_registers_product(tmp_path):
-    prov = InstanceProvisioner(_spec(), run=MagicMock(returncode=0), repo_root=tmp_path)
+def test_apply_dry_run_seeds_product_record_without_calls(tmp_path):
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return MagicMock(returncode=0)
+
+    prov = InstanceProvisioner(_spec(), run=fake_run, repo_root=tmp_path)
     manifest = prov.apply(execute=False)
 
-    # Registration is a local, idempotent config write — it runs in dry-run too.
-    registry = load_registry(tmp_path / "config" / "products.json")
-    assert "demo" in registry
-    assert registry["demo"].github_repo == "acme/demo"
-    assert {s.name: s.result for s in manifest.plan.steps}[
-        "register_product"
-    ] == "registered (dry-run)"
+    seed = next(s for s in manifest.plan.steps if s.name == "seed_product_record")
+    assert seed.result == "seeded (dry-run)"
+    assert seed.executed is False
+    assert not any(
+        c[:4] == ["az", "appconfig", "kv", "set"]
+        and c[c.index("--key") + 1].startswith("product.")
+        for c in calls
+    )
 
 
 def test_apply_execute_runs_real_steps_and_onboards_sre(tmp_path):

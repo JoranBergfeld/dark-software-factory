@@ -12,7 +12,7 @@ from __future__ import annotations
 from dsf.contracts.enums import ProposalKind, SourceKind, TriggerKind
 from dsf.contracts.models import EvidenceItem, Proposal, Provenance, Run
 from dsf_testing.charter import InMemoryCharterStore
-from dsf_testing.config import InMemoryConfigStore
+from dsf_testing.config import InMemoryConfigStore, config_with_product_record
 from dsf_testing.github import RecordingGitHubClient, RecordingRepoClient
 from dsf_testing.memory import InMemoryMemoryStore
 from dsf_testing.model import ECHO_PREFIX, DeterministicModelClient
@@ -102,6 +102,7 @@ __all__ = [
     "RecordingRepoClient",
     "RecordingSourceBackend",
     "build_test_services",
+    "config_with_product_record",
     "make_evidence",
     "make_proposal",
     "make_run",

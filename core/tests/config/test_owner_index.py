@@ -79,3 +79,29 @@ def test_runtime_env_without_endpoint_is_base_env_plus_product():
 
 def test_owner_appconfig_env_name_is_stable():
     assert OWNER_APPCONFIG_ENV == "DSF_OWNER_APPCONFIG_ENDPOINT"
+
+
+def test_list_products_returns_distinct_labels():
+    from dsf.config.owner_index import list_products
+
+    gw = InMemoryConfigGateway({
+        ("GITHUB_REPOSITORY", "alpha"): "o/alpha",
+        ("DSF_PRODUCT", "alpha"): "alpha",
+        ("GITHUB_REPOSITORY", "beta"): "o/beta",
+    })
+    assert list_products("https://owner", gateway=gw) == ["alpha", "beta"]
+
+
+def test_list_products_empty_endpoint_is_empty():
+    from dsf.config.owner_index import list_products
+
+    assert list_products("") == []
+
+
+def test_repo_for_product_reads_github_repository():
+    from dsf.config.owner_index import repo_for_product
+
+    gw = InMemoryConfigGateway({("GITHUB_REPOSITORY", "alpha"): "o/alpha"})
+    assert repo_for_product("https://owner", "alpha", gateway=gw) == "o/alpha"
+    assert repo_for_product("https://owner", "missing", gateway=gw) is None
+    assert repo_for_product("", "alpha", gateway=gw) is None

@@ -8,7 +8,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from dsf.config.registry import load_registry
 from dsf.instance.deprovisioner import InstanceDeprovisioner
 from dsf.instance.provisioner import InstanceProvisioner
 from dsf.instance.spec import (
@@ -79,7 +78,6 @@ def test_plan_step_order_and_names():
         "remove_sre_rbac",
         "delete_sre_agent",
         "delete_resource_group",
-        "deregister_product",
         "remove_runtime_index",
         "delete_config",
         "delete_repo",
@@ -230,24 +228,6 @@ def test_apply_execute_order_azure_before_repo(tmp_path):
 
     InstanceDeprovisioner(_manifest(), run=fake_run, repo_root=tmp_path).apply(execute=True)
     assert call_order.index("azure") < call_order.index("repo")
-
-
-def test_apply_execute_deregisters_product(tmp_path):
-    # First register a product by writing a products.json.
-    products_json = tmp_path / "config" / "products.json"
-    products_json.parent.mkdir(parents=True, exist_ok=True)
-    products_json.write_text(
-        json.dumps({"products": [{"key": "demo", "github_repo": "acme/demo"}]}) + "\n",
-        encoding="utf-8",
-    )
-
-    InstanceDeprovisioner(
-        _manifest(), run=_ok_run, repo_root=tmp_path
-    ).apply(execute=True)
-
-    registry = load_registry(products_json)
-    assert "demo" not in registry
-
 
 def test_deprovisioner_removes_runtime_index_entry():
     from dsf.config.owner_index import publish_runtime_config, read_runtime_config

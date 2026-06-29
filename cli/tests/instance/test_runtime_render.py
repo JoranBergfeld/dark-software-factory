@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from dsf.instance.provisioner import InstanceProvisioner
 from dsf.instance.runtime_render import (
-    render_product_registration,
-    render_product_unregistration,
     render_runtime_bundle,
     render_sre_summary,
     runtime_dir,
@@ -130,22 +128,12 @@ def test_sre_summary_instructs_incident_label(tmp_path):
 
 
 def test_product_from_spec_threads_azure_monitor_scope():
-    from dsf.instance.runtime_render import _product_from_spec
+    from dsf.instance.runtime_render import product_from_spec
     from dsf.instance.spec import InstanceSpec
 
     spec = InstanceSpec(product="microbi", owner="acme")
-    product = _product_from_spec(spec)
+    product = product_from_spec(spec)
     # Defaults to the product key so the telemetry source has a non-empty scope to
     # resolve in azure mode; the live Application Insights id is filled in during
     # observability onboarding.
     assert product.azure_monitor_scope == spec.product
-
-
-def test_render_product_unregistration_removes_entry(tmp_path):
-    manifest = _manifest(tmp_path)
-    render_product_registration(manifest, repo_root=tmp_path)
-    products = tmp_path / "config" / "products.json"
-    assert "microbi" in products.read_text(encoding="utf-8")
-
-    render_product_unregistration("microbi", repo_root=tmp_path)
-    assert "microbi" not in products.read_text(encoding="utf-8")

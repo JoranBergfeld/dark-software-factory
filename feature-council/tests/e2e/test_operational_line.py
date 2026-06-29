@@ -8,11 +8,19 @@ from dsf.contracts.handoff import HANDOFF_LABEL
 from dsf.orchestrator.blackboard import Blackboard
 from dsf.orchestrator.conveyor import run_line
 from dsf.runtime.control import signal_to_run
-from dsf_testing import build_test_services
+from dsf_testing import build_test_services, config_with_product_record
+
+
+def _services(**kw):
+    return build_test_services(
+        product="microbi",
+        config=config_with_product_record("microbi", github_repo="joranbergfeld/microbi"),
+        **kw,
+    )
 
 
 async def test_incident_signal_flows_to_grounded_squad_issue() -> None:
-    services = build_test_services()
+    services = _services()
     run = signal_to_run(
         {
             "id": "evt_incident_recurrence",
@@ -67,7 +75,7 @@ async def test_incident_line_files_real_issue_then_dedups_on_recurrence() -> Non
     """The system executes by default: operational INCIDENTS evidence files a real
     issue via the GitHub port; an identical second run files nothing (deduped at
     S5/S7)."""
-    services = build_test_services()  # github = RecordingGitHubClient
+    services = _services()  # github = RecordingGitHubClient
     bb = Blackboard(services.memory)
 
     first = await run_line(signal_to_run(_incident_signal()), services)

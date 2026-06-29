@@ -6,7 +6,6 @@ import json
 import subprocess
 from unittest.mock import MagicMock
 
-from dsf.config.registry import Product, load_registry, register_product
 from dsf.instance.provisioner import InstanceOffboarder, InstanceProvisioner
 from dsf.instance.spec import AzureProvisionResult, InstanceManifest, InstanceSpec, write_manifest
 
@@ -43,10 +42,6 @@ def _seed_manifest(tmp_path, *, monitored_rgs: list[str] | None = None) -> Insta
     runtime = tmp_path / "config" / "instances" / "demo.runtime"
     runtime.mkdir(parents=True, exist_ok=True)
     (runtime / ".env.orchestrator").write_text("DSF_PRODUCT=demo\n", encoding="utf-8")
-    register_product(
-        Product(key="demo", github_repo="acme/demo"),
-        path=tmp_path / "config" / "products.json",
-    )
     return manifest
 
 
@@ -58,7 +53,6 @@ def test_offboard_plan_step_order_and_purge_default(tmp_path):
         "delete_sre_resource_group",
         "delete_product_resource_group",
         "purge_soft_deleted",
-        "unregister_product",
         "remove_runtime_index",
         "remove_instance_artifacts",
     ]
@@ -119,11 +113,8 @@ def test_offboard_execute_removes_registry_and_artifacts(tmp_path):
     assert results["remove_sre_rbac"] == "removed"
     assert results["delete_sre_resource_group"] == "deleted"
     assert results["delete_product_resource_group"] == "deleted"
-    assert results["unregister_product"] == "unregistered"
     assert results["remove_instance_artifacts"] == "removed"
 
-    registry = load_registry(tmp_path / "config" / "products.json")
-    assert "demo" not in registry
     assert not (tmp_path / "config" / "instances" / "demo.json").exists()
     assert not (tmp_path / "config" / "instances" / "demo.runtime").exists()
 
@@ -263,5 +254,4 @@ def test_offboard_execute_refuses_untagged_resource_group(tmp_path):
     assert results["delete_sre_resource_group"] == "failed"
     # The line stops, so the product RG and registry/artifacts are left untouched.
     assert results["delete_product_resource_group"] == ""
-    assert results["unregister_product"] == ""
     assert (tmp_path / "config" / "instances" / "demo.json").exists()

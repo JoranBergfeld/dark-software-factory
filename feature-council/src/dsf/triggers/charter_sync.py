@@ -13,7 +13,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from dsf.charter.sync import sync_charter
-from dsf.config.registry import load_registry, route_product
+from dsf.config.flags import product_record
 from dsf.contracts.models import AuditRecord
 
 if TYPE_CHECKING:
@@ -37,12 +37,9 @@ async def sync_charter_on_sweep(services: Services, run: Run) -> None:
         _audit(run, "charter sync skipped: no GitHub App configured")
         return
     try:
-        routed = route_product([product], load_registry())
-        if routed is None:
-            _audit(run, f"charter sync skipped: '{product}' not in registry")
-            return
+        record = product_record(services.config, product)
         stored = await sync_charter(
-            services.charter, services.repo, product=product, repo=routed.github_repo
+            services.charter, services.repo, product=product, repo=record.github_repo
         )
     except Exception as exc:  # noqa: BLE001 - charter problems never crash the sweep
         _audit(run, f"charter sync error (ignored): {exc}")

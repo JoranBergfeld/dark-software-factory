@@ -564,7 +564,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_offboard.add_argument(
         "--config-root",
         default=None,
-        help="override repo root where config/instances/ and config/products.json live",
+        help="override repo root where config/instances/ lives",
     )
     p_offboard.add_argument(
         "--owner-appconfig-endpoint",

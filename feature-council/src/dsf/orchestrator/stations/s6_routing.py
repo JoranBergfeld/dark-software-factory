@@ -11,7 +11,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from dsf.config.registry import Product, load_registry, route_product
+from dsf.config.flags import product_record
+from dsf.config.registry import Product
 from dsf.contracts.enums import ProposalKind, RunStatus
 from dsf.contracts.handoff import HANDOFF_LABEL
 from dsf.contracts.models import RoutedIssue
@@ -107,21 +108,10 @@ async def run(run: Run, services: Services) -> Run:
 
         blackboard = Blackboard(services.memory)
         proposals = await blackboard.load_proposals(run.id)
-        registry = load_registry()
+        product = product_record(services.config, services.product)
 
         issues: list[RoutedIssue] = []
         for proposal in proposals:
-            hints = [h for h in [proposal.product, *run.scope_product_hints] if h]
-            product = route_product(hints, registry)
-            if product is None:
-                run.audit.append(
-                    _audit(
-                        f"no product route for proposal {proposal.id} "
-                        f"(hints={hints}) — skipped"
-                    )
-                )
-                continue
-
             issue = RoutedIssue(
                 proposal_id=proposal.id,
                 product=product.key,
@@ -134,8 +124,8 @@ async def run(run: Run, services: Services) -> Run:
             issues.append(issue)
             run.audit.append(
                 _audit(
-                    f"routed proposal {proposal.id} -> {product.key} ({product.github_repo}) "
-                    f"labels={issue.labels}"
+                    f"routed proposal {proposal.id} -> {product.key} "
+                    f"({product.github_repo}) labels={issue.labels}"
                 )
             )
 

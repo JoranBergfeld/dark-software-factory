@@ -174,7 +174,7 @@ def test_new_dry_run_prints_plan_without_side_effects(capsys, tmp_path):
     assert rc == 0
     assert "create_repo" in out
     assert "provision_azure" in out
-    assert "register_product" in out
+    assert "seed_product_record" in out
     assert "deploy_sre_agent" in out
     # pure preview: no manifest written even though a config root was provided
     assert not (tmp_path / "config" / "instances" / "demo.json").exists()
@@ -494,7 +494,7 @@ def test_delete_dry_run_prints_teardown_plan_no_side_effects(capsys, tmp_path):
     assert rc == 0
     assert "delete_sre_agent" in out
     assert "delete_resource_group" in out
-    assert "deregister_product" in out
+    assert "remove_runtime_index" in out
     assert "delete_config" in out
     assert "delete_repo" in out
     assert "DRY-RUN" in out
@@ -726,7 +726,7 @@ def _patch_success_provisioner(monkeypatch):
 
         def apply(self, *, execute=False, on_event=None, on_progress=None):
             step = ProvisionStep(
-                name="register_product", description="register product", result="executed"
+                name="seed_product_record", description="seed product", result="executed"
             )
             plan = InstancePlan(product=self.spec.product, steps=[step])
             return InstanceManifest(spec=self.spec, plan=plan, executed=True)

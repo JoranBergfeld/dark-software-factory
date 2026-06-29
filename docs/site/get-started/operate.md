@@ -61,9 +61,9 @@ Operator commands:
 master DSF GitHub App. Keep `DSF_OWNER_KEYVAULT_URI` exported (the value `dsf
 bootstrap` printed and that `dsf new` already uses): the CLI then reads the App id,
 installation id, and private key from that owner Key Vault and resolves the repo
-from the registry — no other GitHub env vars are needed. Explicit `GITHUB_APP_ID` /
-`GITHUB_INSTALLATION_ID` / `GITHUB_APP_PRIVATE_KEY_SECRET` / `AZURE_KEYVAULT_URI`
-override it when set.
+from the owner App Configuration index (set `DSF_OWNER_APPCONFIG_ENDPOINT`) — no
+other GitHub env vars are needed. Explicit `GITHUB_APP_ID` / `GITHUB_INSTALLATION_ID` /
+`GITHUB_APP_PRIVATE_KEY_SECRET` / `AZURE_KEYVAULT_URI` override it when set.
 
 The Azure backing-service endpoints (App Configuration, Cosmos, and Azure OpenAI)
 are auto-loaded the same way: `dsf charter` reads them from the product's instance
@@ -130,8 +130,9 @@ through the DSF GitHub App. The whole contract is one system label —
 `dsf.contracts.handoff.HANDOFF_LABEL` (`creation:ready`) — that S6 stamps on **every**
 routed issue and that the Coding Agent picks up (ADR 0007, ADR 0016).
 
-`dsf new` wires this end to end: `register_product` upserts the product (repo + label taxonomy
-+ confidence threshold) into the routing registry that S1 scoping and S6 routing read;
+`dsf new` wires this end to end: `seed_product_record` writes the product record
+(repo + label taxonomy + source scopes + confidence threshold) into the product's App
+Configuration that S2 scoping and S6 routing read;
 `create_labels` idempotently creates the taxonomy + `creation:ready` so filing never fails on a
 missing label; and the DSF GitHub App assigns the Copilot Coding Agent when S7 files the issue.
 `dsf new` also creates the `dsf-creation` branch-protection ruleset from the

@@ -12,10 +12,18 @@ from dsf.contracts.enums import RunStatus
 from dsf.orchestrator.blackboard import Blackboard
 from dsf.orchestrator.conveyor import run_line
 from dsf.runtime.control import main, signal_to_run
-from dsf_testing import build_test_services
+from dsf_testing import build_test_services, config_with_product_record
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SAMPLE_SIGNAL = REPO_ROOT / "tests" / "fixtures" / "sample_signal.json"
+
+
+def _services(**kw):
+    return build_test_services(
+        product="microbi",
+        config=config_with_product_record("microbi", github_repo="joranbergfeld/microbi"),
+        **kw,
+    )
 
 STATION_NAMES = {
     "S1:triage",
@@ -34,7 +42,7 @@ def payload() -> dict:
 
 
 async def test_dry_run_line_files_grounded_issue_without_network(payload: dict) -> None:
-    services = build_test_services()
+    services = _services()
     run = signal_to_run(payload)
     run.dry_run = True
 
@@ -68,7 +76,7 @@ async def test_dry_run_line_files_grounded_issue_without_network(payload: dict) 
 async def test_line_files_real_issue_when_dry_run_off(payload: dict) -> None:
     """With both dry-run switches off, the wired line actually files via the
     GitHub port — regression for #13 (no code path could file a real issue)."""
-    services = build_test_services()  # github = RecordingGitHubClient
+    services = _services()  # github = RecordingGitHubClient
     services.config.set_flag("dry_run", False)  # off the global kill switch
 
     run = signal_to_run(payload)
@@ -94,7 +102,7 @@ async def test_line_files_real_issue_when_dry_run_off(payload: dict) -> None:
 def test_cli_run_dry_run_exits_zero(capsys, monkeypatch) -> None:
     # the runtime builds the real bundle; point it at the in-memory test bundle.
     monkeypatch.setattr(
-        "dsf.runtime.control.build_services", lambda: build_test_services()
+        "dsf.runtime.control.build_services", lambda: _services()
     )
     code = main(["run", "--dry-run", "--signal", str(SAMPLE_SIGNAL)])
     out = capsys.readouterr().out
@@ -105,7 +113,7 @@ def test_cli_run_dry_run_exits_zero(capsys, monkeypatch) -> None:
 def test_cli_serve_orchestrator_exits_zero(capsys, monkeypatch) -> None:
     # The orchestrator tick runs the source sweep (DSF is pull-only).
     monkeypatch.setattr(
-        "dsf.runtime.control.build_services", lambda: build_test_services()
+        "dsf.runtime.control.build_services", lambda: _services()
     )
     code = main(["serve-orchestrator"])
     out = capsys.readouterr().out

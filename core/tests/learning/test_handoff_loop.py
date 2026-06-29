@@ -15,9 +15,9 @@ from dsf.contracts.models import Proposal, Run
 from dsf.learning import handle_pr_event
 from dsf.orchestrator.blackboard import Blackboard
 from dsf.orchestrator.stations import s6_routing
-from dsf_testing import build_test_services
+from dsf_testing import build_test_services, config_with_product_record
 
-PRODUCT = "microbi"  # present in config/products.json
+PRODUCT = "microbi"  # seeded product record
 
 
 def _merged_pr_event() -> dict:
@@ -37,7 +37,10 @@ def _merged_pr_event() -> dict:
 
 
 async def test_council_to_squad_loop_closes():
-    services = build_test_services()
+    services = build_test_services(
+        product=PRODUCT,
+        config=config_with_product_record(PRODUCT, github_repo="joranbergfeld/microbi"),
+    )
 
     run = Run(trigger=TriggerKind.SIGNAL, scope_product_hints=[PRODUCT])
     proposal = Proposal(

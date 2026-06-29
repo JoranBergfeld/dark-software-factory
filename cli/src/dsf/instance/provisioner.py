@@ -18,6 +18,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from dsf.config.registry import Product
 from dsf.config.store import load_defaults
 from dsf.contracts.handoff import (
     HANDOFF_LABEL,
@@ -38,8 +39,7 @@ from dsf.instance.branch_protection import (
 )
 from dsf.instance.deploy_progress import DeploymentProgressPoller
 from dsf.instance.runtime_render import (
-    render_product_registration,
-    render_product_unregistration,
+    product_from_spec,
     render_runtime_bundle,
     render_sre_summary,
     runtime_dir,
@@ -123,6 +123,37 @@ def _appconfig_seed_commands(endpoint: str) -> list[list[str]]:
     """
     commands: list[list[str]] = []
     for key, value in _flatten_config(load_defaults()):
+        commands.append(
+            [
+                "az", "appconfig", "kv", "set",
+                "--endpoint", endpoint,
+                "--auth-mode", "login",
+                "--key", key,
+                "--value", json.dumps(value),
+                "--yes",
+            ]
+        )
+    return commands
+
+
+def _product_record_seed_commands(endpoint: str, product: Product) -> list[list[str]]:
+    """Build ``az appconfig kv set`` commands seeding the per-product Product record.
+
+    Unlabelled ``product.*`` keys (the per-product App Config is already
+    product-scoped) plus ``threshold.<product>`` for the confidence threshold,
+    mirroring how :func:`_appconfig_seed_commands` seeds the defaults.
+    """
+    record: dict[str, Any] = {
+        "product.github_repo": product.github_repo,
+        "product.label_taxonomy": product.label_taxonomy,
+        "product.foundryiq_scope": product.foundryiq_scope,
+        "product.sentry_projects": product.sentry_projects,
+        "product.grafana_dashboards": product.grafana_dashboards,
+        "product.azure_monitor_scope": product.azure_monitor_scope,
+        f"threshold.{product.key}": product.confidence_threshold,
+    }
+    commands: list[list[str]] = []
+    for key, value in record.items():
         commands.append(
             [
                 "az", "appconfig", "kv", "set",
@@ -310,10 +341,10 @@ class InstanceProvisioner:
                 ),
             ),
             ProvisionStep(
-                name="register_product",
+                name="seed_product_record",
                 description=(
-                    f"Register {s.product} -> {s.github_repo()} in the routing "
-                    "registry (config/products.json)"
+                    f"Seed the {s.product} Product record (repo, taxonomy, source "
+                    "scopes, threshold) into its per-product App Configuration"
                 ),
             ),
             ProvisionStep(
@@ -436,15 +467,12 @@ class InstanceProvisioner:
         """
         if step.deferred:
             step.result = "deferred"
-        elif step.name == "register_product":
-            render_product_registration(
-                InstanceManifest(
-                    spec=self.spec, plan=plan, executed=executed, azure=azure_result
-                ),
-                repo_root=self._repo_root,
-            )
-            step.executed = execute
-            step.result = "registered" if execute else "registered (dry-run)"
+        elif step.name == "seed_product_record":
+            if not execute:
+                step.result = "seeded (dry-run)"
+            else:
+                self._seed_product_record(azure_result)
+                step.executed, step.result = True, "seeded"
         elif step.name == "seed_appconfig":
             if not execute:
                 step.result = "seeded (dry-run)"
@@ -859,6 +887,31 @@ class InstanceProvisioner:
         assert last_error is not None  # loop ran at least once
         raise last_error
 
+    def _seed_product_record(self, azure_result: AzureProvisionResult | None) -> None:
+        """Seed this product's Product record into its per-product App Configuration.
+
+        Reuses the App Configuration endpoint from ``provision_azure`` outputs and
+        the same retry envelope as :meth:`_seed_appconfig` (RBAC propagation lag).
+        """
+        endpoint = azure_result.outputs.get("appConfigEndpoint", "") if azure_result else ""
+        if not endpoint:
+            raise RuntimeError(
+                "provision_azure returned no appConfigEndpoint; cannot seed product record"
+            )
+        commands = _product_record_seed_commands(endpoint, product_from_spec(self.spec))
+        last_error: subprocess.CalledProcessError | None = None
+        for attempt in range(1, _SEED_MAX_ATTEMPTS + 1):
+            try:
+                for cmd in commands:
+                    self._run(cmd, check=True, capture_output=True, text=True)
+                return
+            except subprocess.CalledProcessError as exc:
+                last_error = exc
+                if attempt < _SEED_MAX_ATTEMPTS:
+                    self._sleep(_SEED_RETRY_DELAY)
+        assert last_error is not None
+        raise last_error
+
     def _publish_runtime_index(self, manifest: InstanceManifest) -> None:
         """Publish this product's runtime env into the owner App Config index."""
         from dsf.config.owner_index import publish_runtime_config
@@ -1035,10 +1088,6 @@ class InstanceOffboarder:
                 ),
                 purge_step,
                 ProvisionStep(
-                    name="unregister_product",
-                    description=f"Unregister {self.product} from config/products.json",
-                ),
-                ProvisionStep(
                     name="remove_runtime_index",
                     description=(
                         f"Remove {self.product} from the owner App Configuration index"
@@ -1099,10 +1148,6 @@ class InstanceOffboarder:
         elif step.name == "purge_soft_deleted":
             step.executed = True
             step.result = self._purge_soft_deleted()
-        elif step.name == "unregister_product":
-            render_product_unregistration(self.product, repo_root=self._repo_root)
-            step.executed = True
-            step.result = "unregistered"
         elif step.name == "remove_runtime_index":
             if not self._owner_appconfig_endpoint:
                 step.result = "skipped (no owner App Config configured)"

@@ -70,4 +70,35 @@ class InMemoryConfigStore:
         return snap
 
 
-__all__ = ["InMemoryConfigStore"]
+def config_with_product_record(
+    product: str,
+    *,
+    github_repo: str,
+    label_taxonomy: dict[str, list[str]] | None = None,
+    sentry_projects: list[str] | None = None,
+    grafana_dashboards: list[str] | None = None,
+    foundryiq_scope: str = "",
+    azure_monitor_scope: str = "",
+    confidence_threshold: float | None = None,
+    seed: dict | None = None,
+) -> InMemoryConfigStore:
+    """Seed an InMemoryConfigStore with a product record (unlabelled product.* keys).
+
+    Mirrors what the provisioner seeds into the per-product App Configuration so
+    runtime tests can exercise ``product_record`` without Azure.
+    """
+    data = copy.deepcopy(seed) if seed is not None else load_defaults()
+    data["product"] = {
+        "github_repo": github_repo,
+        "label_taxonomy": label_taxonomy or {},
+        "foundryiq_scope": foundryiq_scope,
+        "sentry_projects": sentry_projects or [],
+        "grafana_dashboards": grafana_dashboards or [],
+        "azure_monitor_scope": azure_monitor_scope,
+    }
+    if confidence_threshold is not None:
+        data.setdefault("threshold", {})[product] = confidence_threshold
+    return InMemoryConfigStore(data)
+
+
+__all__ = ["InMemoryConfigStore", "config_with_product_record"]
