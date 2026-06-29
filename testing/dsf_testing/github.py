@@ -64,17 +64,30 @@ class RecordingRepoClient:
         *,
         repositories: list[str] | None = None,
         prs: list[_AmendmentPr] | None = None,
+        create_issue_error: Exception | None = None,
     ) -> None:
         self._files = dict(files or {})
         self.repositories = repositories
         self._seed_prs = list(prs or [])
         self.prs: list[dict] = []
+        self.issues: list[dict] = []
+        self._create_issue_error = create_issue_error
 
     async def read_file(self, repo: str, path: str, ref: str = "main") -> _RepoFile | None:
         if path not in self._files:
             return None
         text, sha = self._files[path]
         return _RepoFile(text=text, sha=sha, ref=ref)
+
+    async def create_issue(
+        self, repo: str, title: str, body: str, labels: list[str]
+    ) -> str:
+        if self._create_issue_error is not None:
+            raise self._create_issue_error
+        self.issues.append(
+            {"repo": repo, "title": title, "body": body, "labels": list(labels)}
+        )
+        return f"local://issue/{len(self.issues)}"
 
     async def latest_pr_with_head_prefix(
         self, repo: str, *, head_prefix: str
@@ -96,6 +109,7 @@ class RecordingRepoClient:
         body: str,
         message: str,
         labels: list[str] | None = None,
+        enable_auto_merge: bool = False,
     ) -> str:
         self.prs.append(
             {
@@ -108,6 +122,7 @@ class RecordingRepoClient:
                 "body": body,
                 "message": message,
                 "labels": list(labels or []),
+                "enable_auto_merge": enable_auto_merge,
             }
         )
         return f"https://github.com/{repo}/pull/{len(self.prs)}"
