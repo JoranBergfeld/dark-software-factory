@@ -1378,7 +1378,8 @@ def test_apply_execute_branch_protection_other_403_still_fails(tmp_path, monkeyp
     assert bp.error
 
 
-def test_seed_repo_puts_baseline_ci_workflow_when_absent():
+def test_seed_repo_puts_baseline_ci_workflow_when_absent(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)  # no demo/ clone -> Contents-API fallback
     calls: list[list[str]] = []
 
     def fake_run(cmd, **kwargs):
@@ -1408,7 +1409,8 @@ def test_seed_repo_puts_baseline_ci_workflow_when_absent():
     assert base64.b64decode(content).decode("utf-8").startswith("name: ci")
 
 
-def test_seed_repo_is_idempotent_when_workflow_present():
+def test_seed_repo_is_idempotent_when_workflow_present(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)  # no demo/ clone -> Contents-API fallback
     calls: list[list[str]] = []
 
     def fake_run(cmd, **kwargs):
@@ -1429,10 +1431,10 @@ def test_seed_repo_is_idempotent_when_workflow_present():
 def test_seed_repo_from_clone_runs_specify_and_pushes(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "demo").mkdir()  # the clone created by create_repo --clone
-    calls: list[list[str]] = []
+    runs: list[tuple[list[str], dict]] = []
 
     def fake_run(cmd, **kwargs):
-        calls.append(cmd)
+        runs.append((cmd, kwargs))
         if cmd[:3] == ["git", "status", "--porcelain"]:
             return _completed(stdout=" M .specify/memory/constitution.md\n")
         return _completed(stdout="")
@@ -1442,14 +1444,27 @@ def test_seed_repo_from_clone_runs_specify_and_pushes(monkeypatch, tmp_path):
     )
     prov._seed_repo()
 
+    calls = [cmd for cmd, _ in runs]
+    cwd_of = {tuple(cmd): kwargs.get("cwd") for cmd, kwargs in runs}
     specify = [c for c in calls if c[:2] == ["specify", "init"]]
     assert specify, "specify init should run in the clone"
     assert "--here" in specify[0] and "--force" in specify[0]
     assert "--integration" in specify[0] and "copilot" in specify[0]
     assert "--script" in specify[0] and "sh" in specify[0]
+    assert cwd_of[tuple(specify[0])] == "demo"  # ran inside the clone, not the cwd
     workflow = tmp_path / "demo" / ".github" / "workflows" / "ci.yml"
     assert workflow.read_text(encoding="utf-8").startswith("name: ci")
+    # The unattended commit must carry an explicit identity (no global git config on
+    # the host) and the agreed message, and run inside the clone.
+    commit = next(c for c in calls if "commit" in c)
+    assert "user.name=dsf-factory" in commit
+    assert "user.email=dsf-factory@users.noreply.github.com" in commit
+    assert commit[commit.index("-m") + 1] == (
+        "chore: seed spec kit scaffold and baseline ci workflow"
+    )
+    assert cwd_of[tuple(commit)] == "demo"
     assert ["git", "push", "origin", "HEAD:main"] in calls
+    assert cwd_of[("git", "push", "origin", "HEAD:main")] == "demo"
 
 
 def test_seed_repo_from_clone_skips_commit_when_no_diff(monkeypatch, tmp_path):
