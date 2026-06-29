@@ -247,13 +247,15 @@ class GitHubAppClient:
 
         A repo without auto-merge (low creation maturity) rejects the mutation; we
         swallow that so the constitution PR simply waits for a human merge instead
-        of failing the seeding (the maturity-gated switch is tracked in #97).
+        of failing the seeding (the maturity-gated switch is tracked in #97). Any
+        transient transport fault on this trailing call is swallowed too, so it can
+        never abort an otherwise-successful ``open_file_pr`` after the PR exists.
         """
         try:
             await self._graphql(
                 client, token, _ENABLE_AUTO_MERGE_MUTATION, {"pullRequestId": pr_node_id}
             )
-        except (RuntimeError, httpx.HTTPStatusError):
+        except (RuntimeError, httpx.HTTPError):
             pass
 
     async def open_file_pr(

@@ -558,6 +558,46 @@ async def test_open_file_pr_auto_merge_degrades_on_http_error():
     assert url == "https://github.com/org/alpha/pull/9"
 
 
+async def test_open_file_pr_auto_merge_degrades_on_transport_error():
+    def extra(request: httpx.Request) -> httpx.Response:
+        method, path = request.method, request.url.path
+        if method == "GET" and path.endswith("/git/ref/heads/main"):
+            return httpx.Response(200, json={"object": {"sha": "basesha"}})
+        if method == "POST" and path.endswith("/git/refs"):
+            return httpx.Response(201, json={})
+        if method == "GET" and "/contents/" in path:
+            return httpx.Response(404, json={})
+        if method == "PUT" and "/contents/" in path:
+            return httpx.Response(201, json={})
+        if method == "POST" and path.endswith("/pulls"):
+            return httpx.Response(
+                201,
+                json={
+                    "html_url": "https://github.com/org/alpha/pull/10",
+                    "number": 10,
+                    "node_id": "PR_z",
+                },
+            )
+        if method == "POST" and path == "/graphql":
+            raise httpx.ConnectError("connection reset", request=request)
+        return httpx.Response(500, json={"unexpected": path})
+
+    client = _app_client(_token_handler(extra))
+    url = await client.open_file_pr(
+        "org/alpha",
+        path=".specify/memory/constitution.md",
+        content="C",
+        branch="b",
+        title="T",
+        body="B",
+        message="m",
+        enable_auto_merge=True,
+    )
+    # A transport fault (httpx.RequestError) on the trailing auto-merge call must
+    # not abort open_file_pr after the PR already exists.
+    assert url == "https://github.com/org/alpha/pull/10"
+
+
 async def test_latest_pr_with_head_prefix_returns_first_match_newest_first():
     def extra(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/repos/org/alpha/pulls"
