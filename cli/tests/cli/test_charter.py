@@ -650,6 +650,74 @@ def test_find_agent_pr_reads_connected_event_subject(monkeypatch):
     assert pr == {"number": 9, "url": "https://x/pull/9", "is_draft": True, "state": "OPEN"}
 
 
+def test_request_copilot_review_runs_gh_pr_edit(monkeypatch):
+    calls = []
+
+    def fake_run(argv, check, capture_output, text):
+        assert check is True
+        return calls.append(argv) or SimpleNamespace(stdout="")
+
+    monkeypatch.setattr(
+        "subprocess.run",
+        fake_run,
+    )
+    charter._request_copilot_review("org/alpha", "https://x/pull/8")
+    assert calls == [
+        [
+            "gh",
+            "pr",
+            "edit",
+            "https://x/pull/8",
+            "--repo",
+            "org/alpha",
+            "--add-reviewer",
+            "@copilot",
+        ]
+    ]
+
+
+def test_pr_has_copilot_reviewer_true(monkeypatch):
+    monkeypatch.setattr(
+        "dsf.cli.charter._gh_graphql",
+        lambda *a, **k: {
+            "repository": {
+                "pullRequest": {
+                    "reviewRequests": {
+                        "nodes": [
+                            {
+                                "requestedReviewer": {
+                                    "__typename": "Bot",
+                                    "login": "copilot-pull-request-reviewer",
+                                }
+                            }
+                        ]
+                    }
+                }
+            }
+        },
+    )
+    assert charter._pr_has_copilot_reviewer("org/alpha", 8) is True
+
+
+def test_pr_has_copilot_reviewer_false(monkeypatch):
+    monkeypatch.setattr(
+        "dsf.cli.charter._gh_graphql",
+        lambda *a, **k: {
+            "repository": {
+                "pullRequest": {
+                    "reviewRequests": {
+                        "nodes": [
+                            {"requestedReviewer": {"__typename": "User", "login": "octocat"}},
+                            {"requestedReviewer": None},
+                        ]
+                    }
+                }
+            }
+        },
+    )
+    assert charter._pr_has_copilot_reviewer("org/alpha", 8) is False
+
+
 def test_assign_copilot_via_gh_success(monkeypatch):
     from dsf.cli import charter as charter_mod
 

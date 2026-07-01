@@ -388,6 +388,12 @@ _GH_ISSUE_TIMELINE_QUERY = (
     "... on CrossReferencedEvent{source{__typename ... on PullRequest{"
     "number url isDraft state author{login}}}}}}}}}"
 )
+_GH_PR_REVIEWERS_QUERY = (
+    "query($owner:String!,$name:String!,$num:Int!){"
+    "repository(owner:$owner,name:$name){pullRequest(number:$num){"
+    "reviewRequests(first:20){nodes{requestedReviewer{__typename "
+    "... on Bot{login} ... on User{login}}}}}}}"
+)
 
 
 def _gh_graphql(
@@ -448,6 +454,37 @@ def _find_agent_pr(repo: str, issue_number: int) -> dict | None:
         return None
     prs.sort(key=lambda p: (p["state"] == "OPEN", p["number"]), reverse=True)
     return prs[0]
+
+
+def _pr_has_copilot_reviewer(repo: str, number: int) -> bool:
+    """True when Copilot code review is already requested on the PR."""
+    owner, _, name = repo.partition("/")
+    data = _gh_graphql(
+        _GH_PR_REVIEWERS_QUERY, int_vars={"num": number}, owner=owner, name=name
+    )
+    nodes = data["repository"]["pullRequest"]["reviewRequests"]["nodes"]
+    for node in nodes:
+        login = (node.get("requestedReviewer") or {}).get("login", "")
+        if "copilot" in login.lower():
+            return True
+    return False
+
+
+def _request_copilot_review(repo: str, pr_url: str) -> None:
+    """Request GitHub Copilot code review on ``pr_url`` via the operator's gh token.
+
+    gh 2.x supports the ``@copilot`` reviewer value natively; this runs under a
+    user token, sidestepping the App-installation-token restriction. Raises
+    ``CalledProcessError`` if gh fails.
+    """
+    import subprocess
+
+    subprocess.run(
+        ["gh", "pr", "edit", pr_url, "--repo", repo, "--add-reviewer", "@copilot"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
 
 
 def _assign_copilot_via_gh(repo: str, issue_node_id: str) -> bool:
