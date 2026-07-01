@@ -338,6 +338,72 @@ def _cmd_charter_init(args: argparse.Namespace) -> int:
     return 0
 
 
+#: GraphQL login of the Copilot coding agent bot (mirrors github_app_client).
+_COPILOT_LOGIN = "copilot-swe-agent"
+
+# GitHub rejects assigning the coding agent with a GitHub App installation token, so
+# `dsf charter implement` performs just the assignment with the operator's locally
+# authenticated `gh` user token. `gh` has no native "assign to Copilot" command, so we
+# run the same GraphQL the App client uses via `gh api graphql` (which supplies the
+# user token). The mutation takes a single `$actorId` wrapped in an array literal
+# because `gh -f` cannot pass list-typed variables.
+_GH_SUGGESTED_ACTORS_QUERY = (
+    "query($owner:String!,$name:String!){"
+    "repository(owner:$owner,name:$name){"
+    "suggestedActors(capabilities:[CAN_BE_ASSIGNED],first:100){"
+    "nodes{login __typename ... on Bot{id}}}}}"
+)
+_GH_REPLACE_ACTORS_MUTATION = (
+    "mutation($assignableId:ID!,$actorId:ID!){"
+    "replaceActorsForAssignable(input:{assignableId:$assignableId,actorIds:[$actorId]}){"
+    "assignable{__typename}}}"
+)
+
+
+def _gh_graphql(query: str, **variables: str) -> dict:
+    """Run a GraphQL ``query`` via ``gh api graphql`` and return its ``data``.
+
+    Uses the operator's locally-authenticated ``gh`` CLI, so the request carries a
+    **user** token (required to assign the Copilot coding agent). Raises
+    ``CalledProcessError`` when ``gh`` fails and ``RuntimeError`` on a GraphQL error.
+    """
+    import json
+    import subprocess
+
+    argv = ["gh", "api", "graphql", "-f", f"query={query}"]
+    for key, value in variables.items():
+        argv += ["-f", f"{key}={value}"]
+    result = subprocess.run(argv, check=True, capture_output=True, text=True)
+    payload = json.loads(result.stdout)
+    if payload.get("errors"):
+        raise RuntimeError(f"GraphQL error: {payload['errors']}")
+    return payload["data"]
+
+
+def _assign_copilot_via_gh(repo: str, issue_node_id: str) -> bool:
+    """Assign the Copilot coding agent to an issue via the operator's ``gh`` token.
+
+    Resolve ``copilot-swe-agent``'s node id from the repo's suggested actors, then run
+    ``replaceActorsForAssignable``. Returns ``True`` on success; ``False`` (never
+    raises) when ``gh`` is missing/unauthenticated, a GraphQL call fails, or Copilot
+    is not an assignable actor — so the caller can print a manual-assignment hint.
+    """
+    import json
+    import subprocess
+
+    owner, _, name = repo.partition("/")
+    try:
+        actors = _gh_graphql(_GH_SUGGESTED_ACTORS_QUERY, owner=owner, name=name)
+        nodes = actors["repository"]["suggestedActors"]["nodes"]
+        bot_id = next((n["id"] for n in nodes if n.get("login") == _COPILOT_LOGIN), None)
+        if bot_id is None:
+            return False
+        _gh_graphql(_GH_REPLACE_ACTORS_MUTATION, assignableId=issue_node_id, actorId=bot_id)
+    except (OSError, subprocess.CalledProcessError, RuntimeError, KeyError, json.JSONDecodeError):
+        return False
+    return True
+
+
 def _cmd_charter_implement(args: argparse.Namespace) -> int:
     """Seed the Spec Kit build from an accepted charter.
 
@@ -406,12 +472,19 @@ def _cmd_charter_implement(args: argparse.Namespace) -> int:
         issue_url = asyncio.run(app.create_issue(repo_full, title, body, [HANDOFF_LABEL]))
         print(f"[dsf] filed bootstrap issue + assigned Copilot: {issue_url}")
     except CodingAgentAssignmentError as exc:
-        print(f"[dsf] filed bootstrap issue: {exc.issue_url}")
-        print(
-            f"[dsf] warning: Copilot coding agent assignment FAILED ({exc}); "
-            "assign Copilot manually once enabled.",
-            file=sys.stderr,
-        )
+        # GitHub forbids assigning the coding agent with a GitHub App installation
+        # token, so fall back to the operator's local `gh` user token for just the
+        # assignment step (see _assign_copilot_via_gh).
+        if _assign_copilot_via_gh(repo_full, exc.issue_node_id):
+            print(f"[dsf] filed bootstrap issue + assigned Copilot via gh: {exc.issue_url}")
+        else:
+            print(f"[dsf] filed bootstrap issue: {exc.issue_url}")
+            print(
+                "[dsf] warning: could not assign the Copilot coding agent; assign it "
+                "manually (ensure `gh auth login` and that the Copilot coding agent is "
+                "enabled for the repo).",
+                file=sys.stderr,
+            )
     return 0
 
 

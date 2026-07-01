@@ -438,16 +438,125 @@ def test_implement_unknown_product(monkeypatch, capsys):
     assert rc == 1 and "not in registry" in capsys.readouterr().err
 
 
-def test_implement_reports_copilot_assignment_failure(monkeypatch, capsys):
+def test_implement_falls_back_to_gh_when_app_assignment_forbidden(monkeypatch, capsys):
+    from dsf.ports import CodingAgentAssignmentError
+
+    # App installation tokens can't assign agents; `implement` retries the assign
+    # step with the operator's gh user token and succeeds.
+    boom = CodingAgentAssignmentError(
+        "installation token", issue_url="local://issue/1", issue_node_id="ISSUE_NODE_1"
+    )
+    client = _seed_ok_implement(monkeypatch, create_issue_error=boom)
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        "dsf.cli.charter._assign_copilot_via_gh",
+        lambda repo, node_id: calls.append((repo, node_id)) or True,
+    )
+    rc = main(["charter", "implement", "--product", "alpha"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert calls == [("org/alpha", "ISSUE_NODE_1")]
+    assert "assigned Copilot via gh" in out
+    assert len(client.prs) == 1  # constitution PR still opened
+
+
+def test_implement_warns_when_gh_assignment_also_fails(monkeypatch, capsys):
     from dsf.ports import CodingAgentAssignmentError
 
     boom = CodingAgentAssignmentError(
-        "no copilot", issue_url="local://issue/1", issue_node_id="N"
+        "installation token", issue_url="local://issue/1", issue_node_id="ISSUE_NODE_1"
     )
     client = _seed_ok_implement(monkeypatch, create_issue_error=boom)
+    monkeypatch.setattr("dsf.cli.charter._assign_copilot_via_gh", lambda repo, node_id: False)
     rc = main(["charter", "implement", "--product", "alpha"])
     captured = capsys.readouterr()
-    assert rc == 0  # filing succeeded; assignment failure is a warning, not a hard fail
+    assert rc == 0  # filing succeeded; a failed assign is a warning, not a hard fail
     assert "filed bootstrap issue: local://issue/1" in captured.out
-    assert "assignment FAILED" in captured.err
+    assert "could not assign" in captured.err
     assert len(client.prs) == 1  # constitution PR still opened
+
+
+# --- gh-based Copilot assignment (laptop `implement`) -------------------------
+
+
+def test_gh_graphql_builds_command_and_parses(monkeypatch):
+    from dsf.cli import charter as charter_mod
+
+    seen: dict[str, list[str]] = {}
+
+    def fake_run(argv, **kwargs):
+        seen["argv"] = argv
+        return SimpleNamespace(stdout='{"data":{"ok":true}}', returncode=0)
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    data = charter_mod._gh_graphql("QUERY", owner="o", name="n")
+    assert data == {"ok": True}
+    argv = seen["argv"]
+    assert argv[:3] == ["gh", "api", "graphql"]
+    assert "query=QUERY" in argv and "owner=o" in argv and "name=n" in argv
+
+
+def test_gh_graphql_raises_on_graphql_error(monkeypatch):
+    from dsf.cli import charter as charter_mod
+
+    monkeypatch.setattr(
+        "subprocess.run",
+        lambda argv, **kwargs: SimpleNamespace(stdout='{"errors":[{"message":"boom"}]}'),
+    )
+    try:
+        charter_mod._gh_graphql("QUERY")
+    except RuntimeError as exc:
+        assert "GraphQL error" in str(exc)
+    else:
+        raise AssertionError("expected RuntimeError on GraphQL error")
+
+
+def test_assign_copilot_via_gh_success(monkeypatch):
+    from dsf.cli import charter as charter_mod
+
+    seen: list[tuple[str, dict]] = []
+
+    def fake_gql(query, **variables):
+        seen.append((query, variables))
+        if "suggestedActors" in query:
+            return {
+                "repository": {
+                    "suggestedActors": {
+                        "nodes": [
+                            {"login": "copilot-swe-agent", "id": "BOT_1"},
+                            {"login": "someuser", "id": "U_1"},
+                        ]
+                    }
+                }
+            }
+        return {"replaceActorsForAssignable": {"assignable": {"__typename": "Issue"}}}
+
+    monkeypatch.setattr("dsf.cli.charter._gh_graphql", fake_gql)
+    assert charter_mod._assign_copilot_via_gh("org/alpha", "ISSUE_NODE_1") is True
+    mutation = next(c for c in seen if "replaceActorsForAssignable" in c[0])
+    assert mutation[1]["assignableId"] == "ISSUE_NODE_1"
+    assert mutation[1]["actorId"] == "BOT_1"
+
+
+def test_assign_copilot_via_gh_false_when_copilot_absent(monkeypatch):
+    from dsf.cli import charter as charter_mod
+
+    monkeypatch.setattr(
+        "dsf.cli.charter._gh_graphql",
+        lambda query, **variables: {
+            "repository": {"suggestedActors": {"nodes": [{"login": "someuser", "id": "U_1"}]}}
+        },
+    )
+    assert charter_mod._assign_copilot_via_gh("org/alpha", "N") is False
+
+
+def test_assign_copilot_via_gh_false_on_gh_error(monkeypatch):
+    import subprocess
+
+    from dsf.cli import charter as charter_mod
+
+    def boom(query, **variables):
+        raise subprocess.CalledProcessError(1, ["gh"])
+
+    monkeypatch.setattr("dsf.cli.charter._gh_graphql", boom)
+    assert charter_mod._assign_copilot_via_gh("org/alpha", "N") is False
