@@ -17,5 +17,9 @@ class InMemoryCharterStore:
     async def put_charter(self, stored: StoredCharter) -> None:
         self._by_product[stored.product] = stored
 
+    async def aclose(self) -> None:
+        """No-op: the dict-backed store holds no resources."""
+        return None
+
 
 __all__ = ["InMemoryCharterStore"]

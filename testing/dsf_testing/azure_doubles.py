@@ -52,6 +52,10 @@ class InMemoryCosmosGateway:
             dict(i) for i in self.containers.get(container, []) if i.get(field) == value
         ]
 
+    async def aclose(self) -> None:
+        """No-op: the dict-backed gateway holds no resources."""
+        return None
+
 
 class RecordingChatGateway:
     """ChatGateway double: records calls, returns a canned ``response`` string."""

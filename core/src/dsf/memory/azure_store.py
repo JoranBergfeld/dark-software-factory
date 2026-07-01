@@ -27,6 +27,7 @@ class CosmosGateway(Protocol):
 
     async def upsert(self, container: str, item: dict) -> None: ...
     async def query(self, container: str, field: str, value: Any) -> list[dict]: ...
+    async def aclose(self) -> None: ...
 
 
 class CosmosMemoryStore:
@@ -115,6 +116,10 @@ class CosmosMemoryStore:
             for r in rows[-k:][::-1]
         ]
 
+    async def aclose(self) -> None:
+        """Close the underlying Cosmos gateway (aio client + credential)."""
+        await self._gw.aclose()
+
 
 class _SdkCosmosGateway:
     """Real gateway wrapping ``azure-cosmos`` aio (lazy import).
@@ -127,6 +132,7 @@ class _SdkCosmosGateway:
         self._endpoint = endpoint
         self._database = database
         self._client: Any = None
+        self._cred: Any = None
 
     def _container(self, name: str) -> Any:  # pragma: no cover - requires azure extra
         if self._client is None:
@@ -137,10 +143,24 @@ class _SdkCosmosGateway:
                 raise RuntimeError(
                     "azure extra not installed; run: uv pip install -e '.[azure]'"
                 ) from exc
-            self._client = CosmosClient(
-                self._endpoint, credential=DefaultAzureCredential()
-            )
+            self._cred = DefaultAzureCredential()
+            self._client = CosmosClient(self._endpoint, credential=self._cred)
         return self._client.get_database_client(self._database).get_container_client(name)
+
+    async def aclose(self) -> None:
+        """Close the aio Cosmos client + credential; a no-op before first use.
+
+        The credential is closed even if the client close raises, so neither
+        aiohttp session is ever left open.
+        """
+        try:
+            if self._client is not None:
+                await self._client.close()
+        finally:
+            self._client = None
+            if self._cred is not None:
+                await self._cred.close()
+            self._cred = None
 
     async def upsert(self, container: str, item: dict) -> None:  # pragma: no cover
         await self._container(container).upsert_item(item)

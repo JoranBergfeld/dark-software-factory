@@ -40,5 +40,9 @@ class CosmosCharterStore:
         }
         await self._gw.upsert(_CHARTERS, item)
 
+    async def aclose(self) -> None:
+        """Close the underlying Cosmos gateway (aio client + credential)."""
+        await self._gw.aclose()
+
 
 __all__ = ["CosmosCharterStore"]
