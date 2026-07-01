@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import sys
 import uuid
 from collections.abc import Callable
@@ -210,16 +211,29 @@ def _status_label(stored: StoredCharter | None, live_sha: str | None) -> str:
     return "ok"
 
 
+@contextlib.asynccontextmanager
+async def _charter_store(product: str):
+    """Yield a charter store for ``product`` and close it (aio client) on exit."""
+    store = build_charter_store(_settings(product))
+    try:
+        yield store
+    finally:
+        await store.aclose()
+
+
 def _cmd_charter_status(args: argparse.Namespace) -> int:
     """Print the stored charter status and its drift vs the file/ref."""
     product = args.product
+
+    async def _run():
+        async with _charter_store(product) as store:
+            return await store.get_charter(product)
+
     try:
-        store = build_charter_store(_settings(product))
+        stored = asyncio.run(_run())
     except ValueError as exc:
         print(f"[dsf] error: {exc}", file=sys.stderr)
         return 1
-
-    stored = asyncio.run(store.get_charter(product))
     live_sha, note = _live_blob_sha(args, product)
     print(f"[dsf] charter {product}: {_status_label(stored, live_sha)}")
     if stored is not None:
@@ -242,37 +256,42 @@ def _cmd_charter_status(args: argparse.Namespace) -> int:
 def _cmd_charter_sync(args: argparse.Namespace) -> int:
     """Pull the charter into Cosmos from a local file (default) or a repo ref."""
     product = args.product
+
+    if args.ref is not None:
+        repo_full = _resolve_repo(product)
+        if not repo_full:
+            print(
+                f"[dsf] error: cannot resolve repo for product {product!r} from the "
+                "owner App Config index (is DSF_OWNER_APPCONFIG_ENDPOINT set?)",
+                file=sys.stderr,
+            )
+            return 1
+    else:
+        repo_full = None
+        path = Path(args.file or CHARTER_PATH)
+        try:
+            data = path.read_bytes()
+        except OSError as exc:
+            print(f"[dsf] error: cannot read {path}: {exc}", file=sys.stderr)
+            return 1
+
+    async def _run():
+        async with _charter_store(product) as store:
+            if repo_full is not None:
+                app = build_repo_app_client(_app_settings(product))
+                return await sync_charter(
+                    store, app, product=product, repo=repo_full, ref=args.ref
+                )
+            return await sync_charter_text(
+                store,
+                product=product,
+                text=data.decode("utf-8"),
+                source_sha=git_blob_sha(data),
+                source_ref=f"file:{path}",
+            )
+
     try:
-        store = build_charter_store(_settings(product))
-        if args.ref is not None:
-            repo_full = _resolve_repo(product)
-            if not repo_full:
-                print(
-                    f"[dsf] error: cannot resolve repo for product {product!r} from the "
-                    "owner App Config index (is DSF_OWNER_APPCONFIG_ENDPOINT set?)",
-                    file=sys.stderr,
-                )
-                return 1
-            app = build_repo_app_client(_app_settings(product))
-            stored = asyncio.run(
-                sync_charter(store, app, product=product, repo=repo_full, ref=args.ref)
-            )
-        else:
-            path = Path(args.file or CHARTER_PATH)
-            try:
-                data = path.read_bytes()
-            except OSError as exc:
-                print(f"[dsf] error: cannot read {path}: {exc}", file=sys.stderr)
-                return 1
-            stored = asyncio.run(
-                sync_charter_text(
-                    store,
-                    product=product,
-                    text=data.decode("utf-8"),
-                    source_sha=git_blob_sha(data),
-                    source_ref=f"file:{path}",
-                )
-            )
+        stored = asyncio.run(_run())
     except ValueError as exc:
         print(f"[dsf] error: {exc}", file=sys.stderr)
         return 1

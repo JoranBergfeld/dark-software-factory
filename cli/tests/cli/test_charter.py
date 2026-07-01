@@ -80,6 +80,21 @@ def test_status_missing_when_no_file(monkeypatch, capsys, tmp_path):
     assert rc == 0 and "missing" in capsys.readouterr().out
 
 
+def test_status_closes_the_store(monkeypatch, capsys):
+    closed = {"n": 0}
+
+    class _ClosingStore(InMemoryCharterStore):
+        async def aclose(self) -> None:
+            closed["n"] += 1
+
+    store = _ClosingStore()
+    monkeypatch.setattr("dsf.cli.charter.build_charter_store", lambda s: store)
+    monkeypatch.setattr("dsf.cli.charter._live_blob_sha", lambda a, p: (None, None))
+    rc = main(["charter", "status", "--product", "alpha"])
+    assert rc == 0
+    assert closed["n"] == 1
+
+
 def test_status_ref_via_app(monkeypatch, capsys):
     store = InMemoryCharterStore()
     _put(store, _ok_charter("blobsha"), CharterStatus.OK)
