@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 from dsf.charter.markdown import git_blob_sha, render_charter
 from dsf.charter.sync import CHARTER_PATH
+from dsf.cli import charter
 from dsf.cli.factory import build_parser, main
 from dsf.contracts.charter import Charter, StoredCharter
 from dsf.contracts.enums import CharterStatus
@@ -531,6 +532,20 @@ def test_gh_graphql_builds_command_and_parses(monkeypatch):
     assert "query=QUERY" in argv and "owner=o" in argv and "name=n" in argv
 
 
+def test_gh_graphql_passes_int_vars(monkeypatch):
+    seen = {}
+
+    def fake_run(argv, check, capture_output, text):
+        seen["argv"] = argv
+        return SimpleNamespace(stdout='{"data":{"ok":true}}')
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    data = charter._gh_graphql("query($num:Int!){x}", int_vars={"num": 7}, owner="o")
+    assert data == {"ok": True}
+    assert "-F" in seen["argv"] and "num=7" in seen["argv"]
+    assert "-f" in seen["argv"] and "owner=o" in seen["argv"]
+
+
 def test_gh_graphql_raises_on_graphql_error(monkeypatch):
     from dsf.cli import charter as charter_mod
 
@@ -544,6 +559,95 @@ def test_gh_graphql_raises_on_graphql_error(monkeypatch):
         assert "GraphQL error" in str(exc)
     else:
         raise AssertionError("expected RuntimeError on GraphQL error")
+
+
+def test_find_agent_pr_selects_copilot_pr(monkeypatch):
+    def fake_graphql(query, *, int_vars=None, **variables):
+        return {
+            "repository": {
+                "issue": {
+                    "timelineItems": {
+                        "nodes": [
+                            {
+                                "__typename": "CrossReferencedEvent",
+                                "source": {
+                                    "__typename": "PullRequest",
+                                    "number": 8,
+                                    "url": "https://x/pull/8",
+                                    "isDraft": True,
+                                    "state": "OPEN",
+                                    "author": {"login": "copilot-swe-agent"},
+                                },
+                            }
+                        ]
+                    }
+                }
+            }
+        }
+
+    monkeypatch.setattr("dsf.cli.charter._gh_graphql", fake_graphql)
+    pr = charter._find_agent_pr("org/alpha", 7)
+    assert pr == {"number": 8, "url": "https://x/pull/8", "is_draft": True, "state": "OPEN"}
+
+
+def test_find_agent_pr_none_when_no_copilot_pr(monkeypatch):
+    monkeypatch.setattr(
+        "dsf.cli.charter._gh_graphql",
+        lambda *a, **k: {"repository": {"issue": {"timelineItems": {"nodes": []}}}},
+    )
+    assert charter._find_agent_pr("org/alpha", 7) is None
+
+
+def _timeline(nodes):
+    return {"repository": {"issue": {"timelineItems": {"nodes": nodes}}}}
+
+
+def _xref_pr(number, *, url=None, is_draft=False, state="OPEN", login="copilot-swe-agent"):
+    return {
+        "__typename": "CrossReferencedEvent",
+        "source": {
+            "__typename": "PullRequest",
+            "number": number,
+            "url": url or f"https://x/pull/{number}",
+            "isDraft": is_draft,
+            "state": state,
+            "author": {"login": login},
+        },
+    }
+
+
+def test_find_agent_pr_ignores_non_copilot_prs(monkeypatch):
+    monkeypatch.setattr(
+        "dsf.cli.charter._gh_graphql",
+        lambda *a, **k: _timeline([_xref_pr(3, login="some-human")]),
+    )
+    assert charter._find_agent_pr("org/alpha", 7) is None
+
+
+def test_find_agent_pr_prefers_open_over_higher_numbered_closed(monkeypatch):
+    monkeypatch.setattr(
+        "dsf.cli.charter._gh_graphql",
+        lambda *a, **k: _timeline([_xref_pr(20, state="CLOSED"), _xref_pr(2, state="OPEN")]),
+    )
+    pr = charter._find_agent_pr("org/alpha", 7)
+    assert pr["number"] == 2 and pr["state"] == "OPEN"
+
+
+def test_find_agent_pr_reads_connected_event_subject(monkeypatch):
+    node = {
+        "__typename": "ConnectedEvent",
+        "subject": {
+            "__typename": "PullRequest",
+            "number": 9,
+            "url": "https://x/pull/9",
+            "isDraft": True,
+            "state": "OPEN",
+            "author": {"login": "app/copilot-swe-agent"},
+        },
+    }
+    monkeypatch.setattr("dsf.cli.charter._gh_graphql", lambda *a, **k: _timeline([node]))
+    pr = charter._find_agent_pr("org/alpha", 7)
+    assert pr == {"number": 9, "url": "https://x/pull/9", "is_draft": True, "state": "OPEN"}
 
 
 def test_assign_copilot_via_gh_success(monkeypatch):

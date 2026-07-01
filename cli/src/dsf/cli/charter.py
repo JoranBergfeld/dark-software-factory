@@ -377,14 +377,28 @@ _GH_REPLACE_ACTORS_MUTATION = (
     "replaceActorsForAssignable(input:{assignableId:$assignableId,actorIds:[$actorId]}){"
     "assignable{__typename}}}"
 )
+#: GraphQL: PR nodes linked to an issue (the coding agent opens one per issue).
+_GH_ISSUE_TIMELINE_QUERY = (
+    "query($owner:String!,$name:String!,$num:Int!){"
+    "repository(owner:$owner,name:$name){issue(number:$num){"
+    "timelineItems(itemTypes:[CONNECTED_EVENT,CROSS_REFERENCED_EVENT],first:50){"
+    "nodes{__typename "
+    "... on ConnectedEvent{subject{__typename ... on PullRequest{"
+    "number url isDraft state author{login}}}} "
+    "... on CrossReferencedEvent{source{__typename ... on PullRequest{"
+    "number url isDraft state author{login}}}}}}}}}"
+)
 
 
-def _gh_graphql(query: str, **variables: str) -> dict:
+def _gh_graphql(
+    query: str, *, int_vars: dict[str, int] | None = None, **variables: str
+) -> dict:
     """Run a GraphQL ``query`` via ``gh api graphql`` and return its ``data``.
 
-    Uses the operator's locally-authenticated ``gh`` CLI, so the request carries a
-    **user** token (required to assign the Copilot coding agent). Raises
-    ``CalledProcessError`` when ``gh`` fails and ``RuntimeError`` on a GraphQL error.
+    String variables go through ``-f``; ``int_vars`` go through ``-F`` so GraphQL
+    ``Int!`` variables are typed correctly. Uses the operator's ``gh`` user token.
+    Raises ``CalledProcessError`` when ``gh`` fails and ``RuntimeError`` on a
+    GraphQL error.
     """
     import json
     import subprocess
@@ -392,11 +406,48 @@ def _gh_graphql(query: str, **variables: str) -> dict:
     argv = ["gh", "api", "graphql", "-f", f"query={query}"]
     for key, value in variables.items():
         argv += ["-f", f"{key}={value}"]
+    for key, ivalue in (int_vars or {}).items():
+        argv += ["-F", f"{key}={ivalue}"]
     result = subprocess.run(argv, check=True, capture_output=True, text=True)
     payload = json.loads(result.stdout)
     if payload.get("errors"):
         raise RuntimeError(f"GraphQL error: {payload['errors']}")
     return payload["data"]
+
+
+def _find_agent_pr(repo: str, issue_number: int) -> dict | None:
+    """Return the Copilot coding agent's PR linked to ``issue_number``, or None.
+
+    Scans the issue timeline for connected/cross-referenced PRs and picks the one
+    authored by ``copilot-swe-agent`` (GraphQL bot logins have no ``app/`` prefix),
+    preferring an OPEN one and, among those, the highest number. Returns
+    ``{"number", "url", "is_draft", "state"}``.
+    """
+    owner, _, name = repo.partition("/")
+    data = _gh_graphql(
+        _GH_ISSUE_TIMELINE_QUERY, int_vars={"num": issue_number}, owner=owner, name=name
+    )
+    nodes = data["repository"]["issue"]["timelineItems"]["nodes"]
+    prs: list[dict] = []
+    for node in nodes:
+        pr = node.get("subject") or node.get("source") or {}
+        if pr.get("__typename") != "PullRequest":
+            continue
+        login = (pr.get("author") or {}).get("login", "")
+        if login.split("/")[-1] != _COPILOT_LOGIN:
+            continue
+        prs.append(
+            {
+                "number": pr["number"],
+                "url": pr["url"],
+                "is_draft": bool(pr["isDraft"]),
+                "state": pr["state"],
+            }
+        )
+    if not prs:
+        return None
+    prs.sort(key=lambda p: (p["state"] == "OPEN", p["number"]), reverse=True)
+    return prs[0]
 
 
 def _assign_copilot_via_gh(repo: str, issue_node_id: str) -> bool:
