@@ -407,6 +407,26 @@ def test_implement_opens_constitution_pr_and_files_issue(monkeypatch, capsys):
     assert "synced charter for alpha from main" in out
 
 
+def test_implement_closes_the_store(monkeypatch, capsys):
+    closed = {"n": 0}
+
+    class _ClosingStore(InMemoryCharterStore):
+        async def aclose(self) -> None:
+            closed["n"] += 1
+
+    store = _ClosingStore()
+    _put(store, _ok_charter("blobsha"), CharterStatus.OK)
+    client = RecordingRepoClient(
+        {CHARTER_PATH: (render_charter(_ok_charter("blobsha")), "blobsha")}
+    )
+    monkeypatch.setattr("dsf.cli.charter.build_charter_store", lambda s: store)
+    monkeypatch.setattr("dsf.cli.charter.build_repo_app_client", lambda s: client)
+    monkeypatch.setattr("dsf.cli.charter._resolve_repo", lambda product: "org/alpha")
+    rc = main(["charter", "implement", "--product", "alpha"])
+    assert rc == 0
+    assert closed["n"] == 1
+
+
 def test_implement_syncs_stale_charter_then_proceeds(monkeypatch, capsys):
     # A charter merged to main but not yet synced into Cosmos ("stale") must no
     # longer block: `implement` syncs from main first, then proceeds.

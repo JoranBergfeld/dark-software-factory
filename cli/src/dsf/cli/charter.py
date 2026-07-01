@@ -423,51 +423,38 @@ def _assign_copilot_via_gh(repo: str, issue_node_id: str) -> bool:
     return True
 
 
-def _cmd_charter_implement(args: argparse.Namespace) -> int:
-    """Seed the Spec Kit build from an accepted charter.
+async def _implement_async(
+    product: str, repo_full: str, args: argparse.Namespace
+) -> tuple[int, str | None, bool]:
+    """Sync charter, open the constitution PR, file+assign the bootstrap issue.
 
-    Pulls the charter from ``main`` into Cosmos first (the same work ``dsf charter
-    sync --ref main`` does) so the operator runs a single command, then renders the
-    constitution and lands it via an auto-merged PR (``main`` is branch-protected)
-    and files one ``creation:ready`` bootstrap issue assigned to the Copilot Coding
-    Agent. Refuses unless that sync yields an OK charter, so we never seed from a
-    missing or invalid one.
+    Returns ``(rc, issue_url, assigned)``: ``rc`` non-zero on a hard failure,
+    ``issue_url`` of the filed bootstrap issue (or ``None``), and whether the
+    Copilot coding agent was successfully assigned (so the caller can decide
+    whether it is worth watching the build).
     """
-    product = args.product
-    repo_full = _resolve_repo(product)
-    if not repo_full:
-        print(f"[dsf] error: product {product!r} is not in registry", file=sys.stderr)
-        return 1
-
-    try:
-        store = build_charter_store(_settings(product))
+    async with _charter_store(product) as store:
         app = build_repo_app_client(_app_settings(product))
-    except ValueError as exc:
-        print(f"[dsf] error: {exc}", file=sys.stderr)
-        return 1
 
-    # Sync from main first so `implement` is a single step -- the operator no longer
-    # has to run `dsf charter sync --ref main` beforehand.
-    stored = asyncio.run(
-        sync_charter(store, app, product=product, repo=repo_full, ref="main")
-    )
-    print(f"[dsf] synced charter for {product} from main: {stored.status.value}")
-    if stored.status != CharterStatus.OK or stored.charter is None:
-        print(
-            f"[dsf] error: charter for {product} on main is "
-            f"{stored.status.value.lower()}; merge the charter PR "
-            "(and fix any errors) before implementing.",
-            file=sys.stderr,
+        stored = await sync_charter(
+            store, app, product=product, repo=repo_full, ref="main"
         )
-        if stored.last_error:
-            print(f"[dsf]   note: {stored.last_error}", file=sys.stderr)
-        return 1
+        print(f"[dsf] synced charter for {product} from main: {stored.status.value}")
+        if stored.status != CharterStatus.OK or stored.charter is None:
+            print(
+                f"[dsf] error: charter for {product} on main is "
+                f"{stored.status.value.lower()}; merge the charter PR "
+                "(and fix any errors) before implementing.",
+                file=sys.stderr,
+            )
+            if stored.last_error:
+                print(f"[dsf]   note: {stored.last_error}", file=sys.stderr)
+            return 1, None, False
 
-    charter = stored.charter
-    constitution = render_constitution(charter)
-    branch = f"charter/constitution-{uuid.uuid4().hex[:8]}"
-    pr_url = asyncio.run(
-        app.open_file_pr(
+        charter = stored.charter
+        constitution = render_constitution(charter)
+        branch = f"charter/constitution-{uuid.uuid4().hex[:8]}"
+        pr_url = await app.open_file_pr(
             repo_full,
             path=CONSTITUTION_PATH,
             content=constitution,
@@ -483,20 +470,23 @@ def _cmd_charter_implement(args: argparse.Namespace) -> int:
             message=f"docs: add spec kit constitution for {product}",
             enable_auto_merge=True,
         )
-    )
-    print(f"[dsf] opened constitution PR (auto-merge requested): {pr_url}")
+        print(f"[dsf] opened constitution PR (auto-merge requested): {pr_url}")
 
-    title, body = render_bootstrap_issue(charter)
-    try:
-        issue_url = asyncio.run(app.create_issue(repo_full, title, body, [HANDOFF_LABEL]))
-        print(f"[dsf] filed bootstrap issue + assigned Copilot: {issue_url}")
-    except CodingAgentAssignmentError as exc:
-        # GitHub forbids assigning the coding agent with a GitHub App installation
-        # token, so fall back to the operator's local `gh` user token for just the
-        # assignment step (see _assign_copilot_via_gh).
-        if _assign_copilot_via_gh(repo_full, exc.issue_node_id):
-            print(f"[dsf] filed bootstrap issue + assigned Copilot via gh: {exc.issue_url}")
-        else:
+        title, body = render_bootstrap_issue(charter)
+        try:
+            issue_url = await app.create_issue(repo_full, title, body, [HANDOFF_LABEL])
+            print(f"[dsf] filed bootstrap issue + assigned Copilot: {issue_url}")
+            return 0, issue_url, True
+        except CodingAgentAssignmentError as exc:
+            # GitHub forbids assigning the coding agent with a GitHub App
+            # installation token, so fall back to the operator's local `gh` user
+            # token for just the assignment step (see _assign_copilot_via_gh).
+            if _assign_copilot_via_gh(repo_full, exc.issue_node_id):
+                print(
+                    f"[dsf] filed bootstrap issue + assigned Copilot via gh: "
+                    f"{exc.issue_url}"
+                )
+                return 0, exc.issue_url, True
             print(f"[dsf] filed bootstrap issue: {exc.issue_url}")
             print(
                 "[dsf] warning: could not assign the Copilot coding agent; assign it "
@@ -504,7 +494,32 @@ def _cmd_charter_implement(args: argparse.Namespace) -> int:
                 "enabled for the repo).",
                 file=sys.stderr,
             )
-    return 0
+            return 0, exc.issue_url, False
+
+
+def _cmd_charter_implement(args: argparse.Namespace) -> int:
+    """Seed the Spec Kit build from an accepted charter, then watch the build.
+
+    Pulls the charter from ``main`` into Cosmos first (like ``dsf charter sync
+    --ref main``), renders the constitution via an auto-merged PR, and files one
+    ``creation:ready`` bootstrap issue assigned to the Copilot Coding Agent.
+    Unless ``--no-wait`` is given, it then blocks watching the coding agent's PR
+    and requests Copilot code review once it is ready.
+    """
+    product = args.product
+    repo_full = _resolve_repo(product)
+    if not repo_full:
+        print(f"[dsf] error: product {product!r} is not in registry", file=sys.stderr)
+        return 1
+
+    try:
+        rc, issue_url, assigned = asyncio.run(
+            _implement_async(product, repo_full, args)
+        )
+    except ValueError as exc:
+        print(f"[dsf] error: {exc}", file=sys.stderr)
+        return 1
+    return rc
 
 
 def charter_init(product: str) -> int:
