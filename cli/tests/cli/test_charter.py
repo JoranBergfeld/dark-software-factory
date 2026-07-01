@@ -886,3 +886,88 @@ def test_watch_survives_transient_errors(monkeypatch, capsys):
     assert rc == 0 and requested["n"] == 1
     assert calls["n"] == 3
     assert "transient" in out.lower()
+
+def test_watch_subcommand_parses():
+    parser = build_parser()
+    args = parser.parse_args(["charter", "watch", "--product", "alpha", "--issue", "7"])
+    assert args.command == "charter" and args.product == "alpha" and args.issue == 7
+
+
+def test_watch_command_uses_explicit_issue(monkeypatch):
+    monkeypatch.setattr("dsf.cli.charter._resolve_repo", lambda product: "org/alpha")
+    seen = {}
+    monkeypatch.setattr(
+        "dsf.cli.charter._watch_and_request_review",
+        lambda repo, issue, **kw: seen.update(repo=repo, issue=issue) or 0,
+    )
+    rc = main(["charter", "watch", "--product", "alpha", "--issue", "7"])
+    assert rc == 0 and seen == {"repo": "org/alpha", "issue": 7}
+
+
+def test_watch_command_finds_newest_handoff_issue(monkeypatch):
+    monkeypatch.setattr("dsf.cli.charter._resolve_repo", lambda product: "org/alpha")
+    monkeypatch.setattr("dsf.cli.charter._newest_handoff_issue", lambda repo: 42)
+    seen = {}
+    monkeypatch.setattr(
+        "dsf.cli.charter._watch_and_request_review",
+        lambda repo, issue, **kw: seen.update(issue=issue) or 0,
+    )
+    rc = main(["charter", "watch", "--product", "alpha"])
+    assert rc == 0 and seen == {"issue": 42}
+
+
+def test_watch_command_errors_when_no_issue(monkeypatch, capsys):
+    monkeypatch.setattr("dsf.cli.charter._resolve_repo", lambda product: "org/alpha")
+    monkeypatch.setattr("dsf.cli.charter._newest_handoff_issue", lambda repo: None)
+    rc = main(["charter", "watch", "--product", "alpha"])
+    assert rc == 1 and "no open" in capsys.readouterr().err.lower()
+
+
+def test_newest_handoff_issue_picks_max(monkeypatch):
+    captured = {}
+
+    def fake_run(argv, check, capture_output, text):
+        captured["argv"] = argv
+        return SimpleNamespace(
+            returncode=0,
+            stdout='[{"number": 5}, {"number": 12}, {"number": 9}]',
+            stderr="",
+        )
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    assert charter._newest_handoff_issue("org/alpha") == 12
+    argv = captured["argv"]
+    assert argv[:5] == ["gh", "issue", "list", "--repo", "org/alpha"]
+    assert "--label" in argv and HANDOFF_LABEL in argv
+    assert "--state" in argv and "open" in argv
+    assert argv[argv.index("--json") + 1] == "number"
+
+
+def test_newest_handoff_issue_empty_returns_none(monkeypatch):
+    monkeypatch.setattr(
+        "subprocess.run",
+        lambda argv, check, capture_output, text: SimpleNamespace(
+            returncode=0, stdout="[]", stderr=""
+        ),
+    )
+    assert charter._newest_handoff_issue("org/alpha") is None
+
+
+def test_newest_handoff_issue_swallows_subprocess_error(monkeypatch):
+    import subprocess
+
+    def boom(argv, check, capture_output, text):
+        raise subprocess.CalledProcessError(1, argv, stderr="gh failed")
+
+    monkeypatch.setattr("subprocess.run", boom)
+    assert charter._newest_handoff_issue("org/alpha") is None
+
+
+def test_newest_handoff_issue_swallows_bad_json(monkeypatch):
+    monkeypatch.setattr(
+        "subprocess.run",
+        lambda argv, check, capture_output, text: SimpleNamespace(
+            returncode=0, stdout="not json", stderr=""
+        ),
+    )
+    assert charter._newest_handoff_issue("org/alpha") is None

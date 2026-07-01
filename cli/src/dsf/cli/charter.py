@@ -577,6 +577,28 @@ def _watch_and_request_review(
         sleep(poll_interval)
 
 
+def _newest_handoff_issue(repo: str) -> int | None:
+    """Newest OPEN issue carrying the handoff label (the bootstrap issue), or None."""
+    import json
+    import subprocess
+
+    try:
+        result = subprocess.run(
+            [
+                "gh", "issue", "list", "--repo", repo, "--label", HANDOFF_LABEL,
+                "--state", "open", "--limit", "20", "--json", "number",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        rows = json.loads(result.stdout)
+    except (OSError, subprocess.CalledProcessError, json.JSONDecodeError):
+        return None
+    numbers = [row["number"] for row in rows if "number" in row]
+    return max(numbers) if numbers else None
+
+
 def _assign_copilot_via_gh(repo: str, issue_node_id: str) -> bool:
     """Assign the Copilot coding agent to an issue via the operator's ``gh`` token.
 
@@ -713,6 +735,31 @@ def _cmd_charter_implement(args: argparse.Namespace) -> int:
     )
 
 
+def _cmd_charter_watch(args: argparse.Namespace) -> int:
+    """Watch the coding agent's build for a product and hand it off to review."""
+    product = args.product
+    repo_full = _resolve_repo(product)
+    if not repo_full:
+        print(f"[dsf] error: product {product!r} is not in registry", file=sys.stderr)
+        return 1
+
+    issue_number = args.issue if args.issue is not None else _newest_handoff_issue(repo_full)
+    if issue_number is None:
+        print(
+            f"[dsf] error: no open {HANDOFF_LABEL!r} issue found for {product}; pass "
+            "--issue N.",
+            file=sys.stderr,
+        )
+        return 1
+
+    return _watch_and_request_review(
+        repo_full,
+        issue_number,
+        timeout=_resolve_watch_timeout(args.timeout),
+        poll_interval=_resolve_watch_poll_interval(args.poll_interval),
+    )
+
+
 def charter_init(product: str) -> int:
     """Run the charter interview and open the PR for ``product``.
 
@@ -759,6 +806,25 @@ def add_charter_subcommands(sub: argparse._SubParsersAction) -> None:
         help=f"seconds between polls (default 20; env {_WATCH_POLL_ENV})",
     )
     implement_parser.set_defaults(func=_cmd_charter_implement)
+
+    watch_parser = charter_sub.add_parser(
+        "watch",
+        help="watch the coding agent's build and request Copilot review when ready",
+    )
+    watch_parser.add_argument("--product", required=True, help="product key")
+    watch_parser.add_argument(
+        "--issue", type=int, default=None,
+        help="bootstrap issue number (default: newest open handoff issue)",
+    )
+    watch_parser.add_argument(
+        "--timeout", type=float, default=None,
+        help="max seconds to watch (default 1800; 0 = unbounded)",
+    )
+    watch_parser.add_argument(
+        "--poll-interval", type=float, default=None, dest="poll_interval",
+        help=f"seconds between polls (default 20; env {_WATCH_POLL_ENV})",
+    )
+    watch_parser.set_defaults(func=_cmd_charter_watch)
 
     for name, func, help_text in (
         ("sync", _cmd_charter_sync, "pull .dsf/charter.md (local file or --ref) into Cosmos"),
