@@ -389,9 +389,12 @@ def test_implement_opens_constitution_pr_and_files_issue(monkeypatch, capsys):
     assert len(client.issues) == 1
     assert client.issues[0]["labels"] == [HANDOFF_LABEL]
     assert "opened constitution PR" in out and "filed bootstrap issue" in out
+    assert "synced charter for alpha from main" in out
 
 
-def test_implement_refuses_when_charter_stale(monkeypatch, capsys):
+def test_implement_syncs_stale_charter_then_proceeds(monkeypatch, capsys):
+    # A charter merged to main but not yet synced into Cosmos ("stale") must no
+    # longer block: `implement` syncs from main first, then proceeds.
     store = InMemoryCharterStore()
     _put(store, _ok_charter("oldsha"), CharterStatus.OK)
     client = RecordingRepoClient({CHARTER_PATH: (render_charter(_ok_charter("newsha")), "newsha")})
@@ -399,13 +402,28 @@ def test_implement_refuses_when_charter_stale(monkeypatch, capsys):
     monkeypatch.setattr("dsf.cli.charter.build_repo_app_client", lambda s: client)
     monkeypatch.setattr("dsf.cli.charter._resolve_repo", lambda product: "org/alpha")
     rc = main(["charter", "implement", "--product", "alpha"])
-    assert rc == 1 and "stale" in capsys.readouterr().err
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "synced charter for alpha from main" in out
+    assert len(client.prs) == 1 and len(client.issues) == 1
+    # the stale charter was refreshed into the store from main
+    assert asyncio.run(store.get_charter("alpha")).charter.source_sha == "newsha"
+
+
+def test_implement_refuses_when_charter_invalid_on_main(monkeypatch, capsys):
+    store = InMemoryCharterStore()
+    client = RecordingRepoClient({CHARTER_PATH: ("garbage, no marker", "badsha")})
+    monkeypatch.setattr("dsf.cli.charter.build_charter_store", lambda s: store)
+    monkeypatch.setattr("dsf.cli.charter.build_repo_app_client", lambda s: client)
+    monkeypatch.setattr("dsf.cli.charter._resolve_repo", lambda product: "org/alpha")
+    rc = main(["charter", "implement", "--product", "alpha"])
+    assert rc == 1 and "invalid" in capsys.readouterr().err
     assert not client.prs and not client.issues
 
 
 def test_implement_refuses_when_charter_missing(monkeypatch, capsys):
     store = InMemoryCharterStore()
-    client = RecordingRepoClient({})  # read_file -> None -> live_sha None -> "missing"
+    client = RecordingRepoClient({})  # read_file -> None -> sync records MISSING
     monkeypatch.setattr("dsf.cli.charter.build_charter_store", lambda s: store)
     monkeypatch.setattr("dsf.cli.charter.build_repo_app_client", lambda s: client)
     monkeypatch.setattr("dsf.cli.charter._resolve_repo", lambda product: "org/alpha")

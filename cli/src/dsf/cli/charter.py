@@ -341,11 +341,12 @@ def _cmd_charter_init(args: argparse.Namespace) -> int:
 def _cmd_charter_implement(args: argparse.Namespace) -> int:
     """Seed the Spec Kit build from an accepted charter.
 
-    Renders the constitution from the synced charter and lands it via an
-    auto-merged PR (``main`` is branch-protected), then files one ``creation:ready``
-    bootstrap issue assigned to the Copilot Coding Agent. Refuses unless the charter
-    is present and synced OK against ``main`` (reusing the ``status`` drift logic),
-    so we never seed from a non-accepted charter.
+    Pulls the charter from ``main`` into Cosmos first (the same work ``dsf charter
+    sync --ref main`` does) so the operator runs a single command, then renders the
+    constitution and lands it via an auto-merged PR (``main`` is branch-protected)
+    and files one ``creation:ready`` bootstrap issue assigned to the Copilot Coding
+    Agent. Refuses unless that sync yields an OK charter, so we never seed from a
+    missing or invalid one.
     """
     product = args.product
     repo_full = _resolve_repo(product)
@@ -355,31 +356,29 @@ def _cmd_charter_implement(args: argparse.Namespace) -> int:
 
     try:
         store = build_charter_store(_settings(product))
-    except ValueError as exc:
-        print(f"[dsf] error: {exc}", file=sys.stderr)
-        return 1
-
-    stored = asyncio.run(store.get_charter(product))
-    live_sha, note = _live_blob_sha(argparse.Namespace(ref="main", file=None), product)
-    label = _status_label(stored, live_sha)
-    if label != "ok":
-        print(
-            f"[dsf] error: charter for {product} is {label}; merge it and run "
-            "`dsf charter sync --product "
-            f"{product} --ref main` before implementing.",
-            file=sys.stderr,
-        )
-        if note:
-            print(f"[dsf]   note: {note}", file=sys.stderr)
-        return 1
-
-    charter = stored.charter  # non-None when label == "ok"
-    try:
         app = build_repo_app_client(_app_settings(product))
     except ValueError as exc:
         print(f"[dsf] error: {exc}", file=sys.stderr)
         return 1
 
+    # Sync from main first so `implement` is a single step -- the operator no longer
+    # has to run `dsf charter sync --ref main` beforehand.
+    stored = asyncio.run(
+        sync_charter(store, app, product=product, repo=repo_full, ref="main")
+    )
+    print(f"[dsf] synced charter for {product} from main: {stored.status.value}")
+    if stored.status != CharterStatus.OK or stored.charter is None:
+        print(
+            f"[dsf] error: charter for {product} on main is "
+            f"{stored.status.value.lower()}; merge the charter PR "
+            "(and fix any errors) before implementing.",
+            file=sys.stderr,
+        )
+        if stored.last_error:
+            print(f"[dsf]   note: {stored.last_error}", file=sys.stderr)
+        return 1
+
+    charter = stored.charter
     constitution = render_constitution(charter)
     branch = f"charter/constitution-{uuid.uuid4().hex[:8]}"
     pr_url = asyncio.run(
