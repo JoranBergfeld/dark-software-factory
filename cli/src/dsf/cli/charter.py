@@ -13,6 +13,7 @@ import argparse
 import asyncio
 import contextlib
 import sys
+import time
 import uuid
 from collections.abc import Callable
 from pathlib import Path
@@ -394,6 +395,31 @@ _GH_PR_REVIEWERS_QUERY = (
     "reviewRequests(first:20){nodes{requestedReviewer{__typename "
     "... on Bot{login} ... on User{login}}}}}}}"
 )
+_DEFAULT_WATCH_POLL_INTERVAL = 20.0
+_MIN_WATCH_POLL_INTERVAL = 1.0
+_DEFAULT_WATCH_TIMEOUT = 1800.0
+_WATCH_POLL_ENV = "DSF_WATCH_POLL_INTERVAL"
+
+
+def _resolve_watch_poll_interval(explicit: float | None) -> float:
+    """Poll cadence: explicit flag (floored 1s) > ``DSF_WATCH_POLL_INTERVAL`` > 20s."""
+    import os
+
+    if explicit is not None:
+        return max(_MIN_WATCH_POLL_INTERVAL, explicit)
+    raw = os.environ.get(_WATCH_POLL_ENV, "").strip()
+    if raw:
+        try:
+            return max(_MIN_WATCH_POLL_INTERVAL, float(raw))
+        except ValueError:
+            pass
+    return _DEFAULT_WATCH_POLL_INTERVAL
+
+
+def _resolve_watch_timeout(explicit: float | None) -> float | None:
+    """Timeout seconds: explicit flag > 1800s; ``0`` (or negative) means unbounded."""
+    seconds = _DEFAULT_WATCH_TIMEOUT if explicit is None else explicit
+    return None if seconds <= 0 else seconds
 
 
 def _gh_graphql(
@@ -485,6 +511,65 @@ def _request_copilot_review(repo: str, pr_url: str) -> None:
         capture_output=True,
         text=True,
     )
+
+
+def _watch_and_request_review(
+    repo: str,
+    issue_number: int,
+    *,
+    timeout: float | None,
+    poll_interval: float,
+    sleep=time.sleep,
+    clock=time.monotonic,
+    out=print,
+) -> int:
+    """Poll the coding agent's PR; request Copilot review once it is ready.
+
+    Returns ``0`` on success (review requested, already requested, or the PR
+    reached a terminal non-reviewable state) and ``2`` on timeout (resumable).
+    Transient GitHub/network errors are logged and retried until the timeout so
+    a single blip does not abort a long build watch.
+    """
+    import json
+    import subprocess
+
+    transient = (subprocess.CalledProcessError, RuntimeError, json.JSONDecodeError)
+    start = clock()
+    last_status = ""
+
+    def _emit(status: str) -> None:
+        nonlocal last_status
+        if status != last_status:
+            out(f"[dsf] {status}")
+            last_status = status
+
+    while True:
+        try:
+            pr = _find_agent_pr(repo, issue_number)
+            if pr is None:
+                _emit("waiting for the coding agent to open its PR...")
+            elif pr["state"] in ("MERGED", "CLOSED"):
+                out(f"[dsf] {repo}#{pr['number']} is {pr['state'].lower()}; nothing to review.")
+                return 0
+            elif not pr["is_draft"]:
+                if _pr_has_copilot_reviewer(repo, pr["number"]):
+                    out(f"[dsf] Copilot review already requested: {pr['url']}")
+                    return 0
+                _request_copilot_review(repo, pr["url"])
+                out(f"[dsf] requested Copilot review: {pr['url']}")
+                return 0
+            else:
+                _emit(f"{repo}#{pr['number']} building (draft)...")
+        except transient as exc:
+            _emit(f"transient GitHub error ({exc.__class__.__name__}); retrying...")
+
+        if timeout is not None and clock() - start >= timeout:
+            out(
+                f"[dsf] still building after {int(timeout)}s; re-run "
+                f"`dsf charter watch --product <product>` to resume."
+            )
+            return 2
+        sleep(poll_interval)
 
 
 def _assign_copilot_via_gh(repo: str, issue_node_id: str) -> bool:

@@ -767,3 +767,97 @@ def test_assign_copilot_via_gh_false_on_gh_error(monkeypatch):
 
     monkeypatch.setattr("dsf.cli.charter._gh_graphql", boom)
     assert charter_mod._assign_copilot_via_gh("org/alpha", "N") is False
+
+
+def _watch_env(monkeypatch, pr_states, *, reviewer=False):
+    """Drive _find_agent_pr through a scripted list of PR snapshots (or None)."""
+    seq = list(pr_states)
+
+    def fake_find(repo, issue):
+        return seq.pop(0) if seq else pr_states[-1]
+
+    requested = {"n": 0}
+    monkeypatch.setattr("dsf.cli.charter._find_agent_pr", fake_find)
+    monkeypatch.setattr(
+        "dsf.cli.charter._pr_has_copilot_reviewer", lambda repo, num: reviewer
+    )
+    monkeypatch.setattr(
+        "dsf.cli.charter._request_copilot_review",
+        lambda repo, url: requested.__setitem__("n", requested["n"] + 1),
+    )
+    return requested
+
+
+def test_watch_requests_review_when_pr_becomes_ready(monkeypatch, capsys):
+    draft = {"number": 8, "url": "https://x/pull/8", "is_draft": True, "state": "OPEN"}
+    ready = {"number": 8, "url": "https://x/pull/8", "is_draft": False, "state": "OPEN"}
+    requested = _watch_env(monkeypatch, [None, draft, ready])
+    rc = charter._watch_and_request_review(
+        "org/alpha", 7, timeout=None, poll_interval=0.0, sleep=lambda s: None
+    )
+    out = capsys.readouterr().out
+    assert rc == 0 and requested["n"] == 1
+    assert "requested Copilot review" in out
+
+
+def test_watch_skips_when_review_already_requested(monkeypatch, capsys):
+    ready = {"number": 8, "url": "https://x/pull/8", "is_draft": False, "state": "OPEN"}
+    requested = _watch_env(monkeypatch, [ready], reviewer=True)
+    rc = charter._watch_and_request_review(
+        "org/alpha", 7, timeout=None, poll_interval=0.0, sleep=lambda s: None
+    )
+    assert rc == 0 and requested["n"] == 0
+    assert "already requested" in capsys.readouterr().out
+
+
+def test_watch_stops_when_pr_closed(monkeypatch, capsys):
+    closed = {"number": 8, "url": "https://x/pull/8", "is_draft": True, "state": "CLOSED"}
+    requested = _watch_env(monkeypatch, [closed])
+    rc = charter._watch_and_request_review(
+        "org/alpha", 7, timeout=None, poll_interval=0.0, sleep=lambda s: None
+    )
+    assert rc == 0 and requested["n"] == 0
+    assert "closed" in capsys.readouterr().out.lower()
+
+
+def test_watch_times_out(monkeypatch, capsys):
+    draft = {"number": 8, "url": "https://x/pull/8", "is_draft": True, "state": "OPEN"}
+    requested = _watch_env(monkeypatch, [draft])
+    clock = iter([0.0, 5.0, 999.0])
+    rc = charter._watch_and_request_review(
+        "org/alpha", 7, timeout=10.0, poll_interval=0.0,
+        sleep=lambda s: None, clock=lambda: next(clock),
+    )
+    assert rc == 2 and requested["n"] == 0
+    assert "re-run" in capsys.readouterr().out
+
+
+def test_watch_survives_transient_errors(monkeypatch, capsys):
+    """A transient GraphQL/subprocess error is logged and retried, not fatal."""
+    import subprocess
+
+    ready = {"number": 8, "url": "https://x/pull/8", "is_draft": False, "state": "OPEN"}
+    calls = {"n": 0}
+
+    def flaky_find(repo, issue):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("GraphQL error: rate limited")
+        if calls["n"] == 2:
+            raise subprocess.CalledProcessError(1, ["gh"], stderr="502 Bad Gateway")
+        return ready
+
+    requested = {"n": 0}
+    monkeypatch.setattr("dsf.cli.charter._find_agent_pr", flaky_find)
+    monkeypatch.setattr("dsf.cli.charter._pr_has_copilot_reviewer", lambda r, n: False)
+    monkeypatch.setattr(
+        "dsf.cli.charter._request_copilot_review",
+        lambda r, u: requested.__setitem__("n", requested["n"] + 1),
+    )
+    rc = charter._watch_and_request_review(
+        "org/alpha", 7, timeout=None, poll_interval=0.0, sleep=lambda s: None
+    )
+    out = capsys.readouterr().out
+    assert rc == 0 and requested["n"] == 1
+    assert calls["n"] == 3
+    assert "transient" in out.lower()
