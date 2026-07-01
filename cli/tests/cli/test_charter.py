@@ -396,7 +396,7 @@ def test_implement_subcommand_parses():
 
 def test_implement_opens_constitution_pr_and_files_issue(monkeypatch, capsys):
     client = _seed_ok_implement(monkeypatch)
-    rc = main(["charter", "implement", "--product", "alpha"])
+    rc = main(["charter", "implement", "--product", "alpha", "--no-wait"])
     out = capsys.readouterr().out
     assert rc == 0
     assert len(client.prs) == 1
@@ -423,7 +423,7 @@ def test_implement_closes_the_store(monkeypatch, capsys):
     monkeypatch.setattr("dsf.cli.charter.build_charter_store", lambda s: store)
     monkeypatch.setattr("dsf.cli.charter.build_repo_app_client", lambda s: client)
     monkeypatch.setattr("dsf.cli.charter._resolve_repo", lambda product: "org/alpha")
-    rc = main(["charter", "implement", "--product", "alpha"])
+    rc = main(["charter", "implement", "--product", "alpha", "--no-wait"])
     assert rc == 0
     assert closed["n"] == 1
 
@@ -437,7 +437,7 @@ def test_implement_syncs_stale_charter_then_proceeds(monkeypatch, capsys):
     monkeypatch.setattr("dsf.cli.charter.build_charter_store", lambda s: store)
     monkeypatch.setattr("dsf.cli.charter.build_repo_app_client", lambda s: client)
     monkeypatch.setattr("dsf.cli.charter._resolve_repo", lambda product: "org/alpha")
-    rc = main(["charter", "implement", "--product", "alpha"])
+    rc = main(["charter", "implement", "--product", "alpha", "--no-wait"])
     out = capsys.readouterr().out
     assert rc == 0
     assert "synced charter for alpha from main" in out
@@ -488,7 +488,7 @@ def test_implement_falls_back_to_gh_when_app_assignment_forbidden(monkeypatch, c
         "dsf.cli.charter._assign_copilot_via_gh",
         lambda repo, node_id: calls.append((repo, node_id)) or True,
     )
-    rc = main(["charter", "implement", "--product", "alpha"])
+    rc = main(["charter", "implement", "--product", "alpha", "--no-wait"])
     out = capsys.readouterr().out
     assert rc == 0
     assert calls == [("org/alpha", "ISSUE_NODE_1")]
@@ -510,6 +510,31 @@ def test_implement_warns_when_gh_assignment_also_fails(monkeypatch, capsys):
     assert "filed bootstrap issue: local://issue/1" in captured.out
     assert "could not assign" in captured.err
     assert len(client.prs) == 1  # constitution PR still opened
+
+
+def test_implement_watches_build_by_default(monkeypatch, capsys):
+    _seed_ok_implement(monkeypatch)
+    seen = {}
+    monkeypatch.setattr(
+        "dsf.cli.charter._watch_and_request_review",
+        lambda repo, issue, **kw: seen.update(repo=repo, issue=issue) or 0,
+    )
+    rc = main(["charter", "implement", "--product", "alpha"])
+    assert rc == 0
+    # RecordingRepoClient.create_issue returns local://issue/1 -> issue number 1
+    assert seen == {"repo": "org/alpha", "issue": 1}
+
+
+def test_implement_no_wait_skips_watch(monkeypatch, capsys):
+    _seed_ok_implement(monkeypatch)
+    called = {"n": 0}
+    monkeypatch.setattr(
+        "dsf.cli.charter._watch_and_request_review",
+        lambda *a, **k: called.__setitem__("n", called["n"] + 1) or 0,
+    )
+    rc = main(["charter", "implement", "--product", "alpha", "--no-wait"])
+    assert rc == 0 and called["n"] == 0
+    assert "dsf charter watch" in capsys.readouterr().out
 
 
 # --- gh-based Copilot assignment (laptop `implement`) -------------------------

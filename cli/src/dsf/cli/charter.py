@@ -482,6 +482,11 @@ def _find_agent_pr(repo: str, issue_number: int) -> dict | None:
     return prs[0]
 
 
+def _issue_number_from_url(url: str) -> int:
+    """Parse the trailing issue number from an issue URL/ref (e.g. .../issues/7)."""
+    return int(url.rstrip("/").rsplit("/", 1)[-1])
+
+
 def _pr_has_copilot_reviewer(repo: str, number: int) -> bool:
     """True when Copilot code review is already requested on the PR."""
     owner, _, name = repo.partition("/")
@@ -692,7 +697,20 @@ def _cmd_charter_implement(args: argparse.Namespace) -> int:
     except ValueError as exc:
         print(f"[dsf] error: {exc}", file=sys.stderr)
         return 1
-    return rc
+    if rc != 0 or not assigned or issue_url is None:
+        return rc
+    if args.no_wait:
+        print(
+            f"[dsf] not waiting; run `dsf charter watch --product {product}` to hand "
+            "off to Copilot review once the build is ready."
+        )
+        return 0
+    return _watch_and_request_review(
+        repo_full,
+        _issue_number_from_url(issue_url),
+        timeout=_resolve_watch_timeout(args.timeout),
+        poll_interval=_resolve_watch_poll_interval(args.poll_interval),
+    )
 
 
 def charter_init(product: str) -> int:
@@ -717,9 +735,29 @@ def add_charter_subcommands(sub: argparse._SubParsersAction) -> None:
 
     implement_parser = charter_sub.add_parser(
         "implement",
-        help="render the constitution + file the Spec Kit bootstrap issue",
+        help="render the constitution + file the Spec Kit bootstrap issue, then "
+        "watch the build and request Copilot review",
     )
     implement_parser.add_argument("--product", required=True, help="product key")
+    implement_parser.add_argument(
+        "--no-wait",
+        action="store_true",
+        dest="no_wait",
+        help="file + assign only; do not watch the build or request review",
+    )
+    implement_parser.add_argument(
+        "--timeout",
+        type=float,
+        default=None,
+        help="max seconds to watch the build (default 1800; 0 = unbounded)",
+    )
+    implement_parser.add_argument(
+        "--poll-interval",
+        type=float,
+        default=None,
+        dest="poll_interval",
+        help=f"seconds between polls (default 20; env {_WATCH_POLL_ENV})",
+    )
     implement_parser.set_defaults(func=_cmd_charter_implement)
 
     for name, func, help_text in (
