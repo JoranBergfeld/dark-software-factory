@@ -533,12 +533,19 @@ def _watch_and_request_review(
     Returns ``0`` on success (review requested, already requested, or the PR
     reached a terminal non-reviewable state) and ``2`` on timeout (resumable).
     Transient GitHub/network errors are logged and retried until the timeout so
-    a single blip does not abort a long build watch.
+    a single blip does not abort a long build watch. A null or malformed GitHub
+    response (for example, the issue was deleted mid-watch) is treated the same way.
     """
     import json
     import subprocess
 
-    transient = (subprocess.CalledProcessError, RuntimeError, json.JSONDecodeError)
+    transient = (
+        subprocess.CalledProcessError,
+        RuntimeError,
+        json.JSONDecodeError,
+        KeyError,
+        TypeError,
+    )
     start = clock()
     last_status = ""
 

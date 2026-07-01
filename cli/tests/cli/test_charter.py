@@ -887,6 +887,37 @@ def test_watch_survives_transient_errors(monkeypatch, capsys):
     assert calls["n"] == 3
     assert "transient" in out.lower()
 
+
+def test_watch_survives_malformed_response(monkeypatch, capsys):
+    """A null/malformed GraphQL payload (None[...] -> TypeError, or a missing
+    key -> KeyError) is treated as a transient blip, not a fatal crash."""
+    ready = {"number": 8, "url": "https://x/pull/8", "is_draft": False, "state": "OPEN"}
+    calls = {"n": 0}
+
+    def flaky_find(repo, issue):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise TypeError("'NoneType' object is not subscriptable")
+        if calls["n"] == 2:
+            raise KeyError("nodes")
+        return ready
+
+    requested = {"n": 0}
+    monkeypatch.setattr("dsf.cli.charter._find_agent_pr", flaky_find)
+    monkeypatch.setattr("dsf.cli.charter._pr_has_copilot_reviewer", lambda r, n: False)
+    monkeypatch.setattr(
+        "dsf.cli.charter._request_copilot_review",
+        lambda r, u: requested.__setitem__("n", requested["n"] + 1),
+    )
+    rc = charter._watch_and_request_review(
+        "org/alpha", 7, timeout=None, poll_interval=0.0, sleep=lambda s: None
+    )
+    out = capsys.readouterr().out
+    assert rc == 0 and requested["n"] == 1
+    assert calls["n"] == 3
+    assert "transient" in out.lower()
+
+
 def test_watch_subcommand_parses():
     parser = build_parser()
     args = parser.parse_args(["charter", "watch", "--product", "alpha", "--issue", "7"])
