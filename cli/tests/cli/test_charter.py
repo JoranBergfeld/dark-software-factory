@@ -794,15 +794,20 @@ def test_assign_copilot_via_gh_false_on_gh_error(monkeypatch):
     assert charter_mod._assign_copilot_via_gh("org/alpha", "N") is False
 
 
-def _watch_env(monkeypatch, pr_states, *, reviewer=False):
+def _watch_env(monkeypatch, pr_states, *, reviewer=False, finished=False):
     """Drive _find_agent_pr through a scripted list of PR snapshots (or None)."""
     seq = list(pr_states)
 
     def fake_find(repo, issue):
         return seq.pop(0) if seq else pr_states[-1]
 
-    requested = {"n": 0}
+    requested = {"n": 0, "ready": 0}
     monkeypatch.setattr("dsf.cli.charter._find_agent_pr", fake_find)
+    monkeypatch.setattr("dsf.cli.charter._agent_work_finished", lambda repo, num: finished)
+    monkeypatch.setattr(
+        "dsf.cli.charter._mark_pr_ready",
+        lambda repo, num: requested.__setitem__("ready", requested["ready"] + 1),
+    )
     monkeypatch.setattr(
         "dsf.cli.charter._pr_has_copilot_reviewer", lambda repo, num: reviewer
     )
@@ -811,6 +816,78 @@ def _watch_env(monkeypatch, pr_states, *, reviewer=False):
         lambda repo, url: requested.__setitem__("n", requested["n"] + 1),
     )
     return requested
+
+
+def test_watch_marks_ready_and_requests_review_when_agent_finished(monkeypatch, capsys):
+    draft = {"number": 8, "url": "https://x/pull/8", "is_draft": True, "state": "OPEN"}
+    requested = _watch_env(monkeypatch, [draft], finished=True)
+    rc = charter._watch_and_request_review(
+        "org/alpha", 7, timeout=None, poll_interval=0.0, sleep=lambda s: None
+    )
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert requested["ready"] == 1
+    assert requested["n"] == 1
+    assert "marked ready for review" in out
+    assert "requested Copilot review" in out
+
+
+def test_watch_does_not_mark_ready_while_still_building(monkeypatch, capsys):
+    draft = {"number": 8, "url": "https://x/pull/8", "is_draft": True, "state": "OPEN"}
+    requested = _watch_env(monkeypatch, [draft], finished=False)
+    clock = iter([0.0, 5.0, 999.0])
+    rc = charter._watch_and_request_review(
+        "org/alpha",
+        7,
+        timeout=10.0,
+        poll_interval=0.0,
+        sleep=lambda s: None,
+        clock=lambda: next(clock),
+    )
+    out = capsys.readouterr().out
+    assert rc == 2
+    assert requested["ready"] == 0
+    assert requested["n"] == 0
+    assert "building (draft)" in out
+
+
+def test_watch_marks_ready_when_draft_finishes_after_polling(monkeypatch):
+    draft = {"number": 8, "url": "https://x/pull/8", "is_draft": True, "state": "OPEN"}
+    requested = _watch_env(monkeypatch, [None, draft, draft], finished=True)
+    rc = charter._watch_and_request_review(
+        "org/alpha", 7, timeout=None, poll_interval=0.0, sleep=lambda s: None
+    )
+    assert rc == 0
+    assert requested["ready"] == 1
+    assert requested["n"] == 1
+
+
+def test_agent_work_finished_reads_last_copilot_event(monkeypatch):
+    import json
+
+    seen = []
+    payloads = iter(
+        [
+            [{"event": "copilot_work_started"}, {"event": "copilot_work_finished"}],
+            [{"event": "copilot_work_finished"}, {"event": "copilot_work_started"}],
+            [{"event": "commented"}, "not-a-dict"],
+        ]
+    )
+
+    def fake_run(argv, check, capture_output, text):
+        seen.append(argv)
+        return SimpleNamespace(stdout=json.dumps(next(payloads)))
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    assert charter._agent_work_finished("org/alpha", 8) is True
+    assert charter._agent_work_finished("org/alpha", 8) is False
+    assert charter._agent_work_finished("org/alpha", 8) is False
+    assert seen[0] == [
+        "gh",
+        "api",
+        "--paginate",
+        "repos/org/alpha/issues/8/timeline",
+    ]
 
 
 def test_watch_requests_review_when_pr_becomes_ready(monkeypatch, capsys):

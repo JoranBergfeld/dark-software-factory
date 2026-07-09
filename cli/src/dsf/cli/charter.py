@@ -518,6 +518,45 @@ def _request_copilot_review(repo: str, pr_url: str) -> None:
     )
 
 
+def _agent_work_finished(repo: str, pr_number: int) -> bool:
+    """True when timeline says Copilot finished; draft PRs stay draft by design."""
+    import json
+    import subprocess
+
+    owner, _, name = repo.partition("/")
+    result = subprocess.run(
+        [
+            "gh",
+            "api",
+            "--paginate",
+            f"repos/{owner}/{name}/issues/{pr_number}/timeline",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    latest: str | None = None
+    for item in json.loads(result.stdout):
+        if not isinstance(item, dict):
+            continue
+        event = item.get("event")
+        if event in ("copilot_work_started", "copilot_work_finished"):
+            latest = event
+    return latest == "copilot_work_finished"
+
+
+def _mark_pr_ready(repo: str, pr_number: int) -> None:
+    """Mark a draft PR ready for review."""
+    import subprocess
+
+    subprocess.run(
+        ["gh", "pr", "ready", str(pr_number), "--repo", repo],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
 def _watch_and_request_review(
     repo: str,
     issue_number: int,
@@ -528,13 +567,15 @@ def _watch_and_request_review(
     clock=time.monotonic,
     out=print,
 ) -> int:
-    """Poll the coding agent's PR; request Copilot review once it is ready.
+    """Poll the coding agent's PR; request Copilot review once its work is done.
 
     Returns ``0`` on success (review requested, already requested, or the PR
     reached a terminal non-reviewable state) and ``2`` on timeout (resumable).
     Transient GitHub/network errors are logged and retried until the timeout so
     a single blip does not abort a long build watch. A null or malformed GitHub
     response (for example, the issue was deleted mid-watch) is treated the same way.
+    Completion is detected via the ``copilot_work_finished`` timeline event; draft
+    PRs are marked ready before Copilot review is requested.
     """
     import json
     import subprocess
@@ -555,6 +596,14 @@ def _watch_and_request_review(
             out(f"[dsf] {status}")
             last_status = status
 
+    def _hand_off(pr) -> int:
+        if _pr_has_copilot_reviewer(repo, pr["number"]):
+            out(f"[dsf] Copilot review already requested: {pr['url']}")
+            return 0
+        _request_copilot_review(repo, pr["url"])
+        out(f"[dsf] requested Copilot review: {pr['url']}")
+        return 0
+
     while True:
         try:
             pr = _find_agent_pr(repo, issue_number)
@@ -564,12 +613,11 @@ def _watch_and_request_review(
                 out(f"[dsf] {repo}#{pr['number']} is {pr['state'].lower()}; nothing to review.")
                 return 0
             elif not pr["is_draft"]:
-                if _pr_has_copilot_reviewer(repo, pr["number"]):
-                    out(f"[dsf] Copilot review already requested: {pr['url']}")
-                    return 0
-                _request_copilot_review(repo, pr["url"])
-                out(f"[dsf] requested Copilot review: {pr['url']}")
-                return 0
+                return _hand_off(pr)
+            elif _agent_work_finished(repo, pr["number"]):
+                _mark_pr_ready(repo, pr["number"])
+                out(f"[dsf] {repo}#{pr['number']} marked ready for review")
+                return _hand_off(pr)
             else:
                 _emit(f"{repo}#{pr['number']} building (draft)...")
         except transient as exc:
