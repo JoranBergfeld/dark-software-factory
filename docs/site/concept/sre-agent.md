@@ -64,6 +64,8 @@ systemic hardening proposals.
   gets Monitoring Contributor at subscription scope for alert lifecycle management.
   Azure Monitor connectors (Log Analytics + App Insights) are wired as ARM
   sub-resources so the Azure Monitor link is explicit and verifiable.
+- The human owner/governance principal gets Reader + SRE Agent Administrator on the
+  agent's resource group so they can open and operate the agent UI after `dsf new`.
 - The product GitHub repo is connected via a best-effort Phase-2 data-plane call
   (`az rest`). If the token or endpoint is unavailable at provision time, the step
   records a skip note and the operator can connect manually. The agent comes up

@@ -565,7 +565,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--admin-principal-id",
         default="",
         help="object id of the human owner/governance principal to grant data-plane "
-        "admin (App Config / Key Vault) + Reader on the SRE agent RG "
+        "admin (App Config / Key Vault) + Reader and SRE Agent Administrator "
+        "on the SRE agent RG "
         "(default: $DSF_ADMIN_PRINCIPAL_ID, else the signed-in user; leave unset in "
         "CI / service-principal runs to skip the human grants)",
     )

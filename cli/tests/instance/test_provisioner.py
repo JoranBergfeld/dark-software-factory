@@ -1918,6 +1918,20 @@ def test_cosmos_module_grants_each_data_plane_principal():
     )
 
 
+def test_sre_owner_rg_role_grants_reader_and_sre_admin():
+    bicep = (_default_repo_root() / "infra" / "modules" / "sre-owner-rg-role.bicep").read_text()
+    assert "acdd72a7-3385-48ef-bd42-f606fba81ae7" in bicep, (
+        "owner must keep Reader on the SRE agent RG so the RG, UAMI, connectors, "
+        "and agent resource remain browsable"
+    )
+    assert "e79298df-d852-4c6d-84f9-5d13249d1e55" in bicep, (
+        "owner must get SRE Agent Administrator so the Azure SRE Agent portal UI can open"
+    )
+    assert "for roleId in ownerRoleIds" in bicep, (
+        "owner role assignments must fan out over all required role ids"
+    )
+
+
 def test_cosmos_module_creates_runtime_containers():
     """The cosmos module provisions exactly the containers the runtime reads/writes
     (memory: working/records/lessons; charter: charters), partition-keyed on /id with

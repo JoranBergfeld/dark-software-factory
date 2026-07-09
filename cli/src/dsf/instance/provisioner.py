@@ -924,7 +924,8 @@ class InstanceProvisioner:
         """`az deployment sub create` for the SRE agent, from provision_azure outputs.
 
         ``owner_principal_id`` (when non-empty) is threaded as ``ownerPrincipalId`` so the
-        human owner gets Reader on the agent's resource group (portal/CLI "lift the hood").
+        human owner gets Reader + SRE Agent Administrator on the agent's resource group
+        (portal/CLI "lift the hood" + open the agent UI).
         """
         s = self.spec
         bicep = str((self._repo_root or _default_repo_root()) / "infra" / "sre-agent.bicep")
