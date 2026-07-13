@@ -425,6 +425,56 @@ def _cmd_delete(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_list(args: argparse.Namespace, *, gateway=None) -> int:
+    """List provisioned product factories from the owner App Configuration index."""
+    import json
+    import os
+
+    from dsf.config.owner_index import (
+        OWNER_APPCONFIG_ENV,
+        list_products,
+        read_runtime_config,
+    )
+
+    endpoint = args.owner_appconfig_endpoint or os.environ.get(OWNER_APPCONFIG_ENV, "")
+    if not endpoint:
+        if args.json:
+            print("[]")
+        else:
+            print(f"[dsf] set {OWNER_APPCONFIG_ENV} to list provisioned factories.")
+        return 0
+
+    products = list_products(endpoint, gateway=gateway)
+    rows = [
+        {"product": product, **read_runtime_config(endpoint, product, gateway=gateway)}
+        for product in products
+    ]
+    if args.json:
+        print(json.dumps(rows, indent=2))
+        return 0
+
+    headers = ["PRODUCT", "REPO", "APP CONFIG", "COSMOS", "FOUNDRY"]
+    keys = [
+        "product",
+        "GITHUB_REPOSITORY",
+        "AZURE_APPCONFIG_ENDPOINT",
+        "AZURE_COSMOS_ENDPOINT",
+        "AZURE_OPENAI_ENDPOINT",
+    ]
+    table = [[str(row.get(key) or "-") for key in keys] for row in rows]
+    widths = [
+        max(len(header), *(len(row[idx]) for row in table)) if table else len(header)
+        for idx, header in enumerate(headers)
+    ]
+
+    print("  ".join(header.ljust(widths[idx]) for idx, header in enumerate(headers)))
+    for row in table:
+        print("  ".join(value.ljust(widths[idx]) for idx, value in enumerate(row)))
+    if not rows:
+        print("[dsf] no factories found in the owner App Config index.")
+    return 0
+
+
 _RUNTIME_MODULE = "dsf.runtime.control"
 
 
@@ -655,6 +705,24 @@ def build_parser() -> argparse.ArgumentParser:
         "from (default: DSF_OWNER_APPCONFIG_ENDPOINT)",
     )
     p_delete.set_defaults(func=_cmd_delete)
+
+    p_list = sub.add_parser(
+        "list",
+        aliases=["ls"],
+        help="list provisioned product factories from the owner App Config index",
+    )
+    p_list.add_argument(
+        "--json",
+        action="store_true",
+        help="emit the factory rows as JSON for scripting",
+    )
+    p_list.add_argument(
+        "--owner-appconfig-endpoint",
+        default=None,
+        help="owner App Configuration endpoint to read the factory index from "
+        "(default: DSF_OWNER_APPCONFIG_ENDPOINT)",
+    )
+    p_list.set_defaults(func=_cmd_list)
 
     p_run = sub.add_parser("run", help="run the intake line for one signal (runtime)")
     p_run.add_argument("--signal", help="path to a signal JSON file")
