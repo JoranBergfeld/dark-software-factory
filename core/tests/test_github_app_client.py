@@ -161,6 +161,28 @@ def test_installation_token_raises_on_api_error():
         client.installation_token()
 
 
+def test_has_repository_access_true_when_app_installed_on_repo():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/repos/acme/demo/installation":
+            return httpx.Response(200, json={"id": 142291975, "repository_selection": "all"})
+        return httpx.Response(404, json={"message": "Not Found"})
+
+    client = _app_client(handler)
+
+    assert client.has_repository_access("acme/demo") is True
+
+
+def test_has_repository_access_false_when_repo_not_covered():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/repos/acme/demo/installation":
+            return httpx.Response(404, json={"message": "Not Found"})
+        return httpx.Response(500, json={"message": "unexpected path"})
+
+    client = _app_client(handler)
+
+    assert client.has_repository_access("acme/demo") is False
+
+
 async def test_assign_coding_agent_replaces_actors_with_copilot_bot():
     calls: list[dict] = []
 

@@ -123,6 +123,28 @@ class GitHubAppClient:
         self._cached = _CachedToken(token=data["token"], expires_at=expires_at)
         return self._cached.token
 
+    def has_repository_access(self, repo: str) -> bool:
+        """Return True if this App installation already covers ``repo`` ("owner/name").
+
+        Authoritative App-auth check: ``GET /repos/{repo}/installation`` returns the
+        installation covering the repo (200) for both an "All repositories" install and
+        a "selected" install that includes the repo; 404 means it is not covered. Signed
+        with the App JWT (not an installation token) so it answers even before the repo
+        is in the installation.
+        """
+        with httpx.Client(transport=self.transport, base_url=_GITHUB_API) as client:
+            resp = client.get(
+                f"/repos/{repo}/installation",
+                headers={
+                    "Authorization": f"Bearer {self._app_jwt()}",
+                    "Accept": "application/vnd.github+json",
+                },
+            )
+        if resp.status_code == 404:
+            return False
+        resp.raise_for_status()
+        return True
+
     def _token_headers(self, token: str) -> dict[str, str]:
         return {
             "Authorization": f"Bearer {token}",

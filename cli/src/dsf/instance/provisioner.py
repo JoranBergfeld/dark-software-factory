@@ -28,6 +28,7 @@ from dsf.contracts.handoff import (
     INCIDENT_LABEL_COLOR,
     INCIDENT_LABEL_DESCRIPTION,
 )
+from dsf.github_app_client import GitHubAppClient
 from dsf.instance.branch_protection import (
     CI_WORKFLOW_PATH,
     RULESET_NAME,
@@ -187,6 +188,9 @@ def _format_step_error(exc: BaseException) -> str:
     return "\n".join(parts)
 
 
+class InstallAppError(RuntimeError):
+    """The product repo is not covered by the DSF App installation and could not be
+    added with the available GitHub credentials (actionable: fix the installation)."""
 
 
 def _stdout_lines(result: Any) -> list[str]:
@@ -258,6 +262,7 @@ class InstanceProvisioner:
         appconfig_gateway: object | None = None,
         github_app_id: str = "",
         github_installation_id: str = "",
+        app_access_check: Callable[[str], bool] | None = None,
         admin_principal_id: str = "",
     ) -> None:
         self.spec = spec
@@ -269,6 +274,7 @@ class InstanceProvisioner:
         self._appconfig_gateway = appconfig_gateway
         self._github_app_id = github_app_id
         self._github_installation_id = github_installation_id
+        self._app_access_check = app_access_check
         self._app_binding: GitHubAppBinding | None = None
         # Explicit override for the human owner/governance principal object id (for
         # service-principal / CI runs). When empty, it is resolved lazily at execute
@@ -664,12 +670,52 @@ class InstanceProvisioner:
             outputs={k: str(val) for k, val in outputs.items() if val is not None},
         )
 
-    def _install_app(self) -> tuple[GitHubAppBinding, bool]:
-        """Add the product repo to the single owner installation; capture the binding.
+    def _read_owner_secret(self, name: str) -> str:
+        """Read a secret value from the owner Key Vault (data-plane); never echoed."""
+        owner_kv = self._owner_keyvault_uri.split("//", 1)[-1].split(".", 1)[0]
+        res = self._run(
+            [
+                "az", "keyvault", "secret", "show",
+                "--vault-name", owner_kv,
+                "--name", name,
+                "--query", "value",
+                "-o", "tsv",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return getattr(res, "stdout", "")
 
-        Returns ``(binding, already_installed)``: short-circuits the PUT when the repo
-        is already in the installation so a re-run reports ``already installed`` instead
-        of re-issuing a redundant write.
+    def _app_has_repo_access(self, repo: str) -> bool:
+        """Check (as the DSF App) whether the installation already covers ``repo``.
+
+        Uses the injected ``app_access_check`` seam when provided (tests); otherwise
+        reads the App private key from the owner Key Vault and asks GitHub with the App
+        JWT. The owner-vault read captures output so the key is never echoed.
+        """
+        if self._app_access_check is not None:
+            return self._app_access_check(repo)
+        pem = self._read_owner_secret("github-app-private-key")
+        client = GitHubAppClient(
+            app_id=self._github_app_id,
+            installation_id=self._github_installation_id,
+            private_key_pem=pem,
+        )
+        return client.has_repository_access(repo)
+
+    def _install_app(self) -> tuple[GitHubAppBinding, bool]:
+        """Ensure the DSF App can reach the product repo; capture the binding.
+
+        Coverage is verified authoritatively as the App itself: the operator's ``gh``
+        OAuth token cannot read or modify ``/user/installations`` (those need a
+        GitHub-App-authorized user token), so a plain add would 403. When the
+        installation already covers the repo ("All repositories", or a "selected"
+        install that includes it) the add is skipped. Otherwise the add is attempted
+        (succeeds only with an App-authorized user token / fine-grained PAT); if that is
+        forbidden, an actionable :class:`InstallAppError` is raised.
+
+        Returns ``(binding, already_installed)``.
         """
         repo = self.spec.github_repo()
         lookup = self._run(
@@ -682,29 +728,31 @@ class InstanceProvisioner:
             installation_id=self._github_installation_id,
             repository_id=repository_id,
         )
-        if self._repo_in_installation(repository_id):
+        if self._app_has_repo_access(repo):
             return binding, True
-        self._run(
-            [
-                "gh", "api", "--method", "PUT",
-                f"/user/installations/{self._github_installation_id}"
-                f"/repositories/{repository_id}",
-            ],
-            check=True,
-        )
+        try:
+            self._run(
+                [
+                    "gh", "api", "--method", "PUT",
+                    f"/user/installations/{self._github_installation_id}"
+                    f"/repositories/{repository_id}",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            detail = (getattr(exc, "stderr", "") or "").strip()
+            raise InstallAppError(
+                f"The DSF App installation {self._github_installation_id} does not "
+                f"include {repo}, and it could not be added with the current GitHub "
+                f"credentials. Set the installation to 'All repositories', or add "
+                f"{repo} manually, at "
+                f"https://github.com/settings/installations/{self._github_installation_id}"
+                f", then re-run 'dsf new'."
+                + (f" (github said: {detail})" if detail else "")
+            ) from exc
         return binding, False
-
-    def _repo_in_installation(self, repository_id: int) -> bool:
-        """Return True if ``repository_id`` is already in the owner installation."""
-        result = self._run(
-            [
-                "gh", "api", "--paginate",
-                f"/user/installations/{self._github_installation_id}/repositories",
-                "--jq", ".repositories[].id",
-            ],
-            check=False, capture_output=True, text=True,
-        )
-        return str(repository_id) in _stdout_lines(result)
 
     def _resource_group_exists(self) -> bool:
         """Return True if the product resource group already exists (``az group exists``)."""

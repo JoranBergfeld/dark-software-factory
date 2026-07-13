@@ -1317,7 +1317,7 @@ def test_seed_app_key_step_skips_when_no_owner_app_configured(tmp_path):
     assert next(s for s in manifest.plan.steps if s.name == "deploy_sre_agent").executed is True
 
 
-def test_install_app_adds_repo_to_owner_installation_and_records_binding(tmp_path):
+def test_install_app_verifies_access_and_skips_put_when_app_covers_repo(tmp_path):
     calls: list[list[str]] = []
 
     def fake_run(cmd, **kwargs):
@@ -1338,20 +1338,20 @@ def test_install_app_adds_repo_to_owner_installation_and_records_binding(tmp_pat
         owner_keyvault_uri="https://kv-dsf-app.vault.azure.net/",
         github_app_id="42",
         github_installation_id="9001",
+        app_access_check=lambda repo: True,
     )
     manifest = prov.apply(execute=True)
 
-    # the repo id was looked up, then a PUT added it to the single owner installation
-    put = next(c for c in calls if c[:3] == ["gh", "api", "--method"])
-    assert "PUT" in put
-    assert "/user/installations/9001/repositories/555" in " ".join(put)
+    assert not any("/user/installations/" in " ".join(c) for c in calls)
     assert manifest.github_app is not None
     assert manifest.github_app.app_id == "42"
     assert manifest.github_app.installation_id == "9001"
     assert manifest.github_app.repository_id == 555
+    install = next(s for s in manifest.plan.steps if s.name == "install_app")
+    assert install.result == "already installed"
 
 
-def test_install_app_already_installed_skips_put_and_reports(tmp_path):
+def test_install_app_adds_repo_when_not_yet_covered(tmp_path):
     calls: list[list[str]] = []
 
     def fake_run(cmd, **kwargs):
@@ -1360,8 +1360,6 @@ def test_install_app_already_installed_skips_put_and_reports(tmp_path):
             return MagicMock(returncode=1)
         if cmd[:3] == ["gh", "api", "/repos/acme/demo"]:
             return MagicMock(returncode=0, stdout="555\n")
-        if cmd[:2] == ["gh", "api"] and "/user/installations/9001/repositories" in " ".join(cmd):
-            return MagicMock(returncode=0, stdout="111\n555\n222\n")  # already present
         hit = _az_deploy(cmd, _AZURE_OUTPUTS_JSON)
         if hit is not None:
             return hit
@@ -1371,15 +1369,55 @@ def test_install_app_already_installed_skips_put_and_reports(tmp_path):
         _spec(), run=fake_run, repo_root=tmp_path,
         owner_keyvault_uri="https://kv-dsf-app.vault.azure.net/",
         github_app_id="42", github_installation_id="9001",
+        app_access_check=lambda repo: False,
     )
     manifest = prov.apply(execute=True)
 
-    # repo already in the installation -> no PUT issued, binding still recorded:
-    assert not any("/user/installations/9001/repositories/" in " ".join(c) for c in calls)
+    put = next(
+        c
+        for c in calls
+        if c[:3] == ["gh", "api", "--method"]
+        and "PUT" in c
+        and "/user/installations/9001/repositories/555" in " ".join(c)
+    )
+    assert put
     assert manifest.github_app is not None
     assert manifest.github_app.repository_id == 555
     install = next(s for s in manifest.plan.steps if s.name == "install_app")
-    assert install.result == "already installed"
+    assert install.result == "installed"
+
+
+def test_install_app_raises_actionable_error_when_add_forbidden(tmp_path):
+    def fake_run(cmd, **kwargs):
+        if cmd[:3] == ["gh", "repo", "view"]:
+            return MagicMock(returncode=1)
+        if cmd[:3] == ["gh", "api", "/repos/acme/demo"]:
+            return MagicMock(returncode=0, stdout="555\n")
+        if cmd[:2] == ["gh", "api"] and "--method" in cmd and "PUT" in cmd:
+            raise subprocess.CalledProcessError(
+                1,
+                cmd,
+                stderr="HTTP 403: You do not have permission to modify this app",
+            )
+        hit = _az_deploy(cmd, _AZURE_OUTPUTS_JSON)
+        if hit is not None:
+            return hit
+        return MagicMock(returncode=0, stdout="")
+
+    prov = InstanceProvisioner(
+        _spec(), run=fake_run, repo_root=tmp_path,
+        owner_keyvault_uri="https://kv-dsf-app.vault.azure.net/",
+        github_app_id="42", github_installation_id="9001",
+        app_access_check=lambda repo: False,
+    )
+    manifest = prov.apply(execute=True)
+
+    install = next(s for s in manifest.plan.steps if s.name == "install_app")
+    assert install.result == "failed"
+    assert install.error is not None
+    assert "All repositories" in install.error
+    assert "settings/installations/9001" in install.error
+    assert next(s for s in manifest.plan.steps if s.name == "deploy_sre_agent").executed is False
 
 
 def test_install_app_step_skips_when_no_owner_app_configured(tmp_path):
@@ -1453,6 +1491,7 @@ def test_apply_preserves_prior_github_app_binding_when_install_skips(tmp_path):
         _spec(), run=fake_run, repo_root=tmp_path,
         owner_keyvault_uri="https://kv-dsf-app.vault.azure.net/",
         github_app_id="42", github_installation_id="9001",
+        app_access_check=lambda repo: True,
     ).apply(execute=True)
 
     # Re-run WITHOUT the owner pointer: install_app skips, but the binding must persist.
