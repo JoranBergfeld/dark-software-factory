@@ -733,6 +733,53 @@ def test_read_owner_app_pointers_reads_id_and_installation(monkeypatch):
     assert any("kv-dsf-app" in c for c in seen[0])
 
 
+def test_read_owner_app_pointers_raises_owner_vault_unavailable_on_az_failure(monkeypatch):
+    import subprocess
+
+    from dsf.cli.factory import OwnerVaultUnavailable, _read_owner_app_pointers
+
+    az_stderr = (
+        "ERROR: (Forbidden) Public network access is disabled and request is not from a "
+        "trusted service nor via an approved private link."
+    )
+
+    def fake_run(cmd, **kwargs):
+        raise subprocess.CalledProcessError(1, cmd, stderr=az_stderr)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    with pytest.raises(OwnerVaultUnavailable) as exc_info:
+        _read_owner_app_pointers("https://dsf-owner-jbergfeld.vault.azure.net/")
+    message = str(exc_info.value)
+    assert "dsf-owner-jbergfeld" in message
+    assert "Public network access is disabled" in message
+
+
+def test_new_returns_one_when_owner_keyvault_read_fails(tmp_path, monkeypatch, capsys):
+    import subprocess
+    from unittest.mock import MagicMock
+
+    az_stderr = (
+        "ERROR: (Forbidden) Public network access is disabled and request is not from a "
+        "trusted service nor via an approved private link."
+    )
+
+    def fake_run(cmd, **kwargs):
+        if cmd[:4] == ["az", "keyvault", "secret", "show"]:
+            raise subprocess.CalledProcessError(1, cmd, stderr=az_stderr)
+        return MagicMock(returncode=0, stdout="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    rc = main([
+        "new", "--product", "testing-app", "--owner", "acme",
+        "--owner-keyvault-uri", "https://dsf-owner-jbergfeld.vault.azure.net/",
+        "--config-root", str(tmp_path),
+    ])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "could not read owner Key Vault" in out
+    assert "Public network access is disabled" in out
+
+
 # ---------------------------------------------------------------------------
 # dsf new — post-provision charter seeding (issue #86)
 # ---------------------------------------------------------------------------

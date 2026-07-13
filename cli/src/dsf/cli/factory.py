@@ -14,18 +14,57 @@ import sys
 from pathlib import Path
 
 
+class OwnerVaultUnavailable(RuntimeError):
+    """Raised when the owner Key Vault App pointers cannot be read."""
+
+
 def _read_owner_app_pointers(owner_keyvault_uri: str) -> tuple[str, str]:
     """Read the (non-secret) App id + installation id from the owner Key Vault."""
-    import subprocess
-
     name = owner_keyvault_uri.split("//", 1)[-1].split(".", 1)[0]
 
     def _secret(secret_name: str) -> str:
-        res = subprocess.run(
-            ["az", "keyvault", "secret", "show", "--vault-name", name,
-             "--name", secret_name, "--query", "value", "-o", "tsv"],
-            check=True, capture_output=True, text=True,
-        )
+        try:
+            res = subprocess.run(
+                [
+                    "az",
+                    "keyvault",
+                    "secret",
+                    "show",
+                    "--vault-name",
+                    name,
+                    "--name",
+                    secret_name,
+                    "--query",
+                    "value",
+                    "-o",
+                    "tsv",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError as exc:
+            raise OwnerVaultUnavailable(
+                "az CLI not found: install the Azure CLI and run `az login`, "
+                "or omit --owner-keyvault-uri / unset DSF_OWNER_KEYVAULT_URI "
+                "to provision without GitHub App wiring."
+            ) from exc
+        except subprocess.CalledProcessError as exc:
+            detail = (exc.stderr or exc.stdout or "").strip()
+            raise OwnerVaultUnavailable(
+                f"could not read owner Key Vault '{name}' (secret '{secret_name}').\n"
+                f"az error: {detail or 'az exited without stderr/stdout.'}\n"
+                "Remediation:\n"
+                "- Connectivity: the vault may have public network access disabled; "
+                "run from a network with private access to it, or re-enable public "
+                "access / allow your client IP on the vault firewall.\n"
+                "- Auth: run `az login` and ensure you hold Key Vault Secrets User "
+                "on the vault.\n"
+                "- Subscription: confirm the vault is in your active subscription "
+                "with `az account show`.\n"
+                "- To skip GitHub App wiring, omit --owner-keyvault-uri or unset "
+                "DSF_OWNER_KEYVAULT_URI; those steps are skipped."
+            ) from exc
         return res.stdout.strip()
 
     return _secret("github-app-id"), _secret("github-app-installation-id")
@@ -255,7 +294,11 @@ def _cmd_new(args: argparse.Namespace) -> int:
     )
     app_id, installation_id = "", ""
     if owner_kv and not args.dry_run:
-        app_id, installation_id = _read_owner_app_pointers(owner_kv)
+        try:
+            app_id, installation_id = _read_owner_app_pointers(owner_kv)
+        except OwnerVaultUnavailable as exc:
+            print(f"[dsf] error: {exc}")
+            return 1
     prov = InstanceProvisioner(
         spec,
         repo_root=root,
