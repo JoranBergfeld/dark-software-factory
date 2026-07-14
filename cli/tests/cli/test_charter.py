@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
+from dsf.charter.constitution import CONSTITUTION_PATH
 from dsf.charter.markdown import git_blob_sha, render_charter
 from dsf.charter.sync import CHARTER_PATH
 from dsf.cli import charter
@@ -1079,3 +1080,16 @@ def test_newest_handoff_issue_swallows_bad_json(monkeypatch):
         ),
     )
     assert charter._newest_handoff_issue("org/alpha") is None
+
+
+def test_recording_repo_client_scripts_read_file_sequence():
+    client = RecordingRepoClient(
+        read_file_sequence={CONSTITUTION_PATH: [None, ("first", "s1"), ("last", "s2")]}
+    )
+    # pops through the sequence in order, then the final entry sticks
+    assert asyncio.run(client.read_file("r", CONSTITUTION_PATH)) is None
+    assert asyncio.run(client.read_file("r", CONSTITUTION_PATH)).text == "first"
+    assert asyncio.run(client.read_file("r", CONSTITUTION_PATH)).text == "last"
+    assert asyncio.run(client.read_file("r", CONSTITUTION_PATH)).text == "last"
+    # a path without a scripted sequence still falls back to static files
+    assert asyncio.run(client.read_file("r", "absent")) is None

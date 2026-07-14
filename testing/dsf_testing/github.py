@@ -65,6 +65,7 @@ class RecordingRepoClient:
         repositories: list[str] | None = None,
         prs: list[_AmendmentPr] | None = None,
         create_issue_error: Exception | None = None,
+        read_file_sequence: dict[str, list[tuple[str, str] | None]] | None = None,
     ) -> None:
         self._files = dict(files or {})
         self.repositories = repositories
@@ -72,8 +73,21 @@ class RecordingRepoClient:
         self.prs: list[dict] = []
         self.issues: list[dict] = []
         self._create_issue_error = create_issue_error
+        # Optional per-path scripted results: each ``read_file`` for a scripted
+        # path returns the next entry (``None`` = absent); the last entry sticks
+        # once the sequence is exhausted. Lets a poll be driven deterministically.
+        self._read_seq = {
+            path: list(seq) for path, seq in (read_file_sequence or {}).items()
+        }
 
     async def read_file(self, repo: str, path: str, ref: str = "main") -> _RepoFile | None:
+        seq = self._read_seq.get(path)
+        if seq:
+            entry = seq[0] if len(seq) == 1 else seq.pop(0)
+            if entry is None:
+                return None
+            text, sha = entry
+            return _RepoFile(text=text, sha=sha, ref=ref)
         if path not in self._files:
             return None
         text, sha = self._files[path]
