@@ -9,6 +9,7 @@ introduces no new intent; the charter stays the single source of truth (ADR 0017
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, date, datetime
 
 from dsf.contracts.charter import Charter
@@ -18,6 +19,12 @@ CONSTITUTION_PATH = ".specify/memory/constitution.md"
 
 _SCHEMA_VERSION = 1
 _NONE_DECLARED = "- (none declared in the charter)"
+_MARKER_RE = re.compile(
+    r"<!--\s*dsf:constitution\s+"
+    r"schema_version=(?P<schema_version>\S+)\s+"
+    r"source_ref=(?P<source_ref>\S+)\s+"
+    r"source_sha=(?P<source_sha>\S+)\s*-->"
+)
 
 
 def _today() -> date:
@@ -101,4 +108,26 @@ def render_constitution(charter: Charter, *, today: date | None = None) -> str:
     return "\n\n".join(sections) + "\n"
 
 
-__all__ = ["CONSTITUTION_PATH", "render_constitution"]
+def is_constitution_current(existing_text: str | None, charter: Charter) -> bool:
+    """True iff ``existing_text`` already reflects ``charter``'s identity.
+
+    Parses the ``<!-- dsf:constitution schema_version=.. source_ref=.. source_sha=.. -->``
+    header that :func:`render_constitution` writes and matches it against the
+    charter's schema version, source ref and source sha. Pure and offline.
+    Returns ``False`` for ``None``/empty/headerless text so a missing or foreign
+    document never reads as current. Compares identity only, so the dated
+    ``**Ratified**`` footer never causes a false "stale" reading.
+    """
+    if not existing_text:
+        return False
+    marker = _MARKER_RE.search(existing_text)
+    if marker is None:
+        return False
+    return (
+        marker.group("schema_version") == str(_SCHEMA_VERSION)
+        and marker.group("source_ref") == (charter.source_ref or "unknown")
+        and marker.group("source_sha") == (charter.source_sha or "unknown")
+    )
+
+
+__all__ = ["CONSTITUTION_PATH", "is_constitution_current", "render_constitution"]

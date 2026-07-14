@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from datetime import date
 
-from dsf.charter.constitution import CONSTITUTION_PATH, render_constitution
+from dsf.charter.constitution import (
+    CONSTITUTION_PATH,
+    is_constitution_current,
+    render_constitution,
+)
 from dsf.contracts.charter import Charter
 
 
@@ -73,3 +77,44 @@ def test_same_charter_renders_identically():
     a = render_constitution(_charter(), today=date(2026, 1, 1))
     b = render_constitution(_charter(), today=date(2026, 1, 1))
     assert a == b
+
+
+def test_is_current_true_for_freshly_rendered():
+    charter = _charter()
+    assert is_constitution_current(render_constitution(charter), charter) is True
+
+
+def test_is_current_ignores_ratified_footer_date():
+    charter = _charter()
+    early = render_constitution(charter, today=date(2026, 1, 1))
+    later = render_constitution(charter, today=date(2026, 6, 30))
+    assert is_constitution_current(early, charter) is True
+    assert is_constitution_current(later, charter) is True
+
+
+def test_is_current_false_on_sha_mismatch():
+    on_main = render_constitution(_charter(source_sha="oldsha"))
+    assert is_constitution_current(on_main, _charter(source_sha="newsha")) is False
+
+
+def test_is_current_false_on_schema_mismatch():
+    charter = _charter()
+    text = render_constitution(charter).replace("schema_version=1", "schema_version=2")
+    assert is_constitution_current(text, charter) is False
+
+
+def test_is_current_false_on_ref_mismatch():
+    on_main = render_constitution(_charter(source_ref="main"))
+    assert is_constitution_current(on_main, _charter(source_ref="release")) is False
+
+
+def test_is_current_false_for_none_empty_or_headerless():
+    charter = _charter()
+    assert is_constitution_current(None, charter) is False
+    assert is_constitution_current("", charter) is False
+    assert is_constitution_current("# just a doc, no marker", charter) is False
+
+
+def test_is_current_true_when_ref_and_sha_unknown_roundtrip():
+    charter = _charter(source_sha=None, source_ref=None)
+    assert is_constitution_current(render_constitution(charter), charter) is True
