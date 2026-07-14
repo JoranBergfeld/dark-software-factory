@@ -375,13 +375,20 @@ def test_app_settings_no_owner_kv_stays_offline(monkeypatch):
 
 
 def _seed_ok_implement(monkeypatch, *, create_issue_error=None):
-    """Wire an OK, non-drifted charter + an App double for `charter implement`."""
+    """Wire an OK, non-drifted charter + an App double for `charter implement`.
+
+    The constitution is absent at reconcile (so a PR is opened) and current on
+    `main` on the first poll (so the merge gate passes immediately).
+    """
     charter = _ok_charter("blobsha")
     store = InMemoryCharterStore()
     _put(store, charter, CharterStatus.OK)
     client = RecordingRepoClient(
         {CHARTER_PATH: (render_charter(charter), "blobsha")},
         create_issue_error=create_issue_error,
+        read_file_sequence={
+            CONSTITUTION_PATH: [None, (render_constitution(charter), "csha")]
+        },
     )
     monkeypatch.setattr("dsf.cli.charter.build_charter_store", lambda s: store)
     monkeypatch.setattr("dsf.cli.charter.build_repo_app_client", lambda s: client)
@@ -419,7 +426,10 @@ def test_implement_closes_the_store(monkeypatch, capsys):
     store = _ClosingStore()
     _put(store, _ok_charter("blobsha"), CharterStatus.OK)
     client = RecordingRepoClient(
-        {CHARTER_PATH: (render_charter(_ok_charter("blobsha")), "blobsha")}
+        {CHARTER_PATH: (render_charter(_ok_charter("blobsha")), "blobsha")},
+        read_file_sequence={
+            CONSTITUTION_PATH: [None, (render_constitution(_ok_charter("blobsha")), "csha")]
+        },
     )
     monkeypatch.setattr("dsf.cli.charter.build_charter_store", lambda s: store)
     monkeypatch.setattr("dsf.cli.charter.build_repo_app_client", lambda s: client)
@@ -434,7 +444,12 @@ def test_implement_syncs_stale_charter_then_proceeds(monkeypatch, capsys):
     # longer block: `implement` syncs from main first, then proceeds.
     store = InMemoryCharterStore()
     _put(store, _ok_charter("oldsha"), CharterStatus.OK)
-    client = RecordingRepoClient({CHARTER_PATH: (render_charter(_ok_charter("newsha")), "newsha")})
+    client = RecordingRepoClient(
+        {CHARTER_PATH: (render_charter(_ok_charter("newsha")), "newsha")},
+        read_file_sequence={
+            CONSTITUTION_PATH: [None, (render_constitution(_ok_charter("newsha")), "csha")]
+        },
+    )
     monkeypatch.setattr("dsf.cli.charter.build_charter_store", lambda s: store)
     monkeypatch.setattr("dsf.cli.charter.build_repo_app_client", lambda s: client)
     monkeypatch.setattr("dsf.cli.charter._resolve_repo", lambda product: "org/alpha")
@@ -527,15 +542,17 @@ def test_implement_watches_build_by_default(monkeypatch, capsys):
 
 
 def test_implement_no_wait_skips_watch(monkeypatch, capsys):
-    _seed_ok_implement(monkeypatch)
+    client = _seed_ok_implement(monkeypatch)
     called = {"n": 0}
     monkeypatch.setattr(
         "dsf.cli.charter._watch_and_request_review",
         lambda *a, **k: called.__setitem__("n", called["n"] + 1) or 0,
     )
     rc = main(["charter", "implement", "--product", "alpha", "--no-wait"])
-    assert rc == 0 and called["n"] == 0
-    assert "dsf charter watch" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert rc == 0 and called["n"] == 0  # build watch skipped
+    assert len(client.prs) == 1 and len(client.issues) == 1  # gate still ran
+    assert "dsf charter watch" in out
 
 
 # --- gh-based Copilot assignment (laptop `implement`) -------------------------
@@ -1268,3 +1285,109 @@ def test_wait_retries_transient_errors_until_current():
     )
     assert merged is True
     assert app.calls == 2 and len(slept) == 1
+
+
+def test_implement_skips_pr_when_constitution_already_on_main(monkeypatch, capsys):
+    ch = _ok_charter("blobsha")
+    store = InMemoryCharterStore()
+    _put(store, ch, CharterStatus.OK)
+    client = RecordingRepoClient(
+        {
+            CHARTER_PATH: (render_charter(ch), "blobsha"),
+            CONSTITUTION_PATH: (render_constitution(ch), "csha"),
+        }
+    )
+    monkeypatch.setattr("dsf.cli.charter.build_charter_store", lambda s: store)
+    monkeypatch.setattr("dsf.cli.charter.build_repo_app_client", lambda s: client)
+    monkeypatch.setattr("dsf.cli.charter._resolve_repo", lambda product: "org/alpha")
+    rc = main(["charter", "implement", "--product", "alpha", "--no-wait"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert client.prs == []  # already on main -> no PR opened
+    assert len(client.issues) == 1  # bootstrap issue still filed
+    assert "already on main" in out
+
+
+def test_implement_reuses_open_constitution_pr(monkeypatch, capsys):
+    from datetime import UTC, datetime
+
+    from dsf_testing.github import SeedPr
+
+    ch = _ok_charter("blobsha")  # sha8 == "blobsha"
+    store = InMemoryCharterStore()
+    _put(store, ch, CharterStatus.OK)
+    client = RecordingRepoClient(
+        {CHARTER_PATH: (render_charter(ch), "blobsha")},
+        prs=[
+            SeedPr(
+                html_url="https://github.com/org/alpha/pull/7",
+                state="open",
+                created_at=datetime(2026, 7, 14, tzinfo=UTC),
+                head_ref="charter/constitution-blobsha-deadbeef",
+            )
+        ],
+        read_file_sequence={
+            CONSTITUTION_PATH: [None, (render_constitution(ch), "csha")]
+        },
+    )
+    monkeypatch.setattr("dsf.cli.charter.build_charter_store", lambda s: store)
+    monkeypatch.setattr("dsf.cli.charter.build_repo_app_client", lambda s: client)
+    monkeypatch.setattr("dsf.cli.charter._resolve_repo", lambda product: "org/alpha")
+    rc = main(["charter", "implement", "--product", "alpha", "--no-wait"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert client.prs == []  # reused the seeded open PR; no new open_file_pr
+    assert len(client.issues) == 1
+    assert "reusing open constitution PR" in out
+
+
+def test_implement_opens_new_pr_when_only_stale_revision_pr_exists(monkeypatch, capsys):
+    from datetime import UTC, datetime
+
+    from dsf_testing.github import SeedPr
+
+    ch = _ok_charter("blobsha")  # sha8 == "blobsha"
+    store = InMemoryCharterStore()
+    _put(store, ch, CharterStatus.OK)
+    client = RecordingRepoClient(
+        {CHARTER_PATH: (render_charter(ch), "blobsha")},
+        prs=[
+            SeedPr(
+                html_url="https://github.com/org/alpha/pull/3",
+                state="open",
+                created_at=datetime(2026, 7, 13, tzinfo=UTC),
+                head_ref="charter/constitution-oldsha00-deadbeef",  # different sha8
+            )
+        ],
+        read_file_sequence={
+            CONSTITUTION_PATH: [None, (render_constitution(ch), "csha")]
+        },
+    )
+    monkeypatch.setattr("dsf.cli.charter.build_charter_store", lambda s: store)
+    monkeypatch.setattr("dsf.cli.charter.build_repo_app_client", lambda s: client)
+    monkeypatch.setattr("dsf.cli.charter._resolve_repo", lambda product: "org/alpha")
+    rc = main(["charter", "implement", "--product", "alpha", "--no-wait"])
+    assert rc == 0
+    assert len(client.prs) == 1  # stale-revision PR ignored -> fresh PR opened
+    assert client.prs[0]["branch"].startswith("charter/constitution-blobsha-")
+    assert len(client.issues) == 1
+
+
+def test_implement_aborts_when_constitution_not_merged_in_time(monkeypatch, capsys):
+    client = _seed_ok_implement(monkeypatch)
+
+    async def _never_merges(app, repo, charter, **kw):
+        return False
+
+    monkeypatch.setattr("dsf.cli.charter._wait_for_constitution_on_main", _never_merges)
+    watched = {"n": 0}
+    monkeypatch.setattr(
+        "dsf.cli.charter._watch_and_request_review",
+        lambda *a, **k: watched.__setitem__("n", watched["n"] + 1) or 0,
+    )
+    rc = main(["charter", "implement", "--product", "alpha"])
+    captured = capsys.readouterr()
+    assert rc == 2
+    assert "has not merged" in captured.err
+    assert client.issues == []  # no bootstrap issue filed on timeout
+    assert watched["n"] == 0  # build watch not started

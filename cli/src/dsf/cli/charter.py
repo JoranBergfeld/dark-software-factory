@@ -786,12 +786,17 @@ async def _ensure_constitution_pr(
 async def _implement_async(
     product: str, repo_full: str, args: argparse.Namespace
 ) -> tuple[int, str | None, bool]:
-    """Sync charter, open the constitution PR, file+assign the bootstrap issue.
+    """Sync charter, land the constitution on ``main``, then file the bootstrap issue.
 
-    Returns ``(rc, issue_url, assigned)``: ``rc`` non-zero on a hard failure,
-    ``issue_url`` of the filed bootstrap issue (or ``None``), and whether the
-    Copilot coding agent was successfully assigned (so the caller can decide
-    whether it is worth watching the build).
+    Reconciles the constitution PR (``_ensure_constitution_pr``) and, unless
+    ``main`` already carries it, waits for it to merge
+    (``_wait_for_constitution_on_main``) before filing + assigning the bootstrap
+    issue -- the constitution governs the implementation (ADR 0017), so it must be
+    on ``main`` first. Returns ``(rc, issue_url, assigned)``: ``rc`` is ``1`` on a
+    hard failure, ``2`` when the constitution does not merge within the timeout
+    (resumable: no issue is filed), and ``0`` otherwise. ``issue_url`` is the filed
+    bootstrap issue (or ``None``) and ``assigned`` reports whether the Copilot
+    coding agent was assigned (so the caller can decide whether to watch the build).
     """
     async with _charter_store(product) as store:
         app = build_repo_app_client(_app_settings(product))
@@ -813,24 +818,30 @@ async def _implement_async(
 
         charter = stored.charter
         constitution = render_constitution(charter)
-        branch = f"charter/constitution-{uuid.uuid4().hex[:8]}"
-        pr_url = await app.open_file_pr(
-            repo_full,
-            path=CONSTITUTION_PATH,
-            content=constitution,
-            branch=branch,
-            title=f"Add Spec Kit constitution for {product}",
-            body=(
-                "Constitution derived from the product charter by "
-                "`dsf charter implement`. Auto-merge is requested: on repos where "
-                "it is enabled this merges once the `ci` check is green, otherwise "
-                "it awaits a human review. (Creation-maturity gating is future "
-                "scope.)"
-            ),
-            message=f"docs: add spec kit constitution for {product}",
-            enable_auto_merge=True,
+        pr_url, already_current = await _ensure_constitution_pr(
+            app, repo_full, product, charter, constitution
         )
-        print(f"[dsf] opened constitution PR (auto-merge requested): {pr_url}")
+        if not already_current:
+            merged = await _wait_for_constitution_on_main(
+                app,
+                repo_full,
+                charter,
+                timeout=_resolve_watch_timeout(args.timeout),
+                poll_interval=_resolve_watch_poll_interval(args.poll_interval),
+            )
+            if not merged:
+                print(
+                    "[dsf] error: the constitution PR has not merged within the "
+                    "timeout; not filing the bootstrap issue.",
+                    file=sys.stderr,
+                )
+                print(
+                    f"[dsf]   approve + merge the constitution PR ({pr_url}) then "
+                    f"re-run `dsf charter implement --product {product}`; it resumes "
+                    "and skips the already-merged constitution.",
+                    file=sys.stderr,
+                )
+                return 2, None, False
 
         title, body = render_bootstrap_issue(charter)
         try:
@@ -956,7 +967,10 @@ def add_charter_subcommands(sub: argparse._SubParsersAction) -> None:
         "--timeout",
         type=float,
         default=None,
-        help="max seconds to watch the build (default 1800; 0 = unbounded)",
+        help=(
+            "max seconds to wait for the constitution to merge and then to watch "
+            "the build (default 1800; 0 = unbounded)"
+        ),
     )
     implement_parser.add_argument(
         "--poll-interval",
