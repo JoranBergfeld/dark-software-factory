@@ -682,6 +682,57 @@ def _assign_copilot_via_gh(repo: str, issue_node_id: str) -> bool:
     return True
 
 
+async def _wait_for_constitution_on_main(
+    app,
+    repo: str,
+    charter: Charter,
+    *,
+    timeout: float | None,
+    poll_interval: float,
+    sleep=asyncio.sleep,
+    clock=time.monotonic,
+    out=print,
+) -> bool:
+    """Poll ``main`` until it carries ``charter``'s constitution; return merged?
+
+    Returns ``True`` once ``main``'s constitution matches ``charter`` (merged) or
+    ``False`` if ``timeout`` elapses first (resumable). Async analog of
+    :func:`_watch_and_request_review`: transient GitHub/network errors are logged
+    and retried until the timeout so a single blip does not abort a long wait, and
+    a missing/malformed read is treated as "not yet". ``sleep``/``clock``/``out``
+    are injectable so tests drive the loop without real waiting.
+    ``timeout`` is a max wait in seconds; ``None`` polls without bound until merged.
+    """
+    import httpx
+
+    # Broad transient set mirrors _watch_and_request_review: tolerate blips
+    # (network/transport faults, a malformed read) rather than aborting a long wait.
+    transient = (httpx.HTTPError, OSError, RuntimeError, KeyError, TypeError)
+    start = clock()
+    last_status = ""
+
+    def _emit(status: str) -> None:
+        nonlocal last_status
+        if status != last_status:
+            out(f"[dsf] {status}")
+            last_status = status
+
+    while True:
+        try:
+            existing = await app.read_file(repo, CONSTITUTION_PATH, "main")
+            text = existing.text if existing is not None else None
+            if is_constitution_current(text, charter):
+                out(f"[dsf] constitution merged to main: {repo}")
+                return True
+            _emit("waiting for the constitution PR to merge...")
+        except transient as exc:
+            _emit(f"transient GitHub error ({exc.__class__.__name__}); retrying...")
+
+        if timeout is not None and clock() - start >= timeout:
+            return False
+        await sleep(poll_interval)
+
+
 async def _ensure_constitution_pr(
     app, repo: str, product: str, charter: Charter, constitution: str
 ) -> tuple[str | None, bool]:

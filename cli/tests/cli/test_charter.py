@@ -1188,3 +1188,83 @@ def test_ensure_constitution_pr_opens_when_none_exists():
     assert len(client.prs) == 1
     assert client.prs[0]["path"] == CONSTITUTION_PATH
     assert pr_url.endswith("/pull/1")
+
+
+def _fake_async_sleep(record):
+    async def _sleep(seconds):
+        record.append(seconds)
+
+    return _sleep
+
+
+def test_wait_returns_true_when_main_becomes_current():
+    ch = _ok_charter("blobsha")
+    current = render_constitution(ch)
+    client = RecordingRepoClient(
+        read_file_sequence={CONSTITUTION_PATH: [None, None, (current, "s")]}
+    )
+    slept: list[float] = []
+    merged = asyncio.run(
+        charter._wait_for_constitution_on_main(
+            client,
+            "org/alpha",
+            ch,
+            timeout=None,
+            poll_interval=5,
+            sleep=_fake_async_sleep(slept),
+            clock=lambda: 0.0,
+        )
+    )
+    assert merged is True
+    assert len(slept) == 2  # two "not yet" polls before it went current
+
+
+def test_wait_returns_false_on_timeout():
+    ch = _ok_charter("blobsha")
+    client = RecordingRepoClient(read_file_sequence={CONSTITUTION_PATH: [None]})
+    ticks = iter([0.0, 0.0, 10.0])  # start, guard#1 (< timeout), guard#2 (>= timeout)
+    merged = asyncio.run(
+        charter._wait_for_constitution_on_main(
+            client,
+            "org/alpha",
+            ch,
+            timeout=5,
+            poll_interval=1,
+            sleep=_fake_async_sleep([]),
+            clock=lambda: next(ticks),
+        )
+    )
+    assert merged is False
+
+
+def test_wait_retries_transient_errors_until_current():
+    from types import SimpleNamespace
+
+    ch = _ok_charter("blobsha")
+    current = render_constitution(ch)
+
+    class _Flaky:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def read_file(self, repo, path, ref="main"):
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("transient blip")
+            return SimpleNamespace(text=current, sha="s", ref=ref)
+
+    app = _Flaky()
+    slept: list[float] = []
+    merged = asyncio.run(
+        charter._wait_for_constitution_on_main(
+            app,
+            "org/alpha",
+            ch,
+            timeout=None,
+            poll_interval=1,
+            sleep=_fake_async_sleep(slept),
+            clock=lambda: 0.0,
+        )
+    )
+    assert merged is True
+    assert app.calls == 2 and len(slept) == 1
