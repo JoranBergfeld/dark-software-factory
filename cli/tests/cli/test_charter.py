@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
-from dsf.charter.constitution import CONSTITUTION_PATH
+from dsf.charter.constitution import CONSTITUTION_PATH, render_constitution
 from dsf.charter.markdown import git_blob_sha, render_charter
 from dsf.charter.sync import CHARTER_PATH
 from dsf.cli import charter
@@ -1093,3 +1093,98 @@ def test_recording_repo_client_scripts_read_file_sequence():
     assert asyncio.run(client.read_file("r", CONSTITUTION_PATH)).text == "last"
     # a path without a scripted sequence still falls back to static files
     assert asyncio.run(client.read_file("r", "absent")) is None
+
+
+def test_ensure_constitution_pr_skips_when_already_current():
+    ch = _ok_charter("blobsha")
+    client = RecordingRepoClient({CONSTITUTION_PATH: (render_constitution(ch), "csha")})
+    pr_url, already = asyncio.run(
+        charter._ensure_constitution_pr(client, "org/alpha", "alpha", ch, render_constitution(ch))
+    )
+    assert already is True and pr_url is None and client.prs == []
+
+
+def test_ensure_constitution_pr_reuses_open_same_revision_pr():
+    from datetime import UTC, datetime
+
+    from dsf_testing.github import SeedPr
+
+    ch = _ok_charter("blobsha")  # sha8 == "blobsha"
+    client = RecordingRepoClient(
+        prs=[
+            SeedPr(
+                html_url="https://github.com/org/alpha/pull/7",
+                state="open",
+                created_at=datetime(2026, 7, 14, tzinfo=UTC),
+                head_ref="charter/constitution-blobsha-deadbeef",
+            )
+        ]
+    )
+    pr_url, already = asyncio.run(
+        charter._ensure_constitution_pr(client, "org/alpha", "alpha", ch, render_constitution(ch))
+    )
+    assert already is False
+    assert pr_url == "https://github.com/org/alpha/pull/7"
+    assert client.prs == []  # reused; no new PR opened
+
+
+def test_ensure_constitution_pr_ignores_stale_revision_pr():
+    from datetime import UTC, datetime
+
+    from dsf_testing.github import SeedPr
+
+    ch = _ok_charter("blobsha")  # current sha8; seeded PR below uses a different one
+    client = RecordingRepoClient(
+        prs=[
+            SeedPr(
+                html_url="https://github.com/org/alpha/pull/3",
+                state="open",
+                created_at=datetime(2026, 7, 13, tzinfo=UTC),
+                head_ref="charter/constitution-oldsha00-deadbeef",  # different sha8
+            )
+        ]
+    )
+    pr_url, already = asyncio.run(
+        charter._ensure_constitution_pr(client, "org/alpha", "alpha", ch, render_constitution(ch))
+    )
+    assert already is False
+    assert len(client.prs) == 1
+    assert client.prs[0]["branch"].startswith("charter/constitution-blobsha-")
+    assert client.prs[0]["enable_auto_merge"] is True
+
+
+def test_ensure_constitution_pr_ignores_closed_same_revision_pr():
+    from datetime import UTC, datetime
+
+    from dsf_testing.github import SeedPr
+
+    ch = _ok_charter("blobsha")  # same sha8 as the seeded PR, but that PR is closed
+    client = RecordingRepoClient(
+        prs=[
+            SeedPr(
+                html_url="https://github.com/org/alpha/pull/5",
+                state="closed",
+                created_at=datetime(2026, 7, 14, tzinfo=UTC),
+                head_ref="charter/constitution-blobsha-deadbeef",
+            )
+        ]
+    )
+    pr_url, already = asyncio.run(
+        charter._ensure_constitution_pr(client, "org/alpha", "alpha", ch, render_constitution(ch))
+    )
+    assert already is False
+    assert len(client.prs) == 1  # closed PR not reused -> a fresh PR is opened
+    assert client.prs[0]["branch"].startswith("charter/constitution-blobsha-")
+    assert pr_url.endswith("/pull/1")
+
+
+def test_ensure_constitution_pr_opens_when_none_exists():
+    ch = _ok_charter("blobsha")
+    client = RecordingRepoClient({})
+    pr_url, already = asyncio.run(
+        charter._ensure_constitution_pr(client, "org/alpha", "alpha", ch, render_constitution(ch))
+    )
+    assert already is False
+    assert len(client.prs) == 1
+    assert client.prs[0]["path"] == CONSTITUTION_PATH
+    assert pr_url.endswith("/pull/1")

@@ -18,7 +18,11 @@ import uuid
 from collections.abc import Callable
 from pathlib import Path
 
-from dsf.charter.constitution import CONSTITUTION_PATH, render_constitution
+from dsf.charter.constitution import (
+    CONSTITUTION_PATH,
+    is_constitution_current,
+    render_constitution,
+)
 from dsf.charter.interview import (
     DEFAULT_MAX_TURNS,
     MAX_TURNS_KEY,
@@ -676,6 +680,56 @@ def _assign_copilot_via_gh(repo: str, issue_node_id: str) -> bool:
     except (OSError, subprocess.CalledProcessError, RuntimeError, KeyError, json.JSONDecodeError):
         return False
     return True
+
+
+async def _ensure_constitution_pr(
+    app, repo: str, product: str, charter: Charter, constitution: str
+) -> tuple[str | None, bool]:
+    """Reconcile the constitution PR; return ``(pr_url, already_on_main)``.
+
+    - ``main`` already carries this charter's constitution -> ``(None, True)``:
+      nothing to open, and the caller skips the merge wait.
+    - an **open** PR for the *same* charter revision exists -> reuse it
+      ``(pr_url, False)`` (never open a duplicate).
+    - otherwise open a fresh PR ``(pr_url, False)``.
+
+    The branch is scoped to the charter revision
+    (``charter/constitution-<sha8>-<uuid>``) so a PR for a *different* revision
+    lives under a different prefix and is never mistakenly reused.
+    """
+    sha8 = (charter.source_sha or "unknown")[:8]
+    head_prefix = f"charter/constitution-{sha8}-"
+
+    existing = await app.read_file(repo, CONSTITUTION_PATH, "main")
+    existing_text = existing.text if existing is not None else None
+    if is_constitution_current(existing_text, charter):
+        print(f"[dsf] constitution already on main for {product}; skipping PR")
+        return None, True
+
+    ref = await app.latest_pr_with_head_prefix(repo, head_prefix=head_prefix)
+    if ref is not None and ref.state == "open":
+        print(f"[dsf] reusing open constitution PR: {ref.html_url}")
+        return ref.html_url, False
+
+    branch = f"{head_prefix}{uuid.uuid4().hex[:8]}"
+    pr_url = await app.open_file_pr(
+        repo,
+        path=CONSTITUTION_PATH,
+        content=constitution,
+        branch=branch,
+        title=f"Add Spec Kit constitution for {product}",
+        body=(
+            "Constitution derived from the product charter by "
+            "`dsf charter implement`. Auto-merge is requested: on repos where "
+            "it is enabled this merges once the `ci` check is green, otherwise "
+            "it awaits a human review. (Creation-maturity gating is future "
+            "scope.)"
+        ),
+        message=f"docs: add spec kit constitution for {product}",
+        enable_auto_merge=True,
+    )
+    print(f"[dsf] opened constitution PR (auto-merge requested): {pr_url}")
+    return pr_url, False
 
 
 async def _implement_async(
