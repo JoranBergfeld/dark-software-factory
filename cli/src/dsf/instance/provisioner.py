@@ -276,6 +276,10 @@ class InstanceProvisioner:
         self._github_installation_id = github_installation_id
         self._app_access_check = app_access_check
         self._app_binding: GitHubAppBinding | None = None
+        # Ephemeral local clone of the product repo, shared by create_repo ->
+        # seed_repo and removed in apply()'s finally. A temp dir (never the cwd)
+        # so nothing persists to go stale and collide on re-provision.
+        self._clone_dir: str | None = None
         # Explicit override for the human owner/governance principal object id (for
         # service-principal / CI runs). When empty, it is resolved lazily at execute
         # time via `az ad signed-in-user show`. ``None`` means "not yet resolved".
@@ -291,7 +295,7 @@ class InstanceProvisioner:
                 description=f"Create GitHub repo {s.github_repo()} ({s.visibility})",
                 command=[
                     "gh", "repo", "create", s.github_repo(),
-                    f"--{s.visibility}", "--clone",
+                    f"--{s.visibility}",
                 ],
             ),
             ProvisionStep(
@@ -463,6 +467,9 @@ class InstanceProvisioner:
                 azure=azure_result, github_app=self._app_binding,
             )
             write_manifest(manifest, self._repo_root)
+            if self._clone_dir:
+                shutil.rmtree(self._clone_dir, ignore_errors=True)
+                self._clone_dir = None
         return manifest
 
     def _execute_step(
@@ -601,19 +608,22 @@ class InstanceProvisioner:
             step.executed, step.result = True, "executed"
         elif not step.command:
             step.result = "noop"
-        elif step.name == "create_repo" and self._repo_exists():
+        elif step.name == "create_repo":
+            # Execute-only (dry-run is handled by the generic ``not execute``
+            # branch above). Clone into an ephemeral temp dir -- never the cwd --
+            # so a leftover clone can't go stale and collide on re-provision (a
+            # deleted-then-recreated repo would otherwise trip ``gh repo create``
+            # on the old ``origin``). apply()'s finally removes the temp dir.
+            self._clone_dir = tempfile.mkdtemp(prefix="dsf-clone-")
+            exists = self._repo_exists()
+            if not exists:
+                self._run(step.command, check=True)
+            self._run(
+                ["gh", "repo", "clone", self.spec.github_repo(), self._clone_dir],
+                check=True,
+            )
             step.executed = True
-            repo_dir = self.spec.resolved_repo()
-            if Path(repo_dir).is_dir():
-                step.result = "exists"
-            else:
-                # Repo exists remotely but isn't cloned here; later steps need a
-                # local working copy, so clone it.
-                self._run(
-                    ["gh", "repo", "clone", self.spec.github_repo(), repo_dir],
-                    check=True,
-                )
-                step.result = "cloned"
+            step.result = "cloned" if exists else "created"
         elif step.name == "provision_azure":
             # Kick off the deployment asynchronously, then poll its operations so
             # each resource streams to the console; outputs are read post-deploy.
@@ -788,16 +798,16 @@ class InstanceProvisioner:
     def _seed_repo(self) -> None:
         """Seed the repo before ``branch_protection``: Spec Kit scaffold + baseline ci.
 
-        With a local clone (``create_repo --clone``), commit the ``specify init``
+        With the ephemeral clone from ``create_repo``, commit the ``specify init``
         scaffold and the baseline ``ci`` workflow from it and push to ``main``.
-        Without a local clone (e.g. a re-run on a host that never cloned), fall back
+        Without a clone (``self._clone_dir`` unset), fall back
         to seeding just the baseline ``ci`` workflow via the Contents API so the
         ruleset's required ``ci`` check stays producible. Both run under the
         operator's ``gh`` auth before ``branch_protection``, so pushing ``main`` is
         unobstructed.
         """
-        clone_dir = self.spec.resolved_repo()
-        if Path(clone_dir).is_dir():
+        clone_dir = self._clone_dir
+        if clone_dir and Path(clone_dir).is_dir():
             self._seed_repo_from_clone(clone_dir)
         else:
             self._seed_ci_workflow_via_api()

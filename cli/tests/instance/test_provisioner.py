@@ -259,6 +259,7 @@ def test_plan_create_repo_command():
     assert create.command[:3] == ["gh", "repo", "create"]
     assert "acme/demo" in create.command
     assert "--private" in create.command
+    assert "--clone" not in create.command  # clone happens into a temp dir at execute time
 
 
 def test_plan_create_labels_covers_taxonomy_and_handoff():
@@ -462,8 +463,11 @@ def test_apply_execute_runs_real_steps_and_onboards_sre(tmp_path):
     manifest = prov.apply(execute=True)
 
     executed = [cmd for cmd, _ in calls]
-    # repo created (and cloned locally) for the product:
-    assert ["gh", "repo", "create", "acme/demo", "--private", "--clone"] in executed
+    # repo created (no --clone) then cloned into an ephemeral temp dir:
+    assert ["gh", "repo", "create", "acme/demo", "--private"] in executed
+    clone = next(c for c in executed if c[:3] == ["gh", "repo", "clone"])
+    assert clone[3] == "acme/demo"
+    assert "dsf-clone-" in clone[4]  # ephemeral temp dir, not the cwd
     # azure now provisions for real (RG + Bicep deployment), tagged managed-by=dsf:
     rg_create = next(c for c in executed if c[:3] == ["az", "group", "create"])
     assert rg_create[:5] == ["az", "group", "create", "--name", "rg-dsf-demo"]
@@ -480,14 +484,13 @@ def test_apply_execute_runs_real_steps_and_onboards_sre(tmp_path):
     )
     assert manifest.executed is True
     results = {s.name: s.result for s in manifest.plan.steps}
-    assert results["create_repo"] == "executed"
+    assert results["create_repo"] == "created"
     assert results["deploy_council"] == "deployed"
     assert "deploy_sre_agent" in results
 
 
-def test_apply_execute_skips_clone_when_repo_and_local_dir_exist(tmp_path, monkeypatch):
+def test_apply_execute_clones_into_tempdir_when_repo_exists(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "demo").mkdir()  # local clone already present
     calls = []
 
     def fake_run(cmd, **kwargs):
@@ -500,31 +503,12 @@ def test_apply_execute_skips_clone_when_repo_and_local_dir_exist(tmp_path, monke
     prov = InstanceProvisioner(_spec(), run=fake_run, repo_root=tmp_path)
     manifest = prov.apply(execute=True)
 
-    # repo already exists and is cloned -> neither create nor clone runs:
-    assert ["gh", "repo", "create", "acme/demo", "--private", "--clone"] not in calls
-    assert not any(cmd[:3] == ["gh", "repo", "clone"] for cmd in calls)
-    create = next(s for s in manifest.plan.steps if s.name == "create_repo")
-    assert create.result == "exists"
-    assert create.executed is True
-
-
-def test_apply_execute_clones_when_repo_exists_but_not_local(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)  # empty cwd: no local clone of the repo
-    calls = []
-
-    def fake_run(cmd, **kwargs):
-        calls.append(cmd)
-        hit = _az_deploy(cmd, _AZURE_OUTPUTS_JSON)
-        if hit is not None:
-            return hit
-        return MagicMock(returncode=0)  # gh repo view -> exists
-
-    prov = InstanceProvisioner(_spec(), run=fake_run, repo_root=tmp_path)
-    manifest = prov.apply(execute=True)
-
-    # repo exists remotely but isn't cloned here -> clone so we have a local checkout:
-    assert ["gh", "repo", "create", "acme/demo", "--private", "--clone"] not in calls
-    assert ["gh", "repo", "clone", "acme/demo", "demo"] in calls
+    # repo already exists remotely -> clone (into a temp dir), never create:
+    assert not any(cmd[:3] == ["gh", "repo", "create"] for cmd in calls)
+    clone = next(c for c in calls if c[:3] == ["gh", "repo", "clone"])
+    assert clone[3] == "acme/demo"
+    assert "dsf-clone-" in clone[4]           # ephemeral temp dir, not the cwd
+    assert not (tmp_path / "demo").exists()   # nothing dropped in the cwd
     create = next(s for s in manifest.plan.steps if s.name == "create_repo")
     assert create.result == "cloned"
     assert create.executed is True
@@ -1613,9 +1597,9 @@ def test_seed_repo_is_idempotent_when_workflow_present(monkeypatch, tmp_path):
     assert not [c for c in calls if "--method" in c and "PUT" in c]
 
 
-def test_seed_repo_from_clone_runs_specify_and_pushes(monkeypatch, tmp_path):
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / "demo").mkdir()  # the clone created by create_repo --clone
+def test_seed_repo_from_clone_runs_specify_and_pushes(tmp_path):
+    clone = tmp_path / "demo"
+    clone.mkdir()  # the ephemeral clone create_repo made
     runs: list[tuple[list[str], dict]] = []
 
     def fake_run(cmd, **kwargs):
@@ -1627,6 +1611,7 @@ def test_seed_repo_from_clone_runs_specify_and_pushes(monkeypatch, tmp_path):
     prov = InstanceProvisioner(
         InstanceSpec(product="demo", owner="acme"), run=fake_run
     )
+    prov._clone_dir = str(clone)
     prov._seed_repo()
 
     calls = [cmd for cmd, _ in runs]
@@ -1636,8 +1621,8 @@ def test_seed_repo_from_clone_runs_specify_and_pushes(monkeypatch, tmp_path):
     assert "--here" in specify[0] and "--force" in specify[0]
     assert "--integration" in specify[0] and "copilot" in specify[0]
     assert "--script" in specify[0] and "sh" in specify[0]
-    assert cwd_of[tuple(specify[0])] == "demo"  # ran inside the clone, not the cwd
-    workflow = tmp_path / "demo" / ".github" / "workflows" / "ci.yml"
+    assert cwd_of[tuple(specify[0])] == str(clone)  # ran inside the clone
+    workflow = clone / ".github" / "workflows" / "ci.yml"
     assert workflow.read_text(encoding="utf-8").startswith("name: ci")
     # The unattended commit must carry an explicit identity (no global git config on
     # the host) and the agreed message, and run inside the clone.
@@ -1647,14 +1632,14 @@ def test_seed_repo_from_clone_runs_specify_and_pushes(monkeypatch, tmp_path):
     assert commit[commit.index("-m") + 1] == (
         "chore: seed spec kit scaffold and baseline ci workflow"
     )
-    assert cwd_of[tuple(commit)] == "demo"
+    assert cwd_of[tuple(commit)] == str(clone)
     assert ["git", "push", "origin", "HEAD:main"] in calls
-    assert cwd_of[("git", "push", "origin", "HEAD:main")] == "demo"
+    assert cwd_of[("git", "push", "origin", "HEAD:main")] == str(clone)
 
 
-def test_seed_repo_from_clone_skips_commit_when_no_diff(monkeypatch, tmp_path):
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / "demo").mkdir()
+def test_seed_repo_from_clone_skips_commit_when_no_diff(tmp_path):
+    clone = tmp_path / "demo"
+    clone.mkdir()
     calls: list[list[str]] = []
 
     def fake_run(cmd, **kwargs):
@@ -1664,6 +1649,7 @@ def test_seed_repo_from_clone_skips_commit_when_no_diff(monkeypatch, tmp_path):
     prov = InstanceProvisioner(
         InstanceSpec(product="demo", owner="acme"), run=fake_run
     )
+    prov._clone_dir = str(clone)
     prov._seed_repo()
 
     assert not any("commit" in c for c in calls)
