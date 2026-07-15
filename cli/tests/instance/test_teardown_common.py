@@ -242,6 +242,8 @@ def test_remove_sre_rbac_deletes_expected_scopes():
 
     assert AzureTeardown(run).remove_sre_rbac(spec) == "removed"
     role_deletes = [c for c in calls if c[:4] == ["az", "role", "assignment", "delete"]]
+    # `az role assignment delete` rejects --assignee-principal-type (create-only flag).
+    assert all("--assignee-principal-type" not in cmd for cmd in role_deletes)
     scopes = {cmd[cmd.index("--scope") + 1] for cmd in role_deletes}
     assert "/subscriptions/sub-xyz" in scopes
     assert "/subscriptions/sub-xyz/resourceGroups/rg-dsf-demo" in scopes

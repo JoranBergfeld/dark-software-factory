@@ -229,7 +229,6 @@ class AzureTeardown:
         cmd = [
             "az", "role", "assignment", "delete",
             "--assignee-object-id", principal_id,
-            "--assignee-principal-type", "ServicePrincipal",
             "--role", role_id,
             "--scope", scope,
         ]
