@@ -1,4 +1,4 @@
-# Copilot instructions — Dark Software Factory (DSF)
+# Coding agent instructions — Dark Software Factory (DSF)
 
 DSF is a **blueprint**, not a running factory: a template plus tooling that stamps out an
 isolated "software factory" per product (decide what to build → build it → operate it), with
@@ -129,3 +129,17 @@ issue, never left as a stub.
   `src/` + pull-only, 0007 council↔squad handoff, 0010 uv workspace, 0011 deliberative
   council). Phase write-ups are in `docs/site/concept/`; the operational runbook is
   `docs/site/get-started/operate.md`.
+
+## Agent skills
+
+### Issue tracker
+
+Issues are tracked in this repository's GitHub Issues. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Triage uses the five canonical label names. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Domain documentation uses a single-context layout. See `docs/agents/domain.md`.
