@@ -7,10 +7,10 @@
 **Goal:** Build a throwaway browser prototype that validates the product-scoped Control Center
 operator experience selected in the Wayfinder decision.
 
-**Architecture:** A single self-contained HTML document lives beside the Control Center module
-and maintains simulated effective policy in memory. It provides a product selector, allowlisted
-numeric edits, scoped switches, a confirmation-gated global dry-run control, disabled
-unsupported writes, and an always-visible JSON state view.
+**Architecture:** A single self-contained HTML document lives in the Control Center member
+outside runtime source and maintains simulated effective policy in memory. It provides a product
+selector, allowlisted numeric edits, scoped switches, a confirmation-gated global dry-run
+control, disabled unsupported writes, and an always-visible JSON state view.
 
 **Tech Stack:** Browser HTML, CSS, and vanilla JavaScript; no runtime dependencies or
 persistence.
@@ -20,7 +20,7 @@ persistence.
 ### Task 1: Create the standalone operator dashboard prototype
 
 **Files:**
-- Create: `control-center/src/dsf/control_center/control-center-parity.prototype.html`
+- Create: `control-center/prototypes/control-center-parity.prototype.html`
 - Test: Manual browser interaction only; this is explicitly throwaway prototype code.
 
 - [ ] **Step 1: Create the prototype document**
@@ -145,7 +145,7 @@ persistence.
 
 - [ ] **Step 2: Open the prototype**
 
-Run: `xdg-open control-center/src/dsf/control_center/control-center-parity.prototype.html`
+Run: `xdg-open control-center/prototypes/control-center-parity.prototype.html`
 
 Expected: A dark product-scoped dashboard opens; selecting `alpha` or `beta`, toggling an
 allowlisted switch, saving valid numeric values, and changing dry-run visibly refresh the
@@ -154,7 +154,7 @@ effective-state JSON.
 - [ ] **Step 3: Commit the throwaway asset**
 
 ```bash
-git add control-center/src/dsf/control_center/control-center-parity.prototype.html
+git add control-center/prototypes/control-center-parity.prototype.html
 git commit -m "chore: add control center parity prototype" \
   -m "Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
 ```
@@ -195,4 +195,3 @@ Add this line under `## Decisions so far` in **Chart the repository-wide migrati
 ```markdown
 - [Prototype the operable Control Center parity target](https://github.com/JoranBergfeld/dark-software-factory/issues/119): Use product-first controls, cookie-plus-CSRF browser writes, validated numeric policy fields, a confirmed global dry-run switch, and explained disabled unsupported writes.
 ```
-
