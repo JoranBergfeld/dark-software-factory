@@ -123,7 +123,7 @@ public sealed class CliCommandSurfaceTests
 command <root> desc="Dark Software Factory — factory CLI (create product instances)"
   option --help aliases=[-h] type=Void arity=0..0 desc="Show help and usage information"
   command new desc="create a new isolated product factory instance"
-    option --product type=String arity=1..1 required desc="product key (e.g. 'microbi')"
+    option --product type=String arity=1..1 desc="product key (e.g. 'microbi')"
     option --owner type=String arity=1..1 default="" desc="GitHub owner/org for the product repo"
     option --repo type=String arity=1..1 default="" desc="repo name (defaults to product key)"
     option --visibility type=String arity=1..1 default="private" choices=[internal, private, public] desc="product repo visibility"

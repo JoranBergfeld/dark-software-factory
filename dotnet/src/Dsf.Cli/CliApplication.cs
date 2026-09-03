@@ -11,19 +11,31 @@ public static class CliApplication
     public const int CanceledExitCode = 130;
 
     public static async Task<int> InvokeAsync(string[] args, CancellationToken cancellationToken)
+        => await InvokeAsync(args, cancellationToken, SystemCliTerminal.Detect());
+
+    internal static async Task<int> InvokeAsync(
+        string[] args,
+        CancellationToken cancellationToken,
+        ICliTerminal terminal)
     {
         if (cancellationToken.IsCancellationRequested)
         {
             return CanceledExitCode;
         }
 
-        var root = BuildRootCommand();
+        var providedOptions = args
+            .Where(arg => arg.StartsWith("--", StringComparison.Ordinal))
+            .Select(arg => arg.Split('=', 2)[0])
+            .ToHashSet();
+        var root = BuildRootCommand(terminal, providedOptions);
         var parseResult = root.Parse(args);
         var exitCode = await parseResult.InvokeAsync(cancellationToken: cancellationToken);
         return parseResult.Errors.Count > 0 ? 2 : exitCode;
     }
 
-    internal static RootCommand BuildRootCommand()
+    internal static RootCommand BuildRootCommand() => BuildRootCommand(SystemCliTerminal.Detect(), new HashSet<string>());
+
+    private static RootCommand BuildRootCommand(ICliTerminal terminal, IReadOnlySet<string> providedOptions)
     {
         var root = new RootCommand("Dark Software Factory — factory CLI (create product instances)");
         root.Options.Remove(root.Options.Single(option => option.Name == "--version"));
@@ -32,7 +44,7 @@ public static class CliApplication
         helpOption.Aliases.Remove("/?");
         helpOption.Aliases.Remove("/h");
 
-        root.Subcommands.Add(BuildNewCommand());
+        root.Subcommands.Add(BuildNewCommand(terminal, providedOptions));
         root.Subcommands.Add(BuildListCommand());
         root.Subcommands.Add(BuildOffboardCommand());
         root.Subcommands.Add(BuildBootstrapCommand());
@@ -47,9 +59,9 @@ public static class CliApplication
         return root;
     }
 
-    private static Command BuildNewCommand()
+    private static Command BuildNewCommand(ICliTerminal terminal, IReadOnlySet<string> providedOptions)
     {
-        var product = RequiredStringOption("--product", "product key (e.g. 'microbi')");
+        var product = StringOption("--product", "product key (e.g. 'microbi')");
         var owner = StringOption("--owner", "GitHub owner/org for the product repo", string.Empty);
         var repo = StringOption("--repo", "repo name (defaults to product key)", string.Empty);
         var visibility = StringOption("--visibility", "product repo visibility", "private", "private", "public", "internal");
@@ -88,25 +100,44 @@ public static class CliApplication
 
         command.SetAction(parseResult =>
         {
+            if (!ResolveNewInteraction(
+                    parseResult,
+                    terminal,
+                    product,
+                    namePrefix,
+                    location,
+                    environment,
+                    dryRun,
+                    providedOptions,
+                    out var interaction))
+            {
+                return Failure;
+            }
+
             var prefix = parseResult.GetValue(namePrefix) ?? string.Empty;
+            if (!string.IsNullOrEmpty(interaction.NamePrefix))
+            {
+                prefix = interaction.NamePrefix;
+            }
             if (prefix.Length > 0 && !char.IsAsciiLetter(prefix[0]))
             {
-                Console.Out.WriteLine(
+                terminal.WriteLine(
                     $"[dsf] error: cannot derive an Azure name prefix from '{prefix}': name prefix base must start with a letter: '{prefix}' Pass --name-prefix explicitly.");
                 return Failure;
             }
 
-            var productValue = parseResult.GetRequiredValue(product);
+            var productValue = interaction.Product ?? parseResult.GetValue(product) ?? string.Empty;
             var ownerValue = parseResult.GetValue(owner) ?? string.Empty;
             var repoValue = parseResult.GetValue(repo) ?? string.Empty;
             var visibilityValue = parseResult.GetValue(visibility) ?? "private";
-            var environmentValue = parseResult.GetValue(environment) ?? "dev";
-            var locationValue = parseResult.GetValue(location) ?? "swedencentral";
+            var environmentValue = interaction.Environment ?? parseResult.GetValue(environment) ?? "dev";
+            var locationValue = interaction.Location ?? parseResult.GetValue(location) ?? "swedencentral";
             var configRootValue = parseResult.GetValue(configRoot);
             var effectivePrefix = BuildNamePrefix(prefix.Length > 0 ? prefix : productValue);
             if (parseResult.GetValue(dryRun))
             {
                 PrintDryRunPlan(
+                    terminal,
                     productValue,
                     ownerValue,
                     repoValue,
@@ -118,7 +149,7 @@ public static class CliApplication
             }
             else
             {
-                Console.Out.WriteLine("[dsf] new is not implemented in the .NET migration shell.");
+                terminal.WriteLine("[dsf] new is not implemented in the .NET migration shell.");
             }
 
             return Success;
@@ -127,7 +158,134 @@ public static class CliApplication
         return command;
     }
 
+    private static bool ResolveNewInteraction(
+        ParseResult parseResult,
+        ICliTerminal terminal,
+        Option<string> product,
+        Option<string> namePrefix,
+        Option<string> location,
+        Option<string> environment,
+        Option<bool> dryRun,
+        IReadOnlySet<string> providedOptions,
+        out NewInteraction interaction)
+    {
+        interaction = new NewInteraction(
+            ProvidedValue(parseResult, providedOptions, product),
+            ProvidedValue(parseResult, providedOptions, namePrefix),
+            parseResult.GetValue(location) ?? "swedencentral",
+            parseResult.GetValue(environment) ?? "dev");
+
+        var productProvided = WasProvided(providedOptions, product);
+        var namePrefixProvided = WasProvided(providedOptions, namePrefix);
+        var needsPrompts = !productProvided || !namePrefixProvided;
+        if (!needsPrompts)
+        {
+            return true;
+        }
+
+        if (!terminal.Capabilities.IsInteractive)
+        {
+            if (!productProvided)
+            {
+                terminal.WriteErrorLine(
+                    $"[dsf] error: --product is required when prompts are unavailable. Run: {RenderNewCommand(interaction, parseResult.GetValue(dryRun), productPlaceholder: true)}");
+                return false;
+            }
+
+            return true;
+        }
+
+        ShowEquivalentCommand(terminal, interaction, parseResult.GetValue(dryRun));
+
+        if (!productProvided)
+        {
+            var answer = terminal.Prompt("Product key: ");
+            if (string.IsNullOrWhiteSpace(answer))
+            {
+                terminal.WriteErrorLine("[dsf] error: product key is required.");
+                return false;
+            }
+
+            interaction = interaction with { Product = answer.Trim() };
+            ShowEquivalentCommand(terminal, interaction, parseResult.GetValue(dryRun));
+        }
+
+        if (!namePrefixProvided)
+        {
+            var defaultPrefix = interaction.Product ?? string.Empty;
+            var answer = terminal.Prompt($"Name prefix [{defaultPrefix}]: ");
+            interaction = interaction with
+            {
+                NamePrefix = string.IsNullOrWhiteSpace(answer) ? defaultPrefix : answer.Trim(),
+            };
+            ShowEquivalentCommand(terminal, interaction, parseResult.GetValue(dryRun));
+        }
+
+        return true;
+    }
+
+    private static bool WasProvided<T>(IReadOnlySet<string> providedOptions, Option<T> option) =>
+        providedOptions.Contains(option.Name) || option.Aliases.Any(providedOptions.Contains);
+
+    private static string? ProvidedValue(
+        ParseResult parseResult,
+        IReadOnlySet<string> providedOptions,
+        Option<string> option) =>
+        WasProvided(providedOptions, option) ? parseResult.GetValue(option) : null;
+
+    private static void ShowEquivalentCommand(ICliTerminal terminal, NewInteraction interaction, bool dryRun) =>
+        terminal.WriteLine($"[dsf] equivalent: {RenderNewCommand(interaction, dryRun)}");
+
+    private static string RenderNewCommand(
+        NewInteraction interaction,
+        bool dryRun,
+        bool productPlaceholder = false)
+    {
+        var args = new List<string> { "dsf", "new" };
+        if (productPlaceholder)
+        {
+            args.Add("--product");
+            args.Add("<product>");
+        }
+        else if (!string.IsNullOrWhiteSpace(interaction.Product))
+        {
+            args.Add("--product");
+            args.Add(interaction.Product);
+        }
+
+        if (!productPlaceholder && !string.IsNullOrWhiteSpace(interaction.Product))
+        {
+            AddValue(args, "--name-prefix", interaction.NamePrefix);
+            AddValue(args, "--location", interaction.Location);
+            AddValue(args, "--environment", interaction.Environment);
+        }
+        if (dryRun)
+        {
+            args.Add("--dry-run");
+        }
+
+        return string.Join(' ', args);
+    }
+
+    private static void AddValue(List<string> args, string option, string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return;
+        }
+
+        args.Add(option);
+        args.Add(value);
+    }
+
+    private sealed record NewInteraction(
+        string? Product,
+        string? NamePrefix,
+        string? Location,
+        string? Environment);
+
     private static void PrintDryRunPlan(
+        ICliTerminal terminal,
         string product,
         string owner,
         string repo,
@@ -144,29 +302,29 @@ public static class CliApplication
         var manifestPath = Path.Combine(root, "config", "instances", $"{product}.json");
         var bicepPath = Path.Combine(root, "infra", "main.bicep");
 
-        Console.Out.WriteLine("[dsf] WARNING: DSF_OWNER_KEYVAULT_URI is unset and --owner-keyvault-uri was not passed.");
-        Console.Out.WriteLine("[dsf] WARNING: install_app, seed_app_key, seed_webiq_key, publish_runtime_index will be SKIPPED.");
-        Console.Out.WriteLine("[dsf] WARNING: the GitHub App won't be wired; `dsf charter init` and runtime GitHub access will fail.");
-        Console.Out.WriteLine("[dsf] WARNING: fix: run `dsf bootstrap` once, then export DSF_OWNER_KEYVAULT_URI and DSF_OWNER_APPCONFIG_ENDPOINT, then re-run `dsf new`.");
-        Console.Out.WriteLine($"[dsf] instance plan for product={product} (DRY-RUN)");
-        Console.Out.WriteLine($"[dsf]  1. create_repo    [dry-run] Create GitHub repo {repoFull} ({visibility})");
-        Console.Out.WriteLine($"[dsf]       $ gh repo create {repoFull} {visibilityFlag}");
-        Console.Out.WriteLine($"[dsf]  2. seed_repo      [seeded (dry-run)] Seed {repoFull} with the Spec Kit scaffold (specify init) and a baseline ci workflow so the required 'ci' check is producible before branch protection");
-        Console.Out.WriteLine($"[dsf]  3. create_labels  [dry-run] Create the label taxonomy + handoff label in {repoFull}");
-        Console.Out.WriteLine($"[dsf]  4. install_app    [skipped (no owner App configured)] Add {repoFull} to the DSF App installation <installation>");
-        Console.Out.WriteLine($"[dsf]  5. create_resource_group [dry-run] Create dedicated Azure resource group rg-dsf-{product}");
-        Console.Out.WriteLine($"[dsf]       $ az group create --name rg-dsf-{product} --location {location} --tags project=dark-software-factory managed-by=dsf product={product} component=backing-services");
-        Console.Out.WriteLine("[dsf]  6. provision_azure [dry-run] Deploy backing services into rg-dsf-" + product + " from infra/main.bicep");
-        Console.Out.WriteLine($"[dsf]       $ az deployment group create -g rg-dsf-{product} -n dsf-{product} -f {bicepPath} -p namePrefix={namePrefix} environmentName={environment} location={location} product={product} runtimeImage=ghcr.io/joranbergfeld/dsf-runtime:latest githubAppId= githubInstallationId= githubRepository={repoFull} allowPublicNetworkAccess=true --no-wait");
-        Console.Out.WriteLine($"[dsf]  7. seed_appconfig [seeded (dry-run)] Seed the canonical config/defaults.json into App Configuration for {product} (critic/agent flags + thresholds)");
-        Console.Out.WriteLine($"[dsf]  8. seed_app_key   [skipped (no owner App configured)] Seed the DSF App private key from the owner Key Vault into the product Key Vault for {product}");
-        Console.Out.WriteLine($"[dsf]  9. seed_webiq_key [skipped (no owner App configured)] Seed the WebIQ API key from the owner Key Vault into the product Key Vault for {product}");
-        Console.Out.WriteLine($"[dsf]  10. seed_product_record [seeded (dry-run)] Seed the {product} Product record (repo, taxonomy, source scopes, threshold) into its per-product App Configuration");
-        Console.Out.WriteLine($"[dsf]  11. publish_runtime_index [skipped (no owner App Config configured)] Publish {product} runtime env (endpoints + pointers) to the owner App Configuration index");
-        Console.Out.WriteLine($"[dsf]  12. deploy_council [rendered (dry-run)] Render + bring up the feature-council runtime scoped to {product}");
-        Console.Out.WriteLine($"[dsf]  13. branch_protection [ruleset planned (dry-run)] Apply the 'low' creation maturity dial to {repoFull} as a branch-protection ruleset (required reviews + green 'ci' check)");
-        Console.Out.WriteLine($"[dsf]  14. deploy_sre_agent [deployed (dry-run)] Provision the Azure SRE Agent for {product} (agent + RBAC on rg-dsf-{product} + Azure Monitor)");
-        Console.Out.WriteLine($"[dsf]  15. write_config   [{manifestPath}] Write instance manifest to config/instances/{product}.json");
+        terminal.WriteLine("[dsf] WARNING: DSF_OWNER_KEYVAULT_URI is unset and --owner-keyvault-uri was not passed.");
+        terminal.WriteLine("[dsf] WARNING: install_app, seed_app_key, seed_webiq_key, publish_runtime_index will be SKIPPED.");
+        terminal.WriteLine("[dsf] WARNING: the GitHub App won't be wired; `dsf charter init` and runtime GitHub access will fail.");
+        terminal.WriteLine("[dsf] WARNING: fix: run `dsf bootstrap` once, then export DSF_OWNER_KEYVAULT_URI and DSF_OWNER_APPCONFIG_ENDPOINT, then re-run `dsf new`.");
+        terminal.WriteLine($"[dsf] instance plan for product={product} (DRY-RUN)");
+        terminal.WriteLine($"[dsf]  1. create_repo    [dry-run] Create GitHub repo {repoFull} ({visibility})");
+        terminal.WriteLine($"[dsf]       $ gh repo create {repoFull} {visibilityFlag}");
+        terminal.WriteLine($"[dsf]  2. seed_repo      [seeded (dry-run)] Seed {repoFull} with the Spec Kit scaffold (specify init) and a baseline ci workflow so the required 'ci' check is producible before branch protection");
+        terminal.WriteLine($"[dsf]  3. create_labels  [dry-run] Create the label taxonomy + handoff label in {repoFull}");
+        terminal.WriteLine($"[dsf]  4. install_app    [skipped (no owner App configured)] Add {repoFull} to the DSF App installation <installation>");
+        terminal.WriteLine($"[dsf]  5. create_resource_group [dry-run] Create dedicated Azure resource group rg-dsf-{product}");
+        terminal.WriteLine($"[dsf]       $ az group create --name rg-dsf-{product} --location {location} --tags project=dark-software-factory managed-by=dsf product={product} component=backing-services");
+        terminal.WriteLine("[dsf]  6. provision_azure [dry-run] Deploy backing services into rg-dsf-" + product + " from infra/main.bicep");
+        terminal.WriteLine($"[dsf]       $ az deployment group create -g rg-dsf-{product} -n dsf-{product} -f {bicepPath} -p namePrefix={namePrefix} environmentName={environment} location={location} product={product} runtimeImage=ghcr.io/joranbergfeld/dsf-runtime:latest githubAppId= githubInstallationId= githubRepository={repoFull} allowPublicNetworkAccess=true --no-wait");
+        terminal.WriteLine($"[dsf]  7. seed_appconfig [seeded (dry-run)] Seed the canonical config/defaults.json into App Configuration for {product} (critic/agent flags + thresholds)");
+        terminal.WriteLine($"[dsf]  8. seed_app_key   [skipped (no owner App configured)] Seed the DSF App private key from the owner Key Vault into the product Key Vault for {product}");
+        terminal.WriteLine($"[dsf]  9. seed_webiq_key [skipped (no owner App configured)] Seed the WebIQ API key from the owner Key Vault into the product Key Vault for {product}");
+        terminal.WriteLine($"[dsf]  10. seed_product_record [seeded (dry-run)] Seed the {product} Product record (repo, taxonomy, source scopes, threshold) into its per-product App Configuration");
+        terminal.WriteLine($"[dsf]  11. publish_runtime_index [skipped (no owner App Config configured)] Publish {product} runtime env (endpoints + pointers) to the owner App Configuration index");
+        terminal.WriteLine($"[dsf]  12. deploy_council [rendered (dry-run)] Render + bring up the feature-council runtime scoped to {product}");
+        terminal.WriteLine($"[dsf]  13. branch_protection [ruleset planned (dry-run)] Apply the 'low' creation maturity dial to {repoFull} as a branch-protection ruleset (required reviews + green 'ci' check)");
+        terminal.WriteLine($"[dsf]  14. deploy_sre_agent [deployed (dry-run)] Provision the Azure SRE Agent for {product} (agent + RBAC on rg-dsf-{product} + Azure Monitor)");
+        terminal.WriteLine($"[dsf]  15. write_config   [{manifestPath}] Write instance manifest to config/instances/{product}.json");
     }
 
     private static string BuildNamePrefix(string value)

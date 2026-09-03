@@ -1,0 +1,102 @@
+using Dsf.Cli;
+using Xunit;
+
+namespace Dsf.Cli.Tests;
+
+public sealed class CliInteractionTests
+{
+    [Fact]
+    public async Task New_interactive_flow_asks_one_question_at_a_time_and_shows_equivalent_command()
+    {
+        var terminal = new ScriptedTerminal(
+            new TerminalCapabilities(IsInteractive: true, SupportsAnsi: false, SupportsEmoji: false),
+            ["demo", ""]);
+
+        var exitCode = await CliApplication.InvokeAsync(["new", "--dry-run"], CancellationToken.None, terminal);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(
+            [
+                "Product key: ",
+                "Name prefix [demo]: ",
+            ],
+            terminal.Prompts);
+        Assert.Contains("[dsf] equivalent: dsf new --dry-run", terminal.Output);
+        Assert.Contains(
+            "[dsf] equivalent: dsf new --product demo --name-prefix demo --location swedencentral --environment dev --dry-run",
+            terminal.Output);
+        Assert.Contains("[dsf] instance plan for product=demo (DRY-RUN)", terminal.Output);
+    }
+
+    [Fact]
+    public async Task New_with_explicit_arguments_bypasses_interactive_prompts()
+    {
+        var terminal = new ScriptedTerminal(
+            new TerminalCapabilities(IsInteractive: true, SupportsAnsi: false, SupportsEmoji: false),
+            []);
+
+        var exitCode = await CliApplication.InvokeAsync(
+            [
+                "new",
+                "--product",
+                "demo",
+                "--name-prefix",
+                "demo",
+                "--location",
+                "westeurope",
+                "--environment",
+                "test",
+                "--dry-run",
+            ],
+            CancellationToken.None,
+            terminal);
+
+        Assert.Equal(0, exitCode);
+        Assert.Empty(terminal.Prompts);
+        Assert.DoesNotContain("[dsf] equivalent:", terminal.Output);
+        Assert.Contains("[dsf] instance plan for product=demo (DRY-RUN)", terminal.Output);
+    }
+
+    [Fact]
+    public async Task New_missing_required_prompt_answer_fails_without_terminal_features_when_redirected()
+    {
+        var terminal = new ScriptedTerminal(
+            new TerminalCapabilities(IsInteractive: false, SupportsAnsi: true, SupportsEmoji: true),
+            []);
+
+        var exitCode = await CliApplication.InvokeAsync(["new", "--dry-run"], CancellationToken.None, terminal);
+
+        Assert.Equal(1, exitCode);
+        Assert.Empty(terminal.Prompts);
+        Assert.Equal(string.Empty, terminal.Output);
+        Assert.Equal(
+            "[dsf] error: --product is required when prompts are unavailable. Run: dsf new --product <product> --dry-run"
+                + Environment.NewLine,
+            terminal.Error);
+        Assert.DoesNotContain('\u001b', terminal.Error);
+        Assert.DoesNotContain("⚠", terminal.Error);
+    }
+
+    private sealed class ScriptedTerminal(TerminalCapabilities capabilities, IReadOnlyList<string> answers) : ICliTerminal
+    {
+        private readonly Queue<string> _answers = new(answers);
+        private readonly StringWriter _error = new();
+        private readonly StringWriter _output = new();
+        private readonly List<string> _prompts = [];
+
+        public TerminalCapabilities Capabilities { get; } = capabilities;
+        public IReadOnlyList<string> Prompts => _prompts;
+        public string Output => _output.ToString();
+        public string Error => _error.ToString();
+
+        public void WriteLine(string value) => _output.WriteLine(value);
+
+        public void WriteErrorLine(string value) => _error.WriteLine(value);
+
+        public string? Prompt(string message)
+        {
+            _prompts.Add(message);
+            return _answers.Count == 0 ? null : _answers.Dequeue();
+        }
+    }
+}

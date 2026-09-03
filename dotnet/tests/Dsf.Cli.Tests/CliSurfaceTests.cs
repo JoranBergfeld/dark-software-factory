@@ -57,7 +57,7 @@ public sealed class CliSurfaceTests
               dsf new [options]
 
             Options:
-              --product <product> (REQUIRED)                         product key (e.g. 'microbi')
+              --product <product>                                    product key (e.g. 'microbi')
               --owner <owner>                                        GitHub owner/org for the product repo
               --repo <repo>                                          repo name (defaults to product key)
               --visibility <internal|private|public>                 product repo visibility [default: private]
@@ -140,6 +140,20 @@ public sealed class CliSurfaceTests
                 Directory.Delete(configRoot, recursive: true);
             }
         }
+    }
+
+    [Fact]
+    public async Task New_missing_product_fails_in_redirected_process_without_ansi_or_emoji()
+    {
+        var result = await DsfProcess.RunAsync("new", "--dry-run");
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Equal(string.Empty, result.Stdout);
+        Assert.Equal(
+            "[dsf] error: --product is required when prompts are unavailable. Run: dsf new --product <product> --dry-run\n",
+            result.Stderr);
+        Assert.DoesNotContain('\u001b', result.Stderr);
+        Assert.DoesNotContain("⚠", result.Stderr);
     }
 
     [Fact]
