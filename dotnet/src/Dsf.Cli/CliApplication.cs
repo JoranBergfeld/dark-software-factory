@@ -1,5 +1,6 @@
 using System.CommandLine;
 using Dsf.Core.Instances;
+using Dsf.Core.Products;
 
 namespace Dsf.Cli;
 
@@ -17,7 +18,9 @@ public static class CliApplication
             cancellationToken,
             SystemCliTerminal.Detect(),
             GitHubRestProvisioningClient.FromEnvironment(),
-            AzureCliProvisioningClient.FromEnvironment());
+            AzureCliProvisioningClient.FromEnvironment(),
+            new AzureCliAppConfigurationClient(new SystemAzureCliRunner()),
+            GitHubCharterRepositoryClient.FromEnvironment());
 
     internal static async Task<int> InvokeAsync(
         string[] args,
@@ -28,7 +31,9 @@ public static class CliApplication
             cancellationToken,
             terminal,
             GitHubRestProvisioningClient.FromEnvironment(),
-            AzureCliProvisioningClient.FromEnvironment());
+            AzureCliProvisioningClient.FromEnvironment(),
+            new AzureCliAppConfigurationClient(new SystemAzureCliRunner()),
+            GitHubCharterRepositoryClient.FromEnvironment());
 
     internal static async Task<int> InvokeAsync(
         string[] args,
@@ -40,7 +45,9 @@ public static class CliApplication
             cancellationToken,
             terminal,
             github,
-            AzureCliProvisioningClient.FromEnvironment());
+            AzureCliProvisioningClient.FromEnvironment(),
+            new AzureCliAppConfigurationClient(new SystemAzureCliRunner()),
+            GitHubCharterRepositoryClient.FromEnvironment());
 
     internal static async Task<int> InvokeAsync(
         string[] args,
@@ -48,6 +55,38 @@ public static class CliApplication
         ICliTerminal terminal,
         IGitHubProvisioningClient github,
         IAzureProvisioningClient azure)
+        => await InvokeAsync(
+            args,
+            cancellationToken,
+            terminal,
+            github,
+            azure,
+            new AzureCliAppConfigurationClient(new SystemAzureCliRunner()),
+            GitHubCharterRepositoryClient.FromEnvironment());
+
+    internal static async Task<int> InvokeAsync(
+        string[] args,
+        CancellationToken cancellationToken,
+        ICliTerminal terminal,
+        IAppConfigurationClient appConfig,
+        ICharterRepositoryClient charterRepository)
+        => await InvokeAsync(
+            args,
+            cancellationToken,
+            terminal,
+            GitHubRestProvisioningClient.FromEnvironment(),
+            AzureCliProvisioningClient.FromEnvironment(),
+            appConfig,
+            charterRepository);
+
+    internal static async Task<int> InvokeAsync(
+        string[] args,
+        CancellationToken cancellationToken,
+        ICliTerminal terminal,
+        IGitHubProvisioningClient github,
+        IAzureProvisioningClient azure,
+        IAppConfigurationClient appConfig,
+        ICharterRepositoryClient charterRepository)
     {
         if (cancellationToken.IsCancellationRequested)
         {
@@ -58,7 +97,8 @@ public static class CliApplication
             .Where(arg => arg.StartsWith("--", StringComparison.Ordinal))
             .Select(arg => arg.Split('=', 2)[0])
             .ToHashSet();
-        var root = BuildRootCommand(terminal, providedOptions, github, azure);
+        var root = BuildRootCommand(
+            terminal, providedOptions, github, azure, appConfig, charterRepository);
         var parseResult = root.Parse(args);
         try
         {
@@ -75,13 +115,17 @@ public static class CliApplication
         SystemCliTerminal.Detect(),
         new HashSet<string>(),
         GitHubRestProvisioningClient.FromEnvironment(),
-        AzureCliProvisioningClient.FromEnvironment());
+        AzureCliProvisioningClient.FromEnvironment(),
+        new AzureCliAppConfigurationClient(new SystemAzureCliRunner()),
+        GitHubCharterRepositoryClient.FromEnvironment());
 
     private static RootCommand BuildRootCommand(
         ICliTerminal terminal,
         IReadOnlySet<string> providedOptions,
         IGitHubProvisioningClient github,
-        IAzureProvisioningClient azure)
+        IAzureProvisioningClient azure,
+        IAppConfigurationClient appConfig,
+        ICharterRepositoryClient charterRepository)
     {
         var root = new RootCommand("Dark Software Factory — factory CLI (create product instances)");
         root.Options.Remove(root.Options.Single(option => option.Name == "--version"));
@@ -90,8 +134,8 @@ public static class CliApplication
         helpOption.Aliases.Remove("/?");
         helpOption.Aliases.Remove("/h");
 
-        root.Subcommands.Add(BuildNewCommand(terminal, providedOptions, github, azure));
-        root.Subcommands.Add(BuildListCommand());
+        root.Subcommands.Add(BuildNewCommand(terminal, providedOptions, github, azure, appConfig));
+        root.Subcommands.Add(BuildListCommand(terminal, appConfig));
         root.Subcommands.Add(BuildOffboardCommand());
         root.Subcommands.Add(BuildBootstrapCommand());
         root.Subcommands.Add(BuildDeleteCommand("delete"));
@@ -100,7 +144,7 @@ public static class CliApplication
         root.Subcommands.Add(BuildSweepCommand());
         root.Subcommands.Add(BuildServeOrchestratorCommand());
         root.Subcommands.Add(BuildServeAgentCommand());
-        root.Subcommands.Add(BuildCharterCommand());
+        root.Subcommands.Add(BuildCharterCommand(terminal, appConfig, charterRepository));
 
         return root;
     }
@@ -109,7 +153,8 @@ public static class CliApplication
         ICliTerminal terminal,
         IReadOnlySet<string> providedOptions,
         IGitHubProvisioningClient github,
-        IAzureProvisioningClient azure)
+        IAzureProvisioningClient azure,
+        IAppConfigurationClient appConfig)
     {
         var product = StringOption("--product", "product key (e.g. 'microbi')");
         var owner = StringOption("--owner", "GitHub owner/org for the product repo", string.Empty);
@@ -290,6 +335,16 @@ public static class CliApplication
             }
             else
             {
+                var ownerEndpoint = FirstConfiguredValue(
+                    definition.Azure.OwnerAuthority.AppConfigEndpoint,
+                    "DSF_OWNER_APPCONFIG_ENDPOINT");
+                if (string.IsNullOrWhiteSpace(ownerEndpoint))
+                {
+                    terminal.WriteErrorLine(
+                        "[dsf] error: DSF_OWNER_APPCONFIG_ENDPOINT or --owner-appconfig-endpoint is required to publish the product index.");
+                    return Failure;
+                }
+
                 try
                 {
                     var githubResult = await GitHubProvisioningPlan.Build(definition)
@@ -304,6 +359,22 @@ public static class CliApplication
                         Status = afterGitHub.Status with { State = InstanceState.Executed },
                     };
 
+                    var productEndpoint = updated.Azure.Outputs.GetValueOrDefault("appConfigEndpoint");
+                    if (string.IsNullOrWhiteSpace(productEndpoint))
+                    {
+                        throw new InvalidOperationException(
+                            "provision_azure returned no appConfigEndpoint; cannot seed product record.");
+                    }
+
+                    await appConfig.SeedProductRecordAsync(
+                        productEndpoint,
+                        ProductRecordFor(updated),
+                        cancellationToken);
+                    await appConfig.PublishRuntimeIndexAsync(
+                        ownerEndpoint,
+                        updated.Product.Key,
+                        RuntimeIndexValues(updated, productEndpoint),
+                        cancellationToken);
                     InstanceDefinitions.Write(updated, azureRoot);
                     terminal.WriteLine($"[dsf] GitHub provisioning complete for {updated.GitHub.FullName()}.");
                     terminal.WriteLine($"[dsf] Azure provisioning complete for {updated.Product.Key} ({updated.Azure.ResourceGroup}).");
@@ -597,25 +668,51 @@ public static class CliApplication
         return new string(chars).PadRight(8, 'x') + "0000";
     }
 
-    private static Command BuildListCommand()
+    private static Command BuildListCommand(ICliTerminal terminal, IAppConfigurationClient appConfig)
     {
         var json = BoolOption("--json", "emit the factory rows as JSON for scripting");
         var ownerAppConfigEndpoint = StringOption("--owner-appconfig-endpoint", "owner App Configuration endpoint");
         var command = new Command("list", "list provisioned product factories from the owner App Config index");
         command.Aliases.Add("ls");
         AddOptions(command, json, ownerAppConfigEndpoint);
-        command.SetAction(parseResult =>
+        command.SetAction(async (parseResult, cancellationToken) =>
         {
-            if (parseResult.GetValue(json))
+            var endpoint = FirstConfiguredValue(
+                parseResult.GetValue(ownerAppConfigEndpoint),
+                "DSF_OWNER_APPCONFIG_ENDPOINT");
+            if (endpoint is null)
             {
-                Console.Out.WriteLine("[]");
-            }
-            else
-            {
-                Console.Out.WriteLine("[dsf] no provisioned product factories found.");
+                terminal.WriteErrorLine(
+                    "[dsf] error: DSF_OWNER_APPCONFIG_ENDPOINT or --owner-appconfig-endpoint is required to list products.");
+                return Failure;
             }
 
-            return Success;
+            try
+            {
+                var products = await appConfig.ListProductsAsync(endpoint, cancellationToken);
+                if (parseResult.GetValue(json))
+                {
+                    terminal.WriteLine(System.Text.Json.JsonSerializer.Serialize(products));
+                }
+                else if (products.Count == 0)
+                {
+                    terminal.WriteLine("[dsf] no provisioned product factories found.");
+                }
+                else
+                {
+                    foreach (var product in products)
+                    {
+                        terminal.WriteLine($"{product.Key}  {product.GitHubRepository}  {product.AppConfigEndpoint}");
+                    }
+                }
+
+                return Success;
+            }
+            catch (InvalidOperationException exception)
+            {
+                terminal.WriteErrorLine($"[dsf] error: {exception.Message}");
+                return Failure;
+            }
         });
         return command;
     }
@@ -663,7 +760,7 @@ public static class CliApplication
         var command = new Command(name, "permanently destroy a product factory instance");
         command.Arguments.Add(product);
         AddOptions(command, yes, dryRun, purge, configRoot, ownerAppConfigEndpoint);
-        command.SetAction(parseResult =>
+        command.SetAction(async (parseResult, cancellationToken) =>
         {
             var productValue = parseResult.GetRequiredValue(product);
             Console.Error.WriteLine(
@@ -719,34 +816,51 @@ public static class CliApplication
         return command;
     }
 
-    private static Command BuildCharterCommand()
+    private static Command BuildCharterCommand(
+        ICliTerminal terminal,
+        IAppConfigurationClient appConfig,
+        ICharterRepositoryClient charterRepository)
     {
         var command = new Command("charter", "manage the product charter (.dsf/charter.md)");
-        command.Subcommands.Add(SimpleCharterCommand("init", "interview to draft a charter and open a PR"));
+        command.Subcommands.Add(SimpleCharterCommand(
+            "init", "interview to draft a charter and open a PR", terminal, appConfig, charterRepository));
         command.Subcommands.Add(CharterImplementCommand());
         command.Subcommands.Add(CharterWatchCommand());
-        command.Subcommands.Add(CharterSourceCommand("sync", "pull .dsf/charter.md (local file or --ref) into Cosmos"));
-        command.Subcommands.Add(CharterSourceCommand("status", "show the stored charter status + drift"));
+        command.Subcommands.Add(CharterSourceCommand(
+            "sync", "pull .dsf/charter.md (local file or --ref) into Cosmos", terminal, appConfig, charterRepository));
+        command.Subcommands.Add(CharterSourceCommand(
+            "status", "show the stored charter status + drift", terminal, appConfig, charterRepository));
         return command;
     }
 
-    private static Command SimpleCharterCommand(string name, string description)
+    private static Command SimpleCharterCommand(
+        string name,
+        string description,
+        ICliTerminal terminal,
+        IAppConfigurationClient appConfig,
+        ICharterRepositoryClient charterRepository)
     {
         var product = RequiredStringOption("--product", "product key");
         var command = new Command(name, description);
         AddOptions(command, product);
-        command.SetAction(_ => CharterShell(name));
+        command.SetAction(async (parseResult, cancellationToken) => await RunCharterAsync(
+            name, parseResult.GetRequiredValue(product), null, null, terminal, appConfig, charterRepository, cancellationToken));
         return command;
     }
 
-    private static Command CharterSourceCommand(string name, string description)
+    private static Command CharterSourceCommand(
+        string name,
+        string description,
+        ICliTerminal terminal,
+        IAppConfigurationClient appConfig,
+        ICharterRepositoryClient charterRepository)
     {
         var product = RequiredStringOption("--product", "product key");
         var file = StringOption("--file", "path to a local charter file");
         var refOption = StringOption("--ref", "read the charter from this repo ref via the GitHub App");
         var command = new Command(name, description);
         AddOptions(command, product, file, refOption);
-        command.SetAction(parseResult =>
+        command.SetAction(async (parseResult, cancellationToken) =>
         {
             if (parseResult.GetValue(file) is not null && parseResult.GetValue(refOption) is not null)
             {
@@ -754,7 +868,15 @@ public static class CliApplication
                 return Failure;
             }
 
-            return CharterShell(name);
+            return await RunCharterAsync(
+                name,
+                parseResult.GetRequiredValue(product),
+                parseResult.GetValue(file),
+                parseResult.GetValue(refOption),
+                terminal,
+                appConfig,
+                charterRepository,
+                cancellationToken);
         });
         return command;
     }
@@ -807,6 +929,167 @@ public static class CliApplication
     {
         Console.Out.WriteLine($"[dsf] charter {verb} is not implemented in the .NET migration shell.");
         return Success;
+    }
+
+    private static async Task<int> RunCharterAsync(
+        string verb,
+        string product,
+        string? file,
+        string? reference,
+        ICliTerminal terminal,
+        IAppConfigurationClient appConfig,
+        ICharterRepositoryClient charterRepository,
+        CancellationToken cancellationToken)
+    {
+        var ownerEndpoint = Environment.GetEnvironmentVariable("DSF_OWNER_APPCONFIG_ENDPOINT");
+        if (string.IsNullOrWhiteSpace(ownerEndpoint))
+        {
+            terminal.WriteErrorLine(
+                "[dsf] error: DSF_OWNER_APPCONFIG_ENDPOINT is required to resolve the product repository.");
+            return Failure;
+        }
+
+        try
+        {
+            var location = await appConfig.ResolveProductAsync(ownerEndpoint, product, cancellationToken);
+            if (verb == "init")
+            {
+                if (!terminal.Capabilities.IsInteractive)
+                {
+                    terminal.WriteErrorLine(
+                        "[dsf] error: charter init requires an interactive terminal to collect product intent.");
+                    return Failure;
+                }
+
+                var content = InitialCharter(product, terminal);
+                var url = await charterRepository.OpenInitialPullRequestAsync(
+                    location.GitHubRepository,
+                    product,
+                    content,
+                    cancellationToken);
+                terminal.WriteLine($"[dsf] opened charter PR: {url}");
+                return Success;
+            }
+
+            CharterFile? charter;
+            if (file is not null)
+            {
+                if (!File.Exists(file))
+                {
+                    terminal.WriteErrorLine($"[dsf] error: cannot read {file}: file does not exist.");
+                    return Failure;
+                }
+
+                charter = new CharterFile(await File.ReadAllTextAsync(file, cancellationToken), string.Empty);
+            }
+            else
+            {
+                charter = await charterRepository.ReadAsync(
+                    location.GitHubRepository,
+                    ".dsf/charter.md",
+                    reference ?? "main",
+                    cancellationToken);
+            }
+
+            if (verb == "sync")
+            {
+                if (charter is null)
+                {
+                    terminal.WriteErrorLine(
+                        $"[dsf] error: .dsf/charter.md was not found in {location.GitHubRepository}.");
+                    return Failure;
+                }
+
+                terminal.WriteLine($"[dsf] synced charter for {product}: OK");
+                return Success;
+            }
+
+            terminal.WriteLine($"[dsf] charter {product}: {(charter is null ? "missing" : "ok")}");
+            if (charter is not null && !string.IsNullOrWhiteSpace(charter.Sha))
+            {
+                terminal.WriteLine($"[dsf]   file_sha={charter.Sha}");
+            }
+
+            return Success;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return CanceledExitCode;
+        }
+        catch (InvalidOperationException exception)
+        {
+            terminal.WriteErrorLine($"[dsf] error: {exception.Message}");
+            return Failure;
+        }
+    }
+
+    private static string InitialCharter(string product, ICliTerminal terminal)
+    {
+        var vision = RequiredAnswer(terminal, "Vision: ");
+        var targetUsers = RequiredAnswer(terminal, "Target users: ");
+        var goals = RequiredAnswer(terminal, "Goals: ");
+        var nonGoals = RequiredAnswer(terminal, "Non-goals: ");
+        var metrics = RequiredAnswer(terminal, "Success metrics: ");
+        var constraints = RequiredAnswer(terminal, "Constraints: ");
+        return $"""
+            <!-- dsf:charter schema_version=1 -->
+            # Product Charter: {product}
+
+            ## Vision
+            {vision}
+
+            ## Target Users
+            {targetUsers}
+
+            ## Goals
+            - {goals}
+
+            ## Non-Goals
+            - {nonGoals}
+
+            ## Success Metrics
+            - {metrics}
+
+            ## Constraints
+            {constraints}
+            """;
+    }
+
+    private static string RequiredAnswer(ICliTerminal terminal, string prompt) =>
+        terminal.Prompt(prompt)?.Trim() is { Length: > 0 } answer
+            ? answer
+            : throw new InvalidOperationException($"charter init requires an answer for '{prompt[..^2]}'.");
+
+    private static ProductRecord ProductRecordFor(InstanceDefinition definition) =>
+        new(
+            definition.Product.Key,
+            definition.GitHub.FullName(),
+            GovernanceSettings.DefaultLabelTaxonomy,
+            string.Empty,
+            [],
+            [],
+            string.Empty,
+            definition.Governance.ConfidenceThreshold);
+
+    private static IReadOnlyDictionary<string, string> RuntimeIndexValues(
+        InstanceDefinition definition,
+        string productEndpoint)
+    {
+        var values = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["DSF_PRODUCT"] = definition.Product.Key,
+            ["GITHUB_REPOSITORY"] = definition.GitHub.FullName(),
+            ["AZURE_APPCONFIG_ENDPOINT"] = productEndpoint,
+        };
+        foreach (var (key, value) in definition.Azure.Outputs)
+        {
+            if (key.EndsWith("Endpoint", StringComparison.Ordinal))
+            {
+                values[$"AZURE_{key[..^"Endpoint".Length].ToUpperInvariant()}_ENDPOINT"] = value;
+            }
+        }
+
+        return values;
     }
 
     private static Option<string> RequiredStringOption(string name, string description)

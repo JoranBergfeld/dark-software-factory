@@ -83,13 +83,13 @@ public sealed class CliSurfaceTests
     }
 
     [Fact]
-    public async Task List_json_is_deterministic_and_noninteractive()
+    public async Task List_without_owner_index_configuration_fails_loudly()
     {
         var result = await DsfProcess.RunAsync("list", "--json");
 
-        Assert.Equal(0, result.ExitCode);
-        Assert.Equal("[]\n", result.Stdout);
-        Assert.Equal(string.Empty, result.Stderr);
+        Assert.Equal(1, result.ExitCode);
+        Assert.Equal(string.Empty, result.Stdout);
+        Assert.Contains("DSF_OWNER_APPCONFIG_ENDPOINT", result.Stderr, StringComparison.Ordinal);
     }
 
     [Fact]

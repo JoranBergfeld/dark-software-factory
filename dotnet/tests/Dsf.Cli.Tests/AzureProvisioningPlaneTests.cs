@@ -144,12 +144,15 @@ public sealed class AzureProvisioningPlaneTests
             var exitCode = await CliApplication.InvokeAsync(
                 [
                     "new", "--product", "paritydemo", "--owner", "acme",
+                    "--owner-appconfig-endpoint", "https://owner.azconfig.io",
                     "--config-root", root,
                 ],
                 cts.Token,
                 PlainTerminal(),
                 new RecordingGitHubProvisioningClient(),
-                azure);
+                azure,
+                new RecordingAppConfigurationClient(),
+                new RecordingCharterRepositoryClient(null));
 
             Assert.Equal(CliApplication.CanceledExitCode, exitCode);
             var manifestPath = InstanceDefinitions.PathFor(root, "paritydemo");
@@ -172,12 +175,15 @@ public sealed class AzureProvisioningPlaneTests
             var exitCode = await CliApplication.InvokeAsync(
                 [
                     "new", "--product", "paritydemo", "--owner", "acme",
+                    "--owner-appconfig-endpoint", "https://owner.azconfig.io",
                     "--config-root", root,
                 ],
                 CancellationToken.None,
                 PlainTerminal(),
                 new RecordingGitHubProvisioningClient(),
-                azure);
+                azure,
+                new RecordingAppConfigurationClient(),
+                new RecordingCharterRepositoryClient(null));
 
             Assert.Equal(0, exitCode);
             var written = InstanceDefinitions.Read(InstanceDefinitions.PathFor(root, "paritydemo"));

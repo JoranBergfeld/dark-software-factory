@@ -34,8 +34,8 @@ public sealed class EntryPointTests
         {
             var exitCode = await EntryPoint.RunAsync(["list", "--json"], _ => { });
 
-            Assert.Equal(0, exitCode);
-            Assert.Equal("[]" + Environment.NewLine, capturedOut.ToString());
+            Assert.Equal(1, exitCode);
+            Assert.Equal(string.Empty, capturedOut.ToString());
         }
         finally
         {
