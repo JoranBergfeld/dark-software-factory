@@ -1,4 +1,6 @@
 using System.CommandLine;
+using System.Text;
+using Dsf.Core.Charters;
 using Dsf.Core.Instances;
 using Dsf.Core.Products;
 
@@ -20,7 +22,8 @@ public static class CliApplication
             GitHubRestProvisioningClient.FromEnvironment(),
             AzureCliProvisioningClient.FromEnvironment(),
             new AzureCliAppConfigurationClient(new SystemAzureCliRunner()),
-            GitHubCharterRepositoryClient.FromEnvironment());
+            GitHubCharterRepositoryClient.FromEnvironment(),
+            CosmosCharterStore.FromEnvironment());
 
     internal static async Task<int> InvokeAsync(
         string[] args,
@@ -33,7 +36,8 @@ public static class CliApplication
             GitHubRestProvisioningClient.FromEnvironment(),
             AzureCliProvisioningClient.FromEnvironment(),
             new AzureCliAppConfigurationClient(new SystemAzureCliRunner()),
-            GitHubCharterRepositoryClient.FromEnvironment());
+            GitHubCharterRepositoryClient.FromEnvironment(),
+            CosmosCharterStore.FromEnvironment());
 
     internal static async Task<int> InvokeAsync(
         string[] args,
@@ -47,7 +51,8 @@ public static class CliApplication
             github,
             AzureCliProvisioningClient.FromEnvironment(),
             new AzureCliAppConfigurationClient(new SystemAzureCliRunner()),
-            GitHubCharterRepositoryClient.FromEnvironment());
+            GitHubCharterRepositoryClient.FromEnvironment(),
+            CosmosCharterStore.FromEnvironment());
 
     internal static async Task<int> InvokeAsync(
         string[] args,
@@ -62,7 +67,8 @@ public static class CliApplication
             github,
             azure,
             new AzureCliAppConfigurationClient(new SystemAzureCliRunner()),
-            GitHubCharterRepositoryClient.FromEnvironment());
+            GitHubCharterRepositoryClient.FromEnvironment(),
+            CosmosCharterStore.FromEnvironment());
 
     internal static async Task<int> InvokeAsync(
         string[] args,
@@ -74,10 +80,26 @@ public static class CliApplication
             args,
             cancellationToken,
             terminal,
+            appConfig,
+            charterRepository,
+            CosmosCharterStore.FromEnvironment());
+
+    internal static async Task<int> InvokeAsync(
+        string[] args,
+        CancellationToken cancellationToken,
+        ICliTerminal terminal,
+        IAppConfigurationClient appConfig,
+        ICharterRepositoryClient charterRepository,
+        ICharterStore charterStore)
+        => await InvokeAsync(
+            args,
+            cancellationToken,
+            terminal,
             GitHubRestProvisioningClient.FromEnvironment(),
             AzureCliProvisioningClient.FromEnvironment(),
             appConfig,
-            charterRepository);
+            charterRepository,
+            charterStore);
 
     internal static async Task<int> InvokeAsync(
         string[] args,
@@ -87,6 +109,25 @@ public static class CliApplication
         IAzureProvisioningClient azure,
         IAppConfigurationClient appConfig,
         ICharterRepositoryClient charterRepository)
+        => await InvokeAsync(
+            args,
+            cancellationToken,
+            terminal,
+            github,
+            azure,
+            appConfig,
+            charterRepository,
+            CosmosCharterStore.FromEnvironment());
+
+    internal static async Task<int> InvokeAsync(
+        string[] args,
+        CancellationToken cancellationToken,
+        ICliTerminal terminal,
+        IGitHubProvisioningClient github,
+        IAzureProvisioningClient azure,
+        IAppConfigurationClient appConfig,
+        ICharterRepositoryClient charterRepository,
+        ICharterStore charterStore)
     {
         if (cancellationToken.IsCancellationRequested)
         {
@@ -98,7 +139,7 @@ public static class CliApplication
             .Select(arg => arg.Split('=', 2)[0])
             .ToHashSet();
         var root = BuildRootCommand(
-            terminal, providedOptions, github, azure, appConfig, charterRepository);
+            terminal, providedOptions, github, azure, appConfig, charterRepository, charterStore);
         var parseResult = root.Parse(args);
         try
         {
@@ -117,7 +158,8 @@ public static class CliApplication
         GitHubRestProvisioningClient.FromEnvironment(),
         AzureCliProvisioningClient.FromEnvironment(),
         new AzureCliAppConfigurationClient(new SystemAzureCliRunner()),
-        GitHubCharterRepositoryClient.FromEnvironment());
+        GitHubCharterRepositoryClient.FromEnvironment(),
+        CosmosCharterStore.FromEnvironment());
 
     private static RootCommand BuildRootCommand(
         ICliTerminal terminal,
@@ -125,7 +167,8 @@ public static class CliApplication
         IGitHubProvisioningClient github,
         IAzureProvisioningClient azure,
         IAppConfigurationClient appConfig,
-        ICharterRepositoryClient charterRepository)
+        ICharterRepositoryClient charterRepository,
+        ICharterStore charterStore)
     {
         var root = new RootCommand("Dark Software Factory — factory CLI (create product instances)");
         root.Options.Remove(root.Options.Single(option => option.Name == "--version"));
@@ -144,7 +187,7 @@ public static class CliApplication
         root.Subcommands.Add(BuildSweepCommand());
         root.Subcommands.Add(BuildServeOrchestratorCommand());
         root.Subcommands.Add(BuildServeAgentCommand());
-        root.Subcommands.Add(BuildCharterCommand(terminal, appConfig, charterRepository));
+        root.Subcommands.Add(BuildCharterCommand(terminal, appConfig, charterRepository, charterStore));
 
         return root;
     }
@@ -819,17 +862,28 @@ public static class CliApplication
     private static Command BuildCharterCommand(
         ICliTerminal terminal,
         IAppConfigurationClient appConfig,
-        ICharterRepositoryClient charterRepository)
+        ICharterRepositoryClient charterRepository,
+        ICharterStore charterStore)
     {
         var command = new Command("charter", "manage the product charter (.dsf/charter.md)");
         command.Subcommands.Add(SimpleCharterCommand(
-            "init", "interview to draft a charter and open a PR", terminal, appConfig, charterRepository));
+            "init", "interview to draft a charter and open a PR", terminal, appConfig, charterRepository, charterStore));
         command.Subcommands.Add(CharterImplementCommand());
         command.Subcommands.Add(CharterWatchCommand());
         command.Subcommands.Add(CharterSourceCommand(
-            "sync", "pull .dsf/charter.md (local file or --ref) into Cosmos", terminal, appConfig, charterRepository));
+            "sync",
+            "pull .dsf/charter.md (local file or --ref) into Cosmos",
+            terminal,
+            appConfig,
+            charterRepository,
+            charterStore));
         command.Subcommands.Add(CharterSourceCommand(
-            "status", "show the stored charter status + drift", terminal, appConfig, charterRepository));
+            "status",
+            "show the stored charter status + drift",
+            terminal,
+            appConfig,
+            charterRepository,
+            charterStore));
         return command;
     }
 
@@ -838,13 +892,22 @@ public static class CliApplication
         string description,
         ICliTerminal terminal,
         IAppConfigurationClient appConfig,
-        ICharterRepositoryClient charterRepository)
+        ICharterRepositoryClient charterRepository,
+        ICharterStore charterStore)
     {
         var product = RequiredStringOption("--product", "product key");
         var command = new Command(name, description);
         AddOptions(command, product);
         command.SetAction(async (parseResult, cancellationToken) => await RunCharterAsync(
-            name, parseResult.GetRequiredValue(product), null, null, terminal, appConfig, charterRepository, cancellationToken));
+            name,
+            parseResult.GetRequiredValue(product),
+            null,
+            null,
+            terminal,
+            appConfig,
+            charterRepository,
+            charterStore,
+            cancellationToken));
         return command;
     }
 
@@ -853,7 +916,8 @@ public static class CliApplication
         string description,
         ICliTerminal terminal,
         IAppConfigurationClient appConfig,
-        ICharterRepositoryClient charterRepository)
+        ICharterRepositoryClient charterRepository,
+        ICharterStore charterStore)
     {
         var product = RequiredStringOption("--product", "product key");
         var file = StringOption("--file", "path to a local charter file");
@@ -876,6 +940,7 @@ public static class CliApplication
                 terminal,
                 appConfig,
                 charterRepository,
+                charterStore,
                 cancellationToken);
         });
         return command;
@@ -939,6 +1004,7 @@ public static class CliApplication
         ICliTerminal terminal,
         IAppConfigurationClient appConfig,
         ICharterRepositoryClient charterRepository,
+        ICharterStore charterStore,
         CancellationToken cancellationToken)
     {
         var ownerEndpoint = Environment.GetEnvironmentVariable("DSF_OWNER_APPCONFIG_ENDPOINT");
@@ -954,24 +1020,11 @@ public static class CliApplication
             var location = await appConfig.ResolveProductAsync(ownerEndpoint, product, cancellationToken);
             if (verb == "init")
             {
-                if (!terminal.Capabilities.IsInteractive)
-                {
-                    terminal.WriteErrorLine(
-                        "[dsf] error: charter init requires an interactive terminal to collect product intent.");
-                    return Failure;
-                }
-
-                var content = InitialCharter(product, terminal);
-                var url = await charterRepository.OpenInitialPullRequestAsync(
-                    location.GitHubRepository,
-                    product,
-                    content,
-                    cancellationToken);
-                terminal.WriteLine($"[dsf] opened charter PR: {url}");
-                return Success;
+                return await RunCharterInitAsync(product, location, terminal, charterRepository, cancellationToken);
             }
 
-            CharterFile? charter;
+            var sourceRef = reference ?? "main";
+            CharterSource source;
             if (file is not null)
             {
                 if (!File.Exists(file))
@@ -980,37 +1033,28 @@ public static class CliApplication
                     return Failure;
                 }
 
-                charter = new CharterFile(await File.ReadAllTextAsync(file, cancellationToken), string.Empty);
+                var bytes = await File.ReadAllBytesAsync(file, cancellationToken);
+                source = new CharterSource(
+                    Encoding.UTF8.GetString(bytes), CharterMarkdown.GitBlobSha(bytes), $"file:{file}");
             }
             else
             {
-                charter = await charterRepository.ReadAsync(
-                    location.GitHubRepository,
-                    ".dsf/charter.md",
-                    reference ?? "main",
-                    cancellationToken);
+                var charterFile = await charterRepository.ReadAsync(
+                    location.GitHubRepository, CharterMarkdown.CharterPath, sourceRef, cancellationToken);
+                source = charterFile is null
+                    ? null!
+                    : new CharterSource(
+                        charterFile.Content,
+                        string.IsNullOrWhiteSpace(charterFile.Sha)
+                            ? CharterMarkdown.GitBlobSha(charterFile.Content)
+                            : charterFile.Sha,
+                        sourceRef);
             }
 
-            if (verb == "sync")
-            {
-                if (charter is null)
-                {
-                    terminal.WriteErrorLine(
-                        $"[dsf] error: .dsf/charter.md was not found in {location.GitHubRepository}.");
-                    return Failure;
-                }
-
-                terminal.WriteLine($"[dsf] synced charter for {product}: OK");
-                return Success;
-            }
-
-            terminal.WriteLine($"[dsf] charter {product}: {(charter is null ? "missing" : "ok")}");
-            if (charter is not null && !string.IsNullOrWhiteSpace(charter.Sha))
-            {
-                terminal.WriteLine($"[dsf]   file_sha={charter.Sha}");
-            }
-
-            return Success;
+            return verb == "sync"
+                ? await RunCharterSyncAsync(
+                    product, location, source, sourceRef, terminal, charterStore, cancellationToken)
+                : await RunCharterStatusAsync(product, source, terminal, charterStore, cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -1022,6 +1066,172 @@ public static class CliApplication
             return Failure;
         }
     }
+
+    /// <summary>The live charter as read from the product repo (or a local file).</summary>
+    private sealed record CharterSource(string Content, string Sha, string Reference);
+
+    private static async Task<int> RunCharterInitAsync(
+        string product,
+        ProductLocation location,
+        ICliTerminal terminal,
+        ICharterRepositoryClient charterRepository,
+        CancellationToken cancellationToken)
+    {
+        if (!terminal.Capabilities.IsInteractive)
+        {
+            terminal.WriteErrorLine(
+                "[dsf] error: charter init requires an interactive terminal to collect product intent.");
+            return Failure;
+        }
+
+        var content = InitialCharter(product, terminal);
+        var url = await charterRepository.OpenInitialPullRequestAsync(
+            location.GitHubRepository, product, content, cancellationToken);
+        terminal.WriteLine($"[dsf] opened charter PR: {url}");
+        return Success;
+    }
+
+    /// <summary>
+    /// Parses the live charter and persists a <see cref="StoredCharter"/>. Idempotent on the
+    /// source blob SHA; a missing or unparseable file becomes stored state (MISSING/INVALID)
+    /// that preserves the last known-good charter rather than losing it.
+    /// </summary>
+    private static async Task<int> RunCharterSyncAsync(
+        string product,
+        ProductLocation location,
+        CharterSource? source,
+        string sourceRef,
+        ICliTerminal terminal,
+        ICharterStore charterStore,
+        CancellationToken cancellationToken)
+    {
+        var prior = await charterStore.GetCharterAsync(product, cancellationToken);
+        var lastGood = prior?.Charter;
+        StoredCharter stored;
+        if (source is null)
+        {
+            stored = new StoredCharter(
+                product,
+                location.GitHubRepository,
+                lastGood,
+                CharterStatus.Missing,
+                prior?.SourceSha,
+                sourceRef,
+                prior?.Content,
+                prior?.LastSyncedAt,
+                $"{CharterMarkdown.CharterPath} not found on {sourceRef}");
+        }
+        else if (prior is { Status: CharterStatus.Ok, Charter: not null } && prior.SourceSha == source.Sha)
+        {
+            ReportSync(terminal, product, prior);
+            return Success; // idempotent: unchanged blob SHA since the last good sync
+        }
+        else
+        {
+            try
+            {
+                var charter = CharterMarkdown.Parse(source.Content, product) with
+                {
+                    SourceSha = source.Sha,
+                    SourceRef = source.Reference,
+                };
+                stored = new StoredCharter(
+                    product,
+                    location.GitHubRepository,
+                    charter,
+                    CharterStatus.Ok,
+                    source.Sha,
+                    source.Reference,
+                    source.Content,
+                    DateTimeOffset.UtcNow,
+                    null);
+            }
+            catch (CharterParseException exception)
+            {
+                stored = new StoredCharter(
+                    product,
+                    location.GitHubRepository,
+                    lastGood,
+                    CharterStatus.Invalid,
+                    prior?.SourceSha,
+                    source.Reference,
+                    prior?.Content,
+                    prior?.LastSyncedAt,
+                    exception.Message);
+            }
+        }
+
+        await charterStore.PutCharterAsync(stored, cancellationToken);
+        ReportSync(terminal, product, stored);
+        return stored.Status == CharterStatus.Invalid ? Failure : Success;
+    }
+
+    private static void ReportSync(ICliTerminal terminal, string product, StoredCharter stored)
+    {
+        terminal.WriteLine($"[dsf] synced charter for {product}: {StatusValue(stored.Status)}");
+        if (!string.IsNullOrWhiteSpace(stored.LastError))
+        {
+            terminal.WriteLine($"[dsf]   {stored.LastError}");
+        }
+    }
+
+    /// <summary>Compares the stored charter against the live file and reports the drift.</summary>
+    private static async Task<int> RunCharterStatusAsync(
+        string product,
+        CharterSource? source,
+        ICliTerminal terminal,
+        ICharterStore charterStore,
+        CancellationToken cancellationToken)
+    {
+        var stored = await charterStore.GetCharterAsync(product, cancellationToken);
+        terminal.WriteLine($"[dsf] charter {product}: {DriftLabel(stored, source?.Sha)}");
+        if (stored is not null)
+        {
+            if (stored.LastSyncedAt is not null)
+            {
+                terminal.WriteLine($"[dsf]   last_synced_at={stored.LastSyncedAt:O}");
+            }
+
+            if (stored.Charter?.SourceSha is { Length: > 0 } storedSha)
+            {
+                terminal.WriteLine($"[dsf]   stored_sha={storedSha} ref={stored.Charter.SourceRef}");
+            }
+
+            if (!string.IsNullOrWhiteSpace(stored.LastError))
+            {
+                terminal.WriteLine($"[dsf]   last_error={stored.LastError}");
+            }
+        }
+
+        if (source is null)
+        {
+            terminal.WriteLine($"[dsf]   note: {CharterMarkdown.CharterPath} could not be read.");
+        }
+        else
+        {
+            terminal.WriteLine($"[dsf]   file_sha={source.Sha}");
+        }
+
+        return Success;
+    }
+
+    private static string DriftLabel(StoredCharter? stored, string? liveSha) => (stored, liveSha) switch
+    {
+        (_, null) => "missing",
+        (null, _) => "stale", // file present but nothing good stored yet -> run sync
+        ({ Charter: null }, _) => "stale",
+        ({ Status: CharterStatus.Invalid }, _) => "invalid",
+        var (record, sha) when record!.Charter!.SourceSha != sha => "stale",
+        _ => "ok",
+    };
+
+    private static string StatusValue(CharterStatus status) => status switch
+    {
+        CharterStatus.Ok => "OK",
+        CharterStatus.Stale => "STALE",
+        CharterStatus.Missing => "MISSING",
+        _ => "INVALID",
+    };
 
     private static string InitialCharter(string product, ICliTerminal terminal)
     {
