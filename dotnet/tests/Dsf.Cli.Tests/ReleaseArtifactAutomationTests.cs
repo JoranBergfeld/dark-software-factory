@@ -37,12 +37,12 @@ public sealed class ReleaseArtifactAutomationTests
     }
 
     [Fact]
-    public void Release_workflow_is_manual_jbergfeld_only_and_builds_all_release_shapes()
+    public void Release_workflow_is_manual_JoranBergfeld_only_and_builds_all_release_shapes()
     {
         var workflow = ReadRepoFile(".github", "workflows", "dotnet-release.yml");
 
         Assert.Contains("workflow_dispatch:", workflow, StringComparison.Ordinal);
-        Assert.Contains("github.actor == 'jbergfeld'", workflow, StringComparison.Ordinal);
+        Assert.Contains("github.actor == 'JoranBergfeld'", workflow, StringComparison.Ordinal);
         Assert.Contains("dotnet pack src/Dsf.Cli/Dsf.Cli.csproj", workflow, StringComparison.Ordinal);
         Assert.Contains("--self-contained true", workflow, StringComparison.Ordinal);
         Assert.Contains("PublishSingleFile=true", workflow, StringComparison.Ordinal);
@@ -116,6 +116,164 @@ public sealed class ReleaseArtifactAutomationTests
         var ciWorkflow = ReadRepoFile(".github", "workflows", "dotnet-ci.yml");
 
         Assert.Contains(".github/workflows/dotnet-release.yml", ciWorkflow, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Signing_jobs_never_reference_nonexistent_downloaded_payload_subdirectory()
+    {
+        var workflow = ReadRepoFile(".github", "workflows", "dotnet-release.yml");
+
+        Assert.DoesNotContain("unsigned-payload-win-*/payload", workflow, StringComparison.Ordinal);
+        Assert.DoesNotContain("unsigned-payload-osx-*/payload", workflow, StringComparison.Ordinal);
+        Assert.DoesNotContain("/payload/*", workflow, StringComparison.Ordinal);
+        Assert.DoesNotContain("payload\"; do", workflow, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Release_matrix_uses_hosted_arm_runners_for_native_arm_smoke_tests()
+    {
+        var workflow = ReadRepoFile(".github", "workflows", "dotnet-release.yml");
+
+        Assert.Contains("os: ubuntu-24.04-arm", workflow, StringComparison.Ordinal);
+        Assert.Contains("os: windows-11-arm", workflow, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Nuget_package_is_signed_behind_a_protected_environment_before_publish()
+    {
+        var workflow = ReadRepoFile(".github", "workflows", "dotnet-release.yml");
+
+        Assert.Contains("dotnet nuget sign", workflow, StringComparison.Ordinal);
+        Assert.Contains("NUGET_SIGNING_CERTIFICATE_BASE64", workflow, StringComparison.Ordinal);
+
+        AssertContainsBefore(workflow, "dotnet nuget sign", "python3 dotnet/eng/generate-release-metadata.py");
+        AssertContainsBefore(workflow, "dotnet nuget sign", "publish-nuget:");
+    }
+
+    [Fact]
+    public void Release_signing_key_secret_is_passed_via_env_not_interpolated_into_shell()
+    {
+        var workflow = ReadRepoFile(".github", "workflows", "dotnet-release.yml");
+
+        Assert.DoesNotContain(
+            "printf \'%s\' \"${{ secrets.RELEASE_ED25519_PRIVATE_KEY_PEM }}\"",
+            workflow,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "RELEASE_ED25519_PRIVATE_KEY_PEM: ${{ secrets.RELEASE_ED25519_PRIVATE_KEY_PEM }}",
+            workflow,
+            StringComparison.Ordinal);
+        Assert.Contains("printf \'%s\' \"$RELEASE_ED25519_PRIVATE_KEY_PEM\"", workflow, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Sboms_include_dependency_components_and_relationships()
+    {
+        var metadataScript = ReadRepoFile("dotnet", "eng", "generate-release-metadata.py");
+
+        Assert.Contains("packages.lock.json", metadataScript, StringComparison.Ordinal);
+        Assert.Contains("collect_lockfile_components", metadataScript, StringComparison.Ordinal);
+        Assert.Contains("component_spdx_id", metadataScript, StringComparison.Ordinal);
+        Assert.Contains("\"relationships\"", metadataScript, StringComparison.Ordinal);
+        Assert.Contains("DEPENDS_ON", metadataScript, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Generated_sbom_for_a_sample_artifact_lists_real_nuget_components_and_relationships()
+    {
+        var repoRoot = FindRepoRoot().FullName;
+        var tempRoot = Directory.CreateTempSubdirectory("dsf-release-metadata-test-");
+        try
+        {
+            var artifactRoot = Path.Combine(tempRoot.FullName, "final-artifacts");
+            Directory.CreateDirectory(artifactRoot);
+            File.WriteAllText(Path.Combine(artifactRoot, "dsf-cli-linux-x64.tar.gz"), "fake-archive-bytes");
+
+            var keyPath = Path.Combine(tempRoot.FullName, "signing-key.pem");
+            RunProcess(repoRoot, "openssl", $"genpkey -algorithm Ed25519 -out \"{keyPath}\"");
+
+            var scriptPath = Path.Combine(repoRoot, "dotnet", "eng", "generate-release-metadata.py");
+            RunProcess(
+                repoRoot,
+                "python3",
+                $"\"{scriptPath}\" --artifact-root \"{artifactRoot}\" --version 9.9.9 --commit deadbeef " +
+                $"--repository dark-software-factory/dark-software-factory --run-id 1 --private-key \"{keyPath}\"");
+
+            var sbomPath = Directory.GetFiles(Path.Combine(artifactRoot, "release-metadata"), "*.spdx.json")
+                .Single(path => path.Contains("linux-x64", StringComparison.Ordinal));
+            var sbomJson = File.ReadAllText(sbomPath);
+
+            Assert.Contains("System.CommandLine", sbomJson, StringComparison.Ordinal);
+            Assert.Contains("DEPENDS_ON", sbomJson, StringComparison.Ordinal);
+            Assert.Contains("relationships", sbomJson, StringComparison.Ordinal);
+
+            var hashesPath = Path.Combine(artifactRoot, "release-metadata", "SHA256SUMS");
+            var hashes = File.ReadAllText(hashesPath);
+            Assert.Contains("native-metadata/winget-portable.yaml", hashes, StringComparison.Ordinal);
+
+            var provenancePath = Path.Combine(artifactRoot, "release-metadata", "provenance.json");
+            var provenance = File.ReadAllText(provenancePath);
+            Assert.Contains("native-metadata/winget-portable.yaml", provenance, StringComparison.Ordinal);
+        }
+        finally
+        {
+            tempRoot.Delete(recursive: true);
+        }
+    }
+
+    private static void RunProcess(string workingDirectory, string fileName, string arguments)
+    {
+        using var process = new System.Diagnostics.Process
+        {
+            StartInfo = new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = fileName,
+                Arguments = arguments,
+                WorkingDirectory = workingDirectory,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+            },
+        };
+        process.Start();
+        var stdout = process.StandardOutput.ReadToEnd();
+        var stderr = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        Assert.True(process.ExitCode == 0, $"{fileName} {arguments} failed: {stdout}\n{stderr}");
+    }
+
+    [Fact]
+    public void Native_metadata_files_are_included_in_hashes_and_provenance_subjects()
+    {
+        var metadataScript = ReadRepoFile("dotnet", "eng", "generate-release-metadata.py");
+
+        Assert.Contains("write_native_metadata", metadataScript, StringComparison.Ordinal);
+
+        var callNativeIndex = metadataScript.IndexOf("write_native_metadata(native_root", StringComparison.Ordinal);
+        var callHashesIndex = metadataScript.IndexOf("write_hashes(metadata_root", StringComparison.Ordinal);
+
+        Assert.True(callNativeIndex >= 0);
+        Assert.True(callHashesIndex >= 0);
+        Assert.True(
+            callNativeIndex < callHashesIndex,
+            "native metadata must be generated before hashes/provenance are collected so it is included as a release asset");
+
+        Assert.DoesNotContain("GENERATED_DIRS = {\"release-metadata\", \"native-metadata\"}", metadataScript, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Workflow_creates_github_release_and_uploads_assets_before_publish()
+    {
+        var workflow = ReadRepoFile(".github", "workflows", "dotnet-release.yml");
+
+        Assert.Contains("gh release create", workflow, StringComparison.Ordinal);
+        Assert.Contains("permissions:\n      contents: write", workflow.Replace("\r\n", "\n"), StringComparison.Ordinal);
+
+        AssertContainsBefore(workflow, "gh release create", "publish-nuget:");
+        AssertContainsBefore(
+            workflow,
+            "needs: [build-and-smoke-test, sign-windows, sign-macos, test-and-pack]",
+            "gh release create");
     }
 
     private static string ReadRepoFile(params string[] parts)

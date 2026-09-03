@@ -27,7 +27,7 @@ jobs:
   authorize-release:
     name: Authorize Joran release
     runs-on: ubuntu-latest
-    if: github.actor == 'jbergfeld'
+    if: github.actor == 'JoranBergfeld'
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
@@ -80,7 +80,7 @@ jobs:
             os: ubuntu-latest
             archive: dsf-cli-linux-x64.tar.gz
           - rid: linux-arm64
-            os: ubuntu-latest
+            os: ubuntu-24.04-arm
             archive: dsf-cli-linux-arm64.tar.gz
           - rid: osx-x64
             os: macos-15-intel
@@ -92,7 +92,7 @@ jobs:
             os: windows-latest
             archive: dsf-cli-win-x64.zip
           - rid: win-arm64
-            os: windows-latest
+            os: windows-11-arm
             archive: dsf-cli-win-arm64.zip
     defaults:
       run:
@@ -160,8 +160,8 @@ jobs:
       - name: Smoke test signed Windows artifacts
         shell: bash
         run: |
-          for payload in dotnet/artifacts/windows-signing/unsigned-payload-win-*/payload; do
-            rid="$(basename "$(dirname "$payload")" | sed 's/^unsigned-payload-//')"
+          for payload in dotnet/artifacts/windows-signing/unsigned-payload-win-*; do
+            rid="$(basename "$payload" | sed 's/^unsigned-payload-//')"
             ./dotnet/eng/smoke-test-release-artifact.sh "$payload" "$rid"
           done
       - name: Archive signed Windows artifacts
@@ -170,7 +170,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path dotnet/artifacts/windows-signed
           Get-ChildItem dotnet/artifacts/windows-signing -Directory -Filter "unsigned-payload-win-*" | ForEach-Object {
             $rid = $_.Name -replace "^unsigned-payload-", ""
-            Compress-Archive -Path "$($_.FullName)/payload/*" -DestinationPath "dotnet/artifacts/windows-signed/dsf-cli-$rid.zip" -Force
+            Compress-Archive -Path "$($_.FullName)/*" -DestinationPath "dotnet/artifacts/windows-signed/dsf-cli-$rid.zip" -Force
           }
       - name: Upload signed Windows artifacts
         uses: actions/upload-artifact@v4
@@ -201,16 +201,16 @@ jobs:
       - name: Smoke test signed macOS artifacts
         shell: bash
         run: |
-          for payload in dotnet/artifacts/macos-signing/unsigned-payload-osx-*/payload; do
-            rid="$(basename "$(dirname "$payload")" | sed 's/^unsigned-payload-//')"
+          for payload in dotnet/artifacts/macos-signing/unsigned-payload-osx-*; do
+            rid="$(basename "$payload" | sed 's/^unsigned-payload-//')"
             ./dotnet/eng/smoke-test-release-artifact.sh "$payload" "$rid"
           done
       - name: Archive signed macOS artifacts
         shell: bash
         run: |
           mkdir -p dotnet/artifacts/macos-signed
-          for payload in dotnet/artifacts/macos-signing/unsigned-payload-osx-*/payload; do
-            rid="$(basename "$(dirname "$payload")" | sed 's/^unsigned-payload-//')"
+          for payload in dotnet/artifacts/macos-signing/unsigned-payload-osx-*; do
+            rid="$(basename "$payload" | sed 's/^unsigned-payload-//')"
             tar -C "$payload" -czf "dotnet/artifacts/macos-signed/dsf-cli-$rid.tar.gz" .
           done
       - name: Upload signed macOS artifacts
@@ -248,11 +248,33 @@ jobs:
         with:
           name: dsf-cli-nuget
           path: dotnet/artifacts/final-artifacts
+      - name: Sign NuGet package
+        shell: bash
+        env:
+          NUGET_SIGNING_CERTIFICATE_BASE64: ${{ secrets.NUGET_SIGNING_CERTIFICATE_BASE64 }}
+          NUGET_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.NUGET_SIGNING_CERTIFICATE_PASSWORD }}
+        run: |
+          if [[ -z "$NUGET_SIGNING_CERTIFICATE_BASE64" || -z "$NUGET_SIGNING_CERTIFICATE_PASSWORD" ]]; then
+            echo "NuGet signing requires protected release environment secrets." >&2
+            exit 1
+          fi
+          certificate_path="$RUNNER_TEMP/nuget-signing.pfx"
+          printf '%s' "$NUGET_SIGNING_CERTIFICATE_BASE64" | base64 --decode > "$certificate_path"
+          for package in dotnet/artifacts/final-artifacts/*.nupkg; do
+            dotnet nuget sign "$package" \
+              --certificate-path "$certificate_path" \
+              --certificate-password "$NUGET_SIGNING_CERTIFICATE_PASSWORD" \
+              --timestamper http://timestamp.digicert.com \
+              --overwrite
+          done
+          rm -f "$certificate_path"
       - name: Write Ed25519 release signing key
         shell: bash
+        env:
+          RELEASE_ED25519_PRIVATE_KEY_PEM: ${{ secrets.RELEASE_ED25519_PRIVATE_KEY_PEM }}
         run: |
           install -m 700 -d dotnet/artifacts/final-artifacts/release-metadata
-          printf '%s' "${{ secrets.RELEASE_ED25519_PRIVATE_KEY_PEM }}" > dotnet/artifacts/final-artifacts/release-metadata/release-signing-key.pem
+          printf '%s' "$RELEASE_ED25519_PRIVATE_KEY_PEM" > dotnet/artifacts/final-artifacts/release-metadata/release-signing-key.pem
       - name: Generate hashes, SBOMs, provenance, keys, native metadata
         run: >
           python3 dotnet/eng/generate-release-metadata.py
@@ -276,10 +298,36 @@ jobs:
           path: dotnet/artifacts/final-artifacts
           if-no-files-found: error
 
+  publish-github-release:
+    name: Create GitHub release and upload assets
+    runs-on: ubuntu-latest
+    needs: collect-final-release-artifacts
+    environment: release-github-publish
+    if: inputs.dry_run != true
+    permissions:
+      contents: write
+    steps:
+      - name: Download final release bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: dsf-cli-final-release-bundle
+          path: dotnet/artifacts/final-artifacts
+      - name: Create GitHub release and upload assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mapfile -t release_assets < <(find dotnet/artifacts/final-artifacts -type f | sort)
+          gh release create "v${{ inputs.version }}" \
+            --repo "${{ github.repository }}" \
+            --title "dsf CLI v${{ inputs.version }}" \
+            --notes "Automated release for dsf CLI v${{ inputs.version }}." \
+            --target "${{ github.sha }}" \
+            "${release_assets[@]}"
+
   publish-nuget:
     name: Publish NuGet global tool
     runs-on: ubuntu-latest
-    needs: collect-final-release-artifacts
+    needs: [collect-final-release-artifacts, publish-github-release]
     environment: release-nuget-publish
     if: inputs.dry_run != true
     steps:

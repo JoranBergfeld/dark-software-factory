@@ -27,6 +27,7 @@ case "$rid:$host_os:$host_arch" in
   osx-arm64:darwin:arm64) can_execute=true ;;
   win-x64:mingw*:x86_64|win-x64:msys*:x86_64|win-x64:cygwin*:x86_64) can_execute=true ;;
   win-arm64:mingw*:aarch64|win-arm64:msys*:aarch64|win-arm64:cygwin*:aarch64) can_execute=true ;;
+  win-arm64:mingw*:arm64|win-arm64:msys*:arm64|win-arm64:cygwin*:arm64) can_execute=true ;;
 esac
 
 if [[ "$can_execute" == "true" ]]; then

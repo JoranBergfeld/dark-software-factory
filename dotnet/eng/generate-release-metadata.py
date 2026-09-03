@@ -10,8 +10,16 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 
-GENERATED_DIRS = {"release-metadata", "native-metadata"}
+# Only the top-level directory holding hashes/SBOM-signatures/provenance/keys is excluded from
+# the release assets it describes. Native package metadata (winget/homebrew/deb/rpm) is a real
+# release deliverable, so it must be hashed and attested like everything else.
+GENERATED_DIRS = {"release-metadata"}
 SPDX_SIGNATURE_SUFFIX = ".spdx.json.sig"
+
+# Root of the dotnet workspace relative to this script, used to load packages.lock.json files
+# for the CLI tool and its project dependencies so SBOMs carry real components.
+REPO_DOTNET_ROOT = Path(__file__).resolve().parents[1]
+LOCKFILE_PROJECTS = ("src/Dsf.Cli", "src/Dsf.Core")
 
 
 def main() -> int:
@@ -30,10 +38,15 @@ def main() -> int:
     metadata_root.mkdir(parents=True, exist_ok=True)
     native_root.mkdir(parents=True, exist_ok=True)
 
+    # Native metadata must exist before assets are collected, so it is hashed, attested, and
+    # included in provenance subjects just like every other release artifact.
+    release_assets = collect_assets(artifact_root)
+    write_native_metadata(native_root, release_assets, args)
+
+    components = collect_lockfile_components()
     assets = collect_assets(artifact_root)
     write_hashes(metadata_root, assets, artifact_root)
-    write_sboms(metadata_root, assets, artifact_root, args)
-    write_native_metadata(native_root, assets, args)
+    write_sboms(metadata_root, assets, artifact_root, args, components)
     write_provenance(metadata_root, assets, artifact_root, args)
     write_public_key(metadata_root, Path(args.private_key))
     return 0
@@ -50,6 +63,30 @@ def collect_assets(artifact_root: Path) -> list[Path]:
     return sorted(assets)
 
 
+def collect_lockfile_components() -> list[dict[str, str]]:
+    """Load NuGet package/dependency components from packages.lock.json for the CLI tool and
+    its project references, so generated SBOMs describe the real dependency closure of the
+    self-contained .NET binary instead of an empty package list."""
+    components: dict[str, dict[str, str]] = {}
+    for project in LOCKFILE_PROJECTS:
+        lockfile = REPO_DOTNET_ROOT / project / "packages.lock.json"
+        if not lockfile.exists():
+            continue
+        data = json.loads(lockfile.read_text(encoding="utf-8"))
+        for framework_dependencies in data.get("dependencies", {}).values():
+            for name, info in framework_dependencies.items():
+                if info.get("type") == "Project":
+                    continue
+                resolved = info.get("resolved", "")
+                content_hash = info.get("contentHash", "")
+                components[name] = {
+                    "name": name,
+                    "version": resolved,
+                    "contentHash": content_hash,
+                }
+    return sorted(components.values(), key=lambda component: component["name"])
+
+
 def sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -63,9 +100,52 @@ def write_hashes(metadata_root: Path, assets: list[Path], artifact_root: Path) -
     (metadata_root / "SHA256SUMS").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def write_sboms(metadata_root: Path, assets: list[Path], artifact_root: Path, args: argparse.Namespace) -> None:
+def write_sboms(
+    metadata_root: Path,
+    assets: list[Path],
+    artifact_root: Path,
+    args: argparse.Namespace,
+    components: list[dict[str, str]],
+) -> None:
     for asset in assets:
         relative = asset.relative_to(artifact_root).as_posix()
+        root_spdx_id = "SPDXRef-Package-dsf-cli"
+        component_packages = [
+            {
+                "name": component["name"],
+                "SPDXID": component_spdx_id(component["name"]),
+                "versionInfo": component["version"] or "NOASSERTION",
+                "downloadLocation": (
+                    f"https://www.nuget.org/packages/{component['name']}/{component['version']}"
+                    if component["version"]
+                    else "NOASSERTION"
+                ),
+                "filesAnalyzed": False,
+                "checksums": (
+                    [{"algorithm": "SHA256", "checksumValue": component["contentHash"]}]
+                    if component["contentHash"]
+                    else []
+                ),
+                "licenseConcluded": "NOASSERTION",
+                "licenseDeclared": "NOASSERTION",
+                "copyrightText": "NOASSERTION",
+            }
+            for component in components
+        ]
+        relationships = [
+            {
+                "spdxElementId": "SPDXRef-DOCUMENT",
+                "relationshipType": "DESCRIBES",
+                "relatedSpdxElement": root_spdx_id,
+            }
+        ] + [
+            {
+                "spdxElementId": root_spdx_id,
+                "relationshipType": "DEPENDS_ON",
+                "relatedSpdxElement": component_spdx_id(component["name"]),
+            }
+            for component in components
+        ]
         sbom = {
             "spdxVersion": "SPDX-2.3",
             "dataLicense": "CC0-1.0",
@@ -79,7 +159,7 @@ def write_sboms(metadata_root: Path, assets: list[Path], artifact_root: Path, ar
             "packages": [
                 {
                     "name": relative,
-                    "SPDXID": "SPDXRef-Package-dsf-cli",
+                    "SPDXID": root_spdx_id,
                     "versionInfo": args.version,
                     "downloadLocation": "NOASSERTION",
                     "filesAnalyzed": False,
@@ -87,12 +167,18 @@ def write_sboms(metadata_root: Path, assets: list[Path], artifact_root: Path, ar
                     "licenseConcluded": "NOASSERTION",
                     "licenseDeclared": "NOASSERTION",
                     "copyrightText": "NOASSERTION",
-                }
+                },
+                *component_packages,
             ],
+            "relationships": relationships,
         }
         sbom_path = metadata_root / f"{safe_name(relative)}.spdx.json"
         sbom_path.write_text(json.dumps(sbom, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         sign_file(sbom_path, Path(args.private_key), metadata_root / f"{safe_name(relative)}{SPDX_SIGNATURE_SUFFIX}")
+
+
+def component_spdx_id(name: str) -> str:
+    return f"SPDXRef-Package-{safe_name(name)}"
 
 
 def sign_file(input_path: Path, private_key: Path, signature_path: Path) -> None:
