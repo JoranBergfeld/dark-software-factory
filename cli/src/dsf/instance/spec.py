@@ -8,6 +8,7 @@ factory. A :class:`ProvisionStep` is a single ordered action; an
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
@@ -188,9 +189,32 @@ def instances_dir(repo_root: Path | None = None) -> Path:
     return root / "config" / "instances"
 
 
+def safe_instance_child_path(product: str, suffix: str, repo_root: Path | None = None) -> Path:
+    """Join ``config/instances/`` with ``f"{product}{suffix}"``, refusing to escape it.
+
+    ``product`` comes from an untrusted ``--product`` CLI flag and is used verbatim
+    in an on-disk path. Reject it outright (rather than silently sanitizing it) if
+    it contains a path separator, is a bare ``.``/``..`` segment, or — as a second,
+    independent check — if the normalized joined path would not stay under
+    ``config/instances`` (e.g. an absolute-path product replacing the base
+    entirely). This is the single choke point every instance-path helper and
+    writer routes through, so CLI, provisioner, deprovisioner, and runtime
+    rendering callers are all protected (ticket #137).
+    """
+    base = instances_dir(repo_root)
+    if not product or "/" in product or "\\" in product or product in (".", ".."):
+        raise ValueError(f"unsafe product identifier: {product!r}")
+    candidate = base / f"{product}{suffix}"
+    base_norm = os.path.normpath(str(base))
+    candidate_norm = os.path.normpath(str(candidate))
+    if candidate_norm != base_norm and not candidate_norm.startswith(base_norm + os.sep):
+        raise ValueError(f"unsafe product identifier: {product!r} escapes {base}")
+    return candidate
+
+
 def manifest_path(product: str, repo_root: Path | None = None) -> Path:
     """Path to a product's instance manifest."""
-    return instances_dir(repo_root) / f"{product}.json"
+    return safe_instance_child_path(product, ".json", repo_root)
 
 
 def write_manifest(manifest: InstanceManifest, repo_root: Path | None = None) -> Path:

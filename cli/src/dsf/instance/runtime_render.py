@@ -20,7 +20,7 @@ from dsf.contracts.handoff import HANDOFF_LABEL, INCIDENT_LABEL
 from dsf.instance.spec import (
     InstanceManifest,
     InstanceSpec,
-    instances_dir,
+    safe_instance_child_path,
 )
 
 #: Mapping of Bicep deployment output keys -> the env var names the runtime reads
@@ -66,7 +66,7 @@ class SreSummary:
 
 def runtime_dir(product: str, repo_root: Path | None = None) -> Path:
     """Directory holding a product's generated runtime bundle."""
-    return instances_dir(repo_root) / f"{product}.runtime"
+    return safe_instance_child_path(product, ".runtime", repo_root)
 
 
 def _render_env(product: str, outputs: dict[str, str]) -> str:

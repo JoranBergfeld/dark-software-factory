@@ -187,3 +187,40 @@ def test_monitored_rgs_defaults_to_factory_rg():
 def test_monitored_rgs_appends_and_dedupes():
     s = _spec(monitored_resource_groups=["rg-app", "rg-dsf-microbi", "rg-app"])
     assert s.monitored_rgs() == ["rg-dsf-microbi", "rg-app"]
+
+
+# --- path-safety tests (ticket #137) ---
+
+
+def test_manifest_path_rejects_parent_traversal(tmp_path):
+    with pytest.raises(ValueError, match="unsafe product"):
+        manifest_path("../evil", repo_root=tmp_path)
+
+
+def test_manifest_path_rejects_nested_traversal(tmp_path):
+    with pytest.raises(ValueError, match="unsafe product"):
+        manifest_path("sub/../../evil", repo_root=tmp_path)
+
+
+def test_manifest_path_rejects_absolute_path_product(tmp_path):
+    with pytest.raises(ValueError, match="unsafe product"):
+        manifest_path("/etc/passwd", repo_root=tmp_path)
+
+
+def test_write_manifest_rejects_traversal_product(tmp_path):
+    spec = InstanceSpec(product="demo", owner="acme")
+    plan = InstancePlan(product="demo", steps=[])
+    manifest = InstanceManifest(spec=spec, plan=plan)
+    # Swap in an unsafe product post-construction to exercise the writer's own
+    # guard, independent of any InstanceSpec-level validation.
+    unsafe_manifest = manifest.model_copy(
+        update={"spec": spec.model_copy(update={"product": "../evil"})}
+    )
+
+    with pytest.raises(ValueError, match="unsafe product"):
+        write_manifest(unsafe_manifest, repo_root=tmp_path)
+
+
+def test_manifest_path_accepts_valid_hyphenated_product(tmp_path):
+    path = manifest_path("pets-cool-clinic2", repo_root=tmp_path)
+    assert path == instances_dir(tmp_path) / "pets-cool-clinic2.json"

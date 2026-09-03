@@ -12,6 +12,7 @@ from dsf.instance.spec import (
     instances_dir,
     manifest_path,
     read_manifest,
+    safe_instance_child_path,
     write_manifest,
 )
 
@@ -28,5 +29,6 @@ __all__ = [
     "make_name_prefix",
     "manifest_path",
     "read_manifest",
+    "safe_instance_child_path",
     "write_manifest",
 ]
