@@ -104,20 +104,79 @@ public sealed class RuntimeCliApplicationTests
     }
 
     [Theory]
-    [InlineData("run", "--signal", "signal.json")]
     [InlineData("sweep")]
     [InlineData("serve-orchestrator")]
-    public async Task Fully_configured_verbs_fail_loudly_instead_of_pretending_success(params string[] args)
+    public async Task Fully_configured_sweep_and_orchestrator_report_pending_source_agent_runners(params string[] args)
     {
         var (exitCode, stdout, stderr) = await InvokeAsync(FullEnvironment, args);
 
         Assert.Equal(1, exitCode);
         Assert.Equal(string.Empty, stdout);
-        Assert.Contains("not yet implemented", stderr, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("not yet implemented", stderr, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("no source agent runners are wired", stderr, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("#144", stderr);
     }
 
     [Fact]
-    public async Task Serve_agent_validates_runtime_settings_before_reporting_not_implemented()
+    public async Task Run_with_full_settings_and_a_missing_signal_file_reports_a_real_error()
+    {
+        var (exitCode, stdout, stderr) = await InvokeAsync(FullEnvironment, "run", "--signal", "does-not-exist.json");
+
+        Assert.Equal(1, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.DoesNotContain("not yet implemented", stderr, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("signal file not found: does-not-exist.json", stderr);
+    }
+
+    [Fact]
+    public async Task Run_with_full_settings_and_invalid_json_reports_a_real_error()
+    {
+        var path = Path.GetTempFileName();
+        try
+        {
+            await File.WriteAllTextAsync(path, "not json");
+
+            var (exitCode, stdout, stderr) = await InvokeAsync(FullEnvironment, "run", "--signal", path);
+
+            Assert.Equal(1, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains("is not valid JSON", stderr);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task Run_with_full_settings_and_a_valid_signal_parses_it_and_reports_the_pending_conveyor()
+    {
+        var path = Path.GetTempFileName();
+        try
+        {
+            await File.WriteAllTextAsync(
+                path, """{"product_hints": "acme", "source_kinds": ["sentry", "bogus"]}""");
+
+            var (exitCode, stdout, stderr) = await InvokeAsync(FullEnvironment, "run", "--signal", path);
+
+            Assert.Equal(1, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.DoesNotContain("not yet implemented", stderr, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("product_hints=[acme]", stderr);
+            // "bogus" is not a recognized source kind and must be dropped, mirroring
+            // the Python signal_to_run's unknown-kind handling.
+            Assert.Contains("source_kinds=[sentry]", stderr);
+            Assert.Contains("conveyor station pipeline is not wired yet", stderr);
+            Assert.Contains("#142", stderr);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task Serve_agent_validates_runtime_settings_before_validating_kind()
     {
         var (exitCode, stdout, stderr) = await InvokeAsync(EmptyEnvironment, "serve-agent", "--kind", "sentry");
 
@@ -126,23 +185,36 @@ public sealed class RuntimeCliApplicationTests
         Assert.Contains(
             "DSF_PRODUCT is required to scope the factory runtime (set DSF_PRODUCT=<product>).", stderr);
         Assert.DoesNotContain("not yet implemented", stderr, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("agent host", stderr, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
-    public async Task Serve_agent_with_full_settings_fails_loudly_instead_of_pretending_success()
+    public async Task Serve_agent_with_full_settings_and_an_unknown_kind_reports_a_real_error()
+    {
+        var (exitCode, stdout, stderr) = await InvokeAsync(FullEnvironment, "serve-agent", "--kind", "bogus");
+
+        Assert.Equal(1, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("unknown source agent kind 'bogus'", stderr);
+        Assert.Contains("sentry", stderr);
+    }
+
+    [Fact]
+    public async Task Serve_agent_with_full_settings_and_a_known_kind_reports_the_pending_agent_host()
     {
         var (exitCode, stdout, stderr) = await InvokeAsync(FullEnvironment, "serve-agent", "--kind", "sentry");
 
         Assert.Equal(1, exitCode);
         Assert.Equal(string.Empty, stdout);
-        Assert.Contains("not yet implemented", stderr, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("not yet implemented", stderr, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("source agent kind 'sentry' is recognized", stderr);
+        Assert.Contains("#144", stderr);
     }
 
     [Theory]
-    [InlineData("run", "--signal", "signal.json")]
     [InlineData("sweep")]
     [InlineData("serve-orchestrator")]
-    public async Task Verbs_resolve_missing_endpoints_from_the_owner_runtime_index_when_configured(params string[] args)
+    public async Task Sweep_and_orchestrator_resolve_missing_endpoints_from_the_owner_runtime_index_when_configured(params string[] args)
     {
         var env = new Dictionary<string, string?>
         {
@@ -161,10 +233,10 @@ public sealed class RuntimeCliApplicationTests
         var (exitCode, stdout, stderr) = await InvokeAsync(env, reader, args);
 
         // Settings resolved from the owner index; the failure moves past config
-        // validation entirely to the (expected) not-implemented station pipeline.
+        // validation entirely to the (expected) pending source-agent runners.
         Assert.Equal(1, exitCode);
         Assert.Equal(string.Empty, stdout);
-        Assert.Contains("not yet implemented", stderr, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("#144", stderr);
         Assert.DoesNotContain("AZURE_APPCONFIG_ENDPOINT", stderr);
         Assert.Equal("acme", reader.RequestedProduct);
     }

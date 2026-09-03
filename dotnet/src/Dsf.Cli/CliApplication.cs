@@ -828,7 +828,8 @@ public static class CliApplication
         var product = StringOption("--product", "resolve runtime env for this product");
         var command = new Command("run", "run the intake line for one signal (runtime)");
         AddOptions(command, signal, dryRun, product);
-        command.SetAction(parseResult => RuntimeShell(parseResult.GetValue(product), "run"));
+        command.SetAction(parseResult => RuntimeShell(
+            parseResult.GetValue(product), _ => RuntimeVerbs.Run(parseResult.GetValue(signal), parseResult.GetValue(dryRun))));
         return command;
     }
 
@@ -837,7 +838,8 @@ public static class CliApplication
         var product = StringOption("--product", "resolve runtime env for this product");
         var command = new Command("sweep", "sweep enabled source agents once (runtime)");
         AddOptions(command, product);
-        command.SetAction(parseResult => RuntimeShell(parseResult.GetValue(product), "sweep"));
+        command.SetAction(parseResult => RuntimeShell(
+            parseResult.GetValue(product), settings => RuntimeVerbs.Sweep(settings.Product)));
         return command;
     }
 
@@ -848,7 +850,8 @@ public static class CliApplication
         var product = StringOption("--product", "resolve runtime env for this product");
         var command = new Command("serve-orchestrator", "run the orchestrator worker (runtime)");
         AddOptions(command, loop, interval, product);
-        command.SetAction(parseResult => RuntimeShell(parseResult.GetValue(product), "serve-orchestrator"));
+        command.SetAction(parseResult => RuntimeShell(
+            parseResult.GetValue(product), settings => RuntimeVerbs.ServeOrchestrator(settings.Product)));
         return command;
     }
 
@@ -857,13 +860,13 @@ public static class CliApplication
         var kind = StringOption("--kind", "source agent kind", "sentry");
         var host = StringOption("--host", "bind host", "0.0.0.0");
         var port = IntOption("--port", "bind port", 8080);
+        var product = StringOption("--product", "resolve runtime env for this product");
         var command = new Command("serve-agent", "serve a source agent over A2A (runtime)");
-        AddOptions(command, kind, host, port);
-        command.SetAction(_ =>
-        {
-            Console.Error.WriteLine("[dsf] error: serve-agent is not yet implemented in the .NET runtime host.");
-            return Failure;
-        });
+        AddOptions(command, kind, host, port, product);
+        // serve-agent must still validate required runtime config before validating
+        // --kind, exactly like every other runtime verb.
+        command.SetAction(parseResult => RuntimeShell(
+            parseResult.GetValue(product), _ => RuntimeVerbs.ServeAgent(parseResult.GetValue(kind) ?? "sentry")));
         return command;
     }
 
@@ -1009,11 +1012,20 @@ public static class CliApplication
         return Failure;
     }
 
-    private static int RuntimeShell(string? product, string verb)
+    /// <summary>
+    /// Composes <see cref="RuntimeSettings"/> and, once they validate, runs
+    /// <paramref name="operation"/> -- the verb's real per-invocation work (see
+    /// <see cref="RuntimeVerbs"/>). Both a settings failure
+    /// (<see cref="RuntimeConfigurationException"/>) and an operation failure
+    /// (<see cref="RuntimeVerbException"/>) are printed to stderr and exit
+    /// non-zero the same way.
+    /// </summary>
+    private static int RuntimeShell(string? product, Action<Dsf.Core.Runtime.RuntimeSettings> operation)
     {
+        Dsf.Core.Runtime.RuntimeSettings settings;
         try
         {
-            RuntimeSettingsComposer.FromEnvironment(product);
+            settings = RuntimeSettingsComposer.FromEnvironment(product);
         }
         catch (RuntimeConfigurationException exception)
         {
@@ -1021,8 +1033,17 @@ public static class CliApplication
             return Failure;
         }
 
-        Console.Error.WriteLine($"[dsf] error: {verb} is not yet implemented in the .NET runtime host.");
-        return Failure;
+        try
+        {
+            operation(settings);
+        }
+        catch (RuntimeVerbException exception)
+        {
+            Console.Error.WriteLine($"[dsf] error: {exception.Message}");
+            return Failure;
+        }
+
+        return Success;
     }
 
     private const string ConstitutionPath = ".specify/memory/constitution.md";

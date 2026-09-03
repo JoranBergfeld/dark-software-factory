@@ -38,7 +38,7 @@ public static class RuntimeCliApplication
         IOwnerRuntimeIndexReader? ownerRuntimeIndexReader,
         CancellationToken cancellationToken)
     {
-        ownerRuntimeIndexReader ??= new AzureCliOwnerRuntimeIndexReader();
+        ownerRuntimeIndexReader ??= new AzureAppConfigurationOwnerRuntimeIndexReader();
         var root = BuildRootCommand(env, stdout, stderr, ownerRuntimeIndexReader);
         var parseResult = root.Parse(args);
         var exitCode = await parseResult.InvokeAsync(cancellationToken: cancellationToken);
@@ -47,7 +47,7 @@ public static class RuntimeCliApplication
 
     /// <summary>Builds the root command with no wiring, for command-grammar assertions.</summary>
     public static RootCommand BuildRootCommand() => BuildRootCommand(
-        new Dictionary<string, string?>(), Console.Out, Console.Error, new AzureCliOwnerRuntimeIndexReader());
+        new Dictionary<string, string?>(), Console.Out, Console.Error, new AzureAppConfigurationOwnerRuntimeIndexReader());
 
     private static RootCommand BuildRootCommand(
         IReadOnlyDictionary<string, string?> env,
@@ -71,8 +71,13 @@ public static class RuntimeCliApplication
         var product = StringOption("--product", "resolve runtime env for this product");
         var command = new Command("run", "run the intake line for one signal (runtime)");
         AddOptions(command, signal, dryRun, product);
-        command.SetAction((parseResult, cancellationToken) =>
-            RunVerb(env, stderr, "run", parseResult.GetValue(product), ownerRuntimeIndexReader, cancellationToken));
+        command.SetAction((parseResult, cancellationToken) => RunVerb(
+            env,
+            stderr,
+            parseResult.GetValue(product),
+            ownerRuntimeIndexReader,
+            _ => RuntimeVerbs.Run(parseResult.GetValue(signal), parseResult.GetValue(dryRun)),
+            cancellationToken));
         return command;
     }
 
@@ -82,8 +87,13 @@ public static class RuntimeCliApplication
         var product = StringOption("--product", "resolve runtime env for this product");
         var command = new Command("sweep", "sweep enabled source agents once (runtime)");
         AddOptions(command, product);
-        command.SetAction((parseResult, cancellationToken) =>
-            RunVerb(env, stderr, "sweep", parseResult.GetValue(product), ownerRuntimeIndexReader, cancellationToken));
+        command.SetAction((parseResult, cancellationToken) => RunVerb(
+            env,
+            stderr,
+            parseResult.GetValue(product),
+            ownerRuntimeIndexReader,
+            settings => RuntimeVerbs.Sweep(settings.Product),
+            cancellationToken));
         return command;
     }
 
@@ -95,9 +105,13 @@ public static class RuntimeCliApplication
         var product = StringOption("--product", "resolve runtime env for this product");
         var command = new Command("serve-orchestrator", "run the orchestrator worker (runtime)");
         AddOptions(command, loop, interval, product);
-        command.SetAction((parseResult, cancellationToken) =>
-            RunVerb(
-                env, stderr, "serve-orchestrator", parseResult.GetValue(product), ownerRuntimeIndexReader, cancellationToken));
+        command.SetAction((parseResult, cancellationToken) => RunVerb(
+            env,
+            stderr,
+            parseResult.GetValue(product),
+            ownerRuntimeIndexReader,
+            settings => RuntimeVerbs.ServeOrchestrator(settings.Product),
+            cancellationToken));
         return command;
     }
 
@@ -110,26 +124,40 @@ public static class RuntimeCliApplication
         var product = StringOption("--product", "resolve runtime env for this product");
         var command = new Command("serve-agent", "serve a source agent over A2A (runtime)");
         AddOptions(command, kind, host, port, product);
-        // serve-agent must still validate required runtime config before its loud
-        // not-implemented failure, exactly like every other verb -- it must never
-        // report "not yet implemented" for a product that isn't configured yet.
-        command.SetAction((parseResult, cancellationToken) =>
-            RunVerb(
-                env, stderr, "serve-agent", parseResult.GetValue(product), ownerRuntimeIndexReader, cancellationToken));
+        // serve-agent must still validate required runtime config before validating
+        // --kind, exactly like every other verb -- it must never report a kind
+        // result for a product that isn't configured yet.
+        command.SetAction((parseResult, cancellationToken) => RunVerb(
+            env,
+            stderr,
+            parseResult.GetValue(product),
+            ownerRuntimeIndexReader,
+            _ => RuntimeVerbs.ServeAgent(parseResult.GetValue(kind) ?? "sentry"),
+            cancellationToken));
         return command;
     }
 
+    /// <summary>
+    /// Composes <see cref="RuntimeSettings"/> and, once they validate, runs
+    /// <paramref name="operation"/> -- the verb's real per-invocation work (see
+    /// <see cref="RuntimeVerbs"/>). Both a settings failure
+    /// (<see cref="RuntimeConfigurationException"/>) and an operation failure
+    /// (<see cref="RuntimeVerbException"/>) are printed to stderr and exit
+    /// non-zero the same way.
+    /// </summary>
     private static async Task<int> RunVerb(
         IReadOnlyDictionary<string, string?> env,
         TextWriter stderr,
-        string verb,
         string? productOption,
         IOwnerRuntimeIndexReader ownerRuntimeIndexReader,
+        Action<RuntimeSettings> operation,
         CancellationToken cancellationToken)
     {
+        RuntimeSettings settings;
         try
         {
-            await RuntimeSettingsComposer.ComposeAsync(env, productOption, ownerRuntimeIndexReader, cancellationToken);
+            settings = await RuntimeSettingsComposer.ComposeAsync(
+                env, productOption, ownerRuntimeIndexReader, cancellationToken);
         }
         catch (RuntimeConfigurationException exception)
         {
@@ -137,8 +165,17 @@ public static class RuntimeCliApplication
             return Failure;
         }
 
-        stderr.WriteLine($"[dsf] error: {verb} is not yet implemented in the .NET runtime host.");
-        return Failure;
+        try
+        {
+            operation(settings);
+        }
+        catch (RuntimeVerbException exception)
+        {
+            stderr.WriteLine($"[dsf] error: {exception.Message}");
+            return Failure;
+        }
+
+        return Success;
     }
 
     private static IReadOnlyDictionary<string, string?> RealEnvironment()

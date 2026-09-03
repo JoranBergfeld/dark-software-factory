@@ -230,7 +230,9 @@ public sealed class CliSurfaceTests
 
         Assert.Equal(1, result.ExitCode);
         Assert.Equal(string.Empty, result.Stdout);
-        Assert.Contains("not yet implemented", result.Stderr, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("not yet implemented", result.Stderr, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("no source agent runners are wired", result.Stderr, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("#144", result.Stderr);
     }
 
     [Fact]

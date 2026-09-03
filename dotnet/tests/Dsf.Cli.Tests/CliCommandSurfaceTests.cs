@@ -185,6 +185,7 @@ command <root> desc="Dark Software Factory — factory CLI (create product insta
     option --kind type=String arity=1..1 default="sentry" desc="source agent kind"
     option --host type=String arity=1..1 default="0.0.0.0" desc="bind host"
     option --port type=Int32? arity=1..1 default=8080 desc="bind port"
+    option --product type=String arity=1..1 desc="resolve runtime env for this product"
   command charter desc="manage the product charter (.dsf/charter.md)"
     command init desc="interview to draft a charter and open a PR"
       option --product type=String arity=1..1 required desc="product key"
