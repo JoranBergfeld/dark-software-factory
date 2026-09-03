@@ -35,13 +35,20 @@ internal sealed record GitHubProvisioningPlan(IReadOnlyList<GitHubProvisioningRe
                     definition.GitHub.Visibility,
                     defaultBranch),
                 new EnsureLabelsRequest(repoFullName, LabelDefinitions()),
-                new EnsureAppBindingRequest(repoFullName, definition.GitHub.InstallationId),
+                new EnsureAppBindingRequest(
+                    repoFullName,
+                    definition.GitHub.AppId,
+                    definition.GitHub.InstallationId),
                 new EnsureBranchProtectionRulesetRequest(
                     repoFullName,
                     defaultBranch,
                     ["ci"],
                     RequiredApprovingReviews(definition.Product.CreationMaturity),
-                    definition.GitHub.BranchProtectionRulesetId),
+                    definition.GitHub.BranchProtectionRulesetId,
+                    AllowAutoMerge: string.Equals(
+                        definition.Product.CreationMaturity,
+                        "high",
+                        StringComparison.Ordinal)),
             ]);
     }
 
@@ -124,7 +131,10 @@ internal sealed record EnsureLabelsRequest(
     IReadOnlyList<GitHubLabelDefinition> Labels)
     : GitHubProvisioningRequest("ensure_labels");
 
-internal sealed record EnsureAppBindingRequest(string RepositoryFullName, string? InstallationId)
+internal sealed record EnsureAppBindingRequest(
+    string RepositoryFullName,
+    string? AppId,
+    string? InstallationId)
     : GitHubProvisioningRequest("ensure_app_binding");
 
 internal sealed record EnsureBranchProtectionRulesetRequest(
@@ -132,7 +142,9 @@ internal sealed record EnsureBranchProtectionRulesetRequest(
     string TargetBranch,
     IReadOnlyList<string> RequiredStatusChecks,
     int RequiredApprovingReviewCount,
-    long? ExistingRulesetId)
+    long? ExistingRulesetId,
+    string Name = "dsf-creation",
+    bool AllowAutoMerge = false)
     : GitHubProvisioningRequest("ensure_branch_protection_ruleset");
 
 internal sealed record GitHubLabelDefinition(
@@ -144,7 +156,7 @@ internal sealed record GitHubRepositoryProvisioningResult(long RepositoryId, str
 
 internal sealed record GitHubAppBindingProvisioningResult(string? AppId, string InstallationId);
 
-internal sealed record GitHubRulesetProvisioningResult(long RulesetId);
+internal sealed record GitHubRulesetProvisioningResult(long? RulesetId);
 
 internal sealed record GitHubProvisioningResult(
     GitHubRepositoryProvisioningResult? Repository,

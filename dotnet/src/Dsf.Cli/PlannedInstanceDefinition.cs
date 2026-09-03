@@ -23,6 +23,8 @@ internal static class PlannedInstanceDefinition
         string? ownerKeyVaultUri,
         string? ownerAppConfigEndpoint,
         string? adminPrincipalId,
+        string? githubAppId,
+        string? githubInstallationId,
         DateTimeOffset generatedAt,
         InstanceDefinition? existing = null)
     {
@@ -55,8 +57,9 @@ internal static class PlannedInstanceDefinition
                 Owner = owner,
                 Repository = repoName,
                 Visibility = visibility,
-                AppId = reusableGitHubIdentity?.AppId,
-                InstallationId = reusableGitHubIdentity?.InstallationId,
+                AppId = Trimmed(githubAppId) ?? reusableGitHubIdentity?.AppId,
+                InstallationId = Trimmed(githubInstallationId)
+                    ?? reusableGitHubIdentity?.InstallationId,
                 RepositoryId = reusableGitHubIdentity?.RepositoryId,
                 DefaultBranch = reusableGitHubIdentity?.DefaultBranch ?? "main",
                 BranchProtectionRulesetId = reusableGitHubIdentity?.BranchProtectionRulesetId,

@@ -122,6 +122,34 @@ public sealed class NewInstanceDefinitionTests
     }
 
     [Fact]
+    public async Task Write_plan_persists_owner_github_app_identifiers()
+    {
+        var root = TempRoot();
+        try
+        {
+            var exitCode = await CliApplication.InvokeAsync(
+                [
+                    "new", "--product", "paritydemo", "--owner", "acme",
+                    "--github-app-id", "7", "--github-installation-id", "42",
+                    "--dry-run", "--write-plan", "--config-root", root,
+                ],
+                CancellationToken.None,
+                PlainTerminal());
+
+            Assert.Equal(0, exitCode);
+
+            var definition = InstanceDefinitions.Read(
+                Path.Combine(root, "config", "instances", "paritydemo.json"));
+            Assert.Equal("7", definition.GitHub.AppId);
+            Assert.Equal("42", definition.GitHub.InstallationId);
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
     public async Task Write_plan_omits_owner_authority_values_when_options_are_absent()
     {
         var root = TempRoot();

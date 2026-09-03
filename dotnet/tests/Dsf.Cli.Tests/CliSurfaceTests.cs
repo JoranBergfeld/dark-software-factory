@@ -73,6 +73,8 @@ public sealed class CliSurfaceTests
               --owner-keyvault-uri <owner-keyvault-uri>              owner Key Vault URI
               --owner-appconfig-endpoint <owner-appconfig-endpoint>  owner App Configuration endpoint
               --admin-principal-id <admin-principal-id>              human owner/governance principal object id
+              --github-app-id <github-app-id>                        owner DSF GitHub App id
+              --github-installation-id <github-installation-id>      owner DSF GitHub App installation id
               -h, --help                                             Show help and usage information
 
 

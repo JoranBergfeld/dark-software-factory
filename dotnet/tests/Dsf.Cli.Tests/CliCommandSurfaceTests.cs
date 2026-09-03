@@ -139,6 +139,8 @@ command <root> desc="Dark Software Factory — factory CLI (create product insta
     option --owner-keyvault-uri type=String arity=1..1 default="" desc="owner Key Vault URI"
     option --owner-appconfig-endpoint type=String arity=1..1 desc="owner App Configuration endpoint"
     option --admin-principal-id type=String arity=1..1 default="" desc="human owner/governance principal object id"
+    option --github-app-id type=String arity=1..1 default="" desc="owner DSF GitHub App id"
+    option --github-installation-id type=String arity=1..1 default="" desc="owner DSF GitHub App installation id"
   command list aliases=[ls] desc="list provisioned product factories from the owner App Config index"
     option --json type=Boolean arity=0..1 default=False choices=[False, True] desc="emit the factory rows as JSON for scripting"
     option --owner-appconfig-endpoint type=String arity=1..1 desc="owner App Configuration endpoint"

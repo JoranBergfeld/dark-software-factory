@@ -30,6 +30,61 @@ public sealed class GitHubProvisioningPlaneTests
     }
 
     [Fact]
+    public async Task Dry_run_plans_app_binding_when_owner_app_identifiers_are_supplied()
+    {
+        var terminal = PlainTerminal();
+        var github = new RecordingGitHubProvisioningClient();
+
+        var exitCode = await CliApplication.InvokeAsync(
+            [
+                "new", "--product", "paritydemo", "--owner", "acme",
+                "--github-app-id", "7", "--github-installation-id", "42",
+                "--dry-run", "--config-root", ArtifactRoot(),
+            ],
+            CancellationToken.None,
+            terminal,
+            github);
+
+        Assert.Equal(0, exitCode);
+        Assert.Empty(github.Requests);
+        Assert.Contains(
+            "install_app    [app binding planned (dry-run)]",
+            terminal.Output,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "DSF App 7 installation 42",
+            terminal.Output,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "install_app    [skipped (no owner App configured)]",
+            terminal.Output,
+            StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("--github-app-id", "../7")]
+    [InlineData("--github-installation-id", "42/repositories/999")]
+    public async Task Unsafe_github_app_identifiers_are_rejected(string option, string value)
+    {
+        var terminal = PlainTerminal();
+
+        var exitCode = await CliApplication.InvokeAsync(
+            [
+                "new", "--product", "paritydemo", "--owner", "acme",
+                option, value, "--dry-run", "--config-root", ArtifactRoot(),
+            ],
+            CancellationToken.None,
+            terminal,
+            new RecordingGitHubProvisioningClient());
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains(
+            $"{option} must be a positive numeric GitHub identifier",
+            terminal.Error,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Plan_uses_create_or_reuse_and_ensure_request_shapes()
     {
         var plan = GitHubProvisioningPlan.Build(SampleDefinition());
@@ -63,6 +118,7 @@ public sealed class GitHubProvisioningPlaneTests
                 var app = Assert.IsType<EnsureAppBindingRequest>(request);
                 Assert.Equal("ensure_app_binding", app.Method);
                 Assert.Equal("acme/paritydemo", app.RepositoryFullName);
+                Assert.Equal("7", app.AppId);
                 Assert.Equal("42", app.InstallationId);
             },
             request =>
@@ -73,6 +129,9 @@ public sealed class GitHubProvisioningPlaneTests
                 Assert.Equal("main", ruleset.TargetBranch);
                 Assert.Equal(["ci"], ruleset.RequiredStatusChecks);
                 Assert.Equal(1, ruleset.RequiredApprovingReviewCount);
+                Assert.False(ruleset.AllowAutoMerge);
+                Assert.Equal("dsf-creation", ruleset.Name);
+                Assert.Null(ruleset.ExistingRulesetId);
             });
     }
 
@@ -162,6 +221,7 @@ public sealed class GitHubProvisioningPlaneTests
             Owner = "acme",
             Repository = "paritydemo",
             Visibility = "private",
+            AppId = "7",
             InstallationId = "42",
         },
         Azure = new AzureSettings

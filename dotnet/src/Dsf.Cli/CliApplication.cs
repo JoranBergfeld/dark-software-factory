@@ -16,13 +16,17 @@ public static class CliApplication
             args,
             cancellationToken,
             SystemCliTerminal.Detect(),
-            new UnavailableGitHubProvisioningClient());
+            GitHubRestProvisioningClient.FromEnvironment());
 
     internal static async Task<int> InvokeAsync(
         string[] args,
         CancellationToken cancellationToken,
         ICliTerminal terminal)
-        => await InvokeAsync(args, cancellationToken, terminal, new UnavailableGitHubProvisioningClient());
+        => await InvokeAsync(
+            args,
+            cancellationToken,
+            terminal,
+            GitHubRestProvisioningClient.FromEnvironment());
 
     internal static async Task<int> InvokeAsync(
         string[] args,
@@ -98,6 +102,11 @@ public static class CliApplication
         var ownerKeyVaultUri = StringOption("--owner-keyvault-uri", "owner Key Vault URI", string.Empty);
         var ownerAppConfigEndpoint = StringOption("--owner-appconfig-endpoint", "owner App Configuration endpoint");
         var adminPrincipalId = StringOption("--admin-principal-id", "human owner/governance principal object id", string.Empty);
+        var githubAppId = StringOption("--github-app-id", "owner DSF GitHub App id", string.Empty);
+        var githubInstallationId = StringOption(
+            "--github-installation-id",
+            "owner DSF GitHub App installation id",
+            string.Empty);
 
         var command = new Command("new", "create a new isolated product factory instance");
         AddOptions(
@@ -117,7 +126,9 @@ public static class CliApplication
             configRoot,
             ownerKeyVaultUri,
             ownerAppConfigEndpoint,
-            adminPrincipalId);
+            adminPrincipalId,
+            githubAppId,
+            githubInstallationId);
 
         var newOptions = new Option[]
         {
@@ -137,6 +148,8 @@ public static class CliApplication
             ownerKeyVaultUri,
             ownerAppConfigEndpoint,
             adminPrincipalId,
+            githubAppId,
+            githubInstallationId,
         };
 
         command.SetAction(parseResult =>
@@ -171,6 +184,23 @@ public static class CliApplication
             var environmentValue = parseResult.GetValue(environment) ?? "dev";
             var locationValue = parseResult.GetValue(location) ?? "swedencentral";
             var configRootValue = parseResult.GetValue(configRoot);
+            var githubAppIdValue = FirstConfiguredValue(
+                parseResult.GetValue(githubAppId),
+                "DSF_GITHUB_APP_ID");
+            var githubInstallationIdValue = FirstConfiguredValue(
+                parseResult.GetValue(githubInstallationId),
+                "DSF_GITHUB_INSTALLATION_ID");
+            if (!ValidateGitHubIdentifier(
+                    terminal,
+                    "--github-app-id",
+                    githubAppIdValue)
+                || !ValidateGitHubIdentifier(
+                    terminal,
+                    "--github-installation-id",
+                    githubInstallationIdValue))
+            {
+                return Failure;
+            }
             var effectivePrefix = BuildNamePrefix(prefix.Length > 0 ? prefix : productValue);
             try
             {
@@ -195,6 +225,8 @@ public static class CliApplication
                 parseResult.GetValue(ownerKeyVaultUri),
                 parseResult.GetValue(ownerAppConfigEndpoint),
                 parseResult.GetValue(adminPrincipalId),
+                githubAppIdValue,
+                githubInstallationIdValue,
                 configRootValue);
 
             if (parseResult.GetValue(dryRun))
@@ -208,6 +240,9 @@ public static class CliApplication
                     locationValue,
                     environmentValue,
                     effectivePrefix,
+                    parseResult.GetValue(creationMaturity) ?? "low",
+                    definition.GitHub.AppId,
+                    definition.GitHub.InstallationId,
                     configRootValue);
 
                 if (parseResult.GetValue(writePlan)
@@ -366,6 +401,9 @@ public static class CliApplication
         string location,
         string environment,
         string namePrefix,
+        string creationMaturity,
+        string? githubAppId,
+        string? githubInstallationId,
         string? configRoot)
     {
         var repoName = string.IsNullOrWhiteSpace(repo) ? product : repo;
@@ -375,16 +413,26 @@ public static class CliApplication
         var manifestPath = InstanceDefinitions.PathFor(root, product);
         var bicepPath = Path.Combine(root, "infra", "main.bicep");
 
-        terminal.WriteLine("[dsf] WARNING: DSF_OWNER_KEYVAULT_URI is unset and --owner-keyvault-uri was not passed.");
-        terminal.WriteLine("[dsf] WARNING: install_app, seed_app_key, seed_webiq_key, publish_runtime_index will be SKIPPED.");
-        terminal.WriteLine("[dsf] WARNING: the GitHub App won't be wired; `dsf charter init` and runtime GitHub access will fail.");
-        terminal.WriteLine("[dsf] WARNING: fix: run `dsf bootstrap` once, then export DSF_OWNER_KEYVAULT_URI and DSF_OWNER_APPCONFIG_ENDPOINT, then re-run `dsf new`.");
+        if (string.IsNullOrWhiteSpace(githubInstallationId))
+        {
+            terminal.WriteLine("[dsf] WARNING: DSF_OWNER_KEYVAULT_URI is unset and --owner-keyvault-uri was not passed.");
+            terminal.WriteLine("[dsf] WARNING: install_app, seed_app_key, seed_webiq_key, publish_runtime_index will be SKIPPED.");
+            terminal.WriteLine("[dsf] WARNING: the GitHub App won't be wired; `dsf charter init` and runtime GitHub access will fail.");
+            terminal.WriteLine("[dsf] WARNING: fix: run `dsf bootstrap` once, then export DSF_OWNER_KEYVAULT_URI and DSF_OWNER_APPCONFIG_ENDPOINT, then re-run `dsf new`.");
+        }
         terminal.WriteLine($"[dsf] instance plan for product={product} (DRY-RUN)");
         terminal.WriteLine($"[dsf]  1. create_repo    [dry-run] Create GitHub repo {repoFull} ({visibility})");
         terminal.WriteLine($"[dsf]       $ gh repo create {repoFull} {visibilityFlag}");
         terminal.WriteLine($"[dsf]  2. seed_repo      [seeded (dry-run)] Seed {repoFull} with the Spec Kit scaffold (specify init) and a baseline ci workflow so the required 'ci' check is producible before branch protection");
         terminal.WriteLine($"[dsf]  3. create_labels  [dry-run] Create the label taxonomy + handoff label in {repoFull}");
-        terminal.WriteLine($"[dsf]  4. install_app    [skipped (no owner App configured)] Add {repoFull} to the DSF App installation <installation>");
+        if (string.IsNullOrWhiteSpace(githubInstallationId))
+        {
+            terminal.WriteLine($"[dsf]  4. install_app    [skipped (no owner App configured)] Add {repoFull} to the DSF App installation <installation>");
+        }
+        else
+        {
+            terminal.WriteLine($"[dsf]  4. install_app    [app binding planned (dry-run)] Add {repoFull} to the DSF App {githubAppId ?? "<app>"} installation {githubInstallationId}");
+        }
         terminal.WriteLine($"[dsf]  5. create_resource_group [dry-run] Create dedicated Azure resource group rg-dsf-{product}");
         terminal.WriteLine($"[dsf]       $ az group create --name rg-dsf-{product} --location {location} --tags project=dark-software-factory managed-by=dsf product={product} component=backing-services");
         terminal.WriteLine("[dsf]  6. provision_azure [dry-run] Deploy backing services into rg-dsf-" + product + " from infra/main.bicep");
@@ -395,7 +443,7 @@ public static class CliApplication
         terminal.WriteLine($"[dsf]  10. seed_product_record [seeded (dry-run)] Seed the {product} Product record (repo, taxonomy, source scopes, threshold) into its per-product App Configuration");
         terminal.WriteLine($"[dsf]  11. publish_runtime_index [skipped (no owner App Config configured)] Publish {product} runtime env (endpoints + pointers) to the owner App Configuration index");
         terminal.WriteLine($"[dsf]  12. deploy_council [rendered (dry-run)] Render + bring up the feature-council runtime scoped to {product}");
-        terminal.WriteLine($"[dsf]  13. branch_protection [ruleset planned (dry-run)] Apply the 'low' creation maturity dial to {repoFull} as a branch-protection ruleset (required reviews + green 'ci' check)");
+        terminal.WriteLine($"[dsf]  13. branch_protection [ruleset planned (dry-run)] Apply the '{creationMaturity}' creation maturity dial to {repoFull} as a branch-protection ruleset (required reviews + green 'ci' check)");
         terminal.WriteLine($"[dsf]  14. deploy_sre_agent [deployed (dry-run)] Provision the Azure SRE Agent for {product} (agent + RBAC on rg-dsf-{product} + Azure Monitor)");
         terminal.WriteLine($"[dsf]  15. write_config   [{manifestPath}] Write instance manifest to config/instances/{product}.json");
     }
@@ -438,6 +486,8 @@ public static class CliApplication
         string? ownerKeyVaultUri,
         string? ownerAppConfigEndpoint,
         string? adminPrincipalId,
+        string? githubAppId,
+        string? githubInstallationId,
         string? configRoot)
     {
         var root = configRoot ?? Directory.GetCurrentDirectory();
@@ -455,8 +505,37 @@ public static class CliApplication
             ownerKeyVaultUri,
             ownerAppConfigEndpoint,
             adminPrincipalId,
+            githubAppId,
+            githubInstallationId,
             DateTimeOffset.UtcNow,
             existing);
+    }
+
+    private static string? FirstConfiguredValue(string? optionValue, string environmentVariable)
+    {
+        if (!string.IsNullOrWhiteSpace(optionValue))
+        {
+            return optionValue.Trim();
+        }
+
+        var environmentValue = Environment.GetEnvironmentVariable(environmentVariable);
+        return string.IsNullOrWhiteSpace(environmentValue) ? null : environmentValue.Trim();
+    }
+
+    private static bool ValidateGitHubIdentifier(
+        ICliTerminal terminal,
+        string optionName,
+        string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)
+            || value.All(char.IsAsciiDigit) && value.Any(character => character != '0'))
+        {
+            return true;
+        }
+
+        terminal.WriteErrorLine(
+            $"[dsf] error: {optionName} must be a positive numeric GitHub identifier.");
+        return false;
     }
 
     private static InstanceDefinition? ReadExistingDefinition(string root, string product)
