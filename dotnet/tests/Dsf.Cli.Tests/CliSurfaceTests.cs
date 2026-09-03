@@ -12,17 +12,33 @@ public sealed class CliSurfaceTests
         var result = await DsfProcess.RunAsync("--help");
 
         Assert.Equal(0, result.ExitCode);
-        Assert.Contains("new", result.Stdout);
-        Assert.Contains("list", result.Stdout);
-        Assert.Contains("offboard", result.Stdout);
-        Assert.Contains("delete", result.Stdout);
-        Assert.Contains("deprovision", result.Stdout);
-        Assert.Contains("bootstrap", result.Stdout);
-        Assert.Contains("run", result.Stdout);
-        Assert.Contains("sweep", result.Stdout);
-        Assert.Contains("serve-orchestrator", result.Stdout);
-        Assert.Contains("serve-agent", result.Stdout);
-        Assert.Contains("charter", result.Stdout);
+        Assert.Equal(
+            """
+            Description:
+              Dark Software Factory — factory CLI (create product instances)
+
+            Usage:
+              dsf [command] [options]
+
+            Options:
+              -h, --help  Show help and usage information
+
+            Commands:
+              new                    create a new isolated product factory instance
+              list, ls               list provisioned product factories from the owner App Config index
+              offboard <product>     remove Azure/runtime artifacts for a product
+              bootstrap              one-time: create the DSF GitHub App and store it in the owner Key Vault
+              delete <product>       permanently destroy a product factory instance
+              deprovision <product>  permanently destroy a product factory instance
+              run                    run the intake line for one signal (runtime)
+              sweep                  sweep enabled source agents once (runtime)
+              serve-orchestrator     run the orchestrator worker (runtime)
+              serve-agent            serve a source agent over A2A (runtime)
+              charter                manage the product charter (.dsf/charter.md)
+
+
+            """.Replace("\r\n", "\n"),
+            result.Stdout.Replace("\r\n", "\n"));
         Assert.DoesNotContain("/?", result.Stdout);
     }
 
@@ -32,19 +48,36 @@ public sealed class CliSurfaceTests
         var result = await DsfProcess.RunAsync("new", "--help");
 
         Assert.Equal(0, result.ExitCode);
-        Assert.Contains("--product", result.Stdout);
-        Assert.Contains("--owner", result.Stdout);
-        Assert.Contains("--repo", result.Stdout);
-        Assert.Contains("--visibility", result.Stdout);
-        Assert.Contains("--runtime-target", result.Stdout);
-        Assert.Contains("--name-prefix", result.Stdout);
-        Assert.Contains("--creation-maturity", result.Stdout);
-        Assert.Contains("--dry-run", result.Stdout);
-        Assert.Contains("--write-plan", result.Stdout);
-        Assert.Contains("--config-root", result.Stdout);
-        Assert.Contains("--owner-keyvault-uri", result.Stdout);
-        Assert.Contains("--owner-appconfig-endpoint", result.Stdout);
-        Assert.Contains("--admin-principal-id", result.Stdout);
+        Assert.Equal(
+            """
+            Description:
+              create a new isolated product factory instance
+
+            Usage:
+              dsf new [options]
+
+            Options:
+              --product <product> (REQUIRED)                         product key (e.g. 'microbi')
+              --owner <owner>                                        GitHub owner/org for the product repo
+              --repo <repo>                                          repo name (defaults to product key)
+              --visibility <internal|private|public>                 product repo visibility [default: private]
+              --runtime-target <aca>                                 where the factory runtime is hosted [default: aca]
+              --name-prefix <name-prefix>                            base Azure resource name prefix
+              --environment <environment>                            Azure environment moniker [default: dev]
+              --location <location>                                  Azure region [default: swedencentral]
+              --creation-maturity <high|low>                         creation-phase autonomy [default: low]
+              --dry-run                                              preview only: print the what-if plan without running steps
+              --no-charter                                           skip the post-provision charter prompt
+              --write-plan                                           with --dry-run, still write the instance manifest
+              --config-root <config-root>                            override repo root where config/instances/ is written
+              --owner-keyvault-uri <owner-keyvault-uri>              owner Key Vault URI
+              --owner-appconfig-endpoint <owner-appconfig-endpoint>  owner App Configuration endpoint
+              --admin-principal-id <admin-principal-id>              human owner/governance principal object id
+              -h, --help                                             Show help and usage information
+
+
+            """.Replace("\r\n", "\n"),
+            result.Stdout.Replace("\r\n", "\n"));
     }
 
     [Fact]
@@ -71,7 +104,7 @@ public sealed class CliSurfaceTests
     }
 
     [Fact]
-    public async Task New_dry_run_write_plan_prints_and_persists_deterministic_shell_manifest()
+    public async Task New_dry_run_write_plan_prints_deterministic_path_without_filesystem_writes()
     {
         var root = DsfProcess.FindSolutionRoot();
         var configRoot = Path.Combine(root.FullName, ".test-artifacts", "cli-tests", Guid.NewGuid().ToString("N"));
@@ -97,12 +130,8 @@ public sealed class CliSurfaceTests
             Assert.Equal(string.Empty, result.Stderr);
 
             var manifestPath = Path.Combine(configRoot, "config", "instances", "paritydemo.json");
-            Assert.True(File.Exists(manifestPath), $"Expected manifest at {manifestPath}");
-            var manifest = await File.ReadAllTextAsync(manifestPath);
-            Assert.Contains("\"product\": \"paritydemo\"", manifest);
-            Assert.Contains("\"owner\": \"acme\"", manifest);
-            Assert.Contains("\"name_prefix\": \"parityde0000\"", manifest);
-            Assert.Contains("\"executed\": false", manifest);
+            Assert.Contains($"[dsf]  15. write_config   [{manifestPath}]", result.Stdout);
+            Assert.False(Directory.Exists(configRoot), $"Dry-run must not create {configRoot}");
         }
         finally
         {
@@ -126,13 +155,13 @@ public sealed class CliSurfaceTests
     }
 
     [Fact]
-    public async Task Unknown_command_and_invalid_option_return_nonzero()
+    public async Task Unknown_command_and_invalid_option_return_python_parity_exit_2()
     {
         var unknown = await DsfProcess.RunAsync("wat");
         var invalid = await DsfProcess.RunAsync("new", "--product", "demo", "--definitely-invalid");
 
-        Assert.NotEqual(0, unknown.ExitCode);
-        Assert.NotEqual(0, invalid.ExitCode);
+        Assert.Equal(2, unknown.ExitCode);
+        Assert.Equal(2, invalid.ExitCode);
     }
 
     [Theory]

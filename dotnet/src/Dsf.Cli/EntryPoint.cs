@@ -8,10 +8,16 @@ namespace Dsf.Cli;
 /// </summary>
 public static class EntryPoint
 {
-    public static Task<int> RunAsync(string[] args, Action<Action> subscribeCancel)
+    public static Task<int> RunAsync(string[] args, Action<Action> subscribeCancel) =>
+        RunAsync(args, subscribeCancel, CliApplication.InvokeAsync);
+
+    internal static async Task<int> RunAsync(
+        string[] args,
+        Action<Action> subscribeCancel,
+        Func<string[], CancellationToken, Task<int>> invokeAsync)
     {
         using var cts = new CancellationTokenSource();
         subscribeCancel(cts.Cancel);
-        return CliApplication.InvokeAsync(args, cts.Token);
+        return await invokeAsync(args, cts.Token);
     }
 }

@@ -1,5 +1,4 @@
 using System.CommandLine;
-using System.Text.Json;
 
 namespace Dsf.Cli;
 
@@ -11,15 +10,17 @@ public static class CliApplication
     /// <summary>Canonical exit code for a canceled invocation (e.g. Ctrl+C / SIGINT).</summary>
     public const int CanceledExitCode = 130;
 
-    public static Task<int> InvokeAsync(string[] args, CancellationToken cancellationToken)
+    public static async Task<int> InvokeAsync(string[] args, CancellationToken cancellationToken)
     {
         if (cancellationToken.IsCancellationRequested)
         {
-            return Task.FromResult(CanceledExitCode);
+            return CanceledExitCode;
         }
 
         var root = BuildRootCommand();
-        return root.Parse(args).InvokeAsync(cancellationToken: cancellationToken);
+        var parseResult = root.Parse(args);
+        var exitCode = await parseResult.InvokeAsync(cancellationToken: cancellationToken);
+        return parseResult.Errors.Count > 0 ? 2 : exitCode;
     }
 
     internal static RootCommand BuildRootCommand()
@@ -101,8 +102,6 @@ public static class CliApplication
             var visibilityValue = parseResult.GetValue(visibility) ?? "private";
             var environmentValue = parseResult.GetValue(environment) ?? "dev";
             var locationValue = parseResult.GetValue(location) ?? "swedencentral";
-            var creationMaturityValue = parseResult.GetValue(creationMaturity) ?? "low";
-            var runtimeTargetValue = parseResult.GetValue(runtimeTarget) ?? "aca";
             var configRootValue = parseResult.GetValue(configRoot);
             var effectivePrefix = BuildNamePrefix(prefix.Length > 0 ? prefix : productValue);
             if (parseResult.GetValue(dryRun))
@@ -116,20 +115,6 @@ public static class CliApplication
                     environmentValue,
                     effectivePrefix,
                     configRootValue);
-                if (parseResult.GetValue(writePlan))
-                {
-                    WriteShellManifest(
-                        productValue,
-                        ownerValue,
-                        repoValue,
-                        visibilityValue,
-                        environmentValue,
-                        locationValue,
-                        creationMaturityValue,
-                        runtimeTargetValue,
-                        effectivePrefix,
-                        configRootValue);
-                }
             }
             else
             {
@@ -182,59 +167,6 @@ public static class CliApplication
         Console.Out.WriteLine($"[dsf]  13. branch_protection [ruleset planned (dry-run)] Apply the 'low' creation maturity dial to {repoFull} as a branch-protection ruleset (required reviews + green 'ci' check)");
         Console.Out.WriteLine($"[dsf]  14. deploy_sre_agent [deployed (dry-run)] Provision the Azure SRE Agent for {product} (agent + RBAC on rg-dsf-{product} + Azure Monitor)");
         Console.Out.WriteLine($"[dsf]  15. write_config   [{manifestPath}] Write instance manifest to config/instances/{product}.json");
-    }
-
-    private static void WriteShellManifest(
-        string product,
-        string owner,
-        string repo,
-        string visibility,
-        string environment,
-        string location,
-        string creationMaturity,
-        string runtimeTarget,
-        string namePrefix,
-        string? configRoot)
-    {
-        var root = configRoot ?? Directory.GetCurrentDirectory();
-        var manifestPath = Path.Combine(root, "config", "instances", $"{product}.json");
-        Directory.CreateDirectory(Path.GetDirectoryName(manifestPath)!);
-
-        var manifest = new Dictionary<string, object?>
-        {
-            ["azure"] = null,
-            ["executed"] = false,
-            ["github_app"] = null,
-            ["plan"] = new Dictionary<string, object?>
-            {
-                ["product"] = product,
-                ["steps"] = Array.Empty<object>(),
-            },
-            ["spec"] = new Dictionary<string, object?>
-            {
-                ["confidence_threshold"] = 0.6,
-                ["creation_maturity"] = creationMaturity,
-                ["environment"] = environment,
-                ["label_taxonomy"] = new Dictionary<string, string[]>
-                {
-                    ["area"] = ["api", "ui", "infra"],
-                    ["severity"] = ["sev-low", "sev-medium", "sev-high", "sev-critical"],
-                    ["type"] = ["feature", "bug", "chore"],
-                },
-                ["location"] = location,
-                ["monitored_resource_groups"] = Array.Empty<string>(),
-                ["name_prefix"] = namePrefix,
-                ["owner"] = owner,
-                ["product"] = product,
-                ["repo"] = repo,
-                ["runtime_image"] = "ghcr.io/joranbergfeld/dsf-runtime:latest",
-                ["runtime_target"] = runtimeTarget,
-                ["sre_agent_location"] = location,
-                ["visibility"] = visibility,
-            },
-        };
-
-        File.WriteAllText(manifestPath, JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true }) + Environment.NewLine);
     }
 
     private static string BuildNamePrefix(string value)
