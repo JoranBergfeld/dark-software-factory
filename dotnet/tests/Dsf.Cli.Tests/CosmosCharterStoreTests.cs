@@ -49,6 +49,25 @@ public sealed class CosmosCharterStoreTests
     }
 
     [Fact]
+    public async Task GetCharter_requests_an_Entra_token_for_the_fixed_cosmos_data_plane_resource()
+    {
+        var handler = new StubHttpMessageHandler(Response(HttpStatusCode.NotFound, "{}"));
+        var runner = new RecordingAzureCliRunner(new AzureCliInvocationResult(0, """{"accessToken":"cosmos-token"}""", ""));
+        var store = new CosmosCharterStore(
+            new HttpClient(handler),
+            runner,
+            "https://demo.documents.azure.com:443/",
+            "demo");
+
+        await store.GetCharterAsync("demo", CancellationToken.None);
+
+        var invocation = Assert.Single(runner.Invocations);
+        var scopeIndex = invocation.ToList().IndexOf("--scope");
+        Assert.True(scopeIndex >= 0, "expected a --scope argument");
+        Assert.Equal("https://cosmos.azure.com/.default", invocation[scopeIndex + 1]);
+    }
+
+    [Fact]
     public async Task GetCharter_returns_null_when_the_product_has_no_document()
     {
         var handler = new StubHttpMessageHandler(Response(HttpStatusCode.NotFound, "{}"));

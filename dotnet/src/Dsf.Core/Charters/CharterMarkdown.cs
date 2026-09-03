@@ -92,6 +92,16 @@ public static partial class CharterMarkdown
             diagnostics.Add("section '## Target Users' is empty");
         }
 
+        if (goals.Count == 0)
+        {
+            diagnostics.Add("at least one Goal is required");
+        }
+
+        if (metrics.Count == 0)
+        {
+            diagnostics.Add("at least one Success Metric is required");
+        }
+
         if (diagnostics.Count > 0)
         {
             throw new CharterParseException(diagnostics);
@@ -190,14 +200,14 @@ public static partial class CharterMarkdown
         var glossary = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var entry in Items(sections, "Glossary", diagnostics))
         {
-            var separator = entry.IndexOf(':', StringComparison.Ordinal);
+            var separator = entry.IndexOf(": ", StringComparison.Ordinal);
             if (separator < 0)
             {
                 diagnostics.Add($"glossary entry '{entry}' must be '- term: definition'");
                 continue;
             }
 
-            glossary[entry[..separator].Trim()] = entry[(separator + 1)..].Trim();
+            glossary[entry[..separator].Trim()] = entry[(separator + 2)..].Trim();
         }
 
         return glossary;

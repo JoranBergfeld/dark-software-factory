@@ -77,6 +77,36 @@ public sealed class CharterMarkdownTests
     }
 
     [Fact]
+    public void Parse_rejects_an_empty_Goals_section()
+    {
+        var text = Valid.Replace("## Goals\n- Deliver value\n\n", "## Goals\n\n");
+
+        var error = Assert.Throws<CharterParseException>(() => CharterMarkdown.Parse(text, product: "demo"));
+
+        Assert.Contains(error.Diagnostics, d => d.Contains("Goal", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Parse_rejects_an_empty_Success_Metrics_section()
+    {
+        var text = Valid.Replace("## Success Metrics\n- Weekly active operators\n\n", "## Success Metrics\n\n");
+
+        var error = Assert.Throws<CharterParseException>(() => CharterMarkdown.Parse(text, product: "demo"));
+
+        Assert.Contains(error.Diagnostics, d => d.Contains("Success Metric", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Parse_rejects_a_glossary_entry_without_a_colon_space_separator()
+    {
+        var text = Valid.Replace("- Charter: human-owned intent", "- Charter:human-owned intent");
+
+        var error = Assert.Throws<CharterParseException>(() => CharterMarkdown.Parse(text, product: "demo"));
+
+        Assert.Contains(error.Diagnostics, d => d.Contains("glossary", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public void GitBlobSha_matches_git_hash_object()
     {
         // `printf 'hello\n' | git hash-object --stdin`

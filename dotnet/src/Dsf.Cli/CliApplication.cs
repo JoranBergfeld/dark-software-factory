@@ -868,8 +868,8 @@ public static class CliApplication
         var command = new Command("charter", "manage the product charter (.dsf/charter.md)");
         command.Subcommands.Add(SimpleCharterCommand(
             "init", "interview to draft a charter and open a PR", terminal, appConfig, charterRepository, charterStore));
-        command.Subcommands.Add(CharterImplementCommand());
-        command.Subcommands.Add(CharterWatchCommand());
+        command.Subcommands.Add(CharterImplementCommand(terminal, appConfig));
+        command.Subcommands.Add(CharterWatchCommand(terminal, appConfig));
         command.Subcommands.Add(CharterSourceCommand(
             "sync",
             "pull .dsf/charter.md (local file or --ref) into Cosmos",
@@ -946,7 +946,7 @@ public static class CliApplication
         return command;
     }
 
-    private static Command CharterImplementCommand()
+    private static Command CharterImplementCommand(ICliTerminal terminal, IAppConfigurationClient appConfig)
     {
         var product = RequiredStringOption("--product", "product key");
         var noWait = BoolOption("--no-wait", "file + assign only; do not watch");
@@ -954,11 +954,12 @@ public static class CliApplication
         var pollInterval = DoubleOption("--poll-interval", "seconds between polls");
         var command = new Command("implement", "render the constitution + file the Spec Kit bootstrap issue");
         AddOptions(command, product, noWait, timeout, pollInterval);
-        command.SetAction(_ => CharterShell("implement"));
+        command.SetAction(async (parseResult, cancellationToken) => await RunCharterShellAsync(
+            "implement", parseResult.GetRequiredValue(product), terminal, appConfig, cancellationToken));
         return command;
     }
 
-    private static Command CharterWatchCommand()
+    private static Command CharterWatchCommand(ICliTerminal terminal, IAppConfigurationClient appConfig)
     {
         var product = RequiredStringOption("--product", "product key");
         var issue = IntOption("--issue", "bootstrap issue number");
@@ -966,7 +967,8 @@ public static class CliApplication
         var pollInterval = DoubleOption("--poll-interval", "seconds between polls");
         var command = new Command("watch", "watch the coding agent's build and request Copilot review when ready");
         AddOptions(command, product, issue, timeout, pollInterval);
-        command.SetAction(_ => CharterShell("watch"));
+        command.SetAction(async (parseResult, cancellationToken) => await RunCharterShellAsync(
+            "watch", parseResult.GetRequiredValue(product), terminal, appConfig, cancellationToken));
         return command;
     }
 
@@ -990,9 +992,42 @@ public static class CliApplication
         return Success;
     }
 
-    private static int CharterShell(string verb)
+    /// <summary>
+    /// Resolves the product's provisioned repository from the owner App Configuration index
+    /// (failing loudly, with no local-file fallback, if config is missing or the product is
+    /// unprovisioned) before reporting that this verb's build/watch pipeline is not yet ported
+    /// to the .NET migration shell.
+    /// </summary>
+    private static async Task<int> RunCharterShellAsync(
+        string verb,
+        string product,
+        ICliTerminal terminal,
+        IAppConfigurationClient appConfig,
+        CancellationToken cancellationToken)
     {
-        Console.Out.WriteLine($"[dsf] charter {verb} is not implemented in the .NET migration shell.");
+        var ownerEndpoint = Environment.GetEnvironmentVariable("DSF_OWNER_APPCONFIG_ENDPOINT");
+        if (string.IsNullOrWhiteSpace(ownerEndpoint))
+        {
+            terminal.WriteErrorLine(
+                "[dsf] error: DSF_OWNER_APPCONFIG_ENDPOINT is required to resolve the product repository.");
+            return Failure;
+        }
+
+        try
+        {
+            await appConfig.ResolveProductAsync(ownerEndpoint, product, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return CanceledExitCode;
+        }
+        catch (InvalidOperationException exception)
+        {
+            terminal.WriteErrorLine($"[dsf] error: {exception.Message}");
+            return Failure;
+        }
+
+        terminal.WriteLine($"[dsf] charter {verb} is not implemented in the .NET migration shell.");
         return Success;
     }
 

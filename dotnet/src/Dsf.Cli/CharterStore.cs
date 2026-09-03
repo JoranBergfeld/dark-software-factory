@@ -25,6 +25,13 @@ internal sealed class CosmosCharterStore : ICharterStore
     private const string CosmosApiVersion = "2018-12-31";
     private const string EndpointSetting = "AZURE_COSMOS_ENDPOINT";
 
+    /// <summary>
+    /// Cosmos DB's fixed data-plane AAD resource id (see Microsoft Learn: "Configure role-based
+    /// access control for your Azure Cosmos DB account"). Every Cosmos account shares this
+    /// resource id; it is not derived from the account's own hostname.
+    /// </summary>
+    private const string CosmosDataPlaneScope = "https://cosmos.azure.com/.default";
+
     private static readonly JsonSerializerOptions SerializerOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -130,7 +137,7 @@ internal sealed class CosmosCharterStore : ICharterStore
 
     private async Task<string> AccessTokenAsync(Uri account, CancellationToken cancellationToken)
     {
-        var scope = $"{account.Scheme}://{account.Host}/.default";
+        var scope = CosmosDataPlaneScope;
         var result = await runner.RunAsync(
             ["account", "get-access-token", "--scope", scope, "-o", "json"],
             cancellationToken);

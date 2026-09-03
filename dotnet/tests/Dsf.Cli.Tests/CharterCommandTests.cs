@@ -359,6 +359,148 @@ public sealed class CharterCommandTests
         });
     }
 
+    [Fact]
+    public async Task CharterImplement_fails_loudly_when_the_owner_app_config_endpoint_is_missing()
+    {
+        var prior = Environment.GetEnvironmentVariable("DSF_OWNER_APPCONFIG_ENDPOINT");
+        Environment.SetEnvironmentVariable("DSF_OWNER_APPCONFIG_ENDPOINT", null);
+        try
+        {
+            var terminal = NonInteractiveTerminal();
+
+            var exitCode = await CliApplication.InvokeAsync(
+                ["charter", "implement", "--product", "demo"],
+                CancellationToken.None,
+                terminal,
+                new RecordingAppConfigurationClient(),
+                new RecordingCharterRepositoryClient(null),
+                new RecordingCharterStore());
+
+            Assert.Equal(1, exitCode);
+            Assert.Contains("DSF_OWNER_APPCONFIG_ENDPOINT", terminal.Error, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("DSF_OWNER_APPCONFIG_ENDPOINT", prior);
+        }
+    }
+
+    [Fact]
+    public async Task CharterImplement_fails_loudly_when_the_product_is_not_provisioned()
+    {
+        await WithOwnerEndpointAsync(async () =>
+        {
+            var terminal = NonInteractiveTerminal();
+
+            var exitCode = await CliApplication.InvokeAsync(
+                ["charter", "implement", "--product", "unknown"],
+                CancellationToken.None,
+                terminal,
+                new RecordingAppConfigurationClient(),
+                new RecordingCharterRepositoryClient(null),
+                new RecordingCharterStore());
+
+            Assert.Equal(1, exitCode);
+            Assert.Contains("[dsf] error:", terminal.Error, StringComparison.Ordinal);
+        });
+    }
+
+    [Fact]
+    public async Task CharterImplement_resolves_the_product_repository_before_reporting_the_migration_shell()
+    {
+        await WithOwnerEndpointAsync(async () =>
+        {
+            var terminal = NonInteractiveTerminal();
+            var appConfig = new RecordingAppConfigurationClient(
+                new ProductLocation("demo", "acme/demo", "https://demo.azconfig.io"));
+
+            var exitCode = await CliApplication.InvokeAsync(
+                ["charter", "implement", "--product", "demo"],
+                CancellationToken.None,
+                terminal,
+                appConfig,
+                new RecordingCharterRepositoryClient(null),
+                new RecordingCharterStore());
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains(
+                "[dsf] charter implement is not implemented in the .NET migration shell.",
+                terminal.Output,
+                StringComparison.Ordinal);
+        });
+    }
+
+    [Fact]
+    public async Task CharterWatch_fails_loudly_when_the_owner_app_config_endpoint_is_missing()
+    {
+        var prior = Environment.GetEnvironmentVariable("DSF_OWNER_APPCONFIG_ENDPOINT");
+        Environment.SetEnvironmentVariable("DSF_OWNER_APPCONFIG_ENDPOINT", null);
+        try
+        {
+            var terminal = NonInteractiveTerminal();
+
+            var exitCode = await CliApplication.InvokeAsync(
+                ["charter", "watch", "--product", "demo"],
+                CancellationToken.None,
+                terminal,
+                new RecordingAppConfigurationClient(),
+                new RecordingCharterRepositoryClient(null),
+                new RecordingCharterStore());
+
+            Assert.Equal(1, exitCode);
+            Assert.Contains("DSF_OWNER_APPCONFIG_ENDPOINT", terminal.Error, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("DSF_OWNER_APPCONFIG_ENDPOINT", prior);
+        }
+    }
+
+    [Fact]
+    public async Task CharterWatch_fails_loudly_when_the_product_is_not_provisioned()
+    {
+        await WithOwnerEndpointAsync(async () =>
+        {
+            var terminal = NonInteractiveTerminal();
+
+            var exitCode = await CliApplication.InvokeAsync(
+                ["charter", "watch", "--product", "unknown"],
+                CancellationToken.None,
+                terminal,
+                new RecordingAppConfigurationClient(),
+                new RecordingCharterRepositoryClient(null),
+                new RecordingCharterStore());
+
+            Assert.Equal(1, exitCode);
+            Assert.Contains("[dsf] error:", terminal.Error, StringComparison.Ordinal);
+        });
+    }
+
+    [Fact]
+    public async Task CharterWatch_resolves_the_product_repository_before_reporting_the_migration_shell()
+    {
+        await WithOwnerEndpointAsync(async () =>
+        {
+            var terminal = NonInteractiveTerminal();
+            var appConfig = new RecordingAppConfigurationClient(
+                new ProductLocation("demo", "acme/demo", "https://demo.azconfig.io"));
+
+            var exitCode = await CliApplication.InvokeAsync(
+                ["charter", "watch", "--product", "demo"],
+                CancellationToken.None,
+                terminal,
+                appConfig,
+                new RecordingCharterRepositoryClient(null),
+                new RecordingCharterStore());
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains(
+                "[dsf] charter watch is not implemented in the .NET migration shell.",
+                terminal.Output,
+                StringComparison.Ordinal);
+        });
+    }
+
     private static ScriptedTerminal NonInteractiveTerminal() => new(
         new TerminalCapabilities(IsInteractive: false, SupportsAnsi: false, SupportsEmoji: false),
         []);
