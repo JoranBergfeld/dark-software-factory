@@ -93,10 +93,10 @@
           "xunit.extensibility.core": "[2.9.2]"
         }
       },
-      "dsf": {
+      "DarkSoftwareFactory.Cli": {
         "type": "Project",
         "dependencies": {
-          "Dsf.Core": "[1.0.0, )",
+          "Dsf.Core": "[0.0.1, )",
           "System.CommandLine": "[2.0.11, )"
         }
       },

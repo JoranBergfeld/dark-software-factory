@@ -1,0 +1,292 @@
+name: dotnet-release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version from dotnet/Directory.Build.props
+        required: true
+        default: 0.0.1
+      dry_run:
+        description: Build, sign, and attest without publishing to NuGet
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
+env:
+  CONFIGURATION: Release
+  CLI_PROJECT: src/Dsf.Cli/Dsf.Cli.csproj
+  ARTIFACT_ROOT: ${{ github.workspace }}/dotnet/artifacts/release
+
+jobs:
+  authorize-release:
+    name: Authorize Joran release
+    runs-on: ubuntu-latest
+    if: github.actor == 'jbergfeld'
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Capture version
+        id: version
+        run: echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+
+  test-and-pack:
+    name: Test and pack NuGet tool
+    runs-on: ubuntu-latest
+    needs: authorize-release
+    defaults:
+      run:
+        working-directory: dotnet
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Setup .NET
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5.4.0
+        with:
+          global-json-file: dotnet/global.json
+      - name: Restore locked graph
+        run: dotnet restore Dsf.sln --locked-mode
+      - name: Build
+        run: dotnet build Dsf.sln --no-restore --configuration "$CONFIGURATION"
+      - name: Test
+        run: dotnet test Dsf.sln --no-build --configuration "$CONFIGURATION"
+      - name: Pack NuGet global tool
+        run: >
+          dotnet pack src/Dsf.Cli/Dsf.Cli.csproj
+          --no-build
+          --configuration "$CONFIGURATION"
+          --output "$ARTIFACT_ROOT/nuget"
+          -p:PackageVersion=${{ needs.authorize-release.outputs.version }}
+      - name: Upload NuGet package
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsf-cli-nuget
+          path: dotnet/artifacts/release/nuget/*.nupkg
+          if-no-files-found: error
+
+  build-and-smoke-test:
+    name: Publish and smoke-test ${{ matrix.rid }}
+    runs-on: ${{ matrix.os }}
+    needs: authorize-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: linux-x64
+            os: ubuntu-latest
+            archive: dsf-cli-linux-x64.tar.gz
+          - rid: linux-arm64
+            os: ubuntu-latest
+            archive: dsf-cli-linux-arm64.tar.gz
+          - rid: osx-x64
+            os: macos-15-intel
+            archive: dsf-cli-osx-x64.tar.gz
+          - rid: osx-arm64
+            os: macos-14
+            archive: dsf-cli-osx-arm64.tar.gz
+          - rid: win-x64
+            os: windows-latest
+            archive: dsf-cli-win-x64.zip
+          - rid: win-arm64
+            os: windows-latest
+            archive: dsf-cli-win-arm64.zip
+    defaults:
+      run:
+        working-directory: dotnet
+        shell: bash
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Setup .NET
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5.4.0
+        with:
+          global-json-file: dotnet/global.json
+      - name: Restore locked graph
+        run: dotnet restore "$CLI_PROJECT" --runtime ${{ matrix.rid }}
+      - name: Publish self-contained single-file CLI
+        run: >
+          dotnet publish "$CLI_PROJECT"
+          --no-restore
+          --configuration "$CONFIGURATION"
+          --runtime ${{ matrix.rid }}
+          --self-contained true
+          --output "$ARTIFACT_ROOT/${{ matrix.rid }}/payload"
+          -p:Version=${{ needs.authorize-release.outputs.version }}
+          -p:PublishSingleFile=true
+          -p:PublishTrimmed=false
+      - name: Smoke test published CLI artifact
+        run: ./eng/smoke-test-release-artifact.sh "$ARTIFACT_ROOT/${{ matrix.rid }}/payload" "${{ matrix.rid }}"
+      - name: Archive Linux artifact
+        if: startsWith(matrix.rid, 'linux-')
+        run: |
+          mkdir -p "$ARTIFACT_ROOT/${{ matrix.rid }}/archive"
+          tar -C "$ARTIFACT_ROOT/${{ matrix.rid }}/payload" -czf "$ARTIFACT_ROOT/${{ matrix.rid }}/archive/${{ matrix.archive }}" .
+      - name: Upload Linux RID artifact
+        if: startsWith(matrix.rid, 'linux-')
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsf-cli-${{ matrix.rid }}
+          path: dotnet/artifacts/release/${{ matrix.rid }}/archive/${{ matrix.archive }}
+          if-no-files-found: error
+      - name: Upload unsigned signing payload
+        if: startsWith(matrix.rid, 'win-') || startsWith(matrix.rid, 'osx-')
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-payload-${{ matrix.rid }}
+          path: dotnet/artifacts/release/${{ matrix.rid }}/payload
+          if-no-files-found: error
+
+  sign-windows:
+    name: Authenticode sign Windows artifacts
+    runs-on: windows-latest
+    needs: build-and-smoke-test
+    environment: release-windows-signing
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Download Windows artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: unsigned-payload-win-*
+          path: dotnet/artifacts/windows-signing
+      - name: Authenticode signtool sign and timestamp
+        shell: pwsh
+        env:
+          WINDOWS_SIGNING_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
+          WINDOWS_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
+        run: dotnet/eng/sign-windows-artifacts.ps1 -ArtifactRoot dotnet/artifacts/windows-signing
+      - name: Smoke test signed Windows artifacts
+        shell: bash
+        run: |
+          for payload in dotnet/artifacts/windows-signing/unsigned-payload-win-*/payload; do
+            rid="$(basename "$(dirname "$payload")" | sed 's/^unsigned-payload-//')"
+            ./dotnet/eng/smoke-test-release-artifact.sh "$payload" "$rid"
+          done
+      - name: Archive signed Windows artifacts
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dotnet/artifacts/windows-signed
+          Get-ChildItem dotnet/artifacts/windows-signing -Directory -Filter "unsigned-payload-win-*" | ForEach-Object {
+            $rid = $_.Name -replace "^unsigned-payload-", ""
+            Compress-Archive -Path "$($_.FullName)/payload/*" -DestinationPath "dotnet/artifacts/windows-signed/dsf-cli-$rid.zip" -Force
+          }
+      - name: Upload signed Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsf-cli-windows-signed
+          path: dotnet/artifacts/windows-signed/*
+          if-no-files-found: error
+
+  sign-macos:
+    name: Developer ID sign and notarize macOS artifacts
+    runs-on: macos-14
+    needs: build-and-smoke-test
+    environment: release-macos-notarization
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Download macOS artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: unsigned-payload-osx-*
+          path: dotnet/artifacts/macos-signing
+      - name: Developer ID codesign, timestamp, and xcrun notarytool notarize
+        shell: bash
+        env:
+          MACOS_DEVELOPER_ID_CERTIFICATE_BASE64: ${{ secrets.MACOS_DEVELOPER_ID_CERTIFICATE_BASE64 }}
+          MACOS_DEVELOPER_ID_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_CERTIFICATE_PASSWORD }}
+          MACOS_NOTARYTOOL_PROFILE: ${{ secrets.MACOS_NOTARYTOOL_PROFILE }}
+        run: dotnet/eng/sign-macos-artifacts.sh dotnet/artifacts/macos-signing
+      - name: Smoke test signed macOS artifacts
+        shell: bash
+        run: |
+          for payload in dotnet/artifacts/macos-signing/unsigned-payload-osx-*/payload; do
+            rid="$(basename "$(dirname "$payload")" | sed 's/^unsigned-payload-//')"
+            ./dotnet/eng/smoke-test-release-artifact.sh "$payload" "$rid"
+          done
+      - name: Archive signed macOS artifacts
+        shell: bash
+        run: |
+          mkdir -p dotnet/artifacts/macos-signed
+          for payload in dotnet/artifacts/macos-signing/unsigned-payload-osx-*/payload; do
+            rid="$(basename "$(dirname "$payload")" | sed 's/^unsigned-payload-//')"
+            tar -C "$payload" -czf "dotnet/artifacts/macos-signed/dsf-cli-$rid.tar.gz" .
+          done
+      - name: Upload signed macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsf-cli-macos-signed
+          path: dotnet/artifacts/macos-signed/*
+          if-no-files-found: error
+
+  collect-final-release-artifacts:
+    name: Generate hashes, SBOMs, provenance, keys, native metadata
+    runs-on: ubuntu-latest
+    needs: [build-and-smoke-test, sign-windows, sign-macos, test-and-pack]
+    environment: release-metadata-signing
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Download Linux release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: dsf-cli-linux-*
+          path: dotnet/artifacts/final-artifacts
+          merge-multiple: true
+      - name: Download signed Windows release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dsf-cli-windows-signed
+          path: dotnet/artifacts/final-artifacts
+      - name: Download signed macOS release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dsf-cli-macos-signed
+          path: dotnet/artifacts/final-artifacts
+      - name: Download NuGet tool package
+        uses: actions/download-artifact@v4
+        with:
+          name: dsf-cli-nuget
+          path: dotnet/artifacts/final-artifacts
+      - name: Write Ed25519 release signing key
+        shell: bash
+        run: |
+          install -m 700 -d dotnet/artifacts/final-artifacts/release-metadata
+          printf '%s' "${{ secrets.RELEASE_ED25519_PRIVATE_KEY_PEM }}" > dotnet/artifacts/final-artifacts/release-metadata/release-signing-key.pem
+      - name: Generate hashes, SBOMs, provenance, keys, native metadata
+        run: >
+          python3 dotnet/eng/generate-release-metadata.py
+          --artifact-root dotnet/artifacts/final-artifacts
+          --version "${{ inputs.version }}"
+          --commit "${{ github.sha }}"
+          --repository "${{ github.repository }}"
+          --run-id "${{ github.run_id }}"
+          --private-key dotnet/artifacts/final-artifacts/release-metadata/release-signing-key.pem
+      - name: Remove private signing key
+        if: always()
+        run: rm -f dotnet/artifacts/final-artifacts/release-metadata/release-signing-key.pem
+      - name: Attest final immutable release bytes
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: dotnet/artifacts/final-artifacts/**
+      - name: Upload final release bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsf-cli-final-release-bundle
+          path: dotnet/artifacts/final-artifacts
+          if-no-files-found: error
+
+  publish-nuget:
+    name: Publish NuGet global tool
+    runs-on: ubuntu-latest
+    needs: collect-final-release-artifacts
+    environment: release-nuget-publish
+    if: inputs.dry_run != true
+    steps:
+      - name: Download NuGet package
+        uses: actions/download-artifact@v4
+        with:
+          name: dsf-cli-final-release-bundle
+          path: dotnet/artifacts/final-artifacts
+      - name: Push global tool package to NuGet
+        run: dotnet nuget push "dotnet/artifacts/final-artifacts/*.nupkg" --source https://api.nuget.org/v3/index.json --api-key "${{ secrets.NUGET_API_KEY }}"

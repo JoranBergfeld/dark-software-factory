@@ -4,7 +4,19 @@
     <OutputType>Exe</OutputType>
     <AssemblyName>dsf</AssemblyName>
     <RootNamespace>Dsf.Cli</RootNamespace>
+    <IsPackable>true</IsPackable>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>dsf</ToolCommandName>
+    <PackageId>DarkSoftwareFactory.Cli</PackageId>
+    <Authors>Dark Software Factory</Authors>
+    <Description>Dark Software Factory command-line interface.</Description>
+    <PackageTags>dsf;cli;software-factory</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Dsf.Core\Dsf.Core.csproj" />
