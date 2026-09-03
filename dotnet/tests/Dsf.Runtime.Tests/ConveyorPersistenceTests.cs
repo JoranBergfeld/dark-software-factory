@@ -233,4 +233,94 @@ public sealed class ConveyorPersistenceTests
             File.Delete(path);
         }
     }
+
+    [Fact]
+    public async Task A_persisted_dry_run_checkpointed_through_s6_resumed_without_dry_run_files_for_real()
+    {
+        var store = new RecordingRunStore();
+        var filer = new RecordingIssueFiler();
+        var gatherer = new ScriptedEvidenceGatherer(
+            "sentry", new EvidenceItem("sentry", "SENTRY-1", "checkout 500s spiked"));
+        var dependencies = TestDependencies.Build(evidenceGatherers: [gatherer], runStore: store, issueFiler: filer);
+        var path = await WriteSignalAsync("""{"product_hints": "acme", "source_kinds": ["sentry"]}""");
+        try
+        {
+            var runId = RunIdentity.Compute(TriggerKind.Signal, ["acme"], ["sentry"]);
+            var priorRun = new ConveyorRun
+            {
+                Id = runId,
+                Trigger = TriggerKind.Signal,
+                ProductHints = ["acme"],
+                SourceKinds = ["sentry"],
+                DryRun = true,
+            };
+            // Simulates a crashed dry-run process: S1..S6 checkpointed, one
+            // accepted proposal routed and ready for S7, but the process died
+            // before previewing it. A later non-dry-run invocation resumes the
+            // same open run and must be allowed to file it for real -- the fix
+            // must clear the stale DryRun=true it inherited, not just ever
+            // force DryRun=true.
+            priorRun.Checkpoints.AddRange(ConveyorLine.StationNames.Take(6));
+            var proposal = new Proposal("p1", "Investigate checkout 500s", "sentry", ["SENTRY-1"])
+            {
+                Accepted = true,
+                IntentKey = "intent-1",
+            };
+            proposal.Labels.Add("bug");
+            priorRun.Proposals.Add(proposal);
+            store.Seed(priorRun);
+
+            var run = await RuntimeVerbs.RunAsync(Settings, path, dryRun: false, dependencies, CancellationToken.None);
+
+            Assert.Equal(runId, run.Id);
+            Assert.Equal(RunStatus.Filed, run.Status);
+            Assert.Single(filer.Filed);
+            Assert.Single(run.FiledIssues);
+            Assert.Empty(run.PreviewedIssues);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task A_terminal_previewed_run_resumed_without_dry_run_is_not_re_driven_or_filed()
+    {
+        var store = new RecordingRunStore();
+        var filer = new RecordingIssueFiler();
+        var gatherer = new ScriptedEvidenceGatherer(
+            "sentry", new EvidenceItem("sentry", "SENTRY-1", "checkout 500s spiked"));
+        var dependencies = TestDependencies.Build(evidenceGatherers: [gatherer], runStore: store, issueFiler: filer);
+        var path = await WriteSignalAsync("""{"product_hints": "acme", "source_kinds": ["sentry"]}""");
+        try
+        {
+            var runId = RunIdentity.Compute(TriggerKind.Signal, ["acme"], ["sentry"]);
+            var priorRun = new ConveyorRun
+            {
+                Id = runId,
+                Trigger = TriggerKind.Signal,
+                ProductHints = ["acme"],
+                SourceKinds = ["sentry"],
+                DryRun = true,
+            };
+            priorRun.Checkpoints.AddRange(ConveyorLine.StationNames);
+            priorRun.Status = RunStatus.Previewed;
+            priorRun.PreviewedIssues.Add(new IssuePreview("Investigate checkout 500s", "intent-1", ["bug"]));
+            store.Seed(priorRun);
+
+            var run = await RuntimeVerbs.RunAsync(Settings, path, dryRun: false, dependencies, CancellationToken.None);
+
+            Assert.Equal(runId, run.Id);
+            Assert.Equal(RunStatus.Previewed, run.Status);
+            Assert.True(run.DryRun);
+            Assert.Empty(filer.Filed);
+            Assert.Empty(run.FiledIssues);
+            Assert.Empty(store.Saved);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
 }

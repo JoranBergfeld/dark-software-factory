@@ -127,16 +127,21 @@ public static class RuntimeVerbs
     /// </summary>
     /// <remarks>
     /// A resumed, still-open run is forced onto the current invocation's
-    /// <paramref name="dryRun"/> before it is returned: a signal or sweep run
-    /// today under <c>--dry-run</c> must never reach S7 filing for real just
-    /// because the prior process that checkpointed it (through S6 or earlier)
-    /// ran without <c>--dry-run</c> and crashed or was killed before filing. A
-    /// run already in a terminal status (<see cref="RunStatus.Killed"/>,
-    /// <see cref="RunStatus.Previewed"/>, <see cref="RunStatus.Filed"/>,
-    /// <see cref="RunStatus.Error"/>) is returned exactly as persisted: it is
-    /// never re-driven, so its recorded mode is never altered either -- a run
-    /// that already filed for real stays filed, it is not rewritten into a
-    /// preview after the fact.
+    /// <paramref name="dryRun"/> before it is returned, in both directions: a
+    /// signal or sweep run today under <c>--dry-run</c> must never reach S7
+    /// filing for real just because the prior process that checkpointed it
+    /// (through S6 or earlier) ran without <c>--dry-run</c> and crashed or was
+    /// killed before filing; conversely, a non-dry-run invocation resuming a
+    /// run only ever checkpointed under <c>--dry-run</c> must not be stuck
+    /// forever previewing -- it clears the stale dry-run flag so the run can
+    /// still file for real. A run already in a terminal status (<see
+    /// cref="RunStatus.Killed"/>, <see cref="RunStatus.Previewed"/>, <see
+    /// cref="RunStatus.Filed"/>, <see cref="RunStatus.Error"/>) is returned
+    /// exactly as persisted: it is never re-driven, so its recorded mode is
+    /// never altered either -- a run that already filed for real stays filed,
+    /// it is not rewritten into a preview after the fact, and a run that
+    /// already previewed stays previewed rather than being filed for real by a
+    /// later non-dry-run invocation.
     /// </remarks>
     private static async Task<ConveyorRun> LoadOrCreateRunAsync(
         ConveyorServices services,
@@ -161,13 +166,16 @@ public static class RuntimeVerbs
             var existing = await services.RunStore.LoadAsync(runId, cancellationToken);
             if (existing is not null)
             {
-                if (existing.Status == RunStatus.Open && dryRun && !existing.DryRun)
+                if (existing.Status == RunStatus.Open && dryRun != existing.DryRun)
                 {
-                    existing.DryRun = true;
+                    existing.DryRun = dryRun;
                     existing.Record(
                         "run:load",
-                        "resumed under --dry-run: forcing this run to dry-run so it cannot file for real off "
-                        + "checkpoints written by a prior non-dry-run invocation.");
+                        dryRun
+                            ? "resumed under --dry-run: forcing this run to dry-run so it cannot file for real "
+                              + "off checkpoints written by a prior non-dry-run invocation."
+                            : "resumed without --dry-run: clearing this run's stale dry-run flag so it can file "
+                              + "for real off checkpoints written by a prior --dry-run invocation.");
                 }
 
                 return existing;
