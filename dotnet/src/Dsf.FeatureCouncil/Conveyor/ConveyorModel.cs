@@ -89,8 +89,14 @@ public sealed class ConveyorRun
 
     public IReadOnlyList<string> SourceKinds { get; init; } = [];
 
-    /// <summary>A user-invoked preview: the line runs, filing is skipped.</summary>
-    public bool DryRun { get; init; }
+    /// <summary>
+    /// A user-invoked preview: the line runs, filing is skipped. Settable (not
+    /// init-only) so a run resumed under <c>--dry-run</c> that was persisted with
+    /// this <c>false</c> can be forced to <c>true</c> before it reaches S7 --
+    /// dry-run must never file GitHub issues, even off a crashed non-dry-run
+    /// run's checkpoints.
+    /// </summary>
+    public bool DryRun { get; set; }
 
     public RunStatus Status { get; set; } = RunStatus.Open;
 

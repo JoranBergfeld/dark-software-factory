@@ -185,4 +185,52 @@ public sealed class ConveyorPersistenceTests
             File.Delete(path);
         }
     }
+
+    [Fact]
+    public async Task A_persisted_non_dry_run_checkpointed_through_s6_resumed_with_dry_run_does_not_file()
+    {
+        var store = new RecordingRunStore();
+        var filer = new RecordingIssueFiler();
+        var gatherer = new ScriptedEvidenceGatherer(
+            "sentry", new EvidenceItem("sentry", "SENTRY-1", "checkout 500s spiked"));
+        var dependencies = TestDependencies.Build(evidenceGatherers: [gatherer], runStore: store, issueFiler: filer);
+        var path = await WriteSignalAsync("""{"product_hints": "acme", "source_kinds": ["sentry"]}""");
+        try
+        {
+            var runId = RunIdentity.Compute(TriggerKind.Signal, ["acme"], ["sentry"]);
+            var priorRun = new ConveyorRun
+            {
+                Id = runId,
+                Trigger = TriggerKind.Signal,
+                ProductHints = ["acme"],
+                SourceKinds = ["sentry"],
+                DryRun = false,
+            };
+            // Simulates a crashed non-dry-run process: S1..S6 checkpointed, one
+            // accepted proposal routed and ready for S7, but the process died
+            // before filing it.
+            priorRun.Checkpoints.AddRange(ConveyorLine.StationNames.Take(6));
+            var proposal = new Proposal("p1", "Investigate checkout 500s", "sentry", ["SENTRY-1"])
+            {
+                Accepted = true,
+                IntentKey = "intent-1",
+            };
+            proposal.Labels.Add("bug");
+            priorRun.Proposals.Add(proposal);
+            store.Seed(priorRun);
+
+            var run = await RuntimeVerbs.RunAsync(Settings, path, dryRun: true, dependencies, CancellationToken.None);
+
+            Assert.Equal(runId, run.Id);
+            Assert.Equal(RunStatus.Previewed, run.Status);
+            Assert.Empty(filer.Filed);
+            Assert.Empty(run.FiledIssues);
+            Assert.Single(run.PreviewedIssues);
+            Assert.Equal("Investigate checkout 500s", run.PreviewedIssues[0].Title);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
 }

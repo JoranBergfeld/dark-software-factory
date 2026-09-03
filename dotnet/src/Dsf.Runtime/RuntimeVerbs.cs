@@ -125,6 +125,19 @@ public static class RuntimeVerbs
     /// process already did. Creates a fresh run, seeded with that same identity as
     /// its id, only when no prior run is found.
     /// </summary>
+    /// <remarks>
+    /// A resumed, still-open run is forced onto the current invocation's
+    /// <paramref name="dryRun"/> before it is returned: a signal or sweep run
+    /// today under <c>--dry-run</c> must never reach S7 filing for real just
+    /// because the prior process that checkpointed it (through S6 or earlier)
+    /// ran without <c>--dry-run</c> and crashed or was killed before filing. A
+    /// run already in a terminal status (<see cref="RunStatus.Killed"/>,
+    /// <see cref="RunStatus.Previewed"/>, <see cref="RunStatus.Filed"/>,
+    /// <see cref="RunStatus.Error"/>) is returned exactly as persisted: it is
+    /// never re-driven, so its recorded mode is never altered either -- a run
+    /// that already filed for real stays filed, it is not rewritten into a
+    /// preview after the fact.
+    /// </remarks>
     private static async Task<ConveyorRun> LoadOrCreateRunAsync(
         ConveyorServices services,
         TriggerKind trigger,
@@ -148,6 +161,15 @@ public static class RuntimeVerbs
             var existing = await services.RunStore.LoadAsync(runId, cancellationToken);
             if (existing is not null)
             {
+                if (existing.Status == RunStatus.Open && dryRun && !existing.DryRun)
+                {
+                    existing.DryRun = true;
+                    existing.Record(
+                        "run:load",
+                        "resumed under --dry-run: forcing this run to dry-run so it cannot file for real off "
+                        + "checkpoints written by a prior non-dry-run invocation.");
+                }
+
                 return existing;
             }
         }
