@@ -12,6 +12,7 @@ DOCKERFILE = (
     / "runtime"
     / "Dockerfile"
 )
+DOTNET_PROPS = Path(__file__).resolve().parents[3] / "dotnet" / "Directory.Build.props"
 
 
 def test_runtime_dockerfile_exists():
@@ -37,3 +38,8 @@ def test_runtime_dockerfile_cmd_runs_sweep_worker():
     # interval so the ACA revision stays healthy.
     assert 'ENTRYPOINT ["dotnet", "dsf-runtime.dll"]' in text
     assert 'CMD ["serve-orchestrator", "--loop"]' in text
+
+
+def test_runtime_image_starts_at_dotnet_cutover_version():
+    text = DOTNET_PROPS.read_text(encoding="utf-8")
+    assert "<Version>0.0.1</Version>" in text

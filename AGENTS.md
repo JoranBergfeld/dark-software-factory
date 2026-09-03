@@ -30,9 +30,9 @@ source is under `<member>/src/dsf/...`:
 - **core/** (`dsf-core`) — shared base: `contracts`, `ports`, `config`, `memory`, `model`,
   `observability`, `a2a`, `signals`, `learning`, plus `container.py`, `github_client.py`.
   Imports no application member.
-- **feature-council/** (`dsf-feature-council`) — the runtime: `agents`, `council`,
-  `orchestrator`, `triggers`, `evals`, `runtime`. Runs as a module
-  (`python -m dsf.runtime.control`); the `dsf` front-door fronts its verbs.
+- **feature-council/** (`dsf-feature-council`) — the Python parity reference for
+  `agents`, `council`, `orchestrator`, `triggers`, `evals`, `runtime`; the migration runtime
+  image now starts the .NET `dsf-runtime` executable, and the `dsf` front-door fronts its verbs.
 - **cli/** (`dsf-cli`) — factory CLI + instance provisioning: `cli`, `instance`. Console
   script `dsf` (`dsf.cli.factory:main`).
 - **control-center/** (`dsf-control-center`) — governance web UI (FastAPI + Jinja). Console
