@@ -499,7 +499,17 @@ public static class RuntimeVerbs
         return app;
     }
 
-    /// <summary>Builds and serves the orchestrator host until cancelled.</summary>
+    /// <summary>
+    /// Builds and serves the orchestrator host until cancelled. When
+    /// <paramref name="sweepInterval"/> is set (<c>--loop</c>), the manual
+    /// live-filing gate (<see cref="RuntimeIntegrationSettings.ConfirmLiveFiling"/>)
+    /// is checked once here, before the host -- and its ticking background sweep --
+    /// ever starts: the scheduled sweep always files live, so an unconfirmed gate
+    /// is a permanent config/safety failure, not a transient tick error. Catching
+    /// it here throws <see cref="RuntimeVerbException"/> synchronously, which
+    /// exits the process non-zero, instead of letting the loop swallow it forever
+    /// as a per-tick failure and keep the process running anyway.
+    /// </summary>
     public static Task ServeOrchestratorAsync(
         RuntimeSettings settings,
         RuntimeDependencies dependencies,
@@ -510,6 +520,11 @@ public static class RuntimeVerbs
         IReadOnlyDictionary<string, string?>? env = null)
     {
         ArgumentNullException.ThrowIfNull(dependencies);
+        if (sweepInterval is not null)
+        {
+            EnsureLiveFilingConfirmed(dryRun: false, env);
+        }
+
         var app = BuildOrchestratorHost(settings, dependencies, host, port, sweepInterval, env);
         return dependencies.WebHostRunner.RunAsync(app, cancellationToken);
     }

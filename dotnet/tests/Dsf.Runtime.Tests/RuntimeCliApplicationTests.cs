@@ -282,6 +282,29 @@ public sealed class RuntimeCliApplicationTests
     }
 
     [Fact]
+    public async Task Serve_orchestrator_loop_without_the_live_filing_gate_is_refused_before_starting_and_exits_non_zero()
+    {
+        // The scheduled sweep behind --loop always files live (it never runs
+        // --dry-run), so the manual live-filing gate must be checked once at
+        // startup, before the host (and its ticking background sweep) ever
+        // starts -- never swallowed tick after tick as a transient error that
+        // leaves the process running forever with a non-zero-worthy failure.
+        var envWithoutGate = FullEnvironment
+            .Where(pair => pair.Key != RuntimeIntegrationSettings.ConfirmLiveFiling)
+            .ToDictionary(pair => pair.Key, pair => pair.Value);
+        var runner = new RecordingWebHostRunner();
+        var dependencies = TestDependencies.Build(webHostRunner: runner);
+
+        var (exitCode, stdout, stderr) = await InvokeAsync(
+            envWithoutGate, dependencies, "serve-orchestrator", "--loop");
+
+        Assert.Equal(1, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains(RuntimeIntegrationSettings.ConfirmLiveFiling, stderr);
+        Assert.Null(runner.Started);
+    }
+
+    [Fact]
     public async Task Run_with_full_settings_and_a_missing_signal_file_reports_a_real_error()
     {
         var (exitCode, stdout, stderr) = await InvokeAsync(FullEnvironment, "run", "--signal", "does-not-exist.json");
