@@ -34,8 +34,8 @@ public sealed class S1Triage : IStation
 
     /// <summary>
     /// A stable content hash of the run's scope: two signals asking for the same
-    /// products and sources produce the same fingerprint, which is what later
-    /// dedup (#142) matches on.
+    /// products and sources produce the same fingerprint, which is what dedup and
+    /// the filing intent key are derived from.
     /// </summary>
     private static string Fingerprint(ConveyorRun run)
     {

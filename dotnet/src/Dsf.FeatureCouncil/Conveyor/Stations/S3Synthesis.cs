@@ -16,11 +16,17 @@ public sealed class S3Synthesis : IStation
         foreach (var group in run.Evidence.GroupBy(item => item.SourceKind, StringComparer.OrdinalIgnoreCase))
         {
             var references = group.Select(item => item.Reference).Distinct(StringComparer.Ordinal).ToArray();
+            var kind = group.Key.ToLowerInvariant();
             run.Proposals.Add(new Proposal(
-                id: $"{run.Id}-{group.Key.ToLowerInvariant()}",
-                title: $"[{group.Key.ToLowerInvariant()}] {group.First().Summary}",
-                sourceKind: group.Key.ToLowerInvariant(),
-                evidenceReferences: references));
+                id: $"{run.Id}-{kind}",
+                title: $"[{kind}] {group.First().Summary}",
+                sourceKind: kind,
+                evidenceReferences: references)
+            {
+                // Scope fingerprint, not run id: the same conclusion reached again
+                // must resolve to the same filing intent.
+                IntentKey = $"{run.Fingerprint}:{kind}",
+            });
         }
 
         run.Record(

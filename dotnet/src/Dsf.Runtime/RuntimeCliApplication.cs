@@ -13,7 +13,9 @@ namespace Dsf.Runtime;
 /// anything else; a missing required setting names every unset requirement and
 /// exits non-zero rather than proceeding. Once settings validate, the verb does its
 /// real work (see <see cref="RuntimeVerbs"/>): drives the conveyor, sweeps the
-/// configured source agent roster, or serves the orchestrator/agent host.
+/// configured source agent roster, or serves the orchestrator/agent host. A verb
+/// whose dependencies cannot be composed reports the settings that are unset
+/// rather than running a line that can neither gather, file, nor persist.
 /// </summary>
 public static class RuntimeCliApplication
 {
@@ -39,7 +41,7 @@ public static class RuntimeCliApplication
         RuntimeDependencies? dependencies,
         CancellationToken cancellationToken)
     {
-        dependencies ??= RuntimeDependencies.Production();
+        dependencies ??= RuntimeDependencies.Production(env);
         var root = BuildRootCommand(env, stdout, stderr, dependencies);
         var parseResult = root.Parse(args);
         var exitCode = await parseResult.InvokeAsync(cancellationToken: cancellationToken);

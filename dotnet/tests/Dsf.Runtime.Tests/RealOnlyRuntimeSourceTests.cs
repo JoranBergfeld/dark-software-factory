@@ -91,6 +91,37 @@ public sealed class RealOnlyRuntimeSourceTests
             "Found az CLI process invocation in the .NET runtime host source: " + string.Join(", ", offenders));
     }
 
+    // Deferred-work markers: production runtime source must not promise a
+    // capability "when #NNN lands" in place of shipping it. Real absences are
+    // reported against the setting that is unset, not against a ticket number.
+    private static readonly Regex DeferredWorkMarker = new(
+        @"(tracked in #\d+|ships (?:with|in) #\d+|until #\d+|in #\d+ ?\)|Not ?Implemented)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    public static IEnumerable<object[]> ConveyorAndRuntimeSourceDirectories()
+    {
+        var root = FindSolutionRoot();
+        yield return [Path.Combine(root.FullName, "src", "Dsf.Runtime")];
+        yield return [Path.Combine(root.FullName, "src", "Dsf.FeatureCouncil")];
+    }
+
+    [Theory]
+    [MemberData(nameof(ConveyorAndRuntimeSourceDirectories))]
+    public void Production_runtime_source_defers_no_behaviour_to_a_future_ticket(string directory)
+    {
+        Assert.True(Directory.Exists(directory), $"Expected directory to exist: {directory}");
+
+        var offenders = Directory.EnumerateFiles(directory, "*.cs", SearchOption.AllDirectories)
+            .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            .Where(path => DeferredWorkMarker.IsMatch(File.ReadAllText(path)))
+            .ToList();
+
+        Assert.True(
+            offenders.Count == 0,
+            "Found deferred-work markers in production runtime source: " + string.Join(", ", offenders));
+    }
+
     [Theory]
     [MemberData(nameof(RuntimeVerbSourceDirectories))]
     public void Production_runtime_verb_source_never_emits_the_unconditional_stub_text(string directory)

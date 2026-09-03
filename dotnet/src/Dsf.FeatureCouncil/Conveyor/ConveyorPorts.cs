@@ -1,10 +1,10 @@
 namespace Dsf.FeatureCouncil.Conveyor;
 
 /// <summary>
-/// A source agent's evidence-gathering seam, one implementation per
-/// <see cref="SourceKind"/>. The A2A-served source agents that implement this in
-/// production are tracked in #144; until one is registered for a kind, the
-/// investigation station audits its absence rather than inventing evidence.
+/// A source agent's evidence-gathering seam, one implementation per source kind.
+/// The runtime composes one per configured source agent endpoint; a run that asks
+/// for a kind with no gatherer fails at the investigation station rather than
+/// reporting an empty, successful investigation.
 /// </summary>
 public interface IEvidenceGatherer
 {
@@ -16,9 +16,8 @@ public interface IEvidenceGatherer
 
 /// <summary>
 /// The filing seam: turns an accepted, routed proposal into a tracked issue and
-/// returns its URL. The GitHub-backed implementation is tracked in #143; the
-/// filing station fails at this boundary -- after the rest of the line has run --
-/// when there is something to file and no filer is wired.
+/// returns its URL. Implementations key off <see cref="Proposal.IntentKey"/> so
+/// re-filing the same intent resolves to the issue that already exists.
 /// </summary>
 public interface IIssueFiler
 {
@@ -26,17 +25,32 @@ public interface IIssueFiler
 }
 
 /// <summary>
+/// The blackboard persistence seam. The conveyor writes the run through this port
+/// after every station, so the run's checkpoints, evidence, decisions and audit
+/// trail outlive the process that produced them and a resumed run can skip the
+/// stations that already completed.
+/// </summary>
+public interface IRunStore
+{
+    Task SaveAsync(ConveyorRun run, string station, CancellationToken cancellationToken);
+}
+
+/// <summary>
 /// The collaborators a conveyor line needs: the product it is scoped to, the
-/// source agents it can gather evidence from, and the filer it hands accepted
-/// proposals to. <paramref name="IssueFiler"/> is deliberately nullable -- an
-/// unwired filer is a real, reportable condition at the filing boundary, not
-/// something to paper over with a do-nothing implementation.
+/// source agents it can gather evidence from, the filer it hands accepted
+/// proposals to, and the store its state is persisted through.
+/// <paramref name="IssueFiler"/> is nullable so the filing station can report an
+/// unwired filer at the real boundary; <paramref name="RunStore"/> is required --
+/// a run the factory cannot persist is a run it cannot govern.
 /// </summary>
 public sealed record ConveyorServices(
     string Product,
     IReadOnlyList<IEvidenceGatherer> EvidenceGatherers,
-    IIssueFiler? IssueFiler)
+    IIssueFiler? IssueFiler,
+    IRunStore RunStore)
 {
+    public IRunStore RunStore { get; } = RunStore ?? throw new ArgumentNullException(nameof(RunStore));
+
     public IEvidenceGatherer? GathererFor(string sourceKind) =>
         EvidenceGatherers.FirstOrDefault(
             gatherer => string.Equals(gatherer.SourceKind, sourceKind, StringComparison.OrdinalIgnoreCase));

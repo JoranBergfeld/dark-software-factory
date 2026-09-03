@@ -1,4 +1,5 @@
 using Dsf.Core.Runtime;
+using Dsf.FeatureCouncil.Conveyor;
 using Dsf.Runtime;
 using Xunit;
 
@@ -8,8 +9,8 @@ namespace Dsf.Runtime.Tests;
 /// Entrypoint-parity tests for the .NET runtime host: <c>run</c>, <c>sweep</c>,
 /// <c>serve-orchestrator</c>, and <c>serve-agent --kind</c> must exist, must reuse
 /// the existing env var names when composing settings, must name every unset
-/// required setting and exit non-zero, and must never claim success for behavior
-/// that isn't implemented yet (the station pipeline ships in #142/#143). Every verb
+/// required setting and exit non-zero, and must never claim success for work they
+/// did not do. Every verb
 /// -- including <c>serve-agent</c> -- must validate required runtime config the
 /// same way first, and every verb must be able to resolve settings it doesn't have
 /// locally from the owner App Configuration runtime index when
@@ -108,7 +109,13 @@ public sealed class RuntimeCliApplicationTests
     public async Task Fully_configured_sweep_reports_the_roster_it_actually_read()
     {
         var roster = new RosterReader(["grafana", "sentry"]);
-        var dependencies = TestDependencies.Build(sourceAgentRosterReader: roster);
+        var dependencies = TestDependencies.Build(
+            sourceAgentRosterReader: roster,
+            evidenceGatherers:
+            [
+                new ScriptedEvidenceGatherer("grafana"),
+                new ScriptedEvidenceGatherer("sentry"),
+            ]);
 
         var (exitCode, stdout, stderr) = await InvokeAsync(FullEnvironment, dependencies, "sweep");
 
@@ -187,7 +194,12 @@ public sealed class RuntimeCliApplicationTests
             await File.WriteAllTextAsync(
                 path, """{"product_hints": "acme", "source_kinds": ["sentry", "bogus"]}""");
 
-            var (exitCode, stdout, stderr) = await InvokeAsync(FullEnvironment, "run", "--dry-run", "--signal", path);
+            var dependencies = TestDependencies.Build(evidenceGatherers:
+            [
+                new ScriptedEvidenceGatherer("sentry"),
+            ]);
+            var (exitCode, stdout, stderr) = await InvokeAsync(
+                FullEnvironment, dependencies, "run", "--dry-run", "--signal", path);
 
             Assert.Equal(0, exitCode);
             Assert.Equal(string.Empty, stderr);

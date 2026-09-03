@@ -48,6 +48,14 @@ public sealed class Proposal(string id, string title, string sourceKind, IReadOn
 
     public IReadOnlyList<string> EvidenceReferences { get; } = evidenceReferences;
 
+    /// <summary>
+    /// Durable identity of what this proposal asks for, stable across runs of the
+    /// same scope (the run's fingerprint plus the source kind). The filing station
+    /// stamps it into the filed issue so a later run that reaches the same
+    /// conclusion resolves to the existing issue instead of filing a duplicate.
+    /// </summary>
+    public string IntentKey { get; set; } = string.Empty;
+
     /// <summary>Council confidence in [0, 1]; set by the council station.</summary>
     public double Confidence { get; set; }
 

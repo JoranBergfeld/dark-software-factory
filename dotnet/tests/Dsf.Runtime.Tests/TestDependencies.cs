@@ -18,13 +18,52 @@ internal static class TestDependencies
         ISourceAgentRosterReader? sourceAgentRosterReader = null,
         IWebHostRunner? webHostRunner = null,
         IReadOnlyList<IEvidenceGatherer>? evidenceGatherers = null,
-        IIssueFiler? issueFiler = null) =>
+        IIssueFiler? issueFiler = null,
+        IRunStore? runStore = null,
+        ISourceIntegration? sourceIntegration = null) =>
         new(
             ownerRuntimeIndexReader ?? new RecordingOwnerRuntimeIndexReader(),
             sourceAgentRosterReader ?? new RosterReader([]),
             webHostRunner ?? new RecordingWebHostRunner(),
-            evidenceGatherers ?? [],
-            issueFiler);
+            new ScriptedConveyorComposer(evidenceGatherers ?? [], issueFiler, runStore ?? new RecordingRunStore()),
+            sourceIntegration ?? new ScriptedSourceIntegration());
+}
+
+/// <summary>Composes conveyor services from collaborators the test supplied directly.</summary>
+internal sealed class ScriptedConveyorComposer(
+    IReadOnlyList<IEvidenceGatherer> gatherers,
+    IIssueFiler? issueFiler,
+    IRunStore runStore) : IConveyorComposer
+{
+    public ConveyorServices ComposeFor(RuntimeSettings settings) =>
+        new(settings.Product, gatherers, issueFiler, runStore);
+}
+
+/// <summary>A run store that records every persisted checkpoint in order.</summary>
+internal sealed class RecordingRunStore : IRunStore
+{
+    public List<(string RunId, string Station, RunStatus Status)> Saved { get; } = [];
+
+    public Task SaveAsync(ConveyorRun run, string station, CancellationToken cancellationToken)
+    {
+        Saved.Add((run.Id, station, run.Status));
+        return Task.CompletedTask;
+    }
+}
+
+/// <summary>A run store whose backing store cannot be reached.</summary>
+internal sealed class UnreachableRunStore(string reason) : IRunStore
+{
+    public Task SaveAsync(ConveyorRun run, string station, CancellationToken cancellationToken) =>
+        throw new InvalidOperationException(reason);
+}
+
+/// <summary>A source integration that yields fixed evidence for any kind.</summary>
+internal sealed class ScriptedSourceIntegration(params EvidenceItem[] evidence) : ISourceIntegration
+{
+    public Task<IReadOnlyList<EvidenceItem>> GatherAsync(
+        string kind, string product, CancellationToken cancellationToken) =>
+        Task.FromResult<IReadOnlyList<EvidenceItem>>(evidence);
 }
 
 /// <summary>An owner runtime index that is never expected to be consulted.</summary>

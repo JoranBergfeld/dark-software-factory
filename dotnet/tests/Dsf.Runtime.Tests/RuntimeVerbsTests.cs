@@ -42,23 +42,25 @@ public sealed class RuntimeVerbsTests
     public async Task Run_dry_run_drives_every_station_and_records_checkpoints()
     {
         var path = await WriteSignalAsync("""{"product_hints": "acme", "source_kinds": ["sentry"]}""");
+        var dependencies = TestDependencies.Build(evidenceGatherers:
+        [
+            new ScriptedEvidenceGatherer("sentry", new EvidenceItem("sentry", "SENTRY-1", "checkout 500s spiked")),
+        ]);
         try
         {
             var run = await RuntimeVerbs.RunAsync(
                 Settings,
                 path,
                 dryRun: true,
-                TestDependencies.Empty,
+                dependencies,
                 CancellationToken.None);
 
             Assert.Equal(RunStatus.Previewed, run.Status);
             Assert.Equal(ConveyorLine.StationNames, run.Checkpoints);
             Assert.True(run.DryRun);
             Assert.Equal(["sentry"], run.SourceKinds);
-            // No source agent gatherers are wired yet (#144): the investigation
-            // station must say so out loud rather than silently reporting evidence.
             Assert.Contains(run.Audit, a => a.Station == "s2_investigation" && a.Message.Contains("sentry"));
-            Assert.Empty(run.Evidence);
+            Assert.Single(run.Evidence);
         }
         finally
         {
@@ -107,7 +109,7 @@ public sealed class RuntimeVerbsTests
             Assert.Single(run.Proposals);
             Assert.True(run.Proposals[0].Accepted);
             Assert.Contains("no GitHub issue filer is wired", run.Audit[^1].Message);
-            Assert.Contains("#143", run.Audit[^1].Message);
+            Assert.Contains("GITHUB_TOKEN", run.Audit[^1].Message);
         }
         finally
         {
@@ -158,7 +160,13 @@ public sealed class RuntimeVerbsTests
         var run = await RuntimeVerbs.SweepAsync(
             Settings,
             dryRun: true,
-            TestDependencies.Build(sourceAgentRosterReader: roster),
+            TestDependencies.Build(
+                sourceAgentRosterReader: roster,
+                evidenceGatherers:
+                [
+                    new ScriptedEvidenceGatherer("grafana"),
+                    new ScriptedEvidenceGatherer("sentry"),
+                ]),
             CancellationToken.None);
 
         Assert.Equal("acme", roster.RequestedSettings?.Product);
@@ -183,7 +191,11 @@ public sealed class RuntimeVerbsTests
     [Fact]
     public async Task Orchestrator_host_serves_health_and_previews_a_posted_signal()
     {
-        var app = RuntimeVerbs.BuildOrchestratorHost(Settings, TestDependencies.Empty, "127.0.0.1", 0);
+        var dependencies = TestDependencies.Build(evidenceGatherers:
+        [
+            new ScriptedEvidenceGatherer("sentry", new EvidenceItem("sentry", "SENTRY-1", "checkout 500s spiked")),
+        ]);
+        var app = RuntimeVerbs.BuildOrchestratorHost(Settings, dependencies, "127.0.0.1", 0);
         await using var host = app;
         await app.StartAsync();
         try
@@ -235,9 +247,11 @@ public sealed class RuntimeVerbsTests
     }
 
     [Fact]
-    public async Task Agent_host_publishes_its_card_and_refuses_to_gather_until_the_connector_lands()
+    public async Task Agent_host_publishes_its_card_and_gathers_from_its_integration()
     {
-        var app = RuntimeVerbs.BuildSourceAgentHost(Settings, "SENTRY", "127.0.0.1", 0);
+        var dependencies = TestDependencies.Build(sourceIntegration: new ScriptedSourceIntegration(
+            new EvidenceItem("sentry", "SENTRY-1", "checkout 500s spiked")));
+        var app = RuntimeVerbs.BuildSourceAgentHost(Settings, "SENTRY", dependencies, "127.0.0.1", 0);
         await using var host = app;
         await app.StartAsync();
         try
@@ -250,8 +264,11 @@ public sealed class RuntimeVerbsTests
             Assert.Equal("acme", card.GetProperty("product").GetString());
 
             var gather = await client.PostAsync("/gather", new StringContent("{}", Encoding.UTF8, "application/json"));
-            Assert.Equal(HttpStatusCode.NotImplemented, gather.StatusCode);
-            Assert.Contains("#144", await gather.Content.ReadAsStringAsync());
+            Assert.Equal(HttpStatusCode.OK, gather.StatusCode);
+            var payload = await gather.Content.ReadFromJsonAsync<JsonElement>();
+            Assert.Equal(
+                "SENTRY-1",
+                payload.GetProperty("evidence").EnumerateArray().Single().GetProperty("reference").GetString());
         }
         finally
         {
@@ -263,7 +280,7 @@ public sealed class RuntimeVerbsTests
     public void Agent_host_rejects_an_unknown_kind_by_name()
     {
         var exception = Assert.Throws<RuntimeVerbException>(
-            () => RuntimeVerbs.BuildSourceAgentHost(Settings, "bogus"));
+            () => RuntimeVerbs.BuildSourceAgentHost(Settings, "bogus", TestDependencies.Empty));
 
         Assert.Contains("unknown source agent kind 'bogus'", exception.Message);
         Assert.Contains("sentry", exception.Message);
@@ -278,7 +295,7 @@ public sealed class RuntimeVerbsTests
     [InlineData("azuremonitor")]
     public void Agent_host_builds_for_every_known_source_kind(string kind)
     {
-        var app = RuntimeVerbs.BuildSourceAgentHost(Settings, kind, "127.0.0.1", 0);
+        var app = RuntimeVerbs.BuildSourceAgentHost(Settings, kind, TestDependencies.Empty, "127.0.0.1", 0);
 
         Assert.NotNull(app);
     }

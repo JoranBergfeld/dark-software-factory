@@ -1,10 +1,13 @@
+using Dsf.Core.Runtime;
+
 namespace Dsf.FeatureCouncil.Conveyor.Stations;
 
 /// <summary>
 /// S2 — investigation. Asks the evidence gatherer registered for each of the run's
-/// source kinds for evidence. A kind with no registered gatherer is audited by
-/// name (the A2A source agents ship in #144) instead of being silently skipped or
-/// filled in with invented evidence.
+/// source kinds for evidence. A kind the run was scoped to with no gatherer behind
+/// it fails the run, naming the kind and the setting that would wire it: a line
+/// that cannot look where it was told to look has nothing truthful to say, and an
+/// empty investigation must never be mistaken for a clean one.
 /// </summary>
 public sealed class S2Investigation : IStation
 {
@@ -16,15 +19,12 @@ public sealed class S2Investigation : IStation
     {
         foreach (var kind in run.SourceKinds)
         {
-            var gatherer = services.GathererFor(kind);
-            if (gatherer is null)
-            {
-                run.Record(
-                    StationName,
-                    $"no evidence gatherer is wired for source kind '{kind}'; gathered nothing from it "
-                    + "(source agents are tracked in #144).");
-                continue;
-            }
+            var gatherer = services.GathererFor(kind)
+                ?? throw new InvalidOperationException(
+                    $"no evidence gatherer is configured for source kind '{kind}' (product "
+                    + $"'{services.Product}'): set {RuntimeIntegrationSettings.SourceAgentEndpoint(kind)} "
+                    + $"or {RuntimeIntegrationSettings.SourceAgentEndpointTemplate} to the source agent "
+                    + "serving that kind.");
 
             var gathered = await gatherer.GatherAsync(run, cancellationToken);
             run.Evidence.AddRange(gathered);

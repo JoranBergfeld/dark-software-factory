@@ -34,9 +34,11 @@ unset requirement and exiting non-zero), then does its real work:
   Council conveyor (`Dsf.FeatureCouncil.Conveyor`, stations `s1_triage` ..
   `s7_filing`), printing the finished run: status, evidence/proposal counts,
   station checkpoints and the audit trail. `--dry-run` stops deliberately at the
-  filing station (`previewed`). Without `--dry-run`, a run with accepted proposals
-  fails at the filing boundary until the GitHub issue filer lands (#143) — after
-  stations S1..S6 have run and checkpointed.
+  filing station (`previewed`). Without `--dry-run`, accepted proposals are filed
+  as GitHub issues, idempotently: each proposal carries a durable intent key
+  (scope fingerprint + source kind) that is stamped into the issue body and
+  searched for before filing. Reaching the filing boundary with no filer wired
+  fails the run — after stations S1..S6 have run and checkpointed.
 - `sweep [--dry-run]` — reads the enabled source agent roster from the product's
   App Configuration store (`agents.<KIND>.enabled`, product label overriding the
   unlabelled default) and drives that scheduled run through the conveyor. An empty
@@ -46,9 +48,28 @@ unset requirement and exiting non-zero), then does its real work:
   additionally sweeps every `--interval` seconds (or `DSF_SWEEP_INTERVAL`, default
   300) for as long as the host serves.
 - `serve-agent --kind <kind> [--host --port]` — serves one source agent's A2A card
-  at `/.well-known/agent-card.json`. `POST /gather` answers `501` naming the
-  missing source connector until #144 lands; an unknown `--kind` is rejected by
-  name.
+  at `/.well-known/agent-card.json`. `POST /gather` reads the kind's configured
+  upstream integration (`DSF_SOURCE_<KIND>_ENDPOINT`, optionally
+  `DSF_SOURCE_<KIND>_TOKEN`) and answers with the evidence it found; an
+  unconfigured kind answers `503` naming that setting and a failing upstream
+  answers `502` with the reason. An unknown `--kind` is rejected by name.
+
+### Runtime dependency composition
+
+Every conveyor-driving verb composes its collaborators before running a line, and
+fails naming each unset setting rather than running a line that can neither
+gather, file, nor persist:
+
+- **Source agents** — one A2A gatherer per source kind, from
+  `DSF_SOURCE_AGENT_ENDPOINT_<KIND>` or `DSF_SOURCE_AGENT_ENDPOINT_TEMPLATE` (a
+  base URL containing `{kind}`). A run scoped to a kind with no gatherer fails at
+  `s2_investigation`, naming the kind and the setting.
+- **Filing** — the GitHub REST filer, from `GITHUB_TOKEN` (or `GH_TOKEN`) and
+  `GITHUB_REPOSITORY`; `DSF_GITHUB_API_URL` overrides the API base URL.
+- **Persistence** — the run blackboard is upserted into Cosmos
+  (`AZURE_COSMOS_ENDPOINT`, `DSF_COSMOS_DATABASE`/`DSF_COSMOS_CONTAINER`,
+  defaulting to `dsf`/`runs`) after every station checkpoint, using the runtime's
+  managed identity. A store that cannot be written to fails the run.
 
 The `dsf` front door (`src/Dsf.Cli`) forwards these verbs to the `dsf-runtime`
 executable as a child process — the same way the Python front door shells out to

@@ -15,8 +15,9 @@ namespace Dsf.Runtime;
 /// they produced, and <c>serve-orchestrator</c>/<c>serve-agent</c> build and serve
 /// real HTTP hosts. Nothing here fails for a valid invocation on principle; the
 /// only failures are real, input- or configuration-dependent ones (an unreadable
-/// signal, an unknown source agent kind, an unreachable roster store, or the
-/// filing boundary reached with nothing wired to file through).
+/// signal, an unknown source agent kind, an unreachable roster store, an
+/// incomplete dependency composition, or the filing boundary reached with nothing
+/// wired to file through).
 /// </summary>
 public static class RuntimeVerbs
 {
@@ -71,6 +72,7 @@ public static class RuntimeVerbs
         ArgumentNullException.ThrowIfNull(signal);
         ArgumentNullException.ThrowIfNull(dependencies);
 
+        var services = ComposeServices(settings, dependencies);
         var run = new ConveyorRun
         {
             Trigger = TriggerKind.Signal,
@@ -78,7 +80,7 @@ public static class RuntimeVerbs
             SourceKinds = signal.SourceKinds,
             DryRun = signal.DryRun,
         };
-        return ConveyorLine.RunAsync(run, dependencies.ConveyorServicesFor(settings), cancellationToken);
+        return ConveyorLine.RunAsync(run, services, cancellationToken);
     }
 
     /// <summary>
@@ -96,6 +98,8 @@ public static class RuntimeVerbs
     {
         ArgumentNullException.ThrowIfNull(settings);
         ArgumentNullException.ThrowIfNull(dependencies);
+
+        var services = ComposeServices(settings, dependencies);
 
         IReadOnlyList<string> kinds;
         try
@@ -120,7 +124,24 @@ public static class RuntimeVerbs
             + $"[{(kinds.Count == 0 ? "(none)" : string.Join(", ", kinds))}] "
             + $"(resolved from {settings.AppConfigEndpoint}).");
 
-        return await ConveyorLine.RunAsync(run, dependencies.ConveyorServicesFor(settings), cancellationToken);
+        return await ConveyorLine.RunAsync(run, services, cancellationToken);
+    }
+
+    /// <summary>
+    /// Resolves the conveyor's collaborators, translating an incomplete
+    /// composition into the operator-facing failure the verb reports. The runtime
+    /// never drives a line with dependencies it does not have.
+    /// </summary>
+    private static ConveyorServices ComposeServices(RuntimeSettings settings, RuntimeDependencies dependencies)
+    {
+        try
+        {
+            return dependencies.ConveyorServicesFor(settings);
+        }
+        catch (RuntimeConfigurationException exception)
+        {
+            throw new RuntimeVerbException(exception.Message);
+        }
     }
 
     /// <summary>
@@ -184,19 +205,23 @@ public static class RuntimeVerbs
     /// <summary>
     /// Builds the source agent host for <paramref name="kind"/>: its A2A agent card
     /// and its gather endpoint. Throws <see cref="RuntimeVerbException"/> for an
-    /// unknown kind. The gather endpoint answers <c>501 Not Implemented</c> with the
-    /// reason until the kind's source connector lands (#144) -- an honest refusal
-    /// rather than an empty success.
+    /// unknown kind. <c>POST /gather</c> reads the kind's configured upstream
+    /// integration and answers with the evidence it found; when that integration is
+    /// unconfigured it answers 503 naming the setting, and when the integration
+    /// itself fails it answers 502 with the reason -- never an empty success.
     /// </summary>
     public static WebApplication BuildSourceAgentHost(
         RuntimeSettings settings,
         string kind,
+        RuntimeDependencies dependencies,
         string host = DefaultHost,
         int port = DefaultPort)
     {
         ArgumentNullException.ThrowIfNull(settings);
+        ArgumentNullException.ThrowIfNull(dependencies);
 
         var card = SourceAgentCard.For(kind, settings.Product);
+        var integration = dependencies.SourceIntegration;
         var app = CreateBuilder(host, port).Build();
 
         app.MapGet("/healthz", () => Results.Ok(new
@@ -207,14 +232,26 @@ public static class RuntimeVerbs
             kind = card.Kind,
         }));
         app.MapGet(SourceAgentCard.CardRoute, () => Results.Ok(card));
-        app.MapPost(SourceAgentCard.GatherRoute, () => Results.Json(
-            new
+        app.MapPost(SourceAgentCard.GatherRoute, async (CancellationToken cancellationToken) =>
+        {
+            try
             {
-                kind = card.Kind,
-                error = $"the '{card.Kind}' source connector is not wired in the .NET runtime yet "
-                    + "(tracked in #144); this agent can publish its card but cannot gather evidence.",
-            },
-            statusCode: StatusCodes.Status501NotImplemented));
+                var evidence = await integration.GatherAsync(card.Kind, settings.Product, cancellationToken);
+                return Results.Ok(new { kind = card.Kind, product = settings.Product, evidence });
+            }
+            catch (RuntimeConfigurationException exception)
+            {
+                return Results.Json(
+                    new { kind = card.Kind, error = exception.Message },
+                    statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                return Results.Json(
+                    new { kind = card.Kind, error = exception.Message },
+                    statusCode: StatusCodes.Status502BadGateway);
+            }
+        });
 
         return app;
     }
@@ -243,7 +280,7 @@ public static class RuntimeVerbs
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(dependencies);
-        var app = BuildSourceAgentHost(settings, kind, host, port);
+        var app = BuildSourceAgentHost(settings, kind, dependencies, host, port);
         return dependencies.WebHostRunner.RunAsync(app, cancellationToken);
     }
 

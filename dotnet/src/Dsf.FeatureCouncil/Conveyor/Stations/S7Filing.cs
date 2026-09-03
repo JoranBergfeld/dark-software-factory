@@ -1,3 +1,5 @@
+using Dsf.Core.Runtime;
+
 namespace Dsf.FeatureCouncil.Conveyor.Stations;
 
 /// <summary>
@@ -5,7 +7,9 @@ namespace Dsf.FeatureCouncil.Conveyor.Stations;
 /// <see cref="RunStatus.Previewed"/>) with nothing filed. Otherwise every accepted,
 /// routed proposal is handed to the issue filer. When there is something to file
 /// and no filer is wired, this is the real boundary the run fails at -- after
-/// stations S1..S6 have already done and checkpointed their work.
+/// stations S1..S6 have already done and checkpointed their work. A run that files
+/// nothing because it accepted nothing is reported as such, never as a filing that
+/// silently had no filer behind it.
 /// </summary>
 public sealed class S7Filing : IStation
 {
@@ -27,8 +31,9 @@ public sealed class S7Filing : IStation
         {
             throw new InvalidOperationException(
                 $"cannot file {accepted.Count} accepted proposal(s) for product '{services.Product}': no GitHub "
-                + "issue filer is wired in the .NET runtime yet (tracked in #143). Re-run with --dry-run to "
-                + "preview the line without filing.");
+                + $"issue filer is wired (set {RuntimeIntegrationSettings.GitHubToken} and "
+                + $"{RuntimeIntegrationSettings.GitHubRepository}). Re-run with --dry-run to preview the line "
+                + "without filing.");
         }
 
         foreach (var proposal in accepted)

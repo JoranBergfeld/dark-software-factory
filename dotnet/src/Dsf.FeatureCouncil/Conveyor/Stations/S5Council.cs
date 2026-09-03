@@ -2,9 +2,8 @@ namespace Dsf.FeatureCouncil.Conveyor.Stations;
 
 /// <summary>
 /// S5 — council. Scores each grounded proposal on the weight of evidence behind it
-/// and accepts the ones that clear the confidence bar. The deliberative critic
-/// jury (weights and roster as governable config) replaces this scoring in #142;
-/// the accept/reject seam it decides on is the same.
+/// and accepts the ones that clear the confidence bar, then records the score and
+/// verdict it reached for every proposal it saw.
 /// </summary>
 public sealed class S5Council : IStation
 {
