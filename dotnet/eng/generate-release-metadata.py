@@ -4,11 +4,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
-
 
 # Only the top-level directory holding hashes/SBOM-signatures/provenance/keys is excluded from
 # the release assets it describes. Native package metadata (winget/homebrew/deb/rpm) is a real
@@ -151,9 +149,17 @@ def write_sboms(
             "dataLicense": "CC0-1.0",
             "SPDXID": "SPDXRef-DOCUMENT",
             "name": f"dsf-cli-{args.version}-{relative}",
-            "documentNamespace": f"https://github.com/{args.repository}/releases/{args.version}/{relative}",
+            "documentNamespace": (
+                f"https://github.com/{args.repository}/releases/"
+                f"{args.version}/{relative}"
+            ),
             "creationInfo": {
-                "created": datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+                "created": (
+                    datetime.now(UTC)
+                    .replace(microsecond=0)
+                    .isoformat()
+                    .replace("+00:00", "Z")
+                ),
                 "creators": ["Tool: dotnet/eng/generate-release-metadata.py"],
             },
             "packages": [
@@ -173,8 +179,14 @@ def write_sboms(
             "relationships": relationships,
         }
         sbom_path = metadata_root / f"{safe_name(relative)}.spdx.json"
-        sbom_path.write_text(json.dumps(sbom, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        sign_file(sbom_path, Path(args.private_key), metadata_root / f"{safe_name(relative)}{SPDX_SIGNATURE_SUFFIX}")
+        sbom_path.write_text(
+            json.dumps(sbom, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        sign_file(
+            sbom_path,
+            Path(args.private_key),
+            metadata_root / f"{safe_name(relative)}{SPDX_SIGNATURE_SUFFIX}",
+        )
 
 
 def component_spdx_id(name: str) -> str:
