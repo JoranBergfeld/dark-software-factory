@@ -1,3 +1,3 @@
-using Dsf.Core;
+using Dsf.Cli;
 
-Console.WriteLine($"{CoreModule.Name} :: {"Dsf.Cli"} skeleton (factory/provisioning commands forward runtime verbs)");
+return await CliApplication.InvokeAsync(args, CancellationToken.None);

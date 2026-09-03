@@ -2,11 +2,16 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
+    <AssemblyName>dsf</AssemblyName>
     <RootNamespace>Dsf.Cli</RootNamespace>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Dsf.Core\Dsf.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.CommandLine" />
   </ItemGroup>
 
 </Project>
