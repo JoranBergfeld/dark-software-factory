@@ -38,6 +38,16 @@
       "surface": "dsf list"
     },
     {
+      "authority": "deferred",
+      "evidence": [
+        "evidence/commands/dsf-parser-surface-snapshot.json"
+      ],
+      "evidence_kinds": [
+        "command-behavior"
+      ],
+      "surface": "dsf bootstrap"
+    },
+    {
       "authority": "authoritative",
       "evidence": [
         "evidence/commands/dsf-offboard-dry-run-missing-manifest.json",
@@ -45,8 +55,7 @@
       ],
       "evidence_kinds": [
         "command-behavior",
-        "exit-behavior",
-        "dry-run-plan"
+        "exit-behavior"
       ],
       "surface": "dsf offboard"
     },
@@ -58,8 +67,7 @@
       ],
       "evidence_kinds": [
         "command-behavior",
-        "exit-behavior",
-        "dry-run-plan"
+        "exit-behavior"
       ],
       "surface": "dsf delete/deprovision"
     },
@@ -184,6 +192,7 @@
     {
       "authority": "authoritative",
       "evidence": [
+        "evidence/machine-readable-outputs/control-center-api-state-response.json",
         "evidence/request-shapes/control-center-http-requests.json",
         "evidence/persisted-records/control-center-state-record.json"
       ],

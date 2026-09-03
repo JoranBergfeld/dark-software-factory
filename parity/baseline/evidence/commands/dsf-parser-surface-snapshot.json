@@ -65,6 +65,26 @@
     {
       "argv": [
         "dsf",
+        "bootstrap",
+        "--app-name",
+        "dsf-demo-app",
+        "--keyvault-name",
+        "kv-dsf-owner",
+        "--appconfig-name",
+        "appcs-dsf-owner"
+      ],
+      "namespace": {
+        "app_name": "dsf-demo-app",
+        "appconfig_name": "appcs-dsf-owner",
+        "command": "bootstrap",
+        "keyvault_name": "kv-dsf-owner",
+        "location": "swedencentral",
+        "resource_group": "rg-dsf-app"
+      }
+    },
+    {
+      "argv": [
+        "dsf",
         "delete",
         "demo",
         "--dry-run",
@@ -229,7 +249,7 @@
     }
   ],
   "exit_code": 0,
-  "notes": "argparse namespace snapshot for lifecycle, runtime forwarding, and charter verbs.",
+  "notes": "argparse namespace snapshot for lifecycle, bootstrap, runtime forwarding, and charter verbs.",
   "stderr": "",
   "stdout": ""
 }

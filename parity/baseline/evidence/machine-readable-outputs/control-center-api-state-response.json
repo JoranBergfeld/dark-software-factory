@@ -1,0 +1,181 @@
+{
+  "authority": "authoritative",
+  "captured_at": "2026-09-03T08:24:03.665+02:00",
+  "content_type": "application/json",
+  "method": "GET",
+  "path": "/api/state",
+  "response": {
+    "agents": [
+      {
+        "enabled": true,
+        "name": "SENTRY"
+      },
+      {
+        "enabled": true,
+        "name": "GRAFANA"
+      },
+      {
+        "enabled": true,
+        "name": "FOUNDRYIQ"
+      },
+      {
+        "enabled": true,
+        "name": "WEBIQ"
+      },
+      {
+        "enabled": true,
+        "name": "INCIDENTS"
+      },
+      {
+        "enabled": true,
+        "name": "AZUREMONITOR"
+      }
+    ],
+    "calibration": null,
+    "critics": [
+      {
+        "enabled": true,
+        "name": "grounding"
+      },
+      {
+        "enabled": true,
+        "name": "value"
+      },
+      {
+        "enabled": true,
+        "name": "duplication"
+      },
+      {
+        "enabled": true,
+        "name": "feasibility"
+      },
+      {
+        "enabled": true,
+        "name": "strategic_fit"
+      },
+      {
+        "enabled": true,
+        "name": "cost"
+      },
+      {
+        "enabled": true,
+        "name": "security"
+      }
+    ],
+    "products": [],
+    "snapshot": {
+      "_overrides": {},
+      "agents": {
+        "AZUREMONITOR": {
+          "enabled": true
+        },
+        "FOUNDRYIQ": {
+          "enabled": true
+        },
+        "GRAFANA": {
+          "enabled": true
+        },
+        "INCIDENTS": {
+          "enabled": true
+        },
+        "SENTRY": {
+          "enabled": true
+        },
+        "WEBIQ": {
+          "enabled": true
+        }
+      },
+      "charter": {
+        "amendment": {
+          "cooldown_hours": 168,
+          "enabled": false,
+          "min_lessons": 3
+        },
+        "interview": {
+          "max_turns": 12
+        }
+      },
+      "critics": {
+        "cost": {
+          "enabled": true
+        },
+        "duplication": {
+          "enabled": true
+        },
+        "feasibility": {
+          "enabled": true
+        },
+        "grounding": {
+          "enabled": true
+        },
+        "scope": {
+          "enabled": true
+        },
+        "security": {
+          "enabled": true
+        },
+        "strategic_fit": {
+          "enabled": true
+        },
+        "value": {
+          "enabled": true
+        }
+      },
+      "default_consensus_bar": 0.67,
+      "default_deliberation_rounds": 2,
+      "default_maturity": "supervised",
+      "default_threshold": 0.6,
+      "dry_run": true,
+      "jury": {
+        "roster": [
+          "pragmatist",
+          "skeptic",
+          "user_advocate"
+        ]
+      },
+      "triggers": {
+        "SCHEDULED": {
+          "paused": false
+        },
+        "SIGNAL": {
+          "paused": false
+        }
+      },
+      "weight": {
+        "cost": 1.0,
+        "duplication": 1.0,
+        "feasibility": 1.0,
+        "grounding": 1.0,
+        "scope": 1.0,
+        "security": 1.0,
+        "strategic_fit": 1.0,
+        "value": 1.0
+      }
+    },
+    "thresholds": {
+      "default": 0.6,
+      "products": {}
+    },
+    "triggers": [
+      {
+        "name": "SCHEDULED",
+        "paused": false
+      },
+      {
+        "name": "SIGNAL",
+        "paused": false
+      }
+    ],
+    "weights": {
+      "cost": 1.0,
+      "duplication": 1.0,
+      "feasibility": 1.0,
+      "grounding": 1.0,
+      "security": 1.0,
+      "strategic_fit": 1.0,
+      "value": 1.0
+    }
+  },
+  "source": "control-center/src/dsf/control_center/app.py:create_app TestClient with dsf_testing.build_test_services()",
+  "status_code": 200
+}
