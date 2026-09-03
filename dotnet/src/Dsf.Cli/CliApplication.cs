@@ -1027,6 +1027,7 @@ public static class CliApplication
     private const double DefaultWatchTimeout = 1800.0;
     private const double DefaultWatchPollInterval = 20.0;
     private const double MinimumWatchPollInterval = 1.0;
+    private const string WatchPollIntervalEnvironmentVariable = "DSF_WATCH_POLL_INTERVAL";
 
     private static async Task<int> RunCharterImplementAsync(
         string product,
@@ -1493,11 +1494,23 @@ public static class CliApplication
         return seconds <= 0 ? null : seconds;
     }
 
-    /// <summary>Poll cadence: explicit flag (floored at 1s, as the Python CLI does) else 20s.</summary>
-    internal static double ResolveWatchPollInterval(double? explicitSeconds) =>
-        explicitSeconds is null
-            ? DefaultWatchPollInterval
-            : Math.Max(MinimumWatchPollInterval, explicitSeconds.Value);
+    /// <summary>Poll cadence: explicit flag (floored at 1s) &gt; DSF_WATCH_POLL_INTERVAL (floored at 1s) &gt; 20s.</summary>
+    internal static double ResolveWatchPollInterval(double? explicitSeconds)
+    {
+        if (explicitSeconds is not null)
+        {
+            return Math.Max(MinimumWatchPollInterval, explicitSeconds.Value);
+        }
+
+        var raw = Environment.GetEnvironmentVariable(WatchPollIntervalEnvironmentVariable)?.Trim();
+        if (!string.IsNullOrEmpty(raw)
+            && double.TryParse(raw, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var parsed))
+        {
+            return Math.Max(MinimumWatchPollInterval, parsed);
+        }
+
+        return DefaultWatchPollInterval;
+    }
 
     private static bool TimedOut(DateTimeOffset start, double? seconds) =>
         seconds is not null && (DateTimeOffset.UtcNow - start).TotalSeconds >= seconds.Value;

@@ -907,6 +907,66 @@ public sealed class CharterCommandTests
         Assert.Equal(20.0, CliApplication.ResolveWatchPollInterval(null));
     }
 
+    [Fact]
+    public void Watch_poll_interval_falls_back_to_env_var_when_flag_absent()
+    {
+        var prior = Environment.GetEnvironmentVariable("DSF_WATCH_POLL_INTERVAL");
+        Environment.SetEnvironmentVariable("DSF_WATCH_POLL_INTERVAL", "45");
+        try
+        {
+            Assert.Equal(45.0, CliApplication.ResolveWatchPollInterval(null));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("DSF_WATCH_POLL_INTERVAL", prior);
+        }
+    }
+
+    [Fact]
+    public void Watch_poll_interval_explicit_flag_wins_over_env_var()
+    {
+        var prior = Environment.GetEnvironmentVariable("DSF_WATCH_POLL_INTERVAL");
+        Environment.SetEnvironmentVariable("DSF_WATCH_POLL_INTERVAL", "45");
+        try
+        {
+            Assert.Equal(5.0, CliApplication.ResolveWatchPollInterval(5.0));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("DSF_WATCH_POLL_INTERVAL", prior);
+        }
+    }
+
+    [Fact]
+    public void Watch_poll_interval_ignores_invalid_env_var()
+    {
+        var prior = Environment.GetEnvironmentVariable("DSF_WATCH_POLL_INTERVAL");
+        Environment.SetEnvironmentVariable("DSF_WATCH_POLL_INTERVAL", "not-a-number");
+        try
+        {
+            Assert.Equal(20.0, CliApplication.ResolveWatchPollInterval(null));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("DSF_WATCH_POLL_INTERVAL", prior);
+        }
+    }
+
+    [Fact]
+    public void Watch_poll_interval_env_var_is_floored_at_one_second()
+    {
+        var prior = Environment.GetEnvironmentVariable("DSF_WATCH_POLL_INTERVAL");
+        Environment.SetEnvironmentVariable("DSF_WATCH_POLL_INTERVAL", "0.01");
+        try
+        {
+            Assert.Equal(1.0, CliApplication.ResolveWatchPollInterval(null));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("DSF_WATCH_POLL_INTERVAL", prior);
+        }
+    }
+
     private static ScriptedTerminal NonInteractiveTerminal() => new(
         new TerminalCapabilities(IsInteractive: false, SupportsAnsi: false, SupportsEmoji: false),
         []);
