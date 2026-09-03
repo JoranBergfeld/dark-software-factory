@@ -356,6 +356,9 @@ public sealed class CharterCommandTests
             Assert.Equal(("acme/demo", "demo"), (pullRequest.Repository, pullRequest.Product));
             Assert.Contains("# Product Charter: demo", pullRequest.Content, StringComparison.Ordinal);
             Assert.Contains("[dsf] opened charter PR:", terminal.Output, StringComparison.Ordinal);
+
+            var charter = CharterMarkdown.Parse(pullRequest.Content, "demo");
+            Assert.NotEmpty(charter.Glossary);
         });
     }
 

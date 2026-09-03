@@ -145,7 +145,7 @@ internal sealed class AzureCliAppConfigurationClient(IAzureCliRunner runner) : I
         IReadOnlyList<string> filters,
         CancellationToken cancellationToken)
     {
-        var arguments = new List<string> { "appconfig", "kv", "list", "--endpoint", endpoint };
+        var arguments = new List<string> { "appconfig", "kv", "list", "--endpoint", endpoint, "--auth-mode", "login" };
         arguments.AddRange(filters);
         arguments.AddRange(["-o", "json"]);
         var result = await RunAsync(arguments, cancellationToken);
@@ -175,7 +175,7 @@ internal sealed class AzureCliAppConfigurationClient(IAzureCliRunner runner) : I
     {
         var arguments = new List<string>
         {
-            "appconfig", "kv", "set", "--endpoint", endpoint, "--key", key, "--value", value,
+            "appconfig", "kv", "set", "--endpoint", endpoint, "--auth-mode", "login", "--key", key, "--value", value,
         };
         if (label is not null)
         {

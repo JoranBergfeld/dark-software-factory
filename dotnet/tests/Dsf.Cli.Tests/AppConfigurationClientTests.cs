@@ -28,7 +28,7 @@ public sealed class AppConfigurationClientTests
         Assert.Equal("acme/demo", product.GitHubRepository);
         Assert.Equal("https://demo.azconfig.io", product.AppConfigEndpoint);
         Assert.Equal(
-            ["appconfig", "kv", "list", "--endpoint", "https://owner.azconfig.io", "--label", "demo", "-o", "json"],
+            ["appconfig", "kv", "list", "--endpoint", "https://owner.azconfig.io", "--auth-mode", "login", "--label", "demo", "-o", "json"],
             Assert.Single(runner.Invocations));
     }
 
@@ -66,12 +66,12 @@ public sealed class AppConfigurationClientTests
         Assert.Contains(
             runner.Invocations,
             invocation => invocation.SequenceEqual(
-                ["appconfig", "kv", "set", "--endpoint", "https://demo.azconfig.io", "--key",
+                ["appconfig", "kv", "set", "--endpoint", "https://demo.azconfig.io", "--auth-mode", "login", "--key",
                     "product.github_repo", "--value", "\"acme/demo\"", "--yes"]));
         Assert.Contains(
             runner.Invocations,
             invocation => invocation.SequenceEqual(
-                ["appconfig", "kv", "set", "--endpoint", "https://demo.azconfig.io", "--key",
+                ["appconfig", "kv", "set", "--endpoint", "https://demo.azconfig.io", "--auth-mode", "login", "--key",
                     "threshold.demo", "--value", "0.7", "--yes"]));
     }
 }

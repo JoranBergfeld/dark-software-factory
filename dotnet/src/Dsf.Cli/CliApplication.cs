@@ -1817,6 +1817,9 @@ public static class CliApplication
 
             ## Constraints
             {constraints}
+
+            ## Glossary
+            - Charter: this product's human-owned intent document
             """;
     }
 
