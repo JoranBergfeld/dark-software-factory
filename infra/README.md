@@ -50,7 +50,9 @@ Services OpenAI User**. The model names/versions/capacities and the deployment S
 OpenAI data plane with its managed identity (AAD token, no keys); the container env
 and outputs point at the created account, so `dsf new` needs no OpenAI flags.
 
-**Runtime is a continuous worker.** The image runs `python -m dsf.runtime.control serve-orchestrator
+**Runtime is a continuous worker.** The image (`dsf-runtime`, built from
+`feature-council/src/dsf/runtime/Dockerfile`) runs the .NET runtime (see
+`dotnet/src/Dsf.Runtime`; #132/#141) as `dotnet dsf-runtime.dll serve-orchestrator
 --loop`: it sweeps the enabled sources every `DSF_SWEEP_INTERVAL` seconds (default
 300), surviving per-tick errors, so the always-on Container App revision stays
 healthy (DSF is pull-only — there is no inbound ingress).
@@ -101,14 +103,16 @@ Runs on every change under `infra/`.
   resource group (what-if needs read; deployment needs Contributor).
 
 ### `agents-images` (`.github/workflows/agents-images.yml`)
-Builds each source agent as its own image and pushes to **GHCR**
-(`ghcr.io/<owner>/dsf-agent-<kind>`), tagged `sha-<long>` and `latest` (on main).
-Change-detection: an agent rebuilds only when its own `feature-council/src/dsf/agents/<kind>/**`
-changes; a change to shared core (`contracts`, `ports`, `a2a`, `agents/base.py`,
-`container.py`, `pyproject.toml`) rebuilds **all** agents. Pull requests build for
-validation but do **not** push. Uses the built-in `GITHUB_TOKEN` (no secrets).
-**Deployment of these images is intentionally out of scope — host them however
-you like.**
+Builds each source agent as its own image, plus the .NET `dsf-runtime` image (the
+orchestrator worker; see `dotnet/src/Dsf.Runtime`), and pushes each to **GHCR**
+(`ghcr.io/<owner>/dsf-agent-<kind>` / `ghcr.io/<owner>/dsf-runtime`), tagged
+`sha-<long>` and `latest` (on main). Change-detection: an agent rebuilds only when
+its own `feature-council/src/dsf/agents/<kind>/**` changes; a change to shared core
+(`contracts`, `ports`, `a2a`, `agents/base.py`, `container.py`, `pyproject.toml`)
+rebuilds **all** agents. The `build-runtime` job rebuilds `dsf-runtime` on any
+`dotnet/**` (or its `Dockerfile`) change. Pull requests build for validation but do
+**not** push. Uses the built-in `GITHUB_TOKEN` (no secrets). **Deployment of these
+images is intentionally out of scope — host them however you like.**
 
 ## Validate locally (no deploy)
 
