@@ -62,9 +62,20 @@ public sealed class ModuleReferenceRulesTests
     private static IReadOnlyList<(string Name, FileInfo File)> DiscoverProductionProjects(DirectoryInfo srcRoot) =>
         srcRoot.EnumerateFiles("*.csproj", SearchOption.AllDirectories)
             .Select(csproj => (Name: Path.GetFileNameWithoutExtension(csproj.Name), File: csproj))
-            .Where(p => p.Name != TestingProjectName)
+            .Where(p => !IsCanonicalTestingProject(srcRoot, p.File))
             .OrderBy(p => p.File.FullName, StringComparer.Ordinal)
             .ToList();
+
+    private static bool IsCanonicalTestingProject(DirectoryInfo srcRoot, FileInfo csproj)
+    {
+        var canonicalPath = Path.GetFullPath(Path.Combine(
+            srcRoot.FullName,
+            TestingProjectName,
+            $"{TestingProjectName}.csproj"));
+        var projectPath = Path.GetFullPath(csproj.FullName);
+
+        return string.Equals(projectPath, canonicalPath, StringComparison.Ordinal);
+    }
 
     private static IReadOnlyList<(string Name, FileInfo File)> DiscoverProductionProjects() =>
         DiscoverProductionProjects(new DirectoryInfo(Path.Combine(FindSolutionRoot().FullName, "src")));
@@ -183,7 +194,11 @@ public sealed class ModuleReferenceRulesTests
     {
         private static DirectoryInfo CreateTempSrcTree()
         {
-            var tempRoot = new DirectoryInfo(Path.Combine(Path.GetTempPath(), "dsf-module-boundary-tests-" + Guid.NewGuid()));
+            var tempRoot = new DirectoryInfo(Path.Combine(
+                FindSolutionRoot().FullName,
+                ".test-artifacts",
+                "module-boundary-tests",
+                Guid.NewGuid().ToString("N")));
             tempRoot.Create();
             return tempRoot;
         }
@@ -269,6 +284,35 @@ public sealed class ModuleReferenceRulesTests
 
                 Assert.Empty(FindDuplicateProjectNames(discovered));
                 Assert.Empty(FindProductionReferencesToTesting(discovered));
+            }
+            finally
+            {
+                tempRoot.Delete(recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Same_named_noncanonical_testing_project_is_treated_as_production()
+        {
+            var tempRoot = CreateTempSrcTree();
+            try
+            {
+                WriteProject(tempRoot, "Dsf.Testing", "Dsf.Testing", projectReferenceRelativePath: null);
+                WriteProject(
+                    tempRoot,
+                    "Other",
+                    "Dsf.Testing",
+                    projectReferenceRelativePath: "../Dsf.Testing/Dsf.Testing.csproj");
+
+                var discovered = DiscoverProductionProjects(tempRoot);
+
+                var rogue = Assert.Single(discovered);
+                Assert.Equal("Dsf.Testing", rogue.Name);
+                Assert.Contains($"{Path.DirectorySeparatorChar}Other{Path.DirectorySeparatorChar}", rogue.File.FullName);
+
+                var offenders = FindProductionReferencesToTesting(discovered);
+                Assert.Single(offenders);
+                Assert.Contains($"{Path.DirectorySeparatorChar}Other{Path.DirectorySeparatorChar}", offenders[0]);
             }
             finally
             {
