@@ -329,3 +329,69 @@ internal sealed class RecordingAzureCliRunner : IAzureCliRunner
             results.Count > 0 ? results.Dequeue() : new AzureCliInvocationResult(0, "{}", ""));
     }
 }
+
+/// <summary>
+/// <c>SystemAzureCliRunner</c> shells out to the real <c>az</c> CLI. On cancellation it must
+/// kill the whole process tree it spawned, not just stop awaiting it -- otherwise a
+/// Ctrl+C during `dsf new` can leave `az` (and any Azure mutation it's mid-flight on)
+/// running in the background. Exercised via the injectable <see cref="IManagedProcess"/>
+/// seam so no real OS process needs to be started.
+/// </summary>
+public sealed class SystemAzureCliRunnerCancellationTests
+{
+    [Fact]
+    public async Task Cancelling_the_token_kills_the_entire_spawned_process_tree()
+    {
+        var process = new FakeManagedProcess();
+        var runner = new SystemAzureCliRunner(_ => process);
+        using var cts = new CancellationTokenSource();
+
+        var runTask = runner.RunAsync(["group", "create"], cts.Token);
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => runTask);
+        Assert.True(process.Started);
+        Assert.Equal(1, process.KillCallCount);
+        Assert.True(process.LastKillWasEntireTree);
+        Assert.True(process.Disposed, "the process must still be disposed after being killed.");
+    }
+}
+
+/// <summary>Fake <see cref="IManagedProcess"/> whose exit is controlled entirely by the test.</summary>
+internal sealed class FakeManagedProcess : IManagedProcess
+{
+    private readonly TaskCompletionSource exitSignal = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public bool Started { get; private set; }
+
+    public int KillCallCount { get; private set; }
+
+    public bool LastKillWasEntireTree { get; private set; }
+
+    public bool Disposed { get; private set; }
+
+    public int ExitCode => 0;
+
+    public void Start() => Started = true;
+
+    public Task<string> ReadStandardOutputAsync(CancellationToken cancellationToken) => Task.FromResult(string.Empty);
+
+    public Task<string> ReadStandardErrorAsync(CancellationToken cancellationToken) => Task.FromResult(string.Empty);
+
+    public async Task WaitForExitAsync(CancellationToken cancellationToken)
+    {
+        await using (cancellationToken.Register(() => exitSignal.TrySetCanceled(cancellationToken)))
+        {
+            await exitSignal.Task;
+        }
+    }
+
+    public void Kill(bool entireProcessTree)
+    {
+        KillCallCount++;
+        LastKillWasEntireTree = entireProcessTree;
+        exitSignal.TrySetCanceled();
+    }
+
+    public void Dispose() => Disposed = true;
+}

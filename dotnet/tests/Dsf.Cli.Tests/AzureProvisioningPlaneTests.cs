@@ -117,6 +117,19 @@ public sealed class AzureProvisioningPlaneTests
     }
 
     [Fact]
+    public async Task Execute_throws_for_an_unrecognized_request_subtype()
+    {
+        var azure = new RecordingAzureProvisioningClient();
+        var plan = new AzureProvisioningPlan([new UnknownProvisioningRequest()]);
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => plan.ExecuteAsync(azure, CancellationToken.None));
+
+        Assert.Contains("UnknownProvisioningRequest", error.Message, StringComparison.Ordinal);
+        Assert.Empty(azure.Requests);
+    }
+
+    [Fact]
     public async Task Execution_honors_cancellation_token_during_azure_provisioning()
     {
         var root = ArtifactRoot();
@@ -237,6 +250,8 @@ public sealed class AzureProvisioningPlaneTests
         }
     }
 }
+
+internal sealed record UnknownProvisioningRequest() : AzureProvisioningRequest("unknown");
 
 internal sealed class RecordingAzureProvisioningClient : IAzureProvisioningClient
 {

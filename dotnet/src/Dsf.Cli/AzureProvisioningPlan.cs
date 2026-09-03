@@ -108,6 +108,10 @@ internal sealed record AzureProvisioningPlan(IReadOnlyList<AzureProvisioningRequ
                     };
                     sreAgent = await client.DeploySreAgentAsync(effectiveSreAgent, cancellationToken);
                     break;
+                default:
+                    throw new InvalidOperationException(
+                        $"Unrecognized Azure provisioning request type '{request.GetType().Name}': "
+                        + "no execution branch is wired up for it.");
             }
         }
 

@@ -17,9 +17,61 @@ internal interface IAzureCliRunner
         CancellationToken cancellationToken);
 }
 
+/// <summary>
+/// Thin seam around <see cref="Process"/> so tests can verify cancellation-driven
+/// process-tree termination without starting a real OS process.
+/// </summary>
+internal interface IManagedProcess : IDisposable
+{
+    void Start();
+
+    Task<string> ReadStandardOutputAsync(CancellationToken cancellationToken);
+
+    Task<string> ReadStandardErrorAsync(CancellationToken cancellationToken);
+
+    Task WaitForExitAsync(CancellationToken cancellationToken);
+
+    int ExitCode { get; }
+
+    /// <summary>Kills the process (and, when <paramref name="entireProcessTree"/>, every child it spawned).</summary>
+    void Kill(bool entireProcessTree);
+}
+
+/// <summary>Wraps a real <see cref="Process"/>.</summary>
+internal sealed class RealManagedProcess(Process process) : IManagedProcess
+{
+    public void Start() => process.Start();
+
+    public Task<string> ReadStandardOutputAsync(CancellationToken cancellationToken) =>
+        process.StandardOutput.ReadToEndAsync(cancellationToken);
+
+    public Task<string> ReadStandardErrorAsync(CancellationToken cancellationToken) =>
+        process.StandardError.ReadToEndAsync(cancellationToken);
+
+    public Task WaitForExitAsync(CancellationToken cancellationToken) => process.WaitForExitAsync(cancellationToken);
+
+    public int ExitCode => process.ExitCode;
+
+    public void Kill(bool entireProcessTree) => process.Kill(entireProcessTree);
+
+    public void Dispose() => process.Dispose();
+}
+
 /// <summary>Shells out to the real <c>az</c> CLI on PATH.</summary>
 internal sealed class SystemAzureCliRunner : IAzureCliRunner
 {
+    private readonly Func<ProcessStartInfo, IManagedProcess> processFactory;
+
+    public SystemAzureCliRunner()
+        : this(startInfo => new RealManagedProcess(new Process { StartInfo = startInfo }))
+    {
+    }
+
+    internal SystemAzureCliRunner(Func<ProcessStartInfo, IManagedProcess> processFactory)
+    {
+        this.processFactory = processFactory;
+    }
+
     public async Task<AzureCliInvocationResult> RunAsync(
         IReadOnlyList<string> arguments,
         CancellationToken cancellationToken)
@@ -35,22 +87,44 @@ internal sealed class SystemAzureCliRunner : IAzureCliRunner
             startInfo.ArgumentList.Add(argument);
         }
 
-        using var process = new Process { StartInfo = startInfo };
+        var process = processFactory(startInfo);
         try
         {
-            process.Start();
-        }
-        catch (Exception exception) when (exception is System.ComponentModel.Win32Exception or IOException)
-        {
-            throw new InvalidOperationException(
-                $"az CLI could not be started (is it installed and on PATH?): {exception.Message}",
-                exception);
-        }
+            try
+            {
+                process.Start();
+            }
+            catch (Exception exception) when (exception is System.ComponentModel.Win32Exception or IOException)
+            {
+                throw new InvalidOperationException(
+                    $"az CLI could not be started (is it installed and on PATH?): {exception.Message}",
+                    exception);
+            }
 
-        var stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
-        var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
-        await process.WaitForExitAsync(cancellationToken);
-        return new AzureCliInvocationResult(process.ExitCode, await stdoutTask, await stderrTask);
+            // Ctrl+C (or any other cancellation) must kill the whole `az` process tree,
+            // not just stop awaiting it -- otherwise `az` keeps running an in-flight
+            // Azure mutation in the background after the CLI has "given up" on it.
+            await using var killOnCancellation = cancellationToken.Register(() =>
+            {
+                try
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+                catch (InvalidOperationException)
+                {
+                    // Process already exited; nothing to kill.
+                }
+            });
+
+            var stdoutTask = process.ReadStandardOutputAsync(cancellationToken);
+            var stderrTask = process.ReadStandardErrorAsync(cancellationToken);
+            await process.WaitForExitAsync(cancellationToken);
+            return new AzureCliInvocationResult(process.ExitCode, await stdoutTask, await stderrTask);
+        }
+        finally
+        {
+            process.Dispose();
+        }
     }
 }
 
