@@ -33,6 +33,16 @@ public interface IIssueFiler
 public interface IRunStore
 {
     Task SaveAsync(ConveyorRun run, string station, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Loads the persisted run for <paramref name="runId"/>, or <c>null</c> if no
+    /// run has ever been saved under that identity. The runtime looks a run up
+    /// this way before creating a new one, so a signal or sweep that matches a
+    /// prior, still-in-flight run resumes it -- seeing its checkpoints and
+    /// terminal status -- instead of starting a fresh run blind to what already
+    /// happened.
+    /// </summary>
+    Task<ConveyorRun?> LoadAsync(string runId, CancellationToken cancellationToken);
 }
 
 /// <summary>

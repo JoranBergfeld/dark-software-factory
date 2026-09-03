@@ -86,22 +86,39 @@ internal sealed class UnreachableTracer(string reason) : ITracer
         throw new InvalidOperationException(reason);
 }
 
-/// <summary>A run store that records every persisted checkpoint in order.</summary>
+/// <summary>
+/// A run store that records every persisted checkpoint in order and keeps the
+/// last-saved document per run id, so a test can assert a resumed run finds and
+/// continues what a prior save already persisted -- the same seam a real,
+/// cross-process store round-trips through.
+/// </summary>
 internal sealed class RecordingRunStore : IRunStore
 {
+    private readonly Dictionary<string, ConveyorRun> documents = [];
+
     public List<(string RunId, string Station, RunStatus Status)> Saved { get; } = [];
 
     public Task SaveAsync(ConveyorRun run, string station, CancellationToken cancellationToken)
     {
         Saved.Add((run.Id, station, run.Status));
+        documents[run.Id] = run;
         return Task.CompletedTask;
     }
+
+    public Task<ConveyorRun?> LoadAsync(string runId, CancellationToken cancellationToken) =>
+        Task.FromResult(documents.TryGetValue(runId, out var run) ? run : null);
+
+    /// <summary>Seeds a persisted document directly, without going through <see cref="SaveAsync"/>.</summary>
+    public void Seed(ConveyorRun run) => documents[run.Id] = run;
 }
 
 /// <summary>A run store whose backing store cannot be reached.</summary>
 internal sealed class UnreachableRunStore(string reason) : IRunStore
 {
     public Task SaveAsync(ConveyorRun run, string station, CancellationToken cancellationToken) =>
+        throw new InvalidOperationException(reason);
+
+    public Task<ConveyorRun?> LoadAsync(string runId, CancellationToken cancellationToken) =>
         throw new InvalidOperationException(reason);
 }
 

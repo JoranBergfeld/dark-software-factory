@@ -1,3 +1,6 @@
+using System.Security.Cryptography;
+using System.Text;
+
 namespace Dsf.FeatureCouncil.Conveyor;
 
 /// <summary>
@@ -122,4 +125,28 @@ public sealed class ConveyorRun
     public string? FailureReason { get; set; }
 
     public void Record(string station, string message) => Audit.Add(new AuditRecord(station, message));
+}
+
+/// <summary>
+/// Computes the stable identity of a run's scope. Two runs asking for the same
+/// trigger, product hints and source kinds compute the same identity, so the
+/// runtime can look a prior run up by it before creating a new one -- a resumed
+/// run finds and continues the run already persisted for that scope rather than
+/// starting a fresh one that would never see its checkpoints or terminal status.
+/// S1 triage recomputes the same value into <see cref="ConveyorRun.Fingerprint"/>
+/// for dedup and the filing intent key, so a run's id and its fingerprint always
+/// agree.
+/// </summary>
+public static class RunIdentity
+{
+    public static string Compute(
+        TriggerKind trigger, IEnumerable<string> productHints, IEnumerable<string> sourceKinds)
+    {
+        var scope = string.Join(
+            "|",
+            trigger,
+            string.Join(",", productHints.Select(hint => hint.ToLowerInvariant()).Order(StringComparer.Ordinal)),
+            string.Join(",", sourceKinds.Select(kind => kind.ToLowerInvariant()).Order(StringComparer.Ordinal)));
+        return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(scope)))[..16];
+    }
 }

@@ -1,6 +1,3 @@
-using System.Security.Cryptography;
-using System.Text;
-
 namespace Dsf.FeatureCouncil.Conveyor.Stations;
 
 /// <summary>
@@ -17,7 +14,7 @@ public sealed class S1Triage : IStation
 
     public Task RunAsync(ConveyorRun run, ConveyorServices services, CancellationToken cancellationToken)
     {
-        run.Fingerprint = Fingerprint(run);
+        run.Fingerprint = RunIdentity.Compute(run.Trigger, run.ProductHints, run.SourceKinds);
         if (run.ProductHints.Count == 0 && run.SourceKinds.Count == 0)
         {
             run.Status = RunStatus.Killed;
@@ -30,20 +27,5 @@ public sealed class S1Triage : IStation
             $"triaged fingerprint={run.Fingerprint} products=[{string.Join(", ", run.ProductHints)}] "
             + $"sources=[{string.Join(", ", run.SourceKinds)}]");
         return Task.CompletedTask;
-    }
-
-    /// <summary>
-    /// A stable content hash of the run's scope: two signals asking for the same
-    /// products and sources produce the same fingerprint, which is what dedup and
-    /// the filing intent key are derived from.
-    /// </summary>
-    private static string Fingerprint(ConveyorRun run)
-    {
-        var scope = string.Join(
-            "|",
-            run.Trigger,
-            string.Join(",", run.ProductHints.Select(h => h.ToLowerInvariant()).Order(StringComparer.Ordinal)),
-            string.Join(",", run.SourceKinds.Select(k => k.ToLowerInvariant()).Order(StringComparer.Ordinal)));
-        return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(scope)))[..16];
     }
 }

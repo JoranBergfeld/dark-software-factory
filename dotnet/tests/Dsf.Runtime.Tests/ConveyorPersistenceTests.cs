@@ -108,4 +108,81 @@ public sealed class ConveyorPersistenceTests
         Assert.NotEqual(RunStatus.Filed, run.Status);
         Assert.Empty(run.FiledIssues);
     }
+
+
+    [Fact]
+    public async Task A_run_rehydrates_a_persisted_checkpointed_run_and_skips_completed_stations()
+    {
+        var store = new RecordingRunStore();
+        var gatherer = new ScriptedEvidenceGatherer(
+            "sentry", new EvidenceItem("sentry", "SENTRY-1", "checkout 500s spiked"));
+        var dependencies = TestDependencies.Build(evidenceGatherers: [gatherer], runStore: store);
+        var path = await WriteSignalAsync("""{"product_hints": "acme", "source_kinds": ["sentry"]}""");
+        try
+        {
+            var runId = RunIdentity.Compute(TriggerKind.Signal, ["acme"], ["sentry"]);
+            var priorRun = new ConveyorRun
+            {
+                Id = runId,
+                Trigger = TriggerKind.Signal,
+                ProductHints = ["acme"],
+                SourceKinds = ["sentry"],
+                DryRun = true,
+            };
+            priorRun.Checkpoints.AddRange(["s1_triage", "s2_investigation"]);
+            priorRun.Evidence.Add(new EvidenceItem("sentry", "SENTRY-1", "checkout 500s spiked"));
+            store.Seed(priorRun);
+
+            var run = await RuntimeVerbs.RunAsync(Settings, path, dryRun: true, dependencies, CancellationToken.None);
+
+            Assert.Equal(runId, run.Id);
+            Assert.DoesNotContain(store.Saved, saved => saved.Station is "s1_triage" or "s2_investigation");
+            Assert.Equal(
+                ConveyorLine.StationNames.Skip(2).ToArray(),
+                store.Saved.Select(saved => saved.Station).ToArray());
+            Assert.Equal(ConveyorLine.StationNames, run.Checkpoints);
+            Assert.Equal(RunStatus.Previewed, run.Status);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task A_terminal_persisted_run_is_not_re_driven_by_a_new_invocation()
+    {
+        var store = new RecordingRunStore();
+        var gatherer = new ScriptedEvidenceGatherer(
+            "sentry", new EvidenceItem("sentry", "SENTRY-1", "checkout 500s spiked"));
+        var dependencies = TestDependencies.Build(evidenceGatherers: [gatherer], runStore: store);
+        var path = await WriteSignalAsync("""{"product_hints": "acme", "source_kinds": ["sentry"]}""");
+        try
+        {
+            var runId = RunIdentity.Compute(TriggerKind.Signal, ["acme"], ["sentry"]);
+            var priorRun = new ConveyorRun
+            {
+                Id = runId,
+                Trigger = TriggerKind.Signal,
+                ProductHints = ["acme"],
+                SourceKinds = ["sentry"],
+                DryRun = false,
+            };
+            priorRun.Checkpoints.AddRange(ConveyorLine.StationNames);
+            priorRun.Status = RunStatus.Filed;
+            priorRun.FiledIssues.Add("https://github.com/acme/acme/issues/1");
+            store.Seed(priorRun);
+
+            var run = await RuntimeVerbs.RunAsync(Settings, path, dryRun: true, dependencies, CancellationToken.None);
+
+            Assert.Equal(runId, run.Id);
+            Assert.Equal(RunStatus.Filed, run.Status);
+            Assert.Empty(store.Saved);
+            Assert.Equal(["https://github.com/acme/acme/issues/1"], run.FiledIssues);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
 }

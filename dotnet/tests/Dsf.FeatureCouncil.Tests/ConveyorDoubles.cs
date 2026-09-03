@@ -26,22 +26,34 @@ internal static class ConveyorDoubles
             tracer ?? new RecordingTracer());
 }
 
-/// <summary>A run store that records every persisted checkpoint in order.</summary>
+/// <summary>
+/// A run store that records every persisted checkpoint in order and keeps the
+/// last-saved document per run id.
+/// </summary>
 internal sealed class RecordingRunStore : IRunStore
 {
+    private readonly Dictionary<string, ConveyorRun> documents = [];
+
     public List<(string RunId, string Station, RunStatus Status, string[] Checkpoints)> Saved { get; } = [];
 
     public Task SaveAsync(ConveyorRun run, string station, CancellationToken cancellationToken)
     {
         Saved.Add((run.Id, station, run.Status, [.. run.Checkpoints]));
+        documents[run.Id] = run;
         return Task.CompletedTask;
     }
+
+    public Task<ConveyorRun?> LoadAsync(string runId, CancellationToken cancellationToken) =>
+        Task.FromResult(documents.TryGetValue(runId, out var run) ? run : null);
 }
 
 /// <summary>A run store whose backing store cannot be reached.</summary>
 internal sealed class UnreachableRunStore(string reason) : IRunStore
 {
     public Task SaveAsync(ConveyorRun run, string station, CancellationToken cancellationToken) =>
+        throw new InvalidOperationException(reason);
+
+    public Task<ConveyorRun?> LoadAsync(string runId, CancellationToken cancellationToken) =>
         throw new InvalidOperationException(reason);
 }
 

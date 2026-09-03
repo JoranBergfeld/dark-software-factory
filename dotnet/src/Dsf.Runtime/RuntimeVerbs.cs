@@ -62,7 +62,7 @@ public static class RuntimeVerbs
     }
 
     /// <summary>Drives the conveyor over an already-parsed signal.</summary>
-    public static Task<ConveyorRun> RunSignalAsync(
+    public static async Task<ConveyorRun> RunSignalAsync(
         RuntimeSettings settings,
         Signal signal,
         RuntimeDependencies dependencies,
@@ -73,14 +73,9 @@ public static class RuntimeVerbs
         ArgumentNullException.ThrowIfNull(dependencies);
 
         var services = ComposeServices(settings, dependencies);
-        var run = new ConveyorRun
-        {
-            Trigger = TriggerKind.Signal,
-            ProductHints = signal.ProductHints,
-            SourceKinds = signal.SourceKinds,
-            DryRun = signal.DryRun,
-        };
-        return ConveyorLine.RunAsync(run, services, cancellationToken);
+        var run = await LoadOrCreateRunAsync(
+            services, TriggerKind.Signal, signal.ProductHints, signal.SourceKinds, signal.DryRun, cancellationToken);
+        return await ConveyorLine.RunAsync(run, services, cancellationToken);
     }
 
     /// <summary>
@@ -111,13 +106,8 @@ public static class RuntimeVerbs
             throw new RuntimeVerbException(exception.Message);
         }
 
-        var run = new ConveyorRun
-        {
-            Trigger = TriggerKind.Scheduled,
-            ProductHints = [settings.Product],
-            SourceKinds = kinds,
-            DryRun = dryRun,
-        };
+        var run = await LoadOrCreateRunAsync(
+            services, TriggerKind.Scheduled, [settings.Product], kinds, dryRun, cancellationToken);
         run.Record(
             "trigger:scheduled",
             $"scheduled sweep for product '{settings.Product}': enabled sources="
@@ -125,6 +115,57 @@ public static class RuntimeVerbs
             + $"(resolved from {settings.AppConfigEndpoint}).");
 
         return await ConveyorLine.RunAsync(run, services, cancellationToken);
+    }
+
+    /// <summary>
+    /// Looks up the run already persisted for this scope's stable identity
+    /// (<see cref="RunIdentity"/>) and returns it if found, so a signal or sweep
+    /// that matches a prior run resumes it -- with its checkpoints and terminal
+    /// status intact -- instead of starting a new run blind to what a previous
+    /// process already did. Creates a fresh run, seeded with that same identity as
+    /// its id, only when no prior run is found.
+    /// </summary>
+    private static async Task<ConveyorRun> LoadOrCreateRunAsync(
+        ConveyorServices services,
+        TriggerKind trigger,
+        IReadOnlyList<string> productHints,
+        IReadOnlyList<string> sourceKinds,
+        bool dryRun,
+        CancellationToken cancellationToken)
+    {
+        var runId = RunIdentity.Compute(trigger, productHints, sourceKinds);
+        var run = new ConveyorRun
+        {
+            Id = runId,
+            Trigger = trigger,
+            ProductHints = productHints,
+            SourceKinds = sourceKinds,
+            DryRun = dryRun,
+        };
+
+        try
+        {
+            var existing = await services.RunStore.LoadAsync(runId, cancellationToken);
+            if (existing is not null)
+            {
+                return existing;
+            }
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            // A store that cannot be read is audited as a terminal error on the
+            // fresh run rather than thrown: the conveyor's contract is that no
+            // per-run failure -- including one before the line even starts --
+            // ever propagates past the runtime verb.
+            run.Status = RunStatus.Error;
+            run.FailureReason =
+                $"could not resolve a prior run for identity '{runId}' ({exception.GetType().Name}): "
+                + exception.Message;
+            run.Record(
+                "run:load", $"could not load a persisted run ({exception.GetType().Name}): {exception.Message}");
+        }
+
+        return run;
     }
 
     /// <summary>

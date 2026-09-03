@@ -172,5 +172,10 @@ public sealed class ConveyorDryRunReportingTests
             this.Upserts.Add(json);
             return Task.CompletedTask;
         }
+
+        public Task<string?> ReadAsync(
+            string endpoint, string database, string container, string partitionKey, string id,
+            CancellationToken cancellationToken) =>
+            Task.FromResult<string?>(null);
     }
 }

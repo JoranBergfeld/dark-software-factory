@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
@@ -21,6 +22,18 @@ internal interface ICosmosDocumentGateway
         string partitionKey,
         string id,
         string json,
+        CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Point-reads the document at <paramref name="id"/>/<paramref name="partitionKey"/>,
+    /// or returns <c>null</c> if no document has ever been written under that id.
+    /// </summary>
+    Task<string?> ReadAsync(
+        string endpoint,
+        string database,
+        string container,
+        string partitionKey,
+        string id,
         CancellationToken cancellationToken);
 }
 
@@ -69,6 +82,40 @@ internal sealed class AzureCosmosDocumentGateway(TokenCredential? credential = n
             throw new HttpRequestException(
                 $"{(int)response.StatusCode} {response.ReasonPhrase}: {body}");
         }
+    }
+
+    public async Task<string?> ReadAsync(
+        string endpoint,
+        string database,
+        string container,
+        string partitionKey,
+        string id,
+        CancellationToken cancellationToken)
+    {
+        var token = await this.credential.GetTokenAsync(new TokenRequestContext(Scopes), cancellationToken);
+        var uri = new Uri(new Uri(EnsureTrailingSlash(endpoint)), $"dbs/{database}/colls/{container}/docs/{id}");
+        using var request = new HttpRequestMessage(HttpMethod.Get, uri);
+        request.Headers.TryAddWithoutValidation(
+            "Authorization", Uri.EscapeDataString($"type=aad&ver=1.0&sig={token.Token}"));
+        request.Headers.TryAddWithoutValidation("x-ms-version", CosmosApiVersion);
+        request.Headers.TryAddWithoutValidation("x-ms-date", DateTime.UtcNow.ToString("r"));
+        request.Headers.TryAddWithoutValidation(
+            "x-ms-documentdb-partitionkey", JsonSerializer.Serialize(new[] { partitionKey }));
+
+        using var response = await httpClient.SendAsync(request, cancellationToken);
+        if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            return null;
+        }
+
+        if (!response.IsSuccessStatusCode)
+        {
+            var body = await response.Content.ReadAsStringAsync(cancellationToken);
+            throw new HttpRequestException(
+                $"{(int)response.StatusCode} {response.ReasonPhrase}: {body}");
+        }
+
+        return await response.Content.ReadAsStringAsync(cancellationToken);
     }
 
     private static string EnsureTrailingSlash(string url) => url.EndsWith('/') ? url : url + "/";
@@ -146,4 +193,124 @@ internal sealed class CosmosRunStore(
                 exception);
         }
     }
+
+    /// <summary>
+    /// Reads the run document back by id, so a resumed run finds and continues
+    /// what a prior process already persisted -- checkpoints, evidence,
+    /// proposals, audit trail and terminal status all intact -- instead of
+    /// starting over blind to its own history. Returns <c>null</c> when no
+    /// document has ever been written under <paramref name="runId"/>.
+    /// </summary>
+    public async Task<ConveyorRun?> LoadAsync(string runId, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(runId);
+
+        string? json;
+        try
+        {
+            json = await gateway.ReadAsync(endpoint, database, container, product, runId, cancellationToken);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            throw new InvalidOperationException(
+                $"could not read run '{runId}' from the Cosmos container "
+                + $"'{database}/{container}' at '{endpoint}': {exception.Message}",
+                exception);
+        }
+
+        return json is null ? null : Deserialize(json);
+    }
+
+    /// <summary>Rebuilds a <see cref="ConveyorRun"/> from the document <see cref="SaveAsync"/> wrote.</summary>
+    private static ConveyorRun Deserialize(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+
+        var run = new ConveyorRun
+        {
+            Id = root.GetProperty("id").GetString()!,
+            Trigger = Enum.Parse<TriggerKind>(root.GetProperty("trigger").GetString()!, ignoreCase: true),
+            ProductHints = ReadStrings(root, "productHints"),
+            SourceKinds = ReadStrings(root, "sourceKinds"),
+            DryRun = root.GetProperty("dryRun").GetBoolean(),
+        };
+        run.Status = Enum.Parse<RunStatus>(root.GetProperty("status").GetString()!, ignoreCase: true);
+        run.Fingerprint = root.TryGetProperty("fingerprint", out var fingerprint)
+            ? fingerprint.GetString() ?? string.Empty
+            : string.Empty;
+        run.FailureReason = root.TryGetProperty("failureReason", out var failureReason)
+            && failureReason.ValueKind != JsonValueKind.Null
+                ? failureReason.GetString()
+                : null;
+
+        if (root.TryGetProperty("checkpoints", out var checkpoints))
+        {
+            run.Checkpoints.AddRange(ReadStrings(checkpoints));
+        }
+
+        if (root.TryGetProperty("evidence", out var evidence))
+        {
+            foreach (var item in evidence.EnumerateArray())
+            {
+                run.Evidence.Add(new EvidenceItem(
+                    item.GetProperty("sourceKind").GetString()!,
+                    item.GetProperty("reference").GetString()!,
+                    item.GetProperty("summary").GetString()!));
+            }
+        }
+
+        if (root.TryGetProperty("proposals", out var proposals))
+        {
+            foreach (var item in proposals.EnumerateArray())
+            {
+                var proposal = new Proposal(
+                    item.GetProperty("id").GetString()!,
+                    item.GetProperty("title").GetString()!,
+                    item.GetProperty("sourceKind").GetString()!,
+                    ReadStrings(item, "evidenceReferences"))
+                {
+                    IntentKey = item.GetProperty("intentKey").GetString() ?? string.Empty,
+                    Confidence = item.GetProperty("confidence").GetDouble(),
+                    Accepted = item.GetProperty("accepted").GetBoolean(),
+                };
+                proposal.Labels.AddRange(ReadStrings(item, "labels"));
+                run.Proposals.Add(proposal);
+            }
+        }
+
+        if (root.TryGetProperty("filedIssues", out var filedIssues))
+        {
+            run.FiledIssues.AddRange(ReadStrings(filedIssues));
+        }
+
+        if (root.TryGetProperty("previewedIssues", out var previewedIssues))
+        {
+            foreach (var item in previewedIssues.EnumerateArray())
+            {
+                run.PreviewedIssues.Add(new IssuePreview(
+                    item.GetProperty("title").GetString()!,
+                    item.GetProperty("intentKey").GetString()!,
+                    ReadStrings(item, "labels")));
+            }
+        }
+
+        if (root.TryGetProperty("audit", out var audit))
+        {
+            foreach (var item in audit.EnumerateArray())
+            {
+                run.Audit.Add(new AuditRecord(
+                    item.GetProperty("station").GetString()!,
+                    item.GetProperty("message").GetString()!));
+            }
+        }
+
+        return run;
+    }
+
+    private static IReadOnlyList<string> ReadStrings(JsonElement parent, string property) =>
+        parent.TryGetProperty(property, out var array) ? ReadStrings(array) : [];
+
+    private static IReadOnlyList<string> ReadStrings(JsonElement array) =>
+        array.EnumerateArray().Select(element => element.GetString()!).ToArray();
 }
