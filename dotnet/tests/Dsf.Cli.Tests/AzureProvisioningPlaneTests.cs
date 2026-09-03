@@ -172,7 +172,7 @@ public sealed class AzureProvisioningPlaneTests
                 "https://appcs-paritydemo.azconfig.io",
                 written.Azure.Outputs["appConfigEndpoint"]);
             Assert.Equal(azure.AgentEndpoint, written.Azure.Outputs["sreAgentEndpoint"]);
-            Assert.Equal(InstanceState.Planned, written.Status.State);
+            Assert.Equal(InstanceState.Executed, written.Status.State);
             Assert.NotEmpty(azure.Requests);
         }
         finally

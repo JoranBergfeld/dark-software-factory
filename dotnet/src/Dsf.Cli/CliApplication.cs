@@ -299,7 +299,10 @@ public static class CliApplication
                     var azureRoot = configRootValue ?? Directory.GetCurrentDirectory();
                     var azureResult = await AzureProvisioningPlan.Build(afterGitHub, azureRoot)
                         .ExecuteAsync(azure, cancellationToken);
-                    var updated = azureResult.ApplyTo(afterGitHub);
+                    var updated = azureResult.ApplyTo(afterGitHub) with
+                    {
+                        Status = afterGitHub.Status with { State = InstanceState.Executed },
+                    };
 
                     InstanceDefinitions.Write(updated, azureRoot);
                     terminal.WriteLine($"[dsf] GitHub provisioning complete for {updated.GitHub.FullName()}.");
