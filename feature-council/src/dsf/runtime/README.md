@@ -1,10 +1,11 @@
 # Feature-council orchestrator runtime
 
-The per-product runtime image (`dsf-runtime`). The two-stage `Dockerfile` bundles `core/`
-+ `feature-council/` and runs the orchestrator worker:
+The per-product runtime image (`dsf-runtime`). The two-stage `Dockerfile` builds and publishes
+the .NET runtime from `dotnet/src/Dsf.Runtime`, then runs the orchestrator worker:
 
 ```
-CMD ["python", "-m", "dsf.runtime.control", "serve-orchestrator", "--loop"]
+ENTRYPOINT ["dotnet", "dsf-runtime.dll"]
+CMD ["serve-orchestrator", "--loop"]
 ```
 
 DSF is pull-only: each tick sweeps the enabled source agents through the conveyor. `--loop`
@@ -17,9 +18,9 @@ App pulls anonymously).
 
 ## Environment variables
 
-`build_services()` (`core/src/dsf/container.py`) resolves these from the environment and
-**requires** `DSF_PRODUCT` plus every endpoint below — it raises (naming what is unset) and
-never falls back to a stub. `infra/main.bicep` wires them onto the orchestrator container.
+`RuntimeDependencies.Production` resolves these from the environment and **requires**
+`DSF_PRODUCT` plus every endpoint below — it raises (naming what is unset) and never falls back
+to a stub. `infra/main.bicep` wires them onto the orchestrator container.
 
 | Variable | Required | Purpose |
 | --- | --- | --- |

@@ -20,9 +20,11 @@ def test_runtime_dockerfile_exists():
 
 def test_runtime_dockerfile_is_two_stage_nonroot_pinned():
     text = DOCKERFILE.read_text(encoding="utf-8")
-    # two-stage build on a digest-pinned slim base:
+    # two-stage build on digest-pinned .NET bases:
     assert "AS builder" in text
-    assert "python:3.12-slim@sha256:" in text
+    assert "mcr.microsoft.com/dotnet/sdk:10.0@sha256:" in text
+    assert "mcr.microsoft.com/dotnet/aspnet:10.0@sha256:" in text
+    assert "dotnet publish src/Dsf.Runtime/Dsf.Runtime.csproj" in text
     # runs as the non-root appuser (uid 1001), like the agent images:
     assert "USER appuser" in text
     assert "--uid 1001" in text
@@ -30,10 +32,8 @@ def test_runtime_dockerfile_is_two_stage_nonroot_pinned():
 
 def test_runtime_dockerfile_cmd_runs_sweep_worker():
     text = DOCKERFILE.read_text(encoding="utf-8")
-    # build_services wires the real per-product bundle from the runtime env;
-    # there is no --mode flag any more. --loop keeps the deployed container alive,
-    # sweeping the enabled sources on an interval (so the ACA revision stays healthy).
-    assert (
-        'CMD ["python", "-m", "dsf.runtime.control", "serve-orchestrator", "--loop"]'
-        in text
-    )
+    # RuntimeDependencies.Production wires the real per-product bundle from env.
+    # --loop keeps the deployed container alive, sweeping enabled sources on an
+    # interval so the ACA revision stays healthy.
+    assert 'ENTRYPOINT ["dotnet", "dsf-runtime.dll"]' in text
+    assert 'CMD ["serve-orchestrator", "--loop"]' in text
