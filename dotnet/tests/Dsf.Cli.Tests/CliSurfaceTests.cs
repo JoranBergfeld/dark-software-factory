@@ -23,6 +23,7 @@ public sealed class CliSurfaceTests
         Assert.Contains("serve-orchestrator", result.Stdout);
         Assert.Contains("serve-agent", result.Stdout);
         Assert.Contains("charter", result.Stdout);
+        Assert.DoesNotContain("/?", result.Stdout);
     }
 
     [Fact]
@@ -137,6 +138,7 @@ public sealed class CliSurfaceTests
     [Theory]
     [InlineData("--version")]
     [InlineData("-?")]
+    [InlineData("/?")]
     public async Task Frozen_root_grammar_rejects_non_parity_options(string option)
     {
         var result = await DsfProcess.RunAsync(option);

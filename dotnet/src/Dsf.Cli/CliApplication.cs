@@ -24,7 +24,9 @@ public static class CliApplication
     {
         var root = new RootCommand("Dark Software Factory — factory CLI (create product instances)");
         root.Options.Remove(root.Options.Single(option => option.Name == "--version"));
-        root.Options.Single(option => option.Name == "--help").Aliases.Remove("-?");
+        var helpOption = root.Options.Single(option => option.Name == "--help");
+        helpOption.Aliases.Remove("-?");
+        helpOption.Aliases.Remove("/?");
 
         root.Subcommands.Add(BuildNewCommand());
         root.Subcommands.Add(BuildListCommand());
