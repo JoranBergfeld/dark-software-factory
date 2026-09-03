@@ -129,6 +129,9 @@ public static class ConveyorLine
             ["product"] = services.Product,
             ["runId"] = run.Id,
             ["status"] = run.Status.ToString(),
+            // Carried so an external tracer (Application Insights) can gate its
+            // own emission: a dry run must have no external side effects.
+            ["dryRun"] = run.DryRun.ToString(),
         };
         if (station is not null)
         {

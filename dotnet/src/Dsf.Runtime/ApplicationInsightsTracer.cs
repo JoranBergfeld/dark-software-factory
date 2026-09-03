@@ -70,6 +70,10 @@ internal sealed class ApplicationInsightsTelemetryGateway(HttpClient? httpClient
 /// The tracer the conveyor line reports run and station boundaries through,
 /// backed by a real Application Insights ingestion endpoint parsed from the
 /// runtime's existing <c>APPLICATIONINSIGHTS_CONNECTION_STRING</c> setting.
+/// A dry run must have no external side effects, so an event traced for one
+/// (carrying a <c>dryRun</c> property of <c>"True"</c>, set by the conveyor
+/// line from <see cref="ConveyorRun.DryRun"/>) is never posted to the
+/// ingestion endpoint.
 /// </summary>
 internal sealed class ApplicationInsightsTracer : ITracer
 {
@@ -86,6 +90,16 @@ internal sealed class ApplicationInsightsTracer : ITracer
     public async Task TraceAsync(
         string name, IReadOnlyDictionary<string, string?> properties, CancellationToken cancellationToken)
     {
+        if (properties.TryGetValue("dryRun", out var dryRun) && string.Equals(dryRun, "True", StringComparison.Ordinal))
+        {
+            // A dry run must have no external side effects: never post this
+            // event to the Application Insights ingestion endpoint. The event
+            // still lives in the run's own in-memory audit trail via the
+            // conveyor line's checkpointing -- this only suppresses the
+            // external telemetry post.
+            return;
+        }
+
         try
         {
             await gateway.SendAsync(ingestionEndpoint, instrumentationKey, name, properties, cancellationToken);

@@ -109,6 +109,31 @@ public sealed class ConveyorPersistenceTests
         Assert.Empty(run.FiledIssues);
     }
 
+    [Fact]
+    public async Task A_terminal_sweep_result_does_not_suppress_a_later_sweep()
+    {
+        var store = new RecordingRunStore();
+        var gatherer = new ScriptedEvidenceGatherer(
+            "sentry", new EvidenceItem("sentry", "SENTRY-1", "checkout 500s spiked"));
+        var dependencies = TestDependencies.Build(
+            evidenceGatherers: [gatherer],
+            runStore: store,
+            sourceAgentRosterReader: new RosterReader(["sentry"]));
+
+        var first = await RuntimeVerbs.SweepAsync(Settings, dryRun: true, dependencies, CancellationToken.None);
+        Assert.Equal(RunStatus.Previewed, first.Status);
+
+        var second = await RuntimeVerbs.SweepAsync(Settings, dryRun: true, dependencies, CancellationToken.None);
+
+        // A later sweep over the exact same product and roster must still be
+        // driven through every station -- the first sweep's terminal status must
+        // never be reloaded and returned in place of processing the new sweep.
+        Assert.NotEqual(first.Id, second.Id);
+        Assert.Equal(RunStatus.Previewed, second.Status);
+        Assert.Equal(ConveyorLine.StationNames, second.Checkpoints);
+        Assert.Single(second.Evidence);
+    }
+
 
     [Fact]
     public async Task A_run_rehydrates_a_persisted_checkpointed_run_and_skips_completed_stations()

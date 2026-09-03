@@ -107,7 +107,8 @@ public static class RuntimeVerbs
         }
 
         var run = await LoadOrCreateRunAsync(
-            services, TriggerKind.Scheduled, [settings.Product], kinds, dryRun, cancellationToken);
+            services, TriggerKind.Scheduled, [settings.Product], kinds, dryRun, cancellationToken,
+            resumeTerminal: false);
         run.Record(
             "trigger:scheduled",
             $"scheduled sweep for product '{settings.Product}': enabled sources="
@@ -120,10 +121,10 @@ public static class RuntimeVerbs
     /// <summary>
     /// Looks up the run already persisted for this scope's stable identity
     /// (<see cref="RunIdentity"/>) and returns it if found, so a signal or sweep
-    /// that matches a prior run resumes it -- with its checkpoints and terminal
-    /// status intact -- instead of starting a new run blind to what a previous
-    /// process already did. Creates a fresh run, seeded with that same identity as
-    /// its id, only when no prior run is found.
+    /// that matches a prior, still <see cref="RunStatus.Open"/> run resumes it --
+    /// with its checkpoints intact -- instead of starting a new run blind to
+    /// what a previous process already did. Creates a fresh run, seeded with
+    /// that same identity as its id, only when no prior run is found.
     /// </summary>
     /// <remarks>
     /// A resumed, still-open run is forced onto the current invocation's
@@ -134,14 +135,21 @@ public static class RuntimeVerbs
     /// killed before filing; conversely, a non-dry-run invocation resuming a
     /// run only ever checkpointed under <c>--dry-run</c> must not be stuck
     /// forever previewing -- it clears the stale dry-run flag so the run can
-    /// still file for real. A run already in a terminal status (<see
-    /// cref="RunStatus.Killed"/>, <see cref="RunStatus.Previewed"/>, <see
-    /// cref="RunStatus.Filed"/>, <see cref="RunStatus.Error"/>) is returned
-    /// exactly as persisted: it is never re-driven, so its recorded mode is
-    /// never altered either -- a run that already filed for real stays filed,
-    /// it is not rewritten into a preview after the fact, and a run that
-    /// already previewed stays previewed rather than being filed for real by a
-    /// later non-dry-run invocation.
+    /// still file for real.
+    ///
+    /// A run already in a terminal status (<see cref="RunStatus.Killed"/>, <see
+    /// cref="RunStatus.Previewed"/>, <see cref="RunStatus.Filed"/>, <see
+    /// cref="RunStatus.Error"/>) behaves differently depending on
+    /// <paramref name="resumeTerminal"/>: when <c>true</c> (a <c>--signal</c>
+    /// invocation, which represents one concrete, possibly-redelivered event) it
+    /// is returned exactly as persisted -- never re-driven, its recorded mode
+    /// never altered, so a run that already filed for real stays filed and one
+    /// that already previewed stays previewed. When <c>false</c> (a scheduled
+    /// sweep, which is a recurring tick and never a retry of the same concrete
+    /// occurrence) the scope's terminal result is left untouched but is not
+    /// returned: a fresh run is minted under a new identity so the new tick is
+    /// actually driven through the line instead of being suppressed by the
+    /// scope's first-ever terminal result.
     /// </remarks>
     private static async Task<ConveyorRun> LoadOrCreateRunAsync(
         ConveyorServices services,
@@ -149,7 +157,8 @@ public static class RuntimeVerbs
         IReadOnlyList<string> productHints,
         IReadOnlyList<string> sourceKinds,
         bool dryRun,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool resumeTerminal = true)
     {
         var runId = RunIdentity.Compute(trigger, productHints, sourceKinds);
         var run = new ConveyorRun
@@ -166,6 +175,24 @@ public static class RuntimeVerbs
             var existing = await services.RunStore.LoadAsync(runId, cancellationToken);
             if (existing is not null)
             {
+                if (existing.Status != RunStatus.Open && !resumeTerminal)
+                {
+                    var fresh = new ConveyorRun
+                    {
+                        Id = Guid.NewGuid().ToString("n"),
+                        Trigger = trigger,
+                        ProductHints = productHints,
+                        SourceKinds = sourceKinds,
+                        DryRun = dryRun,
+                    };
+                    fresh.Record(
+                        "run:load",
+                        $"prior run '{existing.Id}' for this scope already reached terminal status "
+                        + $"'{existing.Status}': starting a new run '{fresh.Id}' for this sweep instead of "
+                        + "resuming it.");
+                    return fresh;
+                }
+
                 if (existing.Status == RunStatus.Open && dryRun != existing.DryRun)
                 {
                     existing.DryRun = dryRun;
@@ -267,7 +294,10 @@ public static class RuntimeVerbs
             }
 
             var run = await RunSignalAsync(settings, signal, dependencies, cancellationToken);
-            return Results.Ok(RuntimeRunSummary.From(run));
+            var summary = RuntimeRunSummary.From(run);
+            return run.Status == RunStatus.Error
+                ? Results.Json(summary, statusCode: StatusCodes.Status500InternalServerError)
+                : Results.Ok(summary);
         });
 
         return app;

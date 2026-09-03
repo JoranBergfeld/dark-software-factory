@@ -76,6 +76,22 @@ public sealed class ApplicationInsightsTracerTests
     }
 
     [Fact]
+    public async Task A_dry_run_event_is_not_sent_to_the_gateway()
+    {
+        var gateway = new RecordingGateway();
+        var tracer = new ApplicationInsightsTracer("InstrumentationKey=abc-123", gateway);
+
+        await tracer.TraceAsync(
+            "run.start",
+            new Dictionary<string, string?> { ["dryRun"] = "True" },
+            CancellationToken.None);
+
+        // A dry run must have no external side effects: the event must never
+        // reach the Application Insights ingestion endpoint.
+        Assert.Null(gateway.Sent);
+    }
+
+    [Fact]
     public async Task A_gateway_failure_is_reported_naming_the_event()
     {
         var tracer = new ApplicationInsightsTracer("InstrumentationKey=abc-123", new ThrowingGateway("503 Service Unavailable"));

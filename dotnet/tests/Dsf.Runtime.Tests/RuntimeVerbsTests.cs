@@ -226,6 +226,36 @@ public sealed class RuntimeVerbsTests
     }
 
     [Fact]
+    public async Task Orchestrator_host_reports_a_station_error_as_a_non_2xx_response()
+    {
+        var dependencies = TestDependencies.Build(
+            evidenceGatherers: [new ScriptedEvidenceGatherer(
+                "sentry", new EvidenceItem("sentry", "SENTRY-1", "checkout 500s spiked"))],
+            modelClient: new ThrowingModelClient("model deployment unreachable"));
+        var app = RuntimeVerbs.BuildOrchestratorHost(Settings, dependencies, "127.0.0.1", 0);
+        await using var host = app;
+        await app.StartAsync();
+        try
+        {
+            using var client = new HttpClient { BaseAddress = new Uri(BaseAddress(app)) };
+
+            var response = await client.PostAsync(
+                "/run",
+                new StringContent(
+                    """{"product_hints": "acme", "source_kinds": ["sentry"]}""", Encoding.UTF8, "application/json"));
+
+            Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+            var summary = await response.Content.ReadFromJsonAsync<JsonElement>();
+            Assert.Equal("error", summary.GetProperty("status").GetString());
+            Assert.Contains("model deployment unreachable", summary.GetProperty("failureReason").GetString());
+        }
+        finally
+        {
+            await app.StopAsync();
+        }
+    }
+
+    [Fact]
     public async Task Orchestrator_host_rejects_an_unparseable_signal_payload()
     {
         var app = RuntimeVerbs.BuildOrchestratorHost(Settings, TestDependencies.Empty, "127.0.0.1", 0);
@@ -381,6 +411,10 @@ public sealed class RuntimeVerbsTests
                 Assert.Contains(tracer.Traced, e => e.Name == "station.start" && e.Properties["station"] == station);
                 Assert.Contains(tracer.Traced, e => e.Name == "station.complete" && e.Properties["station"] == station);
             }
+
+            // This is a dry run: every traced event must carry the mode so an
+            // external tracer (Application Insights) can gate its own emission.
+            Assert.All(tracer.Traced, e => Assert.Equal("True", e.Properties["dryRun"]));
         }
         finally
         {
