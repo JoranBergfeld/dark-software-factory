@@ -128,10 +128,13 @@ public sealed class GitHubRestProvisioningClientTests
     }
 
     [Fact]
-    public async Task App_binding_uses_idempotent_selected_repository_endpoint()
+    public async Task App_binding_adds_repository_when_selected_installation_does_not_cover_it()
     {
         var handler = new RecordingHttpMessageHandler(
             Response(HttpStatusCode.OK, """{"id":123,"default_branch":"main"}"""),
+            Response(
+                HttpStatusCode.OK,
+                """{"total_count":0,"repository_selection":"selected","repositories":[]}"""),
             Response(HttpStatusCode.NoContent));
         var client = new GitHubRestProvisioningClient(new HttpClient(handler), "test-token");
 
@@ -151,9 +154,116 @@ public sealed class GitHubRestProvisioningClientTests
             },
             request =>
             {
+                Assert.Equal(HttpMethod.Get, request.Method);
+                Assert.Equal(
+                    "/user/installations/42/repositories?per_page=100",
+                    request.Path);
+            },
+            request =>
+            {
                 Assert.Equal(HttpMethod.Put, request.Method);
                 Assert.Equal("/user/installations/42/repositories/123", request.Path);
             });
+    }
+
+    [Fact]
+    public async Task App_binding_skips_mutation_when_selected_installation_already_covers_repository()
+    {
+        var handler = new RecordingHttpMessageHandler(
+            Response(HttpStatusCode.OK, """{"id":123,"default_branch":"main"}"""),
+            Response(
+                HttpStatusCode.OK,
+                """{"total_count":1,"repository_selection":"selected","repositories":[{"id":123}]}"""));
+        var client = new GitHubRestProvisioningClient(new HttpClient(handler), "test-token");
+
+        var result = await client.EnsureAppBindingAsync(
+            new EnsureAppBindingRequest("acme/demo", "7", "42"),
+            CancellationToken.None);
+
+        Assert.NotNull(result);
+        Assert.Equal("7", result.AppId);
+        Assert.Equal("42", result.InstallationId);
+        Assert.Collection(
+            handler.Requests,
+            request =>
+            {
+                Assert.Equal(HttpMethod.Get, request.Method);
+                Assert.Equal("/repos/acme/demo", request.Path);
+            },
+            request =>
+            {
+                Assert.Equal(HttpMethod.Get, request.Method);
+                Assert.Equal(
+                    "/user/installations/42/repositories?per_page=100",
+                    request.Path);
+            });
+    }
+
+    [Fact]
+    public async Task App_binding_skips_mutation_for_all_repositories_installation()
+    {
+        var handler = new RecordingHttpMessageHandler(
+            Response(HttpStatusCode.OK, """{"id":123,"default_branch":"main"}"""),
+            Response(
+                HttpStatusCode.OK,
+                """{"total_count":0,"repository_selection":"all","repositories":[]}"""));
+        var client = new GitHubRestProvisioningClient(new HttpClient(handler), "test-token");
+
+        var result = await client.EnsureAppBindingAsync(
+            new EnsureAppBindingRequest("acme/demo", "7", "42"),
+            CancellationToken.None);
+
+        Assert.NotNull(result);
+        Assert.Equal("7", result.AppId);
+        Assert.Equal("42", result.InstallationId);
+        Assert.Collection(
+            handler.Requests,
+            request =>
+            {
+                Assert.Equal(HttpMethod.Get, request.Method);
+                Assert.Equal("/repos/acme/demo", request.Path);
+            },
+            request =>
+            {
+                Assert.Equal(HttpMethod.Get, request.Method);
+                Assert.Equal(
+                    "/user/installations/42/repositories?per_page=100",
+                    request.Path);
+            });
+    }
+
+    [Fact]
+    public async Task App_binding_follows_pagination_before_deciding_repository_is_missing()
+    {
+        var firstPage = Response(
+            HttpStatusCode.OK,
+            """{"total_count":1,"repository_selection":"selected","repositories":[{"id":999}]}""");
+        firstPage.Headers.Add(
+            "Link",
+            "<https://api.github.com/user/installations/42/repositories"
+            + "?per_page=100&page=2>; rel=\"next\"");
+        var handler = new RecordingHttpMessageHandler(
+            Response(HttpStatusCode.OK, """{"id":123,"default_branch":"main"}"""),
+            firstPage,
+            Response(
+                HttpStatusCode.OK,
+                """{"total_count":1,"repository_selection":"selected","repositories":[{"id":123}]}"""));
+        var client = new GitHubRestProvisioningClient(new HttpClient(handler), "test-token");
+
+        var result = await client.EnsureAppBindingAsync(
+            new EnsureAppBindingRequest("acme/demo", "7", "42"),
+            CancellationToken.None);
+
+        Assert.NotNull(result);
+        Assert.Collection(
+            handler.Requests,
+            request => Assert.Equal("/repos/acme/demo", request.Path),
+            request => Assert.Equal(
+                "/user/installations/42/repositories?per_page=100",
+                request.Path),
+            request => Assert.Equal(
+                "/user/installations/42/repositories?per_page=100&page=2",
+                request.Path));
     }
 
     [Fact]

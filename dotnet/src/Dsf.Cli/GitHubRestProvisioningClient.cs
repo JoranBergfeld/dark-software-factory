@@ -128,12 +128,58 @@ internal sealed class GitHubRestProvisioningClient : IGitHubProvisioningClient
             cancellationToken);
         using var repository = await ReadJsonAsync(repositoryResponse, cancellationToken);
         var repositoryId = repository.RootElement.GetProperty("id").GetInt64();
-        using var ignored = await SendAsync(
-            HttpMethod.Put,
-            $"user/installations/{request.InstallationId}/repositories/{repositoryId}",
-            body: null,
-            cancellationToken);
+        if (!await InstallationCoversRepositoryAsync(
+                request.InstallationId, repositoryId, cancellationToken))
+        {
+            using var ignored = await SendAsync(
+                HttpMethod.Put,
+                $"user/installations/{request.InstallationId}/repositories/{repositoryId}",
+                body: null,
+                cancellationToken);
+        }
+
         return new GitHubAppBindingProvisioningResult(request.AppId, request.InstallationId);
+    }
+
+    /// <summary>
+    /// Whether the installation already covers <paramref name="repositoryId"/>: either
+    /// it is "all-repositories" (covers every repo of the owner), or a "selected"
+    /// installation whose repository list already contains it. Checking first keeps
+    /// re-runs idempotent: a PUT against a repo an "all" installation already covers,
+    /// or a "selected" installation already lists, would otherwise risk a 403/422.
+    /// </summary>
+    private async Task<bool> InstallationCoversRepositoryAsync(
+        string installationId,
+        long repositoryId,
+        CancellationToken cancellationToken)
+    {
+        string? page = $"user/installations/{installationId}/repositories?per_page=100";
+        while (page is not null)
+        {
+            using var response = await SendAsync(
+                HttpMethod.Get,
+                page,
+                body: null,
+                cancellationToken);
+            page = NextPage(response);
+            using var body = await ReadJsonAsync(response, cancellationToken);
+            var root = body.RootElement;
+            if (root.TryGetProperty("repository_selection", out var selection)
+                && string.Equals(selection.GetString(), "all", StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            foreach (var candidate in root.GetProperty("repositories").EnumerateArray())
+            {
+                if (candidate.GetProperty("id").GetInt64() == repositoryId)
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     public async Task<GitHubRulesetProvisioningResult> EnsureBranchProtectionRulesetAsync(
