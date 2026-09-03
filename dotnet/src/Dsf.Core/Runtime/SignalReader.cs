@@ -20,25 +20,38 @@ public static class SignalReader
             throw new FileNotFoundException($"signal file not found: {path}", path);
         }
 
-        using var document = Parse(path);
+        return Read(File.ReadAllText(path), path, dryRun);
+    }
+
+    /// <summary>
+    /// Normalizes an already-loaded signal payload. <paramref name="origin"/> only
+    /// names the payload's source in errors and on the returned
+    /// <see cref="Signal.Path"/> (a file path, or a request description when the
+    /// payload arrived over HTTP).
+    /// </summary>
+    public static Signal ReadFromJson(string json, string origin, bool dryRun) => Read(json, origin, dryRun);
+
+    private static Signal Read(string json, string origin, bool dryRun)
+    {
+        using var document = Parse(json, origin);
         var root = document.RootElement;
         var productHints = ReadStringList(root, "product_hints");
         var sourceKinds = ReadStringList(root, "source_kinds")
             .Select(kind => kind.Trim().ToLowerInvariant())
             .Where(SourceAgentKinds.IsKnown)
             .ToArray();
-        return new Signal(path, productHints, sourceKinds, dryRun);
+        return new Signal(origin, productHints, sourceKinds, dryRun);
     }
 
-    private static JsonDocument Parse(string path)
+    private static JsonDocument Parse(string json, string origin)
     {
         try
         {
-            return JsonDocument.Parse(File.ReadAllText(path));
+            return JsonDocument.Parse(json);
         }
         catch (JsonException exception)
         {
-            throw new JsonException($"signal file '{path}' is not valid JSON: {exception.Message}", exception);
+            throw new JsonException($"signal file '{origin}' is not valid JSON: {exception.Message}", exception);
         }
     }
 

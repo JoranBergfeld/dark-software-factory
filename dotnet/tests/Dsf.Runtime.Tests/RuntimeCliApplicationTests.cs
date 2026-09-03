@@ -11,9 +11,9 @@ namespace Dsf.Runtime.Tests;
 /// required setting and exit non-zero, and must never claim success for behavior
 /// that isn't implemented yet (the station pipeline ships in #142/#143). Every verb
 /// -- including <c>serve-agent</c> -- must validate required runtime config the
-/// same way before its loud not-implemented failure, and every verb must be able to
-/// resolve settings it doesn't have locally from the owner App Configuration
-/// runtime index when <c>DSF_OWNER_APPCONFIG_ENDPOINT</c> is configured.
+/// same way first, and every verb must be able to resolve settings it doesn't have
+/// locally from the owner App Configuration runtime index when
+/// <c>DSF_OWNER_APPCONFIG_ENDPOINT</c> is configured.
 /// </summary>
 public sealed class RuntimeCliApplicationTests
 {
@@ -32,23 +32,24 @@ public sealed class RuntimeCliApplicationTests
 
     private static async Task<(int ExitCode, string Stdout, string Stderr)> InvokeAsync(
         IReadOnlyDictionary<string, string?> env,
-        params string[] args)
-    {
-        var stdout = new StringWriter();
-        var stderr = new StringWriter();
-        var exitCode = await RuntimeCliApplication.InvokeAsync(args, env, stdout, stderr, CancellationToken.None);
-        return (exitCode, stdout.ToString(), stderr.ToString());
-    }
+        params string[] args) =>
+        await InvokeAsync(env, TestDependencies.Empty, args);
 
     private static async Task<(int ExitCode, string Stdout, string Stderr)> InvokeAsync(
         IReadOnlyDictionary<string, string?> env,
         IOwnerRuntimeIndexReader ownerRuntimeIndexReader,
+        params string[] args) =>
+        await InvokeAsync(env, TestDependencies.Build(ownerRuntimeIndexReader: ownerRuntimeIndexReader), args);
+
+    private static async Task<(int ExitCode, string Stdout, string Stderr)> InvokeAsync(
+        IReadOnlyDictionary<string, string?> env,
+        RuntimeDependencies dependencies,
         params string[] args)
     {
         var stdout = new StringWriter();
         var stderr = new StringWriter();
         var exitCode = await RuntimeCliApplication.InvokeAsync(
-            args, env, stdout, stderr, ownerRuntimeIndexReader, CancellationToken.None);
+            args, env, stdout, stderr, dependencies, CancellationToken.None);
         return (exitCode, stdout.ToString(), stderr.ToString());
     }
 
@@ -103,18 +104,47 @@ public sealed class RuntimeCliApplicationTests
         Assert.Contains("AZURE_APPCONFIG_ENDPOINT", stderr);
     }
 
-    [Theory]
-    [InlineData("sweep")]
-    [InlineData("serve-orchestrator")]
-    public async Task Fully_configured_sweep_and_orchestrator_report_pending_source_agent_runners(params string[] args)
+    [Fact]
+    public async Task Fully_configured_sweep_reports_the_roster_it_actually_read()
     {
-        var (exitCode, stdout, stderr) = await InvokeAsync(FullEnvironment, args);
+        var roster = new RosterReader(["grafana", "sentry"]);
+        var dependencies = TestDependencies.Build(sourceAgentRosterReader: roster);
 
-        Assert.Equal(1, exitCode);
-        Assert.Equal(string.Empty, stdout);
-        Assert.DoesNotContain("not yet implemented", stderr, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("no source agent runners are wired", stderr, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("#144", stderr);
+        var (exitCode, stdout, stderr) = await InvokeAsync(FullEnvironment, dependencies, "sweep");
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Equal("acme", roster.RequestedSettings?.Product);
+        Assert.Contains("sources=[grafana, sentry]", stdout);
+        Assert.Contains("checkpoints=[s1_triage", stdout);
+    }
+
+    [Fact]
+    public async Task Sweep_with_no_enabled_agents_reports_the_empty_roster_and_succeeds()
+    {
+        var dependencies = TestDependencies.Build(sourceAgentRosterReader: new RosterReader([]));
+
+        var (exitCode, stdout, stderr) = await InvokeAsync(FullEnvironment, dependencies, "sweep");
+
+        // Backed by a real roster read that returned nothing -- not an unconditional
+        // "nothing to do". Parity with the Python sweep, which drives an empty
+        // scheduled run and exits 0.
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Contains("enabled sources=[(none)]", stdout);
+    }
+
+    [Fact]
+    public async Task Serve_orchestrator_with_full_settings_starts_a_real_host()
+    {
+        var runner = new RecordingWebHostRunner();
+        var dependencies = TestDependencies.Build(webHostRunner: runner);
+
+        var (exitCode, _, stderr) = await InvokeAsync(FullEnvironment, dependencies, "serve-orchestrator");
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.NotNull(runner.Started);
     }
 
     [Fact]
@@ -149,7 +179,7 @@ public sealed class RuntimeCliApplicationTests
     }
 
     [Fact]
-    public async Task Run_with_full_settings_and_a_valid_signal_parses_it_and_reports_the_pending_conveyor()
+    public async Task Run_with_full_settings_and_a_valid_signal_drives_the_conveyor()
     {
         var path = Path.GetTempFileName();
         try
@@ -157,17 +187,16 @@ public sealed class RuntimeCliApplicationTests
             await File.WriteAllTextAsync(
                 path, """{"product_hints": "acme", "source_kinds": ["sentry", "bogus"]}""");
 
-            var (exitCode, stdout, stderr) = await InvokeAsync(FullEnvironment, "run", "--signal", path);
+            var (exitCode, stdout, stderr) = await InvokeAsync(FullEnvironment, "run", "--dry-run", "--signal", path);
 
-            Assert.Equal(1, exitCode);
-            Assert.Equal(string.Empty, stdout);
-            Assert.DoesNotContain("not yet implemented", stderr, StringComparison.OrdinalIgnoreCase);
-            Assert.Contains("product_hints=[acme]", stderr);
+            Assert.Equal(0, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Contains("status=previewed", stdout);
             // "bogus" is not a recognized source kind and must be dropped, mirroring
             // the Python signal_to_run's unknown-kind handling.
-            Assert.Contains("source_kinds=[sentry]", stderr);
-            Assert.Contains("conveyor station pipeline is not wired yet", stderr);
-            Assert.Contains("#142", stderr);
+            Assert.Contains("sources=[sentry]", stdout);
+            Assert.Contains("checkpoints=[s1_triage, s2_investigation, s3_synthesis, s4_grounding, "
+                + "s5_council, s6_routing, s7_filing]", stdout);
         }
         finally
         {
@@ -200,15 +229,17 @@ public sealed class RuntimeCliApplicationTests
     }
 
     [Fact]
-    public async Task Serve_agent_with_full_settings_and_a_known_kind_reports_the_pending_agent_host()
+    public async Task Serve_agent_with_full_settings_and_a_known_kind_starts_a_real_host()
     {
-        var (exitCode, stdout, stderr) = await InvokeAsync(FullEnvironment, "serve-agent", "--kind", "sentry");
+        var runner = new RecordingWebHostRunner();
+        var dependencies = TestDependencies.Build(webHostRunner: runner);
 
-        Assert.Equal(1, exitCode);
-        Assert.Equal(string.Empty, stdout);
-        Assert.DoesNotContain("not yet implemented", stderr, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("source agent kind 'sentry' is recognized", stderr);
-        Assert.Contains("#144", stderr);
+        var (exitCode, _, stderr) = await InvokeAsync(
+            FullEnvironment, dependencies, "serve-agent", "--kind", "sentry");
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.NotNull(runner.Started);
     }
 
     [Theory]
@@ -230,14 +261,13 @@ public sealed class RuntimeCliApplicationTests
             ["AZURE_OPENAI_EMBEDDING_DEPLOYMENT"] = "embed-deploy",
         });
 
-        var (exitCode, stdout, stderr) = await InvokeAsync(env, reader, args);
+        var (exitCode, _, stderr) = await InvokeAsync(
+            env, TestDependencies.Build(ownerRuntimeIndexReader: reader), args);
 
-        // Settings resolved from the owner index; the failure moves past config
-        // validation entirely to the (expected) pending source-agent runners.
-        Assert.Equal(1, exitCode);
-        Assert.Equal(string.Empty, stdout);
-        Assert.Contains("#144", stderr);
-        Assert.DoesNotContain("AZURE_APPCONFIG_ENDPOINT", stderr);
+        // Settings resolved from the owner index; the verb then does its real work
+        // instead of reporting missing configuration.
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr);
         Assert.Equal("acme", reader.RequestedProduct);
     }
 

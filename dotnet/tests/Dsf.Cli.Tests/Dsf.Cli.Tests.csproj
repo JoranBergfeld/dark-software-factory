@@ -11,6 +11,9 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Dsf.Cli\Dsf.Cli.csproj" />
+    <!-- Not consumed as a library: the front door launches the runtime host as a
+         process, so the surface tests need that executable built alongside them. -->
+    <ProjectReference Include="..\..\src\Dsf.Runtime\Dsf.Runtime.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
 </Project>

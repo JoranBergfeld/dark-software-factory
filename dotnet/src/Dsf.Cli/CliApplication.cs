@@ -1,4 +1,5 @@
 using System.CommandLine;
+using System.Globalization;
 using System.Net;
 using System.Text;
 using System.Text.Json;
@@ -828,8 +829,13 @@ public static class CliApplication
         var product = StringOption("--product", "resolve runtime env for this product");
         var command = new Command("run", "run the intake line for one signal (runtime)");
         AddOptions(command, signal, dryRun, product);
-        command.SetAction(parseResult => RuntimeShell(
-            parseResult.GetValue(product), _ => RuntimeVerbs.Run(parseResult.GetValue(signal), parseResult.GetValue(dryRun))));
+        command.SetAction((parseResult, cancellationToken) => RuntimeShell(
+            RuntimeArguments(
+                "run",
+                Flag("--dry-run", parseResult.GetValue(dryRun)),
+                Value("--signal", parseResult.GetValue(signal)),
+                Value("--product", parseResult.GetValue(product))),
+            cancellationToken));
         return command;
     }
 
@@ -838,8 +844,9 @@ public static class CliApplication
         var product = StringOption("--product", "resolve runtime env for this product");
         var command = new Command("sweep", "sweep enabled source agents once (runtime)");
         AddOptions(command, product);
-        command.SetAction(parseResult => RuntimeShell(
-            parseResult.GetValue(product), settings => RuntimeVerbs.Sweep(settings.Product)));
+        command.SetAction((parseResult, cancellationToken) => RuntimeShell(
+            RuntimeArguments("sweep", Value("--product", parseResult.GetValue(product))),
+            cancellationToken));
         return command;
     }
 
@@ -850,8 +857,13 @@ public static class CliApplication
         var product = StringOption("--product", "resolve runtime env for this product");
         var command = new Command("serve-orchestrator", "run the orchestrator worker (runtime)");
         AddOptions(command, loop, interval, product);
-        command.SetAction(parseResult => RuntimeShell(
-            parseResult.GetValue(product), settings => RuntimeVerbs.ServeOrchestrator(settings.Product)));
+        command.SetAction((parseResult, cancellationToken) => RuntimeShell(
+            RuntimeArguments(
+                "serve-orchestrator",
+                Flag("--loop", parseResult.GetValue(loop)),
+                Value("--interval", parseResult.GetValue(interval)?.ToString(CultureInfo.InvariantCulture)),
+                Value("--product", parseResult.GetValue(product))),
+            cancellationToken));
         return command;
     }
 
@@ -863,12 +875,25 @@ public static class CliApplication
         var product = StringOption("--product", "resolve runtime env for this product");
         var command = new Command("serve-agent", "serve a source agent over A2A (runtime)");
         AddOptions(command, kind, host, port, product);
-        // serve-agent must still validate required runtime config before validating
-        // --kind, exactly like every other runtime verb.
-        command.SetAction(parseResult => RuntimeShell(
-            parseResult.GetValue(product), _ => RuntimeVerbs.ServeAgent(parseResult.GetValue(kind) ?? "sentry")));
+        command.SetAction((parseResult, cancellationToken) => RuntimeShell(
+            RuntimeArguments(
+                "serve-agent",
+                Value("--kind", parseResult.GetValue(kind)),
+                Value("--host", parseResult.GetValue(host)),
+                Value("--port", parseResult.GetValue(port)?.ToString(CultureInfo.InvariantCulture)),
+                Value("--product", parseResult.GetValue(product))),
+            cancellationToken));
         return command;
     }
+
+    /// <summary>Forwards a verb and its set options to the runtime host, dropping unset ones.</summary>
+    internal static IReadOnlyList<string> RuntimeArguments(string verb, params IReadOnlyList<string>[] options) =>
+        [verb, .. options.SelectMany(option => option)];
+
+    private static IReadOnlyList<string> Flag(string name, bool value) => value ? [name] : [];
+
+    private static IReadOnlyList<string> Value(string name, string? value) =>
+        string.IsNullOrWhiteSpace(value) ? [] : [name, value];
 
     private static Command BuildCharterCommand(
         ICliTerminal terminal,
@@ -1020,30 +1045,26 @@ public static class CliApplication
     /// (<see cref="RuntimeVerbException"/>) are printed to stderr and exit
     /// non-zero the same way.
     /// </summary>
-    private static int RuntimeShell(string? product, Action<Dsf.Core.Runtime.RuntimeSettings> operation)
+    /// <summary>
+    /// Runs a runtime verb by launching the runtime host with the same options the
+    /// operator typed, and returns its exit code. Settings composition, signal
+    /// parsing and the conveyor all happen in the runtime host itself, so the front
+    /// door and the deployed runtime can never report different results for the
+    /// same command.
+    /// </summary>
+    private static async Task<int> RuntimeShell(
+        IReadOnlyList<string> arguments,
+        CancellationToken cancellationToken)
     {
-        Dsf.Core.Runtime.RuntimeSettings settings;
         try
         {
-            settings = RuntimeSettingsComposer.FromEnvironment(product);
-        }
-        catch (RuntimeConfigurationException exception)
-        {
-            Console.Error.WriteLine($"[dsf] error: {exception.Message}");
-            return Failure;
-        }
-
-        try
-        {
-            operation(settings);
+            return await new ProcessRuntimeHostLauncher().LaunchAsync(arguments, cancellationToken);
         }
         catch (RuntimeVerbException exception)
         {
             Console.Error.WriteLine($"[dsf] error: {exception.Message}");
             return Failure;
         }
-
-        return Success;
     }
 
     private const string ConstitutionPath = ".specify/memory/constitution.md";

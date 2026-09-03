@@ -10,7 +10,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\Dsf.Core\Dsf.Core.csproj" />
+    <ProjectReference Include="..\..\src\Dsf.FeatureCouncil\Dsf.FeatureCouncil.csproj" />
     <ProjectReference Include="..\..\src\Dsf.Runtime\Dsf.Runtime.csproj" />
   </ItemGroup>
 

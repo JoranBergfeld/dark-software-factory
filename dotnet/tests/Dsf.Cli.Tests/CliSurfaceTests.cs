@@ -214,7 +214,7 @@ public sealed class CliSurfaceTests
     }
 
     [Fact]
-    public async Task Runtime_verbs_fail_loudly_instead_of_pretending_success_once_settings_validate()
+    public async Task Runtime_verbs_are_executed_by_the_runtime_host_the_front_door_launches()
     {
         var env = new Dictionary<string, string?>
         {
@@ -226,13 +226,32 @@ public sealed class CliSurfaceTests
             ["AZURE_OPENAI_EMBEDDING_DEPLOYMENT"] = "embed-deploy",
         };
 
+        // A kind the runtime host alone knows about: reaching this error proves the
+        // front door forwarded the verb and its options to the real runtime host
+        // rather than answering for it.
+        var result = await DsfProcess.RunAsync(env, "serve-agent", "--kind", "bogus");
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Equal(string.Empty, result.Stdout);
+        Assert.Contains("unknown source agent kind 'bogus'", result.Stderr);
+        Assert.Contains("sentry", result.Stderr);
+    }
+
+    [Fact]
+    public async Task Runtime_verb_reports_a_missing_runtime_host_by_path()
+    {
+        var missing = Path.Combine(Path.GetTempPath(), $"dsf-runtime-{Guid.NewGuid():N}");
+        var env = new Dictionary<string, string?>
+        {
+            ["DSF_PRODUCT"] = "acme",
+            [DsfProcess.RuntimeHostEnvironmentVariable] = missing,
+        };
+
         var result = await DsfProcess.RunAsync(env, "sweep");
 
         Assert.Equal(1, result.ExitCode);
         Assert.Equal(string.Empty, result.Stdout);
-        Assert.DoesNotContain("not yet implemented", result.Stderr, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("no source agent runners are wired", result.Stderr, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("#144", result.Stderr);
+        Assert.Contains(missing, result.Stderr);
     }
 
     [Fact]
@@ -304,6 +323,11 @@ public sealed class CliSurfaceTests
                 RedirectStandardError = true,
             };
             startInfo.Environment.Remove("DSF_PRODUCT");
+            // The `dsf` front door launches the runtime host for every runtime verb.
+            // Installed side by side in production; in the test build tree the two
+            // projects have separate output directories, so point the CLI at the
+            // runtime host the same build just produced.
+            startInfo.Environment[RuntimeHostEnvironmentVariable] = FindRuntimeHostExecutable();
             foreach (var entry in env ?? new Dictionary<string, string?>())
             {
                 startInfo.Environment[entry.Key] = entry.Value;
@@ -337,6 +361,27 @@ public sealed class CliSurfaceTests
             var stdout = await stdoutTask;
             var stderr = await stderrTask;
             return new CommandResult(process.ExitCode, stdout, stderr);
+        }
+
+        /// <summary>Env var the CLI reads to locate the runtime host executable.</summary>
+        public const string RuntimeHostEnvironmentVariable = "DSF_RUNTIME_HOST";
+
+        /// <summary>
+        /// The <c>dsf-runtime</c> executable this test run's build produced, resolved
+        /// from the configuration the test assembly itself was built in.
+        /// </summary>
+        public static string FindRuntimeHostExecutable()
+        {
+            var configuration = AppContext.BaseDirectory.Contains(
+                $"{Path.DirectorySeparatorChar}Release{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
+                ? "Release"
+                : "Debug";
+            var fileName = OperatingSystem.IsWindows() ? "dsf-runtime.exe" : "dsf-runtime";
+            var path = Path.Combine(
+                FindSolutionRoot().FullName, "src", "Dsf.Runtime", "bin", configuration, "net10.0", fileName);
+
+            Assert.True(File.Exists(path), $"Expected the runtime host executable to be built at {path}.");
+            return path;
         }
 
         public static DirectoryInfo FindSolutionRoot()

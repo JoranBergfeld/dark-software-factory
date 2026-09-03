@@ -33,6 +33,7 @@ public sealed class RealOnlyRuntimeSourceTests
         var root = FindSolutionRoot();
         yield return [Path.Combine(root.FullName, "src", "Dsf.Runtime")];
         yield return [Path.Combine(root.FullName, "src", "Dsf.Core", "Runtime")];
+        yield return [Path.Combine(root.FullName, "src", "Dsf.FeatureCouncil")];
     }
 
     [Theory]
@@ -65,6 +66,7 @@ public sealed class RealOnlyRuntimeSourceTests
         var root = FindSolutionRoot();
         yield return [Path.Combine(root.FullName, "src", "Dsf.Runtime")];
         yield return [Path.Combine(root.FullName, "src", "Dsf.Core", "Runtime")];
+        yield return [Path.Combine(root.FullName, "src", "Dsf.FeatureCouncil")];
         yield return [Path.Combine(root.FullName, "src", "Dsf.Cli")];
     }
 
