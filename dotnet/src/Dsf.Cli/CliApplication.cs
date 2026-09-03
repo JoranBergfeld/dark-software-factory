@@ -1,5 +1,7 @@
 using System.CommandLine;
+using System.Net;
 using System.Text;
+using System.Text.Json;
 using Dsf.Core.Charters;
 using Dsf.Core.Instances;
 using Dsf.Core.Products;
@@ -149,6 +151,11 @@ public static class CliApplication
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             return CanceledExitCode;
+        }
+        catch (Exception exception)
+        {
+            terminal.WriteErrorLine($"[dsf] error: {exception.Message}");
+            return Failure;
         }
     }
 
@@ -868,8 +875,8 @@ public static class CliApplication
         var command = new Command("charter", "manage the product charter (.dsf/charter.md)");
         command.Subcommands.Add(SimpleCharterCommand(
             "init", "interview to draft a charter and open a PR", terminal, appConfig, charterRepository, charterStore));
-        command.Subcommands.Add(CharterImplementCommand(terminal, appConfig));
-        command.Subcommands.Add(CharterWatchCommand(terminal, appConfig));
+        command.Subcommands.Add(CharterImplementCommand(terminal, appConfig, charterRepository, charterStore));
+        command.Subcommands.Add(CharterWatchCommand(terminal, appConfig, charterRepository));
         command.Subcommands.Add(CharterSourceCommand(
             "sync",
             "pull .dsf/charter.md (local file or --ref) into Cosmos",
@@ -946,7 +953,11 @@ public static class CliApplication
         return command;
     }
 
-    private static Command CharterImplementCommand(ICliTerminal terminal, IAppConfigurationClient appConfig)
+    private static Command CharterImplementCommand(
+        ICliTerminal terminal,
+        IAppConfigurationClient appConfig,
+        ICharterRepositoryClient charterRepository,
+        ICharterStore charterStore)
     {
         var product = RequiredStringOption("--product", "product key");
         var noWait = BoolOption("--no-wait", "file + assign only; do not watch");
@@ -954,12 +965,23 @@ public static class CliApplication
         var pollInterval = DoubleOption("--poll-interval", "seconds between polls");
         var command = new Command("implement", "render the constitution + file the Spec Kit bootstrap issue");
         AddOptions(command, product, noWait, timeout, pollInterval);
-        command.SetAction(async (parseResult, cancellationToken) => await RunCharterShellAsync(
-            "implement", parseResult.GetRequiredValue(product), terminal, appConfig, cancellationToken));
+        command.SetAction(async (parseResult, cancellationToken) => await RunCharterImplementAsync(
+            parseResult.GetRequiredValue(product),
+            parseResult.GetValue(noWait),
+            parseResult.GetValue(timeout),
+            parseResult.GetValue(pollInterval),
+            terminal,
+            appConfig,
+            charterRepository,
+            charterStore,
+            cancellationToken));
         return command;
     }
 
-    private static Command CharterWatchCommand(ICliTerminal terminal, IAppConfigurationClient appConfig)
+    private static Command CharterWatchCommand(
+        ICliTerminal terminal,
+        IAppConfigurationClient appConfig,
+        ICharterRepositoryClient charterRepository)
     {
         var product = RequiredStringOption("--product", "product key");
         var issue = IntOption("--issue", "bootstrap issue number");
@@ -967,8 +989,15 @@ public static class CliApplication
         var pollInterval = DoubleOption("--poll-interval", "seconds between polls");
         var command = new Command("watch", "watch the coding agent's build and request Copilot review when ready");
         AddOptions(command, product, issue, timeout, pollInterval);
-        command.SetAction(async (parseResult, cancellationToken) => await RunCharterShellAsync(
-            "watch", parseResult.GetRequiredValue(product), terminal, appConfig, cancellationToken));
+        command.SetAction(async (parseResult, cancellationToken) => await RunCharterWatchAsync(
+            parseResult.GetRequiredValue(product),
+            parseResult.GetValue(issue),
+            parseResult.GetValue(timeout),
+            parseResult.GetValue(pollInterval),
+            terminal,
+            appConfig,
+            charterRepository,
+            cancellationToken));
         return command;
     }
 
@@ -992,30 +1021,128 @@ public static class CliApplication
         return Success;
     }
 
-    /// <summary>
-    /// Resolves the product's provisioned repository from the owner App Configuration index
-    /// (failing loudly, with no local-file fallback, if config is missing or the product is
-    /// unprovisioned) before reporting that this verb's build/watch pipeline is not yet ported
-    /// to the .NET migration shell.
-    /// </summary>
-    private static async Task<int> RunCharterShellAsync(
-        string verb,
+    private const string ConstitutionPath = ".specify/memory/constitution.md";
+    private const string HandoffLabel = "creation:ready";
+    private const string CopilotModelRequest = "Claude Opus 4.8";
+    private const double DefaultWatchTimeout = 1800.0;
+    private const double DefaultWatchPollInterval = 20.0;
+
+    private static async Task<int> RunCharterImplementAsync(
         string product,
+        bool noWait,
+        double? timeout,
+        double? pollInterval,
         ICliTerminal terminal,
         IAppConfigurationClient appConfig,
+        ICharterRepositoryClient charterRepository,
+        ICharterStore charterStore,
         CancellationToken cancellationToken)
     {
-        var ownerEndpoint = Environment.GetEnvironmentVariable("DSF_OWNER_APPCONFIG_ENDPOINT");
-        if (string.IsNullOrWhiteSpace(ownerEndpoint))
+        var location = await ResolveProductLocationAsync(product, terminal, appConfig, cancellationToken);
+        if (location is null)
         {
-            terminal.WriteErrorLine(
-                "[dsf] error: DSF_OWNER_APPCONFIG_ENDPOINT is required to resolve the product repository.");
             return Failure;
         }
 
         try
         {
-            await appConfig.ResolveProductAsync(ownerEndpoint, product, cancellationToken);
+            var source = await ReadMainCharterAsync(location, charterRepository, cancellationToken);
+            var syncCode = await RunCharterSyncAsync(
+                product,
+                location,
+                source,
+                "main",
+                terminal,
+                charterStore,
+                cancellationToken);
+            var stored = await charterStore.GetCharterAsync(product, cancellationToken);
+            if (syncCode != Success || stored is null || stored.Status != CharterStatus.Ok || stored.Charter is null)
+            {
+                var status = stored?.Status.ToString().ToLowerInvariant() ?? "missing";
+                terminal.WriteErrorLine(
+                    $"[dsf] error: charter for {product} on main is {status}; merge the charter PR (and fix any errors) before implementing.");
+                if (!string.IsNullOrWhiteSpace(stored?.LastError))
+                {
+                    terminal.WriteErrorLine($"[dsf]   note: {stored.LastError}");
+                }
+
+                return Failure;
+            }
+
+            var charter = stored.Charter;
+            var constitution = RenderConstitution(charter);
+            var (pullRequestUrl, alreadyCurrent) = await EnsureConstitutionPullRequestAsync(
+                location.GitHubRepository,
+                product,
+                charter,
+                constitution,
+                terminal,
+                charterRepository,
+                cancellationToken);
+            if (!alreadyCurrent)
+            {
+                var merged = await WaitForConstitutionOnMainAsync(
+                    location.GitHubRepository,
+                    product,
+                    charter,
+                    timeout,
+                    pollInterval,
+                    terminal,
+                    charterRepository,
+                    cancellationToken);
+                if (!merged)
+                {
+                    terminal.WriteErrorLine(
+                        "[dsf] error: the constitution PR has not merged within the timeout; not filing the bootstrap issue.");
+                    terminal.WriteErrorLine(
+                        $"[dsf]   approve + merge the constitution PR ({pullRequestUrl}) then re-run `dsf charter implement --product {product}`; it resumes and skips the already-merged constitution.");
+                    return 2;
+                }
+            }
+
+            var (title, body) = RenderBootstrapIssue(charter);
+            var issue = await charterRepository.CreateIssueAsync(
+                location.GitHubRepository,
+                title,
+                body,
+                [HandoffLabel],
+                cancellationToken);
+            var assigned = await charterRepository.AssignCopilotWithAppAsync(
+                    location.GitHubRepository,
+                    issue.NodeId,
+                    cancellationToken)
+                || await charterRepository.AssignCopilotWithGhAsync(
+                    location.GitHubRepository,
+                    issue.NodeId,
+                    cancellationToken);
+            if (assigned)
+            {
+                terminal.WriteLine($"[dsf] filed bootstrap issue + assigned Copilot: {issue.HtmlUrl}");
+            }
+            else
+            {
+                terminal.WriteLine($"[dsf] filed bootstrap issue: {issue.HtmlUrl}");
+                terminal.WriteErrorLine(
+                    "[dsf] warning: could not assign the Copilot coding agent; assign it manually (ensure `gh auth login` and that the Copilot coding agent is enabled for the repo).");
+                return Success;
+            }
+
+            if (noWait)
+            {
+                terminal.WriteLine(
+                    $"[dsf] not waiting; run `dsf charter watch --product {product}` to hand off to Copilot review once the build is ready.");
+                return Success;
+            }
+
+            return await RunWatchLoopAsync(
+                location.GitHubRepository,
+                IssueNumberFromUrl(issue.HtmlUrl),
+                product,
+                timeout,
+                pollInterval,
+                terminal,
+                charterRepository,
+                cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -1026,10 +1153,384 @@ public static class CliApplication
             terminal.WriteErrorLine($"[dsf] error: {exception.Message}");
             return Failure;
         }
+    }
 
-        terminal.WriteLine($"[dsf] charter {verb} is not implemented in the .NET migration shell.");
+    private static async Task<int> RunCharterWatchAsync(
+        string product,
+        int? issueNumber,
+        double? timeout,
+        double? pollInterval,
+        ICliTerminal terminal,
+        IAppConfigurationClient appConfig,
+        ICharterRepositoryClient charterRepository,
+        CancellationToken cancellationToken)
+    {
+        var location = await ResolveProductLocationAsync(product, terminal, appConfig, cancellationToken);
+        if (location is null)
+        {
+            return Failure;
+        }
+
+        try
+        {
+            var issue = issueNumber ?? await charterRepository.NewestReadyIssueAsync(
+                location.GitHubRepository,
+                HandoffLabel,
+                cancellationToken);
+            if (issue is null)
+            {
+                terminal.WriteErrorLine(
+                    $"[dsf] error: no open '{HandoffLabel}' issue found for {product}; pass --issue N.");
+                return Failure;
+            }
+
+            return await RunWatchLoopAsync(
+                location.GitHubRepository,
+                issue.Value,
+                product,
+                timeout,
+                pollInterval,
+                terminal,
+                charterRepository,
+                cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return CanceledExitCode;
+        }
+        catch (Exception exception)
+        {
+            terminal.WriteErrorLine($"[dsf] error: {exception.Message}");
+            return Failure;
+        }
+    }
+
+    private static async Task<ProductLocation?> ResolveProductLocationAsync(
+        string product,
+        ICliTerminal terminal,
+        IAppConfigurationClient appConfig,
+        CancellationToken cancellationToken)
+    {
+        var ownerEndpoint = Environment.GetEnvironmentVariable("DSF_OWNER_APPCONFIG_ENDPOINT");
+        if (string.IsNullOrWhiteSpace(ownerEndpoint))
+        {
+            terminal.WriteErrorLine(
+                "[dsf] error: DSF_OWNER_APPCONFIG_ENDPOINT is required to resolve the product repository.");
+            return null;
+        }
+
+        try
+        {
+            return await appConfig.ResolveProductAsync(ownerEndpoint, product, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (InvalidOperationException)
+        {
+            terminal.WriteErrorLine($"[dsf] error: product '{product}' is not in registry");
+            return null;
+        }
+    }
+
+    private static async Task<CharterSource?> ReadMainCharterAsync(
+        ProductLocation location,
+        ICharterRepositoryClient charterRepository,
+        CancellationToken cancellationToken)
+    {
+        var file = await charterRepository.ReadAsync(
+            location.GitHubRepository,
+            CharterMarkdown.CharterPath,
+            "main",
+            cancellationToken);
+        return file is null
+            ? null
+            : new CharterSource(
+                file.Content,
+                string.IsNullOrWhiteSpace(file.Sha) ? CharterMarkdown.GitBlobSha(file.Content) : file.Sha,
+                "main");
+    }
+
+    private static async Task<(string? PullRequestUrl, bool AlreadyCurrent)> EnsureConstitutionPullRequestAsync(
+        string repository,
+        string product,
+        Charter charter,
+        string constitution,
+        ICliTerminal terminal,
+        ICharterRepositoryClient charterRepository,
+        CancellationToken cancellationToken)
+    {
+        var existing = await charterRepository.ReadAsync(repository, ConstitutionPath, "main", cancellationToken);
+        if (IsConstitutionCurrent(existing?.Content, charter))
+        {
+            terminal.WriteLine($"[dsf] constitution already on main for {product}; skipping PR");
+            return (null, true);
+        }
+
+        var sha8 = (charter.SourceSha ?? "unknown")[..Math.Min((charter.SourceSha ?? "unknown").Length, 8)];
+        var headPrefix = $"charter/constitution-{sha8}-";
+        var current = await charterRepository.LatestPullRequestWithHeadPrefixAsync(
+            repository,
+            headPrefix,
+            cancellationToken);
+        if (current is { State: "open" or "OPEN" })
+        {
+            terminal.WriteLine($"[dsf] reusing open constitution PR: {current.HtmlUrl}");
+            return (current.HtmlUrl, false);
+        }
+
+        var branch = $"{headPrefix}{Guid.NewGuid():N}"[..(headPrefix.Length + 8)];
+        var url = await charterRepository.OpenFilePullRequestAsync(
+            repository,
+            ConstitutionPath,
+            constitution,
+            branch,
+            $"Add Spec Kit constitution for {product}",
+            "Constitution derived from the product charter by `dsf charter implement`. Auto-merge is requested: on repos where it is enabled this merges once the `ci` check is green, otherwise it awaits a human review. (Creation-maturity gating is future scope.)",
+            $"docs: add spec kit constitution for {product}",
+            true,
+            existing?.Sha,
+            cancellationToken);
+        terminal.WriteLine($"[dsf] opened constitution PR (auto-merge requested): {url}");
+        return (url, false);
+    }
+
+    private static async Task<bool> WaitForConstitutionOnMainAsync(
+        string repository,
+        string product,
+        Charter charter,
+        double? timeout,
+        double? pollInterval,
+        ICliTerminal terminal,
+        ICharterRepositoryClient charterRepository,
+        CancellationToken cancellationToken)
+    {
+        var start = DateTimeOffset.UtcNow;
+        var lastStatus = string.Empty;
+        var seconds = ResolveTimeout(timeout);
+        while (true)
+        {
+            try
+            {
+                var existing = await charterRepository.ReadAsync(repository, ConstitutionPath, "main", cancellationToken);
+                if (IsConstitutionCurrent(existing?.Content, charter))
+                {
+                    terminal.WriteLine($"[dsf] constitution merged to main: {repository}");
+                    return true;
+                }
+
+                WriteStatusOnce(terminal, ref lastStatus, "waiting for the constitution PR to merge...");
+            }
+            catch (Exception exception) when (IsTransientGitHubError(exception))
+            {
+                WriteStatusOnce(terminal, ref lastStatus, $"transient GitHub error ({exception.GetType().Name}); retrying...");
+            }
+
+            if (TimedOut(start, seconds))
+            {
+                return false;
+            }
+
+            await DelayAsync(start, seconds, pollInterval, cancellationToken);
+        }
+    }
+
+    private static async Task<int> RunWatchLoopAsync(
+        string repository,
+        int issueNumber,
+        string product,
+        double? timeout,
+        double? pollInterval,
+        ICliTerminal terminal,
+        ICharterRepositoryClient charterRepository,
+        CancellationToken cancellationToken)
+    {
+        var start = DateTimeOffset.UtcNow;
+        var seconds = ResolveTimeout(timeout);
+        var lastStatus = string.Empty;
+        while (true)
+        {
+            try
+            {
+                var pullRequest = await charterRepository.FindCodingAgentPullRequestAsync(
+                    repository,
+                    issueNumber,
+                    cancellationToken);
+                if (pullRequest is null)
+                {
+                    WriteStatusOnce(terminal, ref lastStatus, "waiting for the coding agent to open its PR...");
+                }
+                else if (pullRequest.State is "MERGED" or "CLOSED")
+                {
+                    terminal.WriteLine(
+                        $"[dsf] {repository}#{pullRequest.Number} is {pullRequest.State.ToLowerInvariant()}; nothing to review.");
+                    return Success;
+                }
+                else if (!pullRequest.IsDraft)
+                {
+                    return await HandOffForReviewAsync(repository, pullRequest, terminal, charterRepository, cancellationToken);
+                }
+                else if (await charterRepository.AgentWorkFinishedAsync(repository, pullRequest.Number, cancellationToken))
+                {
+                    await charterRepository.MarkPullRequestReadyAsync(repository, pullRequest.Number, cancellationToken);
+                    terminal.WriteLine($"[dsf] {repository}#{pullRequest.Number} marked ready for review");
+                    return await HandOffForReviewAsync(repository, pullRequest, terminal, charterRepository, cancellationToken);
+                }
+                else
+                {
+                    WriteStatusOnce(terminal, ref lastStatus, $"{repository}#{pullRequest.Number} building (draft)...");
+                }
+            }
+            catch (Exception exception) when (IsTransientGitHubError(exception))
+            {
+                WriteStatusOnce(terminal, ref lastStatus, $"transient GitHub error ({exception.GetType().Name}); retrying...");
+            }
+
+            if (TimedOut(start, seconds))
+            {
+                terminal.WriteLine(
+                    $"[dsf] still building after {(int)seconds!.Value}s; re-run `dsf charter watch --product {product}` to resume.");
+                return 2;
+            }
+
+            await DelayAsync(start, seconds, pollInterval, cancellationToken);
+        }
+    }
+
+    private static async Task<int> HandOffForReviewAsync(
+        string repository,
+        CodingAgentPullRequest pullRequest,
+        ICliTerminal terminal,
+        ICharterRepositoryClient charterRepository,
+        CancellationToken cancellationToken)
+    {
+        if (await charterRepository.HasCopilotReviewRequestAsync(repository, pullRequest.Number, cancellationToken))
+        {
+            terminal.WriteLine($"[dsf] Copilot review already requested: {pullRequest.Url}");
+            return Success;
+        }
+
+        await charterRepository.RequestCopilotReviewAsync(repository, pullRequest.Url, cancellationToken);
+        terminal.WriteLine($"[dsf] requested Copilot review: {pullRequest.Url}");
         return Success;
     }
+
+    private static string RenderConstitution(Charter charter)
+    {
+        var sourceSha = charter.SourceSha ?? string.Empty;
+        var sourceRef = charter.SourceRef ?? string.Empty;
+        var builder = new StringBuilder();
+        builder.AppendLine($"<!-- dsf:constitution schema_version=1 source_sha={sourceSha} source_ref={sourceRef} -->");
+        builder.AppendLine($"# Spec Kit Constitution: {charter.Product}");
+        builder.AppendLine();
+        builder.AppendLine("## Product Charter");
+        builder.AppendLine(charter.Vision);
+        builder.AppendLine();
+        builder.AppendLine("## Principles");
+        foreach (var goal in charter.Goals)
+        {
+            builder.AppendLine($"- {goal}");
+        }
+        builder.AppendLine();
+        builder.AppendLine("## Constraints");
+        builder.AppendLine(charter.Constraints);
+        return builder.ToString();
+    }
+
+    private static bool IsConstitutionCurrent(string? text, Charter charter) =>
+        !string.IsNullOrWhiteSpace(text)
+        && text.Contains("dsf:constitution schema_version=1", StringComparison.Ordinal)
+        && text.Contains($"source_sha={charter.SourceSha}", StringComparison.Ordinal)
+        && text.Contains($"source_ref={charter.SourceRef}", StringComparison.Ordinal);
+
+    private static (string Title, string Body) RenderBootstrapIssue(Charter charter)
+    {
+        var title = $"Build {charter.Product} from its charter (Spec Kit)";
+        var body = $"""
+            Bootstrap the **{charter.Product}** product from its accepted charter using the GitHub Spec Kit lifecycle, in a single session.
+
+            ## What to do (one session)
+            1. `/speckit.specify` — derive the product specification from the charter below and `{CharterMarkdown.CharterPath}`.
+            2. `/speckit.plan` — choose a sensible tech stack and architecture (a paved-road default is not wired yet — your choice for now).
+            3. `/speckit.tasks` — break the plan into actionable tasks.
+            4. Implement the tasks and open pull request(s); keep the `ci` check green.
+
+            ## Governing documents
+            - Constitution: `{ConstitutionPath}` (derived from the charter — your principles and quality gates).
+            - Charter: `{CharterMarkdown.CharterPath}` (the human-owned source of truth).
+
+            ## Product charter (reference)
+            <untrusted-product-charter>
+            Product: {charter.Product}
+            Vision: {charter.Vision}
+            Target users: {charter.TargetUsers}
+            Goals:
+            {BulletList(charter.Goals)}
+            Non-goals:
+            {BulletList(charter.NonGoals)}
+            Success metrics:
+            {BulletList(charter.SuccessMetrics)}
+            Constraints: {charter.Constraints}
+            </untrusted-product-charter>
+
+            ---
+            _Model request: this build is intended to run as {CopilotModelRequest}. Copilot's model is a repository/account setting, so treat this as a request, not a guarantee._
+            """;
+        return (title, body);
+    }
+
+    private static string BulletList(IReadOnlyList<string> values) =>
+        values.Count == 0 ? "- (none)" : string.Join(Environment.NewLine, values.Select(value => $"- {value}"));
+
+    private static int IssueNumberFromUrl(string url) =>
+        int.Parse(url.TrimEnd('/').Split('/')[^1], System.Globalization.CultureInfo.InvariantCulture);
+
+    private static double? ResolveTimeout(double? explicitSeconds)
+    {
+        var seconds = explicitSeconds ?? DefaultWatchTimeout;
+        return seconds <= 0 ? null : seconds;
+    }
+
+    private static double ResolvePollInterval(double? explicitSeconds) =>
+        Math.Max(0.01, explicitSeconds ?? DefaultWatchPollInterval);
+
+    private static bool TimedOut(DateTimeOffset start, double? seconds) =>
+        seconds is not null && (DateTimeOffset.UtcNow - start).TotalSeconds >= seconds.Value;
+
+    private static async Task DelayAsync(
+        DateTimeOffset start,
+        double? timeoutSeconds,
+        double? pollInterval,
+        CancellationToken cancellationToken)
+    {
+        var delay = ResolvePollInterval(pollInterval);
+        if (timeoutSeconds is not null)
+        {
+            var remaining = timeoutSeconds.Value - (DateTimeOffset.UtcNow - start).TotalSeconds;
+            delay = Math.Min(delay, Math.Max(0.01, remaining));
+        }
+
+        await Task.Delay(TimeSpan.FromSeconds(delay), cancellationToken);
+    }
+
+    private static void WriteStatusOnce(ICliTerminal terminal, ref string lastStatus, string status)
+    {
+        if (status == lastStatus)
+        {
+            return;
+        }
+
+        terminal.WriteLine($"[dsf] {status}");
+        lastStatus = status;
+    }
+
+    private static bool IsTransientGitHubError(Exception exception) =>
+        exception is HttpRequestException
+            or JsonException
+            or KeyNotFoundException
+            or GitHubApiException { StatusCode: HttpStatusCode.TooManyRequests }
+            or GitHubApiException { StatusCode: >= HttpStatusCode.InternalServerError };
 
     private static async Task<int> RunCharterAsync(
         string verb,
