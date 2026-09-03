@@ -17,6 +17,11 @@ internal sealed record ProductPolicy(
     IReadOnlyDictionary<string, bool> AgentEnablement,
     double ConfidenceThreshold);
 
+internal sealed class ProductNotFoundException(string message) : InvalidOperationException(message);
+
+internal sealed class ConfigurationAuthorityUnavailableException(string message, Exception? innerException = null)
+    : InvalidOperationException(message, innerException);
+
 /// <summary>
 /// The product/config authority the Control Center governs through: the owner
 /// App Configuration index lists the products, and each product's own store
@@ -171,11 +176,11 @@ internal sealed class AppConfigurationProductPolicyAuthority(
         }
 
         var location = await ResolveAsync(product, cancellationToken);
-        await gateway.SetAsync(
+        await WriteAsync(
             location.AppConfigEndpoint,
             $"{AgentKeyPrefix}{normalized}{AgentKeySuffix}",
             enabled ? "true" : "false",
-            product,
+            label: product,
             cancellationToken);
     }
 
@@ -190,7 +195,7 @@ internal sealed class AppConfigurationProductPolicyAuthority(
         }
 
         var location = await ResolveAsync(product, cancellationToken);
-        await gateway.SetAsync(
+        await WriteAsync(
             location.AppConfigEndpoint,
             ThresholdKey(product),
             threshold.ToString(CultureInfo.InvariantCulture),
@@ -203,7 +208,7 @@ internal sealed class AppConfigurationProductPolicyAuthority(
         var entries = await ReadAsync(ownerEndpoint, product, cancellationToken);
         if (entries.Count == 0)
         {
-            throw new InvalidOperationException(
+            throw new ProductNotFoundException(
                 $"product '{product}' is absent from the owner App Configuration index at '{ownerEndpoint}'.");
         }
 
@@ -216,7 +221,7 @@ internal sealed class AppConfigurationProductPolicyAuthority(
         var endpoint = index.GetValueOrDefault(EndpointKey);
         if (string.IsNullOrWhiteSpace(repository) || string.IsNullOrWhiteSpace(endpoint))
         {
-            throw new InvalidOperationException(
+            throw new ConfigurationAuthorityUnavailableException(
                 $"product '{product}' is incomplete in the owner App Configuration index at '{ownerEndpoint}'; "
                 + $"{RepositoryKey} and {EndpointKey} are required.");
         }
@@ -239,12 +244,31 @@ internal sealed class AppConfigurationProductPolicyAuthority(
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            throw new InvalidOperationException(
+            throw new ConfigurationAuthorityUnavailableException(
                 $"failed to read App Configuration at '{endpoint}': {exception.Message}",
                 exception);
         }
 
         return entries;
+    }
+
+    private async Task WriteAsync(
+        string endpoint,
+        string key,
+        string value,
+        string? label,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await gateway.SetAsync(endpoint, key, value, label, cancellationToken);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            throw new ConfigurationAuthorityUnavailableException(
+                $"failed to write App Configuration at '{endpoint}': {exception.Message}",
+                exception);
+        }
     }
 
     private static string ThresholdKey(string product) => $"threshold.{product}";

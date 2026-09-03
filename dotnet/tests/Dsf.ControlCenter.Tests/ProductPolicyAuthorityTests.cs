@@ -43,7 +43,7 @@ public sealed class ProductPolicyAuthorityTests
         var store = new ScriptedConfigurationStore();
         store.Seed(OwnerEndpoint, "GITHUB_REPOSITORY", "acme/wayfinder", "wayfinder");
 
-        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+        var exception = await Assert.ThrowsAsync<ConfigurationAuthorityUnavailableException>(
             () => Authority(store).ListProductsAsync(CancellationToken.None));
 
         Assert.Contains("AZURE_APPCONFIG_ENDPOINT", exception.Message, StringComparison.Ordinal);
@@ -55,7 +55,7 @@ public sealed class ProductPolicyAuthorityTests
         var store = SeededStore();
         store.ListFailure = new InvalidOperationException("network down");
 
-        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+        var exception = await Assert.ThrowsAsync<ConfigurationAuthorityUnavailableException>(
             () => Authority(store).ListProductsAsync(CancellationToken.None));
 
         Assert.Contains(OwnerEndpoint, exception.Message, StringComparison.Ordinal);
@@ -91,7 +91,7 @@ public sealed class ProductPolicyAuthorityTests
     [Fact]
     public async Task Unknown_product_fails_loudly()
     {
-        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+        var exception = await Assert.ThrowsAsync<ProductNotFoundException>(
             () => Authority(SeededStore()).ReadPolicyAsync("ghost", CancellationToken.None));
 
         Assert.Contains("ghost", exception.Message, StringComparison.Ordinal);

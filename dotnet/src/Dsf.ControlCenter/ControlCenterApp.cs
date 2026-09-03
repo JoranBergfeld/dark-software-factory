@@ -91,7 +91,7 @@ internal static class ControlCenterApp
                 var products = await authority.ListProductsAsync(cancellationToken);
                 return Html(ControlCenterPages.ProductList(products, csrfToken));
             }
-            catch (InvalidOperationException exception)
+            catch (ConfigurationAuthorityUnavailableException exception)
             {
                 // The authority is the Control Center's only source of truth; when it
                 // cannot be read, say so instead of rendering an empty, reassuring list.
@@ -137,11 +137,16 @@ internal static class ControlCenterApp
             {
                 await authority.SetConfidenceThresholdAsync(product, threshold, cancellationToken);
             }
-            catch (InvalidOperationException exception)
+            catch (ProductNotFoundException exception)
             {
                 return Html(
                     ControlCenterPages.Message("Product unavailable", exception.Message),
                     StatusCodes.Status404NotFound);
+            }
+            catch (ConfigurationAuthorityUnavailableException exception)
+            {
+                logger.LogError(exception, "failed to write confidence threshold through configuration authority");
+                return AuthorityUnavailable(exception);
             }
 
             logger.LogInformation(
@@ -181,11 +186,16 @@ internal static class ControlCenterApp
             {
                 await authority.SetAgentEnabledAsync(product, kind, enabled, cancellationToken);
             }
-            catch (InvalidOperationException exception)
+            catch (ProductNotFoundException exception)
             {
                 return Html(
                     ControlCenterPages.Message("Product unavailable", exception.Message),
                     StatusCodes.Status404NotFound);
+            }
+            catch (ConfigurationAuthorityUnavailableException exception)
+            {
+                logger.LogError(exception, "failed to write agent enablement through configuration authority");
+                return AuthorityUnavailable(exception);
             }
 
             logger.LogInformation(
@@ -198,9 +208,22 @@ internal static class ControlCenterApp
         });
 
         app.MapGet("/api/products", async (HttpContext context, CancellationToken cancellationToken) =>
-            !IsAuthorizedApiClient(context, settings)
-                ? Unauthorized()
-                : Results.Ok(await authority.ListProductsAsync(cancellationToken)));
+        {
+            if (!IsAuthorizedApiClient(context, settings))
+            {
+                return Unauthorized();
+            }
+
+            try
+            {
+                return Results.Ok(await authority.ListProductsAsync(cancellationToken));
+            }
+            catch (ConfigurationAuthorityUnavailableException exception)
+            {
+                logger.LogError(exception, "failed to list products from the configuration authority");
+                return AuthorityUnavailableJson(exception);
+            }
+        });
 
         app.MapGet("/api/products/{product}", async (
             string product,
@@ -216,9 +239,14 @@ internal static class ControlCenterApp
             {
                 return Results.Ok(await authority.ReadPolicyAsync(product, cancellationToken));
             }
-            catch (InvalidOperationException exception)
+            catch (ProductNotFoundException exception)
             {
                 return Results.NotFound(new { error = exception.Message });
+            }
+            catch (ConfigurationAuthorityUnavailableException exception)
+            {
+                logger.LogError(exception, "failed to read product policy from the configuration authority");
+                return AuthorityUnavailableJson(exception);
             }
         });
 
@@ -242,9 +270,14 @@ internal static class ControlCenterApp
             {
                 await authority.SetConfidenceThresholdAsync(product, request.Value, cancellationToken);
             }
-            catch (InvalidOperationException exception)
+            catch (ProductNotFoundException exception)
             {
                 return Results.NotFound(new { error = exception.Message });
+            }
+            catch (ConfigurationAuthorityUnavailableException exception)
+            {
+                logger.LogError(exception, "failed to write confidence threshold through configuration authority");
+                return AuthorityUnavailableJson(exception);
             }
 
             logger.LogInformation(
@@ -274,11 +307,15 @@ internal static class ControlCenterApp
             var policy = await authority.ReadPolicyAsync(product, cancellationToken);
             return Html(ControlCenterPages.ProductPolicyPage(policy, csrfToken, error), statusCode);
         }
-        catch (InvalidOperationException exception)
+        catch (ProductNotFoundException exception)
         {
             return Html(
                 ControlCenterPages.Message("Product unavailable", exception.Message),
                 StatusCodes.Status404NotFound);
+        }
+        catch (ConfigurationAuthorityUnavailableException exception)
+        {
+            return AuthorityUnavailable(exception);
         }
     }
 
@@ -358,6 +395,14 @@ internal static class ControlCenterApp
 
     private static IResult Unauthorized() =>
         Results.Json(new { error = "a bearer token is required" }, statusCode: StatusCodes.Status401Unauthorized);
+
+    private static IResult AuthorityUnavailable(ConfigurationAuthorityUnavailableException exception) =>
+        Html(
+            ControlCenterPages.Message("Configuration authority unavailable", exception.Message),
+            StatusCodes.Status502BadGateway);
+
+    private static IResult AuthorityUnavailableJson(ConfigurationAuthorityUnavailableException exception) =>
+        Results.Json(new { error = exception.Message }, statusCode: StatusCodes.Status502BadGateway);
 
     private static IResult Html(string html, int statusCode = StatusCodes.Status200OK) =>
         Results.Content(html, HtmlContentType, Encoding.UTF8, statusCode);

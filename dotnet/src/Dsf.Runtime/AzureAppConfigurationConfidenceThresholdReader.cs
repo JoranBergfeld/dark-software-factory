@@ -1,4 +1,5 @@
 using System.Globalization;
+using Dsf.Core.Products;
 using Dsf.Core.Runtime;
 using Dsf.FeatureCouncil.Conveyor;
 using Dsf.FeatureCouncil.Conveyor.Stations;
@@ -56,7 +57,7 @@ internal sealed class AzureAppConfigurationConfidenceThresholdReader(
         {
             if (string.Equals(entryKey, key, StringComparison.Ordinal)
                 && double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed)
-                && double.IsFinite(parsed))
+                && ConfidenceThresholdRange.Contains(parsed))
             {
                 return parsed;
             }

@@ -72,24 +72,45 @@ internal sealed class RecordingProductPolicyAuthority : IProductPolicyAuthority
 
     public Exception? ListFailure { get; set; }
 
+    public Exception? ReadFailure { get; set; }
+
+    public Exception? WriteFailure { get; set; }
+
     public Task<IReadOnlyList<ProductSummary>> ListProductsAsync(CancellationToken cancellationToken) =>
         ListFailure is not null
             ? Task.FromException<IReadOnlyList<ProductSummary>>(ListFailure)
             : Task.FromResult<IReadOnlyList<ProductSummary>>(Products);
 
-    public Task<ProductPolicy> ReadPolicyAsync(string product, CancellationToken cancellationToken) =>
-        Policies.TryGetValue(product, out var policy)
+    public Task<ProductPolicy> ReadPolicyAsync(string product, CancellationToken cancellationToken)
+    {
+        if (ReadFailure is not null)
+        {
+            return Task.FromException<ProductPolicy>(ReadFailure);
+        }
+
+        return Policies.TryGetValue(product, out var policy)
             ? Task.FromResult(policy)
-            : throw new InvalidOperationException($"unknown product '{product}'");
+            : throw new ProductNotFoundException($"unknown product '{product}'");
+    }
 
     public Task SetAgentEnabledAsync(string product, string kind, bool enabled, CancellationToken cancellationToken)
     {
+        if (WriteFailure is not null)
+        {
+            return Task.FromException(WriteFailure);
+        }
+
         AgentWrites.Add((product, kind, enabled));
         return Task.CompletedTask;
     }
 
     public Task SetConfidenceThresholdAsync(string product, double threshold, CancellationToken cancellationToken)
     {
+        if (WriteFailure is not null)
+        {
+            return Task.FromException(WriteFailure);
+        }
+
         ThresholdWrites.Add((product, threshold));
         return Task.CompletedTask;
     }

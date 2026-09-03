@@ -1,4 +1,5 @@
 using System.Globalization;
+using Dsf.Core.Products;
 
 namespace Dsf.ControlCenter;
 
@@ -10,8 +11,8 @@ namespace Dsf.ControlCenter;
 /// </summary>
 internal static class PolicyValidation
 {
-    public const double MinimumConfidenceThreshold = 0d;
-    public const double MaximumConfidenceThreshold = 1d;
+    public const double MinimumConfidenceThreshold = ConfidenceThresholdRange.Minimum;
+    public const double MaximumConfidenceThreshold = ConfidenceThresholdRange.Maximum;
 
     public static bool TryValidateConfidenceThreshold(string? raw, out double value, out string? error)
     {
@@ -46,9 +47,7 @@ internal static class PolicyValidation
 
     public static bool TryValidateConfidenceThreshold(double value, out string? error)
     {
-        if (!double.IsFinite(value)
-            || value < MinimumConfidenceThreshold
-            || value > MaximumConfidenceThreshold)
+        if (!ConfidenceThresholdRange.Contains(value))
         {
             error = $"Confidence threshold must be between {Format(MinimumConfidenceThreshold)} and "
                 + $"{Format(MaximumConfidenceThreshold)}; '{Format(value)}' is out of range.";
@@ -59,5 +58,5 @@ internal static class PolicyValidation
         return true;
     }
 
-    public static string Format(double value) => value.ToString("0.####", CultureInfo.InvariantCulture);
+    public static string Format(double value) => ConfidenceThresholdRange.Format(value);
 }

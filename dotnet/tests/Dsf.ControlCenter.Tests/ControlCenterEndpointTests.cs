@@ -345,7 +345,7 @@ public sealed class ControlCenterEndpointTests
     public async Task Unreachable_configuration_authority_is_reported_not_hidden()
     {
         var authority = SeededAuthority();
-        authority.ListFailure = new InvalidOperationException(
+        authority.ListFailure = new ConfigurationAuthorityUnavailableException(
             "failed to read App Configuration at 'https://owner.azconfig.io': network down");
         await using var harness = await StartAsync(authority);
         await SignInAsync(harness.Client);
@@ -382,6 +382,92 @@ public sealed class ControlCenterEndpointTests
         Assert.NotNull(policy);
         Assert.Equal(0.72d, policy!.ConfidenceThreshold);
         Assert.True(policy.AgentEnablement["sentry"]);
+    }
+
+    [Fact]
+    public async Task Api_list_products_reports_configuration_authority_failures_as_bad_gateway()
+    {
+        var authority = SeededAuthority();
+        authority.ListFailure = new ConfigurationAuthorityUnavailableException(
+            "failed to read App Configuration at 'https://owner.azconfig.io': 403 Forbidden");
+        await using var harness = await StartAsync(authority);
+        harness.Client.DefaultRequestHeaders.Authorization =
+            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", OperatorToken);
+
+        var response = await harness.Client.GetAsync("/api/products", CancellationToken.None);
+        var body = await response.Content.ReadAsStringAsync(CancellationToken.None);
+
+        Assert.Equal(HttpStatusCode.BadGateway, response.StatusCode);
+        Assert.Contains("https://owner.azconfig.io", body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Api_read_product_reports_configuration_authority_failures_as_bad_gateway()
+    {
+        var authority = SeededAuthority();
+        authority.ReadFailure = new ConfigurationAuthorityUnavailableException(
+            "failed to read App Configuration at 'https://wayfinder.azconfig.io': 403 Forbidden");
+        await using var harness = await StartAsync(authority);
+        harness.Client.DefaultRequestHeaders.Authorization =
+            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", OperatorToken);
+
+        var response = await harness.Client.GetAsync("/api/products/wayfinder", CancellationToken.None);
+        var body = await response.Content.ReadAsStringAsync(CancellationToken.None);
+
+        Assert.Equal(HttpStatusCode.BadGateway, response.StatusCode);
+        Assert.Contains("https://wayfinder.azconfig.io", body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Api_read_product_keeps_unknown_products_as_not_found()
+    {
+        await using var harness = await StartAsync(SeededAuthority());
+        harness.Client.DefaultRequestHeaders.Authorization =
+            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", OperatorToken);
+
+        var response = await harness.Client.GetAsync("/api/products/missing", CancellationToken.None);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Api_write_product_reports_configuration_authority_failures_as_bad_gateway()
+    {
+        var authority = SeededAuthority();
+        authority.WriteFailure = new ConfigurationAuthorityUnavailableException(
+            "failed to write App Configuration at 'https://wayfinder.azconfig.io': 403 Forbidden");
+        await using var harness = await StartAsync(authority);
+        harness.Client.DefaultRequestHeaders.Authorization =
+            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", OperatorToken);
+
+        var response = await harness.Client.PostAsJsonAsync(
+            "/api/products/wayfinder/threshold",
+            new { value = 0.9d },
+            CancellationToken.None);
+        var body = await response.Content.ReadAsStringAsync(CancellationToken.None);
+
+        Assert.Equal(HttpStatusCode.BadGateway, response.StatusCode);
+        Assert.Contains("https://wayfinder.azconfig.io", body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Browser_write_product_reports_configuration_authority_failures_as_bad_gateway()
+    {
+        var authority = SeededAuthority();
+        authority.WriteFailure = new ConfigurationAuthorityUnavailableException(
+            "failed to write App Configuration at 'https://wayfinder.azconfig.io': 403 Forbidden");
+        await using var harness = await StartAsync(authority);
+        await SignInAsync(harness.Client);
+        var csrf = await CsrfTokenAsync(harness.Client, "/products/wayfinder");
+
+        var response = await harness.Client.PostAsync(
+            "/products/wayfinder/threshold",
+            Form(("value", "0.8"), ("csrf_token", csrf)),
+            CancellationToken.None);
+        var body = await response.Content.ReadAsStringAsync(CancellationToken.None);
+
+        Assert.Equal(HttpStatusCode.BadGateway, response.StatusCode);
+        Assert.Contains("https://wayfinder.azconfig.io", body, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -67,6 +67,23 @@ public sealed class AzureAppConfigurationConfidenceThresholdReaderTests
         Assert.Equal(S5Council.DefaultThreshold, threshold);
     }
 
+    [Theory]
+    [InlineData("-0.01")]
+    [InlineData("1.01")]
+    public async Task Falls_back_to_the_default_when_the_stored_value_is_outside_the_valid_range(
+        string storedValue)
+    {
+        var gateway = new LabelledConfigurationSettingsGateway(new Dictionary<string, (string, string)[]>
+        {
+            ["\0"] = [("threshold.acme", storedValue)],
+        });
+
+        var threshold = await new AzureAppConfigurationConfidenceThresholdReader(gateway, Settings)
+            .ReadThresholdAsync(CancellationToken.None);
+
+        Assert.Equal(S5Council.DefaultThreshold, threshold);
+    }
+
     [Fact]
     public async Task An_unreadable_store_fails_loudly_naming_the_product_and_endpoint()
     {
