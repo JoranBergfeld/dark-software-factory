@@ -81,6 +81,19 @@ public sealed class ModuleReferenceRulesTests
             $"Allowed: {string.Join(", ", allowed)}");
     }
 
+    [Fact]
+    public void Every_production_project_has_reference_policy_coverage()
+    {
+        var discovered = DiscoverProductionProjectNames().ToList();
+
+        var uncovered = discovered.Except(AllowedReferences.Keys).ToList();
+
+        Assert.True(
+            uncovered.Count == 0,
+            "Production project(s) missing module-reference policy coverage: " +
+            $"{string.Join(", ", uncovered)}. Add them to {nameof(AllowedReferences)}.");
+    }
+
     [Theory]
     [MemberData(nameof(ProductionProjectNames))]
     public void Production_project_never_references_testing_support(string projectName)
@@ -97,5 +110,17 @@ public sealed class ModuleReferenceRulesTests
     public static IEnumerable<object[]> ExpectedProjectNames() => AllowedReferences.Keys.Select(k => new object[] { k });
 
     public static IEnumerable<object[]> ProductionProjectNames() =>
-        AllowedReferences.Keys.Where(k => k != TestingProjectName).Select(k => new object[] { k });
+        DiscoverProductionProjectNames().Select(k => new object[] { k });
+
+    private static IEnumerable<string> DiscoverProductionProjectNames()
+    {
+        var root = FindSolutionRoot();
+        var src = new DirectoryInfo(Path.Combine(root.FullName, "src"));
+
+        return src.EnumerateFiles("*.csproj", SearchOption.AllDirectories)
+            .Select(csproj => Path.GetFileNameWithoutExtension(csproj.Name))
+            .Where(projectName => projectName != TestingProjectName)
+            .Order()
+            .ToList();
+    }
 }
