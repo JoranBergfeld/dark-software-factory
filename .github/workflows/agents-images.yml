@@ -1,12 +1,13 @@
 name: agents-images
 
-# Build each source agent — and the feature-council runtime — as its own container
-# image and push to the GitHub Container Registry (GHCR). Change-detection: an agent
+# Build each Python source agent, and the .NET runtime (dsf-runtime, the
+# orchestrator worker; see dotnet/src/Dsf.Runtime), as its own container image
+# and push to the GitHub Container Registry (GHCR). Change-detection: an agent
 # rebuilds only when its own code/config changes; a change to shared core
-# (contracts/ports/a2a/base/container or pyproject) rebuilds ALL agents. The runtime
-# image (dsf-runtime, the orchestrator worker) rebuilds on any core/ or
-# feature-council/ source or pyproject change. Images are pushed on main; pull
-# requests build only (validation, no push). Hosting/deployment is out of scope.
+# (contracts/ports/a2a/base/container or pyproject) rebuilds ALL agents. The
+# runtime image rebuilds on any dotnet/ source change. Images are pushed on
+# main; pull requests build only (validation, no push). Hosting/deployment is
+# out of scope.
 
 on:
   push:
@@ -17,6 +18,7 @@ on:
       - 'pyproject.toml'
       - 'core/pyproject.toml'
       - 'feature-council/pyproject.toml'
+      - 'dotnet/**'
       - '.github/workflows/agents-images.yml'
   pull_request:
     paths:
@@ -25,6 +27,7 @@ on:
       - 'pyproject.toml'
       - 'core/pyproject.toml'
       - 'feature-council/pyproject.toml'
+      - 'dotnet/**'
       - '.github/workflows/agents-images.yml'
   workflow_dispatch:
 
@@ -65,11 +68,8 @@ jobs:
             webiq:
               - 'feature-council/src/dsf/agents/webiq/**'
             runtime:
-              - 'core/src/**'
-              - 'feature-council/src/**'
-              - 'pyproject.toml'
-              - 'core/pyproject.toml'
-              - 'feature-council/pyproject.toml'
+              - 'dotnet/**'
+              - 'feature-council/src/dsf/runtime/Dockerfile'
 
       - id: set
         env:
@@ -222,6 +222,12 @@ jobs:
           ignore-unfixed: true
           vuln-type: os,library
           severity: CRITICAL,HIGH
+
+      - name: Smoke test entrypoint
+        run: |
+          set -euo pipefail
+          docker run --rm dsf-runtime:scan --help
+          docker run --rm dsf-runtime:scan --version
 
       - name: Build and push
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
