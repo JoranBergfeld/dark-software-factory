@@ -134,6 +134,37 @@ public sealed class CliSurfaceTests
         Assert.NotEqual(0, invalid.ExitCode);
     }
 
+    [Theory]
+    [InlineData("--version")]
+    [InlineData("-?")]
+    public async Task Frozen_root_grammar_rejects_non_parity_options(string option)
+    {
+        var result = await DsfProcess.RunAsync(option);
+
+        Assert.NotEqual(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("sync")]
+    [InlineData("status")]
+    public async Task Charter_source_commands_reject_file_and_ref_together(string command)
+    {
+        var result = await DsfProcess.RunAsync(
+            "charter", command, "--product", "demo", "--file", "charter.md", "--ref", "main");
+
+        Assert.NotEqual(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task New_accepts_and_normalizes_uppercase_explicit_name_prefix()
+    {
+        var result = await DsfProcess.RunAsync(
+            "new", "--product", "demo", "--name-prefix", "Demo", "--dry-run");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Contains("namePrefix=demoxxxx0000", result.Stdout);
+    }
+
     [Fact]
     public async Task Canceled_invocation_returns_nonzero_without_dispatching_shell()
     {

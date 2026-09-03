@@ -23,6 +23,8 @@ public static class CliApplication
     private static RootCommand BuildRootCommand()
     {
         var root = new RootCommand("Dark Software Factory — factory CLI (create product instances)");
+        root.Options.Remove(root.Options.Single(option => option.Name == "--version"));
+        root.Options.Single(option => option.Name == "--help").Aliases.Remove("-?");
 
         root.Subcommands.Add(BuildNewCommand());
         root.Subcommands.Add(BuildListCommand());
@@ -81,7 +83,7 @@ public static class CliApplication
         command.SetAction(parseResult =>
         {
             var prefix = parseResult.GetValue(namePrefix) ?? string.Empty;
-            if (prefix.Length > 0 && !char.IsAsciiLetterLower(prefix[0]))
+            if (prefix.Length > 0 && !char.IsAsciiLetter(prefix[0]))
             {
                 Console.Out.WriteLine(
                     $"[dsf] error: cannot derive an Azure name prefix from '{prefix}': name prefix base must start with a letter: '{prefix}' Pass --name-prefix explicitly.");
@@ -385,7 +387,16 @@ public static class CliApplication
         var refOption = StringOption("--ref", "read the charter from this repo ref via the GitHub App");
         var command = new Command(name, description);
         AddOptions(command, product, file, refOption);
-        command.SetAction(_ => CharterShell(name));
+        command.SetAction(parseResult =>
+        {
+            if (parseResult.GetValue(file) is not null && parseResult.GetValue(refOption) is not null)
+            {
+                Console.Error.WriteLine("[dsf] error: --file and --ref cannot be used together.");
+                return Failure;
+            }
+
+            return CharterShell(name);
+        });
         return command;
     }
 
