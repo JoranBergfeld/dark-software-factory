@@ -234,7 +234,8 @@ public static class CliApplication
         WasProvided(providedOptions, option) ? parseResult.GetValue(option) : null;
 
     private static void ShowEquivalentCommand(ICliTerminal terminal, NewInteraction interaction, bool dryRun) =>
-        terminal.WriteLine($"[dsf] equivalent: {RenderNewCommand(interaction, dryRun)}");
+        terminal.WriteLine(
+            CliPresentation.EquivalentCommand(terminal.Capabilities, RenderNewCommand(interaction, dryRun)));
 
     private static string RenderNewCommand(
         NewInteraction interaction,
