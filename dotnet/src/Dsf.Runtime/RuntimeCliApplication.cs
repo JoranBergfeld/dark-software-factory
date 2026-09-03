@@ -244,9 +244,6 @@ public static class RuntimeCliApplication
 
     /// <summary>
     /// Composes <see cref="RuntimeSettings"/> and, once they validate, runs the
-    /// verb's conveyor operation, printing the finished run's summary.
-    /// <summary>
-    /// Composes <see cref="RuntimeSettings"/> and, once they validate, runs the
     /// verb's conveyor operation, printing the finished run's summary. A run that
     /// ended in <see cref="RunStatus.Error"/> (for example, the filing boundary
     /// reached with no filer wired) still prints everything the line did before

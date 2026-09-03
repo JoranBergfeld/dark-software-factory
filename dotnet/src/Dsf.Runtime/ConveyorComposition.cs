@@ -79,14 +79,7 @@ internal sealed class EnvironmentConveyorComposer(
             return null;
         }
 
-        var database = Read(RuntimeIntegrationSettings.CosmosDatabase);
-        var container = Read(RuntimeIntegrationSettings.CosmosLearningContainer);
-        return new CosmosLearningStore(
-            settings.CosmosEndpoint.Trim(),
-            database.Length > 0 ? database : RuntimeIntegrationSettings.DefaultCosmosDatabase,
-            container.Length > 0 ? container : RuntimeIntegrationSettings.DefaultCosmosLearningContainer,
-            settings.Product,
-            cosmosGateway ?? new AzureCosmosDocumentGateway());
+        return CosmosLearningStoreFactory.Create(settings, env, cosmosGateway);
     }
 
     /// <summary>One gatherer per source kind that has an agent endpoint configured.</summary>
