@@ -337,4 +337,16 @@ jobs:
           name: dsf-cli-final-release-bundle
           path: dotnet/artifacts/final-artifacts
       - name: Push global tool package to NuGet
-        run: dotnet nuget push "dotnet/artifacts/final-artifacts/*.nupkg" --source https://api.nuget.org/v3/index.json --api-key "${{ secrets.NUGET_API_KEY }}"
+        shell: bash
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: |
+          shopt -s nullglob
+          packages=(dotnet/artifacts/final-artifacts/*.nupkg)
+          if (( ${#packages[@]} == 0 )); then
+            echo "No NuGet packages found in dotnet/artifacts/final-artifacts." >&2
+            exit 1
+          fi
+          for package in "${packages[@]}"; do
+            dotnet nuget push "$package" --source https://api.nuget.org/v3/index.json --api-key "$NUGET_API_KEY"
+          done

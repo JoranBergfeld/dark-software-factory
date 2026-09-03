@@ -276,6 +276,21 @@ public sealed class ReleaseArtifactAutomationTests
             "gh release create");
     }
 
+    [Fact]
+    public void Nuget_publish_expands_packages_and_fails_when_no_packages_exist()
+    {
+        var workflow = ReadRepoFile(".github", "workflows", "dotnet-release.yml");
+
+        Assert.DoesNotContain(
+            "dotnet nuget push \"dotnet/artifacts/final-artifacts/*.nupkg\"",
+            workflow,
+            StringComparison.Ordinal);
+        Assert.Contains("shopt -s nullglob", workflow, StringComparison.Ordinal);
+        Assert.Contains("packages=(dotnet/artifacts/final-artifacts/*.nupkg)", workflow, StringComparison.Ordinal);
+        Assert.Contains("if (( ${#packages[@]} == 0 )); then", workflow, StringComparison.Ordinal);
+        Assert.Contains("dotnet nuget push \"$package\"", workflow, StringComparison.Ordinal);
+    }
+
     private static string ReadRepoFile(params string[] parts)
     {
         return File.ReadAllText(Path.Combine(new[] { FindRepoRoot().FullName }.Concat(parts).ToArray()));
