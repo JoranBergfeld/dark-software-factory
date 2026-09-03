@@ -4,7 +4,8 @@ namespace Dsf.Runtime;
 
 /// <summary>
 /// The operator-facing result of a conveyor run: what it was scoped to, what it
-/// found, which stations checkpointed, and the audit trail. Rendered as text by
+/// found, which stations checkpointed, what a dry run would have filed, why it
+/// failed if it did, and the audit trail. Rendered as text by
 /// the runtime CLI and as JSON by the orchestrator host, so both surfaces report
 /// exactly the same run.
 /// </summary>
@@ -21,6 +22,8 @@ public sealed record RuntimeRunSummary(
     int AcceptedProposalCount,
     IReadOnlyList<string> Checkpoints,
     IReadOnlyList<string> FiledIssues,
+    IReadOnlyList<IssuePreview> PreviewedIssues,
+    string? FailureReason,
     IReadOnlyList<string> Audit)
 {
     public static RuntimeRunSummary From(ConveyorRun run)
@@ -39,6 +42,8 @@ public sealed record RuntimeRunSummary(
             AcceptedProposalCount: run.Proposals.Count(proposal => proposal.Accepted),
             Checkpoints: run.Checkpoints,
             FiledIssues: run.FiledIssues,
+            PreviewedIssues: run.PreviewedIssues,
+            FailureReason: run.FailureReason,
             Audit: run.Audit.Select(record => $"[{record.Station}] {record.Message}").ToArray());
     }
 
@@ -54,9 +59,20 @@ public sealed record RuntimeRunSummary(
             yield return $"[dsf]   audit{line}";
         }
 
+        foreach (var preview in PreviewedIssues)
+        {
+            yield return $"[dsf]   would file '{preview.Title}' "
+                + $"labels=[{string.Join(", ", preview.Labels)}] intent={preview.IntentKey}";
+        }
+
         foreach (var issue in FiledIssues)
         {
             yield return $"[dsf]   filed {issue}";
+        }
+
+        if (FailureReason is not null)
+        {
+            yield return $"[dsf]   failure {FailureReason}";
         }
     }
 }

@@ -122,6 +122,13 @@ internal sealed class CosmosRunStore(
                     proposal.EvidenceReferences,
                 }),
                 filedIssues = run.FiledIssues,
+                previewedIssues = run.PreviewedIssues.Select(preview => new
+                {
+                    preview.Title,
+                    preview.IntentKey,
+                    preview.Labels,
+                }),
+                failureReason = run.FailureReason,
                 audit = run.Audit.Select(record => new { record.Station, record.Message }),
                 updatedAt = DateTimeOffset.UtcNow,
             },

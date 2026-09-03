@@ -8,7 +8,8 @@ namespace Dsf.FeatureCouncil.Conveyor;
 /// <see cref="IRunStore"/> and a checkpoint recorded after each station so a
 /// resumed run skips completed stations, a KILLED run stops the line early, and
 /// any per-station exception -- including a failed persist -- becomes an audited
-/// terminal <see cref="RunStatus.Error"/> rather than propagating to the caller.
+/// terminal <see cref="RunStatus.Error"/>, with the failing station and its reason
+/// pinned on the run, rather than propagating to the caller.
 /// Each run and station boundary is traced through <see cref="ITracer"/>: a
 /// tracer send failure is recorded and swallowed rather than turned into a
 /// station failure, since telemetry must never be the reason a run that actually
@@ -71,6 +72,11 @@ public static class ConveyorLine
             {
                 run.Checkpoints.Remove(station.Name);
                 run.Status = RunStatus.Error;
+                // The cause is pinned here, before tracing or persisting the
+                // failure: either of those can fail too, and the operator needs
+                // the station that actually broke, not the last thing that did.
+                run.FailureReason =
+                    $"station '{station.Name}' failed ({exception.GetType().Name}): {exception.Message}";
                 run.Record(station.Name, $"station error ({exception.GetType().Name}): {exception.Message}");
                 await TraceAsync(services, "station.error", run, station.Name, cancellationToken);
                 await TryPersistAsync(run, station.Name, services, cancellationToken);

@@ -217,7 +217,11 @@ public static class RuntimeCliApplication
             return Success;
         }
 
-        stderr.WriteLine($"[dsf] error: run {run.Id} ended in error: {run.Audit[^1].Message}");
+        // The station that failed is pinned on the run; a later telemetry or
+        // persistence failure may have audited itself afterwards, and reporting
+        // that instead would send the operator after the wrong cause.
+        var reason = run.FailureReason ?? run.Audit[^1].Message;
+        stderr.WriteLine($"[dsf] error: run {run.Id} ended in error: {reason}");
         return Failure;
     }
 

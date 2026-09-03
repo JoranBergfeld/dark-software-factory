@@ -23,6 +23,9 @@ directory holds the buildable seams only (no behavior migrated yet).
   references `Dsf.Testing`.
 - `tests/Dsf.Core.Tests` — example test project demonstrating a test using both
   `Dsf.Core` and `Dsf.Testing`.
+- `tests/Dsf.FeatureCouncil.Tests` — conveyor semantics: station order and
+  checkpointing, resume past completed stations, terminal runs never re-driven,
+  per-station failures as audited error states, and the dry-run filing preview.
 
 ## Runtime host
 
@@ -34,7 +37,11 @@ unset requirement and exiting non-zero), then does its real work:
   Council conveyor (`Dsf.FeatureCouncil.Conveyor`, stations `s1_triage` ..
   `s7_filing`), printing the finished run: status, evidence/proposal counts,
   station checkpoints and the audit trail. `--dry-run` stops deliberately at the
-  filing station (`previewed`). Without `--dry-run`, accepted proposals are filed
+  filing station (`previewed`), reporting every issue it would have filed (title,
+  labels, intent key) without creating any of them and without touching the
+  filer. A run that fails a station is reported with the failing station as the
+  cause and exits non-zero; a telemetry or persistence failure on the way out
+  never displaces that cause. Without `--dry-run`, accepted proposals are filed
   as GitHub issues, idempotently: each proposal carries a durable intent key
   (scope fingerprint + source kind) that is stamped into the issue body and
   searched for before filing. Reaching the filing boundary with no filer wired

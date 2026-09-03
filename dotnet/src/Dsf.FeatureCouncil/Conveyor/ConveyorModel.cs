@@ -66,6 +66,12 @@ public sealed class Proposal(string id, string title, string sourceKind, IReadOn
 }
 
 /// <summary>
+/// An issue a dry run would have filed: the title, labels and filing intent key
+/// the real filing station would have used, reported without creating anything.
+/// </summary>
+public sealed record IssuePreview(string Title, string IntentKey, IReadOnlyList<string> Labels);
+
+/// <summary>
 /// The unit of work the conveyor drives from station to station: what was asked
 /// for, what was found, what was decided, and the audit trail and station
 /// checkpoints that make all of it inspectable afterwards.
@@ -99,6 +105,21 @@ public sealed class ConveyorRun
 
     /// <summary>Issue URLs the filing station created (empty on a dry run).</summary>
     public List<string> FiledIssues { get; } = [];
+
+    /// <summary>
+    /// What a dry run would have filed: one entry per accepted, routed proposal
+    /// the filing station deliberately did not file. Empty on a run that files
+    /// for real -- there, <see cref="FiledIssues"/> is the record.
+    /// </summary>
+    public List<IssuePreview> PreviewedIssues { get; } = [];
+
+    /// <summary>
+    /// Why the run ended in <see cref="RunStatus.Error"/>: the station that failed
+    /// and what it failed with. Set once, by the first failure, so a later
+    /// telemetry or persistence failure cannot displace the cause an operator
+    /// needs to see. <c>null</c> on a run that did not fail.
+    /// </summary>
+    public string? FailureReason { get; set; }
 
     public void Record(string station, string message) => Audit.Add(new AuditRecord(station, message));
 }

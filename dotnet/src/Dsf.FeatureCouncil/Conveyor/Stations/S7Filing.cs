@@ -4,7 +4,9 @@ namespace Dsf.FeatureCouncil.Conveyor.Stations;
 
 /// <summary>
 /// S7 — filing. On a dry run the line stops here deliberately (status
-/// <see cref="RunStatus.Previewed"/>) with nothing filed. Otherwise every accepted,
+/// <see cref="RunStatus.Previewed"/>), reporting every issue it would have filed
+/// on <see cref="ConveyorRun.PreviewedIssues"/> without creating any of them and
+/// without touching the filer. Otherwise every accepted,
 /// routed proposal is handed to the issue filer. When there is something to file
 /// and no filer is wired, this is the real boundary the run fails at -- after
 /// stations S1..S6 have already done and checkpointed their work. A run that files
@@ -22,8 +24,17 @@ public sealed class S7Filing : IStation
         var accepted = run.Proposals.Where(proposal => proposal.Accepted).ToList();
         if (run.DryRun)
         {
+            foreach (var proposal in accepted)
+            {
+                run.PreviewedIssues.Add(new IssuePreview(proposal.Title, proposal.IntentKey, [.. proposal.Labels]));
+                run.Record(
+                    StationName,
+                    $"dry run: would file '{proposal.Title}' labels=[{string.Join(", ", proposal.Labels)}] "
+                    + $"intent={proposal.IntentKey}");
+            }
+
             run.Status = RunStatus.Previewed;
-            run.Record(StationName, $"dry run: skipped filing {accepted.Count} accepted proposal(s).");
+            run.Record(StationName, $"dry run: previewed {accepted.Count} accepted proposal(s), filed none.");
             return;
         }
 
