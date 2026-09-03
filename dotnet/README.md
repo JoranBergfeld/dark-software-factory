@@ -67,10 +67,15 @@ Every conveyor-driving verb composes its collaborators before running a line, an
 fails naming each unset setting rather than running a line that can neither
 gather, file, nor persist:
 
-- **Source agents** — one A2A gatherer per source kind, from
-  `DSF_SOURCE_AGENT_ENDPOINT_<KIND>` or `DSF_SOURCE_AGENT_ENDPOINT_TEMPLATE` (a
-  base URL containing `{kind}`). A run scoped to a kind with no gatherer fails at
-  `s2_investigation`, naming the kind and the setting.
+- **Source agents** — in-process by default: each known kind gathers directly
+  from its configured upstream integration (`DSF_SOURCE_<KIND>_ENDPOINT`,
+  optionally `DSF_SOURCE_<KIND>_TOKEN`) in the orchestrator's own process, no
+  separately served agent required. A remote, served source agent is used
+  instead only for a kind whose agent endpoint is explicitly configured
+  (`DSF_SOURCE_AGENT_ENDPOINT_<KIND>` or `DSF_SOURCE_AGENT_ENDPOINT_TEMPLATE`, a
+  base URL containing `{kind}`), gathered from over the same `/gather` protocol
+  `serve-agent` serves. Either way, a kind whose upstream integration is
+  unconfigured fails at `s2_investigation`, naming the kind and the setting.
 - **Filing** — the GitHub REST filer, authenticated as the DSF GitHub App
   (`GITHUB_APP_ID`, `GITHUB_INSTALLATION_ID`, `GITHUB_APP_PRIVATE_KEY_SECRET`,
   `AZURE_KEYVAULT_URI`) and `GITHUB_REPOSITORY`; `DSF_GITHUB_API_URL` overrides

@@ -78,15 +78,69 @@ public sealed class ProductionCompositionTests
                 privateKeySecretReader: privateKeySecretReader ?? new StubPrivateKeySecretReader()));
 
     [Fact]
-    public void Production_composition_without_source_agent_endpoints_names_the_unset_settings()
+    public void Production_composition_without_any_source_agent_endpoint_still_wires_in_process_gatherers_for_every_known_kind()
     {
         var dependencies = ProductionDependencies(new Dictionary<string, string?>());
 
-        var exception = Assert.Throws<RuntimeConfigurationException>(
-            () => dependencies.ConveyorServicesFor(SettingsWithGitHubApp()));
+        var services = dependencies.ConveyorServicesFor(SettingsWithGitHubApp());
 
-        Assert.Contains("DSF_SOURCE_AGENT_ENDPOINT_TEMPLATE", exception.Message);
-        Assert.Contains("DSF_SOURCE_AGENT_ENDPOINT_SENTRY", exception.Message);
+        foreach (var kind in SourceAgentKinds.Known)
+        {
+            Assert.IsType<InProcessEvidenceGatherer>(services.GathererFor(kind));
+        }
+    }
+
+    /// <summary>
+    /// In-process is the default evidence path (ADR: source agents run in-process
+    /// unless a served agent endpoint is explicitly configured for that kind): a
+    /// factory with no <c>DSF_SOURCE_AGENT_ENDPOINT*</c> setting at all must still
+    /// compose, gathering directly from each kind's upstream integration rather
+    /// than requiring a separately served A2A agent.
+    /// </summary>
+    [Fact]
+    public async Task An_in_process_gatherer_reads_evidence_directly_from_the_kinds_configured_integration()
+    {
+        var env = new Dictionary<string, string?>
+        {
+            ["DSF_SOURCE_SENTRY_ENDPOINT"] = "unused-by-the-scripted-integration",
+        };
+        var dependencies = new RuntimeDependencies(
+            new AzureAppConfigurationOwnerRuntimeIndexReader(),
+            new AzureAppConfigurationSourceAgentRosterReader(),
+            new WebApplicationHostRunner(),
+            new EnvironmentConveyorComposer(
+                env,
+                privateKeySecretReader: new StubPrivateKeySecretReader(),
+                sourceIntegration: new ScriptedSourceIntegration(new EvidenceItem("sentry", "SENTRY-9", "queue backed up"))),
+            new ScriptedSourceIntegration(),
+            new EnvironmentLearningComposer(env, privateKeySecretReader: new StubPrivateKeySecretReader()));
+
+        var services = dependencies.ConveyorServicesFor(SettingsWithGitHubApp());
+        var gatherer = services.GathererFor("sentry")!;
+        var evidence = await gatherer.GatherAsync(
+            new ConveyorRun { SourceKinds = ["sentry"], ProductHints = ["acme"] }, CancellationToken.None);
+
+        var item = Assert.Single(evidence);
+        Assert.Equal("SENTRY-9", item.Reference);
+    }
+
+    /// <summary>
+    /// An in-process gatherer for a kind whose upstream integration is
+    /// unconfigured must fail at gather time naming the unset setting -- exactly
+    /// like the served agent's own <c>/gather</c> endpoint does -- rather than
+    /// composing successfully and then reporting an empty investigation.
+    /// </summary>
+    [Fact]
+    public async Task An_in_process_gatherer_names_the_unset_integration_setting_when_asked_to_gather()
+    {
+        var dependencies = ProductionDependencies(new Dictionary<string, string?>());
+        var services = dependencies.ConveyorServicesFor(SettingsWithGitHubApp());
+        var gatherer = services.GathererFor("grafana")!;
+
+        var exception = await Assert.ThrowsAsync<RuntimeConfigurationException>(
+            () => gatherer.GatherAsync(new ConveyorRun { SourceKinds = ["grafana"] }, CancellationToken.None));
+
+        Assert.Contains("DSF_SOURCE_GRAFANA_ENDPOINT", exception.Message);
     }
 
     [Fact]
@@ -219,8 +273,8 @@ public sealed class ProductionCompositionTests
 
         var services = ProductionDependencies(env).ConveyorServicesFor(SettingsWithGitHubApp());
 
-        Assert.NotNull(services.GathererFor("sentry"));
-        Assert.Null(services.GathererFor("grafana"));
+        Assert.IsType<SourceAgentEvidenceGatherer>(services.GathererFor("sentry"));
+        Assert.IsType<InProcessEvidenceGatherer>(services.GathererFor("grafana"));
     }
 
     [Fact]

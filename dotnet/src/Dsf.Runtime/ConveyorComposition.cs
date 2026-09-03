@@ -17,10 +17,13 @@ public interface IConveyorComposer
 }
 
 /// <summary>
-/// The production composer: reads the runtime's environment and settings and wires
-/// the real adapters -- an A2A gatherer per configured source agent endpoint, the
-/// GitHub REST issue filer, the Cosmos-backed run store, the Azure OpenAI-backed
-/// model client, and the Application Insights-backed tracer. Anything unset raises
+/// The production composer: reads the runtime's environment and settings and
+/// wires the real adapters -- an in-process gatherer per source kind by default
+/// (reading that kind's upstream integration directly, in this process), falling
+/// back to an A2A gatherer against a remote source agent only for a kind whose
+/// agent endpoint is explicitly configured; the GitHub REST issue filer; the
+/// Cosmos-backed run store; the Azure OpenAI-backed model client; and the
+/// Application Insights-backed tracer. Anything unset raises
 /// <see cref="RuntimeConfigurationException"/> naming every missing setting at
 /// once.
 /// </summary>
@@ -30,19 +33,21 @@ internal sealed class EnvironmentConveyorComposer(
     ICosmosDocumentGateway? cosmosGateway = null,
     IPrivateKeySecretReader? privateKeySecretReader = null,
     IModelCompletionGateway? modelGateway = null,
-    ITelemetryGateway? telemetryGateway = null) : IConveyorComposer
+    ITelemetryGateway? telemetryGateway = null,
+    ISourceIntegration? sourceIntegration = null) : IConveyorComposer
 {
     private const string KindPlaceholder = "{kind}";
     private const string DefaultGitHubApiUrl = "https://api.github.com/";
 
     private readonly HttpClient httpClient = httpClient ?? new HttpClient();
+    private readonly ISourceIntegration sourceIntegration = sourceIntegration ?? new HttpSourceIntegration(env);
 
     public ConveyorServices ComposeFor(RuntimeSettings settings)
     {
         ArgumentNullException.ThrowIfNull(settings);
 
         var missing = new List<string>();
-        var gatherers = ComposeGatherers(missing);
+        var gatherers = ComposeGatherers(settings);
         var filer = ComposeFiler(settings, missing);
         var runStore = ComposeRunStore(settings, missing);
         var modelClient = ComposeModelClient(settings, missing);
@@ -82,8 +87,18 @@ internal sealed class EnvironmentConveyorComposer(
         return CosmosLearningStoreFactory.Create(settings, env, cosmosGateway);
     }
 
-    /// <summary>One gatherer per source kind that has an agent endpoint configured.</summary>
-    private IReadOnlyList<IEvidenceGatherer> ComposeGatherers(List<string> missing)
+    /// <summary>
+    /// One gatherer per known source kind: in-process by default, gathering
+    /// directly from the kind's configured upstream integration in this same
+    /// process; a remote, served source agent is used instead only for a kind
+    /// whose agent endpoint is explicitly configured (a per-kind
+    /// <see cref="RuntimeIntegrationSettings.SourceAgentEndpoint"/>, or the
+    /// <see cref="RuntimeIntegrationSettings.SourceAgentEndpointTemplate"/>). A
+    /// kind with neither configured still composes here -- it fails at gather
+    /// time, naming its unset upstream integration setting, exactly as a served
+    /// agent's own <c>/gather</c> endpoint would.
+    /// </summary>
+    private IReadOnlyList<IEvidenceGatherer> ComposeGatherers(RuntimeSettings settings)
     {
         var template = Read(RuntimeIntegrationSettings.SourceAgentEndpointTemplate);
         var gatherers = new List<IEvidenceGatherer>();
@@ -95,16 +110,9 @@ internal sealed class EnvironmentConveyorComposer(
                 endpoint = template.Replace(KindPlaceholder, kind, StringComparison.OrdinalIgnoreCase);
             }
 
-            if (endpoint.Length > 0)
-            {
-                gatherers.Add(new SourceAgentEvidenceGatherer(kind, new Uri(EnsureTrailingSlash(endpoint)), httpClient));
-            }
-        }
-
-        if (gatherers.Count == 0)
-        {
-            missing.Add(RuntimeIntegrationSettings.SourceAgentEndpointTemplate);
-            missing.AddRange(SourceAgentKinds.Known.Select(RuntimeIntegrationSettings.SourceAgentEndpoint));
+            gatherers.Add(endpoint.Length > 0
+                ? new SourceAgentEvidenceGatherer(kind, new Uri(EnsureTrailingSlash(endpoint)), httpClient)
+                : new InProcessEvidenceGatherer(kind, settings.Product, sourceIntegration));
         }
 
         return gatherers;
@@ -226,16 +234,6 @@ internal sealed class EnvironmentConveyorComposer(
     /// <summary>Human-readable reasons, one per unmet requirement.</summary>
     private IEnumerable<string> Explain(RuntimeSettings settings)
     {
-        var template = Read(RuntimeIntegrationSettings.SourceAgentEndpointTemplate);
-        if (template.Length == 0
-            && SourceAgentKinds.Known.All(kind => Read(RuntimeIntegrationSettings.SourceAgentEndpoint(kind)).Length == 0))
-        {
-            yield return "no source agent endpoint is configured (set "
-                + $"{RuntimeIntegrationSettings.SourceAgentEndpointTemplate} to a base URL containing "
-                + $"'{KindPlaceholder}', or a per-kind endpoint such as "
-                + $"{RuntimeIntegrationSettings.SourceAgentEndpoint("sentry")})";
-        }
-
         var missingAppSettings = new (string Value, string EnvVar)[]
         {
             (settings.GitHubAppId, RuntimeSettingsComposer.GitHubAppId),

@@ -24,7 +24,7 @@ internal sealed class WebApplicationHostRunner : IWebHostRunner
 /// The collaborators the runtime verbs need, resolved once per process.
 /// <see cref="Production(IReadOnlyDictionary{string, string})"/> wires the real
 /// adapters only (ADR 0014): the managed-identity Azure readers, the real web host
-/// runner, the environment-driven conveyor composition (A2A gatherers, GitHub
+/// runner, the environment-driven conveyor composition (in-process gatherers by default, GitHub
 /// filer, Cosmos-backed run store) and the served agent's upstream integration.
 /// None of them is optional or empty -- an unconfigured dependency is reported by
 /// the setting that is unset, at composition time.
@@ -44,12 +44,13 @@ public sealed record RuntimeDependencies(
     public static RuntimeDependencies Production(IReadOnlyDictionary<string, string?> env)
     {
         ArgumentNullException.ThrowIfNull(env);
+        var sourceIntegration = new HttpSourceIntegration(env);
         return new(
             new AzureAppConfigurationOwnerRuntimeIndexReader(),
             new AzureAppConfigurationSourceAgentRosterReader(),
             new WebApplicationHostRunner(),
-            new EnvironmentConveyorComposer(env),
-            new HttpSourceIntegration(env),
+            new EnvironmentConveyorComposer(env, sourceIntegration: sourceIntegration),
+            sourceIntegration,
             new EnvironmentLearningComposer(env));
     }
 
