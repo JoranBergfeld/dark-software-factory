@@ -69,7 +69,7 @@ public sealed class CliCommandSurfaceTests
 
     private const string ExpectedSnapshot = """
 command <root>
-  option --help aliases=[-h, /h]
+  option --help aliases=[-h]
   command new
     option --product required
     option --owner

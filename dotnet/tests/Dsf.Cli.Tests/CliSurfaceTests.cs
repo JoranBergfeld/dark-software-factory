@@ -139,6 +139,7 @@ public sealed class CliSurfaceTests
     [InlineData("--version")]
     [InlineData("-?")]
     [InlineData("/?")]
+    [InlineData("/h")]
     public async Task Frozen_root_grammar_rejects_non_parity_options(string option)
     {
         var result = await DsfProcess.RunAsync(option);

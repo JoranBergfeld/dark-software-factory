@@ -29,6 +29,7 @@ public static class CliApplication
         var helpOption = root.Options.Single(option => option.Name == "--help");
         helpOption.Aliases.Remove("-?");
         helpOption.Aliases.Remove("/?");
+        helpOption.Aliases.Remove("/h");
 
         root.Subcommands.Add(BuildNewCommand());
         root.Subcommands.Add(BuildListCommand());
