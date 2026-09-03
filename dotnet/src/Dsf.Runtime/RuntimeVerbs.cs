@@ -39,7 +39,8 @@ public static class RuntimeVerbs
         string? signalPath,
         bool dryRun,
         RuntimeDependencies dependencies,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IReadOnlyDictionary<string, string?>? env = null)
     {
         ArgumentNullException.ThrowIfNull(settings);
         ArgumentNullException.ThrowIfNull(dependencies);
@@ -59,7 +60,7 @@ public static class RuntimeVerbs
             throw new RuntimeVerbException(exception.Message);
         }
 
-        return await RunSignalAsync(settings, signal, dependencies, cancellationToken);
+        return await RunSignalAsync(settings, signal, dependencies, cancellationToken, env);
     }
 
     /// <summary>Drives the conveyor over an already-parsed signal.</summary>
@@ -67,11 +68,14 @@ public static class RuntimeVerbs
         RuntimeSettings settings,
         Signal signal,
         RuntimeDependencies dependencies,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IReadOnlyDictionary<string, string?>? env = null)
     {
         ArgumentNullException.ThrowIfNull(settings);
         ArgumentNullException.ThrowIfNull(signal);
         ArgumentNullException.ThrowIfNull(dependencies);
+
+        EnsureLiveFilingConfirmed(signal.DryRun, env);
 
         var services = ComposeServices(settings, dependencies);
         var run = await LoadOrCreateRunAsync(
@@ -90,10 +94,13 @@ public static class RuntimeVerbs
         RuntimeSettings settings,
         bool dryRun,
         RuntimeDependencies dependencies,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IReadOnlyDictionary<string, string?>? env = null)
     {
         ArgumentNullException.ThrowIfNull(settings);
         ArgumentNullException.ThrowIfNull(dependencies);
+
+        EnsureLiveFilingConfirmed(dryRun, env);
 
         var services = ComposeServices(settings, dependencies);
 
@@ -152,6 +159,37 @@ public static class RuntimeVerbs
     /// actually driven through the line instead of being suppressed by the
     /// scope's first-ever terminal result.
     /// </remarks>
+    /// <summary>
+    /// Refuses a live (non-dry-run) <c>run</c> or <c>sweep</c> invocation unless the
+    /// manual gate <see cref="RuntimeIntegrationSettings.ConfirmLiveFiling"/> is
+    /// explicitly set to <c>true</c> in <paramref name="env"/>. This mirrors the
+    /// gate <see cref="PollOutcomesAsync"/> already enforces for
+    /// <see cref="RuntimeIntegrationSettings.ConfirmLiveOutcomes"/>: an accidental
+    /// live filing invocation must fail loudly before any station runs, never be
+    /// silently downgraded to a preview. A dry run is always allowed through
+    /// untouched.
+    /// </summary>
+    private static void EnsureLiveFilingConfirmed(bool dryRun, IReadOnlyDictionary<string, string?>? env)
+    {
+        if (dryRun)
+        {
+            return;
+        }
+
+        var confirmed = (env is not null
+            && env.TryGetValue(RuntimeIntegrationSettings.ConfirmLiveFiling, out var value)
+                ? value
+                : null)
+            ?.Trim();
+        if (!string.Equals(confirmed, "true", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new RuntimeVerbException(
+                "refusing to file live without an explicit manual gate: set "
+                + $"{RuntimeIntegrationSettings.ConfirmLiveFiling}=true to confirm this run may file real GitHub "
+                + "issues instead of previewing them.");
+        }
+    }
+
     private static async Task<ConveyorRun> LoadOrCreateRunAsync(
         ConveyorServices services,
         TriggerKind trigger,
@@ -354,7 +392,8 @@ public static class RuntimeVerbs
         RuntimeDependencies dependencies,
         string host = DefaultHost,
         int port = DefaultPort,
-        TimeSpan? sweepInterval = null)
+        TimeSpan? sweepInterval = null,
+        IReadOnlyDictionary<string, string?>? env = null)
     {
         ArgumentNullException.ThrowIfNull(settings);
         ArgumentNullException.ThrowIfNull(dependencies);
@@ -366,6 +405,7 @@ public static class RuntimeVerbs
                 settings,
                 dependencies,
                 sweepInterval.Value,
+                env,
                 provider.GetRequiredService<ILogger<PeriodicSweepService>>()));
         }
 
@@ -466,10 +506,11 @@ public static class RuntimeVerbs
         string host,
         int port,
         TimeSpan? sweepInterval,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IReadOnlyDictionary<string, string?>? env = null)
     {
         ArgumentNullException.ThrowIfNull(dependencies);
-        var app = BuildOrchestratorHost(settings, dependencies, host, port, sweepInterval);
+        var app = BuildOrchestratorHost(settings, dependencies, host, port, sweepInterval, env);
         return dependencies.WebHostRunner.RunAsync(app, cancellationToken);
     }
 

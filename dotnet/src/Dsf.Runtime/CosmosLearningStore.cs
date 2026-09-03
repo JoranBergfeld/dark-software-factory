@@ -8,10 +8,12 @@ namespace Dsf.Runtime;
 /// <summary>
 /// The learning-loop persistence adapter, backed by the product's Cosmos
 /// account: each (intent key, verdict) pair is recorded under a stable document
-/// id, so recording the same still-labelled issue again on a later poll is
-/// recognized as already recorded and skipped rather than duplicated. Reuses
-/// <see cref="ICosmosDocumentGateway"/>, the same real Entra-authenticated gateway
-/// <see cref="CosmosRunStore"/> persists the run blackboard through.
+/// id via the gateway's atomic create-if-absent primitive (<see
+/// cref="ICosmosDocumentGateway.CreateIfAbsentAsync"/>), so recording the same
+/// still-labelled issue again -- even from a poll racing concurrently with this
+/// one -- is recognized as already recorded and skipped rather than duplicated.
+/// Reuses <see cref="ICosmosDocumentGateway"/>, the same real Entra-authenticated
+/// gateway <see cref="CosmosRunStore"/> persists the run blackboard through.
 /// </summary>
 internal sealed class CosmosLearningStore(
     string endpoint,
@@ -29,25 +31,6 @@ internal sealed class CosmosLearningStore(
     {
         ArgumentNullException.ThrowIfNull(record);
         var id = DocumentId(record.IntentKey, record.Verdict);
-
-        string? existing;
-        try
-        {
-            existing = await gateway.ReadAsync(endpoint, database, container, product, id, cancellationToken);
-        }
-        catch (Exception exception) when (exception is not OperationCanceledException)
-        {
-            throw new InvalidOperationException(
-                $"could not read the learning record for intent '{record.IntentKey}' verdict '{record.Verdict}' "
-                + $"from the Cosmos container '{database}/{container}' at '{endpoint}': {exception.Message}",
-                exception);
-        }
-
-        if (existing is not null)
-        {
-            return false;
-        }
-
         var document = JsonSerializer.Serialize(
             new
             {
@@ -63,7 +46,12 @@ internal sealed class CosmosLearningStore(
 
         try
         {
-            await gateway.UpsertAsync(endpoint, database, container, product, id, document, cancellationToken);
+            // Delegates the atomicity to the gateway's create-if-absent primitive
+            // rather than reading first and upserting second here: two polls
+            // racing to record the exact same (intent key, verdict) pair must
+            // never both observe "not there yet" and both write -- a race a
+            // separate read-then-write in this class could lose.
+            return await gateway.CreateIfAbsentAsync(endpoint, database, container, product, id, document, cancellationToken);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
@@ -73,8 +61,61 @@ internal sealed class CosmosLearningStore(
                 + $"{exception.Message}",
                 exception);
         }
+    }
 
-        return true;
+    /// <summary>
+    /// Retrieves every outcome ever recorded for <paramref name="intentKey"/>, so a
+    /// later run whose synthesis reaches the exact same scope fingerprint and
+    /// source kind (the same intent key) can draw on what a human verdict on
+    /// that same conclusion actually was, instead of reasoning blind to its own
+    /// history. Point-reads the (intent key, verdict) document for each
+    /// canonical outcome label rather than querying the container: with only
+    /// three possible verdicts (<see cref="OutcomeLabels.All"/>), this is exact
+    /// and needs no query capability the gateway does not already expose.
+    /// </summary>
+    public async Task<IReadOnlyList<LearningRecord>> RetrieveAsync(string intentKey, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(intentKey);
+        var lessons = new List<LearningRecord>();
+        foreach (var verdict in OutcomeLabels.All)
+        {
+            var id = DocumentId(intentKey, verdict);
+            string? json;
+            try
+            {
+                json = await gateway.ReadAsync(endpoint, database, container, product, id, cancellationToken);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                throw new InvalidOperationException(
+                    $"could not read learning lessons for intent '{intentKey}' from the Cosmos container "
+                    + $"'{database}/{container}' at '{endpoint}': {exception.Message}",
+                    exception);
+            }
+
+            if (json is null)
+            {
+                continue;
+            }
+
+            lessons.Add(Deserialize(json));
+        }
+
+        return lessons;
+    }
+
+    private static LearningRecord Deserialize(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+        return new LearningRecord(
+            root.GetProperty("intentKey").GetString() ?? string.Empty,
+            root.GetProperty("verdict").GetString() ?? string.Empty,
+            root.TryGetProperty("issueUrl", out var issueUrl) ? issueUrl.GetString() ?? string.Empty : string.Empty,
+            root.TryGetProperty("title", out var title) ? title.GetString() ?? string.Empty : string.Empty,
+            root.TryGetProperty("observedAt", out var observedAt) && observedAt.ValueKind != JsonValueKind.Null
+                ? observedAt.GetDateTimeOffset()
+                : DateTimeOffset.MinValue);
     }
 
     /// <summary>

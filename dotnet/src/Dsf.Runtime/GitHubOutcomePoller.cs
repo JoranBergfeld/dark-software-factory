@@ -52,19 +52,33 @@ internal sealed partial class GitHubOutcomePoller : IOutcomeSource
         var query = Uri.EscapeDataString($"repo:{repository} is:issue label:{labelClause}");
         httpClient.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", await authProvider.GetTokenAsync(cancellationToken));
-        using var response = await httpClient.GetAsync($"search/issues?q={query}", cancellationToken);
-        var body = await response.Content.ReadAsStringAsync(cancellationToken);
-        if (!response.IsSuccessStatusCode)
+
+        var signals = new List<OutcomeSignal>();
+        string? requestUri = $"search/issues?q={query}";
+        while (requestUri is not null)
         {
-            throw new InvalidOperationException(
-                $"GitHub refused the outcome poll for '{repository}' ({(int)response.StatusCode}): {body}");
+            using var response = await httpClient.GetAsync(requestUri, cancellationToken);
+            var body = await response.Content.ReadAsStringAsync(cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                throw new InvalidOperationException(
+                    $"GitHub refused the outcome poll for '{repository}' ({(int)response.StatusCode}): {body}");
+            }
+
+            signals.AddRange(ParseSignals(body));
+            requestUri = NextPageRequestUri(response);
         }
 
+        return signals;
+    }
+
+    /// <summary>Parses one search response page into the outcome signals it carries.</summary>
+    private static IEnumerable<OutcomeSignal> ParseSignals(string body)
+    {
         using var document = JsonDocument.Parse(body);
-        var signals = new List<OutcomeSignal>();
         if (!document.RootElement.TryGetProperty("items", out var items) || items.ValueKind != JsonValueKind.Array)
         {
-            return signals;
+            yield break;
         }
 
         foreach (var item in items.EnumerateArray())
@@ -81,11 +95,41 @@ internal sealed partial class GitHubOutcomePoller : IOutcomeSource
 
             var url = item.TryGetProperty("html_url", out var urlValue) ? urlValue.GetString() ?? string.Empty : string.Empty;
             var title = item.TryGetProperty("title", out var titleValue) ? titleValue.GetString() ?? string.Empty : string.Empty;
-            signals.Add(new OutcomeSignal(intentKey, verdict, url, title));
+            yield return new OutcomeSignal(intentKey, verdict, url, title);
+        }
+    }
+
+    /// <summary>
+    /// The next page's request URI, taken from the response's <c>Link: rel="next"</c>
+    /// header exactly as GitHub's search API paginates -- or <c>null</c> once the
+    /// last page (no <c>next</c> link) is reached, ending the poll.
+    /// </summary>
+    private static string? NextPageRequestUri(HttpResponseMessage response)
+    {
+        if (!response.Headers.TryGetValues("Link", out var linkValues))
+        {
+            return null;
         }
 
-        return signals;
+        foreach (var linkHeader in linkValues)
+        {
+            foreach (var link in linkHeader.Split(',', StringSplitOptions.TrimEntries))
+            {
+                var match = LinkHeaderPattern().Match(link);
+                if (match.Success && string.Equals(match.Groups["rel"].Value, "next", StringComparison.Ordinal))
+                {
+                    // Return an absolute URI: HttpClient resolves it against BaseAddress
+                    // when it already is one, and against the relative path otherwise.
+                    return match.Groups["url"].Value;
+                }
+            }
+        }
+
+        return null;
     }
+
+    [GeneratedRegex("<(?<url>[^>]+)>;\\s*rel=\"(?<rel>[^\"]+)\"")]
+    private static partial Regex LinkHeaderPattern();
 
     /// <summary>Extracts the intent key from the <c>&lt;!-- dsf-intent: ... --&gt;</c> marker <see cref="GitHubIssueFiler"/> stamps into a filed issue's body.</summary>
     private static string? ExtractIntentKey(string body)

@@ -32,6 +32,38 @@ public sealed class GitHubOutcomePollerTests
         return app;
     }
 
+    /// <summary>
+    /// Starts a GitHub double that serves <paramref name="pages"/> across as many
+    /// requests, one page per call, each carrying a <c>Link: rel="next"</c>
+    /// response header pointing at the next page -- exactly like the real GitHub
+    /// search API paginates -- except on the last page, which carries no
+    /// <c>next</c> link.
+    /// </summary>
+    private static async Task<WebApplication> StartPagedGitHubAsync(List<string> requestedPages, params string[] pages)
+    {
+        var builder = WebApplication.CreateSlimBuilder();
+        builder.WebHost.UseUrls("http://127.0.0.1:0");
+        var app = builder.Build();
+        app.MapGet("/search/issues", async (HttpContext context) =>
+        {
+            var page = context.Request.Query.TryGetValue("page", out var raw) && int.TryParse(raw, out var parsed)
+                ? parsed
+                : 1;
+            requestedPages.Add(page.ToString());
+            if (page < pages.Length)
+            {
+                var nextUrl = $"{context.Request.Scheme}://{context.Request.Host}{context.Request.Path}"
+                    + $"?q={Uri.EscapeDataString(context.Request.Query["q"].ToString())}&page={page + 1}";
+                context.Response.Headers.Append("Link", $"<{nextUrl}>; rel=\"next\"");
+            }
+
+            context.Response.ContentType = "application/json";
+            await context.Response.WriteAsync(pages[page - 1]);
+        });
+        await app.StartAsync();
+        return app;
+    }
+
     [Fact]
     public async Task Polling_ORs_every_canonical_outcome_label_into_one_search_query()
     {
@@ -51,6 +83,46 @@ public sealed class GitHubOutcomePollerTests
             Assert.Contains("dsf-outcome:approved", decoded);
             Assert.Contains("dsf-outcome:rejected", decoded);
             Assert.Contains("dsf-outcome:changes-requested", decoded);
+        }
+        finally
+        {
+            await github.StopAsync();
+        }
+    }
+
+    [Fact]
+    public async Task Polling_follows_every_page_until_no_next_link_and_reports_every_issue_found()
+    {
+        var requestedPages = new List<string>();
+        var page1 = """
+        {"total_count": 2, "items": [{
+            "html_url": "https://github.com/acme/acme/issues/9",
+            "title": "[sentry] checkout 500s spiked",
+            "body": "<!-- dsf-intent: fingerprint-1:sentry -->",
+            "labels": [{"name": "dsf-outcome:approved"}]
+        }]}
+        """;
+        var page2 = """
+        {"total_count": 2, "items": [{
+            "html_url": "https://github.com/acme/acme/issues/10",
+            "title": "[grafana] latency spiked",
+            "body": "<!-- dsf-intent: fingerprint-2:grafana -->",
+            "labels": [{"name": "dsf-outcome:rejected"}]
+        }]}
+        """;
+        var github = await StartPagedGitHubAsync(requestedPages, page1, page2);
+        await using var host = github;
+        try
+        {
+            using var http = new HttpClient { BaseAddress = new Uri($"{BaseAddress(github)}/") };
+            var poller = new GitHubOutcomePoller(http, new StaticAuthProvider("ghp_test"), "acme/acme");
+
+            var signals = await poller.PollAsync(CancellationToken.None);
+
+            Assert.Equal(["1", "2"], requestedPages);
+            Assert.Equal(2, signals.Count);
+            Assert.Contains(signals, s => s.IntentKey == "fingerprint-1:sentry" && s.Verdict == OutcomeLabels.Approved);
+            Assert.Contains(signals, s => s.IntentKey == "fingerprint-2:grafana" && s.Verdict == OutcomeLabels.Rejected);
         }
         finally
         {

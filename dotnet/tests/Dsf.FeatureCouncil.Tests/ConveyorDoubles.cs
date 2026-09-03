@@ -16,14 +16,16 @@ internal static class ConveyorDoubles
         IIssueFiler? issueFiler = null,
         IRunStore? runStore = null,
         IModelClient? modelClient = null,
-        ITracer? tracer = null) =>
+        ITracer? tracer = null,
+        ILearningStore? learningStore = null) =>
         new(
             Product,
             gatherers ?? [],
             issueFiler,
             runStore ?? new RecordingRunStore(),
             modelClient ?? new RecordingModelClient(),
-            tracer ?? new RecordingTracer());
+            tracer ?? new RecordingTracer(),
+            learningStore);
 }
 
 /// <summary>
@@ -88,6 +90,53 @@ internal sealed class RecordingModelClient(string response = "deterministic test
         Prompts.Add(prompt);
         return Task.FromResult(response);
     }
+}
+
+/// <summary>
+/// A learning store seeded with the lessons a prior run recorded, and that
+/// records every retrieval and recording it is asked to do -- so a test can
+/// assert both what S3 synthesis consulted and that a recorded outcome remains
+/// idempotent by (intent key, verdict).
+/// </summary>
+internal sealed class RecordingLearningStore(params LearningRecord[] seeded) : ILearningStore
+{
+    private readonly List<LearningRecord> records = [.. seeded];
+
+    public List<string> Retrieved { get; } = [];
+
+    public List<LearningRecord> Recorded { get; } = [];
+
+    public Task<bool> RecordAsync(LearningRecord record, CancellationToken cancellationToken)
+    {
+        var alreadyRecorded = this.records.Any(
+            existing => existing.IntentKey == record.IntentKey && existing.Verdict == record.Verdict);
+        if (alreadyRecorded)
+        {
+            return Task.FromResult(false);
+        }
+
+        this.records.Add(record);
+        this.Recorded.Add(record);
+        return Task.FromResult(true);
+    }
+
+    public Task<IReadOnlyList<LearningRecord>> RetrieveAsync(string intentKey, CancellationToken cancellationToken)
+    {
+        this.Retrieved.Add(intentKey);
+        IReadOnlyList<LearningRecord> found =
+            [.. this.records.Where(record => record.IntentKey == intentKey)];
+        return Task.FromResult(found);
+    }
+}
+
+/// <summary>A learning store whose backing store cannot be reached.</summary>
+internal sealed class UnreachableLearningStore(string reason) : ILearningStore
+{
+    public Task<bool> RecordAsync(LearningRecord record, CancellationToken cancellationToken) =>
+        throw new InvalidOperationException(reason);
+
+    public Task<IReadOnlyList<LearningRecord>> RetrieveAsync(string intentKey, CancellationToken cancellationToken) =>
+        throw new InvalidOperationException(reason);
 }
 
 /// <summary>An evidence gatherer that yields fixed evidence and counts its calls.</summary>

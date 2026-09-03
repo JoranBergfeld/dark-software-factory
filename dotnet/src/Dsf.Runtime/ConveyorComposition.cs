@@ -56,7 +56,37 @@ internal sealed class EnvironmentConveyorComposer(
                 missing);
         }
 
-        return new ConveyorServices(settings.Product, gatherers, filer, runStore!, modelClient!, tracer!);
+        // The learning store is enrichment, not a requirement: a factory whose
+        // Cosmos endpoint is unset still composes and runs the line exactly as
+        // before, just without any prior verdict for synthesis to consult.
+        var learningStore = ComposeLearningStore(settings);
+
+        return new ConveyorServices(settings.Product, gatherers, filer, runStore!, modelClient!, tracer!, learningStore);
+    }
+
+    /// <summary>
+    /// Wires the same Cosmos endpoint the run store uses, in a separate container
+    /// (<see cref="RuntimeIntegrationSettings.CosmosLearningContainer"/>), so
+    /// synthesis can consult any human verdict already recorded for a recurring
+    /// intent. Returns <c>null</c> when no Cosmos endpoint is configured, rather
+    /// than raising -- learning is enrichment the filing/persistence requirements
+    /// above already gate, not a new hard requirement of its own.
+    /// </summary>
+    private ILearningStore? ComposeLearningStore(RuntimeSettings settings)
+    {
+        if (settings.CosmosEndpoint.Trim().Length == 0)
+        {
+            return null;
+        }
+
+        var database = Read(RuntimeIntegrationSettings.CosmosDatabase);
+        var container = Read(RuntimeIntegrationSettings.CosmosLearningContainer);
+        return new CosmosLearningStore(
+            settings.CosmosEndpoint.Trim(),
+            database.Length > 0 ? database : RuntimeIntegrationSettings.DefaultCosmosDatabase,
+            container.Length > 0 ? container : RuntimeIntegrationSettings.DefaultCosmosLearningContainer,
+            settings.Product,
+            cosmosGateway ?? new AzureCosmosDocumentGateway());
     }
 
     /// <summary>One gatherer per source kind that has an agent endpoint configured.</summary>

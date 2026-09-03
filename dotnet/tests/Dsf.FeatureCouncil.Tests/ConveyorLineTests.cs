@@ -228,4 +228,52 @@ public sealed class ConveyorLineTests
         Assert.Equal(
             finished.Proposals.Count(proposal => proposal.Accepted), finished.PreviewedIssues.Count);
     }
+
+    [Fact]
+    public async Task A_recurring_intent_consults_the_lessons_a_prior_run_recorded_during_synthesis()
+    {
+        var fingerprint = RunIdentity.Compute(TriggerKind.Signal, ["acme"], ["sentry"]);
+        var intentKey = $"{fingerprint}:sentry";
+        var learningStore = new RecordingLearningStore(
+            new LearningRecord(
+                intentKey, OutcomeLabels.Rejected, "https://github.com/acme/acme/issues/7", "prior attempt",
+                DateTimeOffset.UtcNow.AddDays(-3)));
+        var model = new RecordingModelClient();
+        var services = ConveyorDoubles.Services(
+            gatherers: [new CountingEvidenceGatherer("sentry", SentryEvidence)],
+            modelClient: model,
+            learningStore: learningStore);
+
+        var run = await ConveyorLine.RunAsync(ScopedRun(), services, CancellationToken.None);
+
+        Assert.Equal(RunStatus.Previewed, run.Status);
+        Assert.Contains(intentKey, learningStore.Retrieved);
+        Assert.Contains(
+            model.Prompts, prompt => prompt.Contains(OutcomeLabels.Rejected, StringComparison.Ordinal));
+        Assert.Contains(
+            run.Audit,
+            record => record.Station == S3Synthesis.StationName
+                && record.Message.Contains("prior", StringComparison.OrdinalIgnoreCase)
+                && record.Message.Contains(OutcomeLabels.Rejected, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_first_time_intent_with_no_recorded_lessons_synthesizes_exactly_as_before()
+    {
+        var learningStore = new RecordingLearningStore();
+        var model = new RecordingModelClient();
+        var services = ConveyorDoubles.Services(
+            gatherers: [new CountingEvidenceGatherer("sentry", SentryEvidence)],
+            modelClient: model,
+            learningStore: learningStore);
+
+        var run = await ConveyorLine.RunAsync(ScopedRun(), services, CancellationToken.None);
+
+        Assert.Equal(RunStatus.Previewed, run.Status);
+        Assert.NotEmpty(learningStore.Retrieved);
+        Assert.DoesNotContain(
+            run.Audit,
+            record => record.Station == S3Synthesis.StationName
+                && record.Message.Contains("prior", StringComparison.OrdinalIgnoreCase));
+    }
 }

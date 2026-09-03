@@ -201,6 +201,15 @@ public sealed class ProductionCompositionTests
     }
 
     [Fact]
+    public void Fully_configured_production_composition_also_wires_a_learning_store_for_synthesis_to_consult()
+    {
+        var services = ProductionDependencies().ConveyorServicesFor(SettingsWithGitHubApp());
+
+        Assert.NotNull(services.LearningStore);
+        Assert.IsType<CosmosLearningStore>(services.LearningStore);
+    }
+
+    [Fact]
     public void Production_composition_honours_per_kind_endpoint_overrides()
     {
         var env = new Dictionary<string, string?>

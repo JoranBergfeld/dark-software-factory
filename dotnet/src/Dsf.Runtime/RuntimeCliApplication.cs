@@ -86,7 +86,7 @@ public static class RuntimeCliApplication
             parseResult.GetValue(product),
             dependencies,
             (settings, token) => RuntimeVerbs.RunAsync(
-                settings, parseResult.GetValue(signal), parseResult.GetValue(dryRun), dependencies, token),
+                settings, parseResult.GetValue(signal), parseResult.GetValue(dryRun), dependencies, token, env),
             cancellationToken));
         return command;
     }
@@ -108,7 +108,7 @@ public static class RuntimeCliApplication
             parseResult.GetValue(product),
             dependencies,
             (settings, token) => RuntimeVerbs.SweepAsync(
-                settings, parseResult.GetValue(dryRun), dependencies, token),
+                settings, parseResult.GetValue(dryRun), dependencies, token, env),
             cancellationToken));
         return command;
     }
@@ -139,7 +139,8 @@ public static class RuntimeCliApplication
                 parseResult.GetValue(loop)
                     ? PeriodicSweepService.ResolveInterval(parseResult.GetValue(interval), env)
                     : null,
-                token),
+                token,
+                env),
             cancellationToken));
         return command;
     }

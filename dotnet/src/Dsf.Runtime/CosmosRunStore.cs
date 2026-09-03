@@ -35,6 +35,36 @@ internal interface ICosmosDocumentGateway
         string partitionKey,
         string id,
         CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Atomically creates the document at <paramref name="id"/>/<paramref name="partitionKey"/>
+    /// only if none exists yet, so two callers racing to write the same id can
+    /// never both succeed: exactly one creates it, and every other caller
+    /// (concurrent or later) is told <c>false</c> -- a document was already
+    /// there -- instead of overwriting it. The default implementation composes
+    /// the two other members (a non-atomic read-then-write) for gateways that
+    /// have not opted into a real atomic primitive; <see cref="AzureCosmosDocumentGateway"/>
+    /// overrides this with an actual unconditional Cosmos create that reports a
+    /// document conflict rather than racing a read against a write.
+    /// </summary>
+    async Task<bool> CreateIfAbsentAsync(
+        string endpoint,
+        string database,
+        string container,
+        string partitionKey,
+        string id,
+        string json,
+        CancellationToken cancellationToken)
+    {
+        var existing = await ReadAsync(endpoint, database, container, partitionKey, id, cancellationToken);
+        if (existing is not null)
+        {
+            return false;
+        }
+
+        await UpsertAsync(endpoint, database, container, partitionKey, id, json, cancellationToken);
+        return true;
+    }
 }
 
 /// <summary>
@@ -116,6 +146,51 @@ internal sealed class AzureCosmosDocumentGateway(TokenCredential? credential = n
         }
 
         return await response.Content.ReadAsStringAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// The real atomic create: an unconditional Cosmos insert (no
+    /// <c>x-ms-documentdb-is-upsert</c> header), so a document id that already
+    /// exists is reported by Cosmos itself as a 409 Conflict -- an atomic
+    /// data-plane guarantee, not a read-then-write race the gateway could lose.
+    /// </summary>
+    public async Task<bool> CreateIfAbsentAsync(
+        string endpoint,
+        string database,
+        string container,
+        string partitionKey,
+        string id,
+        string json,
+        CancellationToken cancellationToken)
+    {
+        var token = await this.credential.GetTokenAsync(new TokenRequestContext(Scopes), cancellationToken);
+        var uri = new Uri(new Uri(EnsureTrailingSlash(endpoint)), $"dbs/{database}/colls/{container}/docs");
+        using var request = new HttpRequestMessage(HttpMethod.Post, uri)
+        {
+            Content = new StringContent(json, Encoding.UTF8, "application/json"),
+        };
+        request.Headers.TryAddWithoutValidation(
+            "Authorization", Uri.EscapeDataString($"type=aad&ver=1.0&sig={token.Token}"));
+        request.Headers.TryAddWithoutValidation("x-ms-version", CosmosApiVersion);
+        request.Headers.TryAddWithoutValidation("x-ms-date", DateTime.UtcNow.ToString("r"));
+        request.Headers.TryAddWithoutValidation(
+            "x-ms-documentdb-partitionkey", JsonSerializer.Serialize(new[] { partitionKey }));
+        request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+
+        using var response = await httpClient.SendAsync(request, cancellationToken);
+        if (response.StatusCode == System.Net.HttpStatusCode.Conflict)
+        {
+            return false;
+        }
+
+        if (!response.IsSuccessStatusCode)
+        {
+            var body = await response.Content.ReadAsStringAsync(cancellationToken);
+            throw new HttpRequestException(
+                $"{(int)response.StatusCode} {response.ReasonPhrase}: {body}");
+        }
+
+        return true;
     }
 
     private static string EnsureTrailingSlash(string url) => url.EndsWith('/') ? url : url + "/";

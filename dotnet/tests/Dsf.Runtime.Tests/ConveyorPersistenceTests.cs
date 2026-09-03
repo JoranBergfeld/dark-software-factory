@@ -27,6 +27,12 @@ public sealed class ConveyorPersistenceTests
         GitHubAppPrivateKeySecret: "",
         GitHubRepository: "acme/acme");
 
+    /// <summary>The manual live-filing gate, confirmed -- for tests that must reach real filing.</summary>
+    private static readonly IReadOnlyDictionary<string, string?> ConfirmedLiveFiling = new Dictionary<string, string?>
+    {
+        [RuntimeIntegrationSettings.ConfirmLiveFiling] = "true",
+    };
+
     private static async Task<string> WriteSignalAsync(string json)
     {
         var path = Path.Combine(Path.GetTempPath(), $"dsf-signal-{Guid.NewGuid():n}.json");
@@ -102,7 +108,8 @@ public sealed class ConveyorPersistenceTests
     {
         var dependencies = TestDependencies.Build(sourceAgentRosterReader: new RosterReader(["sentry"]));
 
-        var run = await RuntimeVerbs.SweepAsync(Settings, dryRun: false, dependencies, CancellationToken.None);
+        var run = await RuntimeVerbs.SweepAsync(
+            Settings, dryRun: false, dependencies, CancellationToken.None, ConfirmedLiveFiling);
 
         Assert.Equal(RunStatus.Error, run.Status);
         Assert.NotEqual(RunStatus.Filed, run.Status);
@@ -295,7 +302,8 @@ public sealed class ConveyorPersistenceTests
             priorRun.Proposals.Add(proposal);
             store.Seed(priorRun);
 
-            var run = await RuntimeVerbs.RunAsync(Settings, path, dryRun: false, dependencies, CancellationToken.None);
+            var run = await RuntimeVerbs.RunAsync(
+                Settings, path, dryRun: false, dependencies, CancellationToken.None, ConfirmedLiveFiling);
 
             Assert.Equal(runId, run.Id);
             Assert.Equal(RunStatus.Filed, run.Status);
@@ -334,7 +342,8 @@ public sealed class ConveyorPersistenceTests
             priorRun.PreviewedIssues.Add(new IssuePreview("Investigate checkout 500s", "intent-1", ["bug"]));
             store.Seed(priorRun);
 
-            var run = await RuntimeVerbs.RunAsync(Settings, path, dryRun: false, dependencies, CancellationToken.None);
+            var run = await RuntimeVerbs.RunAsync(
+                Settings, path, dryRun: false, dependencies, CancellationToken.None, ConfirmedLiveFiling);
 
             Assert.Equal(runId, run.Id);
             Assert.Equal(RunStatus.Previewed, run.Status);

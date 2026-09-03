@@ -138,6 +138,18 @@ internal sealed record GitHubProvisioningPlan(IReadOnlyList<GitHubProvisioningRe
                 "incident",
                 "b60205",
                 "SRE-filed incident the feature council reflects on"),
+            new(
+                "dsf-outcome:approved",
+                "0e8a16",
+                "Human verdict: the council's proposal was approved as filed"),
+            new(
+                "dsf-outcome:rejected",
+                "b60205",
+                "Human verdict: the council's proposal was rejected"),
+            new(
+                "dsf-outcome:changes-requested",
+                "fbca04",
+                "Human verdict: the council's proposal needs changes before it can land"),
         ];
 
     private static int RequiredApprovingReviews(string creationMaturity) =>

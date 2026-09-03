@@ -76,7 +76,10 @@ public interface ITracer
 /// unwired filer at the real boundary; <paramref name="RunStore"/>,
 /// <paramref name="ModelClient"/> and <paramref name="Tracer"/> are required --
 /// a run the factory cannot persist, cannot reason over, or cannot trace is not
-/// one composition should ever hand to the line.
+/// one composition should ever hand to the line. <paramref name="LearningStore"/>
+/// is nullable and defaults to unwired: a factory without a configured learning
+/// store still synthesizes proposals exactly as before, just blind to any prior
+/// verdict its own recurring intents have already received.
 /// </summary>
 public sealed record ConveyorServices(
     string Product,
@@ -84,7 +87,8 @@ public sealed record ConveyorServices(
     IIssueFiler? IssueFiler,
     IRunStore RunStore,
     IModelClient ModelClient,
-    ITracer Tracer)
+    ITracer Tracer,
+    ILearningStore? LearningStore = null)
 {
     public IRunStore RunStore { get; } = RunStore ?? throw new ArgumentNullException(nameof(RunStore));
 

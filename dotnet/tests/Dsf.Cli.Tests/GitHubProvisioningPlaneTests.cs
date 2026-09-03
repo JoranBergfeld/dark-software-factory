@@ -118,6 +118,7 @@ public sealed class GitHubProvisioningPlaneTests
                         "feature", "bug", "chore", "api", "ui", "infra",
                         "sev-low", "sev-medium", "sev-high", "sev-critical",
                         "creation:ready", "incident",
+                        "dsf-outcome:approved", "dsf-outcome:rejected", "dsf-outcome:changes-requested",
                     ],
                     labels.Labels.Select(label => label.Name).ToArray());
             },

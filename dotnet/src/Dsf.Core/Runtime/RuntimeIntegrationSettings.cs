@@ -61,6 +61,17 @@ public static class RuntimeIntegrationSettings
     /// </summary>
     public const string ConfirmLiveOutcomes = "DSF_CONFIRM_LIVE_OUTCOMES";
 
+    /// <summary>
+    /// The manual gate a live (non-<c>--dry-run</c>) <c>run</c> or <c>sweep</c>
+    /// requires before it may reach S7 filing for real: an operator must set this
+    /// to <c>true</c> before the runtime will file real GitHub issues from a
+    /// signal or scheduled sweep. An accidental live invocation without this set
+    /// fails loudly before the line files anything, exactly like <see
+    /// cref="ConfirmLiveOutcomes"/> gates a live outcome poll. A <c>--dry-run</c>
+    /// invocation never needs this: it never reaches filing.
+    /// </summary>
+    public const string ConfirmLiveFiling = "DSF_CONFIRM_LIVE_FILING";
+
     private static string Normalize(string kind) =>
         (kind ?? string.Empty).Trim().ToUpperInvariant().Replace('-', '_');
 }

@@ -15,6 +15,7 @@ internal sealed class PeriodicSweepService(
     RuntimeSettings settings,
     RuntimeDependencies dependencies,
     TimeSpan interval,
+    IReadOnlyDictionary<string, string?>? env,
     ILogger<PeriodicSweepService> logger) : BackgroundService
 {
     /// <summary>Seconds between sweeps when neither <c>--interval</c> nor the env var is set.</summary>
@@ -48,7 +49,7 @@ internal sealed class PeriodicSweepService(
         {
             try
             {
-                var run = await RuntimeVerbs.SweepAsync(settings, dryRun: false, dependencies, stoppingToken);
+                var run = await RuntimeVerbs.SweepAsync(settings, dryRun: false, dependencies, stoppingToken, env);
                 foreach (var line in RuntimeRunSummary.From(run).ToLines())
                 {
                     logger.LogInformation("{Line}", line);

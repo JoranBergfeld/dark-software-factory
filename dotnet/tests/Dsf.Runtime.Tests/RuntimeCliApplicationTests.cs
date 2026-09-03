@@ -29,6 +29,11 @@ public sealed class RuntimeCliApplicationTests
         ["AZURE_OPENAI_ENDPOINT"] = "https://openai.example",
         ["AZURE_OPENAI_DEPLOYMENT"] = "gpt-deploy",
         ["AZURE_OPENAI_EMBEDDING_DEPLOYMENT"] = "embed-deploy",
+        // Every fully-configured fixture confirms the manual live-filing gate by
+        // default, so existing sweep/run parity tests keep exercising what they
+        // already did before the gate existed; the refusal itself is exercised
+        // separately against an environment that omits this.
+        [RuntimeIntegrationSettings.ConfirmLiveFiling] = "true",
     };
 
     private static async Task<(int ExitCode, string Stdout, string Stderr)> InvokeAsync(
@@ -227,6 +232,43 @@ public sealed class RuntimeCliApplicationTests
     }
 
     [Fact]
+    public async Task Sweep_without_dry_run_and_without_the_live_filing_gate_is_refused_and_exits_non_zero()
+    {
+        var envWithoutGate = FullEnvironment
+            .Where(pair => pair.Key != RuntimeIntegrationSettings.ConfirmLiveFiling)
+            .ToDictionary(pair => pair.Key, pair => pair.Value);
+
+        var (exitCode, stdout, stderr) = await InvokeAsync(envWithoutGate, "sweep");
+
+        Assert.Equal(1, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains(RuntimeIntegrationSettings.ConfirmLiveFiling, stderr);
+    }
+
+    [Fact]
+    public async Task Run_without_dry_run_and_without_the_live_filing_gate_is_refused_and_exits_non_zero()
+    {
+        var path = Path.GetTempFileName();
+        try
+        {
+            await File.WriteAllTextAsync(path, """{"product_hints": "acme", "source_kinds": ["sentry"]}""");
+            var envWithoutGate = FullEnvironment
+                .Where(pair => pair.Key != RuntimeIntegrationSettings.ConfirmLiveFiling)
+                .ToDictionary(pair => pair.Key, pair => pair.Value);
+
+            var (exitCode, stdout, stderr) = await InvokeAsync(envWithoutGate, "run", "--signal", path);
+
+            Assert.Equal(1, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains(RuntimeIntegrationSettings.ConfirmLiveFiling, stderr);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public async Task Serve_orchestrator_with_full_settings_starts_a_real_host()
     {
         var runner = new RecordingWebHostRunner();
@@ -348,6 +390,10 @@ public sealed class RuntimeCliApplicationTests
         {
             ["DSF_PRODUCT"] = "acme",
             ["DSF_OWNER_APPCONFIG_ENDPOINT"] = "https://owner-appconfig.example",
+            // sweep runs live (no --dry-run in `args`), so the manual live-filing
+            // gate must be confirmed for this to reach real work instead of being
+            // refused before the line runs.
+            [RuntimeIntegrationSettings.ConfirmLiveFiling] = "true",
         };
         var reader = new StubOwnerRuntimeIndexReader(new Dictionary<string, string>
         {

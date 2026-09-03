@@ -87,12 +87,19 @@ internal sealed class RecordingLearningStore : ILearningStore
         Recorded.Add(record);
         return Task.FromResult(seen.Add((record.IntentKey, record.Verdict)));
     }
+
+    public Task<IReadOnlyList<LearningRecord>> RetrieveAsync(string intentKey, CancellationToken cancellationToken) =>
+        Task.FromResult<IReadOnlyList<LearningRecord>>(
+            Recorded.Where(record => record.IntentKey == intentKey).ToArray());
 }
 
 /// <summary>A learning store whose backend cannot be reached.</summary>
 internal sealed class UnreachableLearningStore(string reason) : ILearningStore
 {
     public Task<bool> RecordAsync(LearningRecord record, CancellationToken cancellationToken) =>
+        throw new InvalidOperationException(reason);
+
+    public Task<IReadOnlyList<LearningRecord>> RetrieveAsync(string intentKey, CancellationToken cancellationToken) =>
         throw new InvalidOperationException(reason);
 }
 

@@ -57,4 +57,13 @@ public interface ILearningStore
     /// recorded -- a no-op write, not a duplicate.
     /// </summary>
     Task<bool> RecordAsync(LearningRecord record, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Retrieves every outcome ever recorded for <paramref name="intentKey"/>, so
+    /// a later run whose synthesis reaches the exact same intent can draw on the
+    /// human verdicts that conclusion actually received, instead of reasoning
+    /// blind to its own history. Answers an empty list, never a failure, when
+    /// nothing has ever been recorded for the intent.
+    /// </summary>
+    Task<IReadOnlyList<LearningRecord>> RetrieveAsync(string intentKey, CancellationToken cancellationToken);
 }
