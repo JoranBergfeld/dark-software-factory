@@ -67,6 +67,91 @@ public sealed class RuntimeCliApplicationTests
     }
 
     [Fact]
+    public void Root_grammar_exposes_poll_outcomes()
+    {
+        var root = RuntimeCliApplication.BuildRootCommand();
+
+        Assert.Contains("poll-outcomes", root.Subcommands.Select(c => c.Name));
+    }
+
+    [Fact]
+    public async Task Poll_outcomes_without_any_settings_names_the_missing_product_and_exits_non_zero()
+    {
+        var (exitCode, stdout, stderr) = await InvokeAsync(EmptyEnvironment, "poll-outcomes", "--dry-run");
+
+        Assert.Equal(1, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("DSF_PRODUCT is required", stderr);
+    }
+
+    [Fact]
+    public async Task Poll_outcomes_without_dry_run_or_live_is_refused_and_exits_non_zero()
+    {
+        var (exitCode, stdout, stderr) = await InvokeAsync(FullEnvironment, "poll-outcomes");
+
+        Assert.Equal(1, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("--dry-run", stderr);
+        Assert.Contains("--live", stderr);
+    }
+
+    [Fact]
+    public async Task Poll_outcomes_dry_run_reports_every_outcome_it_polled_without_recording()
+    {
+        var outcomeSource = new RecordingOutcomeSource(
+            new OutcomeSignal("fingerprint-1:sentry", OutcomeLabels.Approved, "https://github.com/acme/acme/issues/9", "checkout 500s spiked"));
+        var learningStore = new RecordingLearningStore();
+        var dependencies = TestDependencies.Build(
+            learningComposer: new ScriptedLearningComposer(outcomeSource, learningStore));
+
+        var (exitCode, stdout, stderr) = await InvokeAsync(FullEnvironment, dependencies, "poll-outcomes", "--dry-run");
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Contains("fingerprint-1:sentry", stdout);
+        Assert.Contains("previewed 1 outcome(s)", stdout);
+        Assert.Empty(learningStore.Recorded);
+    }
+
+    [Fact]
+    public async Task Poll_outcomes_live_without_the_manual_gate_is_refused_and_records_nothing()
+    {
+        var outcomeSource = new RecordingOutcomeSource(
+            new OutcomeSignal("fingerprint-1:sentry", OutcomeLabels.Approved, "https://github.com/acme/acme/issues/9", "checkout 500s spiked"));
+        var learningStore = new RecordingLearningStore();
+        var dependencies = TestDependencies.Build(
+            learningComposer: new ScriptedLearningComposer(outcomeSource, learningStore));
+
+        var (exitCode, stdout, stderr) = await InvokeAsync(FullEnvironment, dependencies, "poll-outcomes", "--live");
+
+        Assert.Equal(1, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains(RuntimeIntegrationSettings.ConfirmLiveOutcomes, stderr);
+        Assert.Empty(learningStore.Recorded);
+    }
+
+    [Fact]
+    public async Task Poll_outcomes_live_with_the_manual_gate_records_and_reports_success()
+    {
+        var outcomeSource = new RecordingOutcomeSource(
+            new OutcomeSignal("fingerprint-1:sentry", OutcomeLabels.Approved, "https://github.com/acme/acme/issues/9", "checkout 500s spiked"));
+        var learningStore = new RecordingLearningStore();
+        var dependencies = TestDependencies.Build(
+            learningComposer: new ScriptedLearningComposer(outcomeSource, learningStore));
+        var env = new Dictionary<string, string?>(FullEnvironment)
+        {
+            [RuntimeIntegrationSettings.ConfirmLiveOutcomes] = "true",
+        };
+
+        var (exitCode, stdout, stderr) = await InvokeAsync(env, dependencies, "poll-outcomes", "--live");
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Contains("recorded 1 new", stdout);
+        Assert.Single(learningStore.Recorded);
+    }
+
+    [Fact]
     public async Task Run_without_any_settings_names_the_missing_product_and_exits_non_zero()
     {
         var (exitCode, stdout, stderr) = await InvokeAsync(EmptyEnvironment, "run", "--signal", "signal.json");

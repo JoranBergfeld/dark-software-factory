@@ -447,3 +447,173 @@ public sealed class RuntimeVerbsTests
     private static string BaseAddress(WebApplication app) =>
         app.Urls.First().Replace("[::]", "127.0.0.1", StringComparison.Ordinal);
 }
+
+/// <summary>
+/// Behavioural tests for <c>poll-outcomes</c>: it must poll and record human
+/// outcomes idempotently, must require exactly one of <c>--dry-run</c>/<c>--live</c>,
+/// and a live (recording) poll must refuse to run without an explicit manual
+/// confirmation gate.
+/// </summary>
+public sealed class PollOutcomesVerbTests
+{
+    private static readonly RuntimeSettings Settings = new(
+        Product: "acme",
+        AppConfigEndpoint: "https://appconfig.example",
+        KeyVaultUri: "",
+        AppInsightsConnectionString: "",
+        CosmosEndpoint: "https://cosmos.example",
+        OpenAiEndpoint: "https://openai.example",
+        OpenAiDeployment: "gpt-deploy",
+        OpenAiEmbeddingDeployment: "embed-deploy",
+        GitHubAppId: "",
+        GitHubInstallationId: "",
+        GitHubAppPrivateKeySecret: "",
+        GitHubRepository: "acme/acme");
+
+    private static readonly OutcomeSignal Signal =
+        new("fingerprint-1:sentry", OutcomeLabels.Approved, "https://github.com/acme/acme/issues/9", "[sentry] checkout 500s spiked");
+
+    private static readonly Dictionary<string, string?> NoConfirmEnv = [];
+
+    private static readonly Dictionary<string, string?> ConfirmedEnv = new()
+    {
+        [RuntimeIntegrationSettings.ConfirmLiveOutcomes] = "true",
+    };
+
+    [Fact]
+    public async Task Neither_dry_run_nor_live_is_refused_loudly()
+    {
+        var dependencies = TestDependencies.Build();
+
+        var exception = await Assert.ThrowsAsync<RuntimeVerbException>(() => RuntimeVerbs.PollOutcomesAsync(
+            Settings, dryRun: false, live: false, NoConfirmEnv, dependencies, CancellationToken.None));
+
+        Assert.Contains("--dry-run", exception.Message);
+        Assert.Contains("--live", exception.Message);
+    }
+
+    [Fact]
+    public async Task Both_dry_run_and_live_is_refused_loudly()
+    {
+        var dependencies = TestDependencies.Build();
+
+        var exception = await Assert.ThrowsAsync<RuntimeVerbException>(() => RuntimeVerbs.PollOutcomesAsync(
+            Settings, dryRun: true, live: true, ConfirmedEnv, dependencies, CancellationToken.None));
+
+        Assert.Contains("mutually exclusive", exception.Message);
+    }
+
+    [Fact]
+    public async Task Dry_run_polls_and_previews_without_recording_anything()
+    {
+        var outcomeSource = new RecordingOutcomeSource(Signal);
+        var learningStore = new RecordingLearningStore();
+        var dependencies = TestDependencies.Build(
+            learningComposer: new ScriptedLearningComposer(outcomeSource, learningStore));
+
+        var result = await RuntimeVerbs.PollOutcomesAsync(
+            Settings, dryRun: true, live: false, NoConfirmEnv, dependencies, CancellationToken.None);
+
+        Assert.Equal(1, outcomeSource.PollCount);
+        Assert.Empty(learningStore.Recorded);
+        Assert.True(result.DryRun);
+        Assert.Equal(1, result.Polled);
+        var outcome = Assert.Single(result.Outcomes);
+        Assert.Equal("fingerprint-1:sentry", outcome.IntentKey);
+        Assert.False(outcome.Recorded);
+    }
+
+    [Fact]
+    public async Task Live_without_the_manual_confirmation_gate_is_refused_and_records_nothing()
+    {
+        var outcomeSource = new RecordingOutcomeSource(Signal);
+        var learningStore = new RecordingLearningStore();
+        var dependencies = TestDependencies.Build(
+            learningComposer: new ScriptedLearningComposer(outcomeSource, learningStore));
+
+        var exception = await Assert.ThrowsAsync<RuntimeVerbException>(() => RuntimeVerbs.PollOutcomesAsync(
+            Settings, dryRun: false, live: true, NoConfirmEnv, dependencies, CancellationToken.None));
+
+        Assert.Contains(RuntimeIntegrationSettings.ConfirmLiveOutcomes, exception.Message);
+        Assert.Empty(learningStore.Recorded);
+    }
+
+    [Fact]
+    public async Task Live_with_the_manual_confirmation_gate_records_every_polled_outcome()
+    {
+        var outcomeSource = new RecordingOutcomeSource(Signal);
+        var learningStore = new RecordingLearningStore();
+        var dependencies = TestDependencies.Build(
+            learningComposer: new ScriptedLearningComposer(outcomeSource, learningStore));
+
+        var result = await RuntimeVerbs.PollOutcomesAsync(
+            Settings, dryRun: false, live: true, ConfirmedEnv, dependencies, CancellationToken.None);
+
+        Assert.False(result.DryRun);
+        var recorded = Assert.Single(learningStore.Recorded);
+        Assert.Equal("fingerprint-1:sentry", recorded.IntentKey);
+        var outcome = Assert.Single(result.Outcomes);
+        Assert.True(outcome.Recorded);
+    }
+
+    [Fact]
+    public async Task Recording_an_outcome_already_recorded_is_idempotent_and_reported_as_such()
+    {
+        var outcomeSource = new RecordingOutcomeSource(Signal);
+        var learningStore = new RecordingLearningStore();
+        await learningStore.RecordAsync(
+            new LearningRecord(Signal.IntentKey, Signal.Verdict, Signal.IssueUrl, Signal.Title, DateTimeOffset.UtcNow),
+            CancellationToken.None);
+        var dependencies = TestDependencies.Build(
+            learningComposer: new ScriptedLearningComposer(outcomeSource, learningStore));
+
+        var result = await RuntimeVerbs.PollOutcomesAsync(
+            Settings, dryRun: false, live: true, ConfirmedEnv, dependencies, CancellationToken.None);
+
+        var outcome = Assert.Single(result.Outcomes);
+        Assert.False(outcome.Recorded);
+        Assert.Equal(0, result.Recorded);
+    }
+
+    [Fact]
+    public async Task An_incomplete_learning_composition_is_reported_by_the_settings_that_are_unset()
+    {
+        var dependencies = TestDependencies.Build(
+            learningComposer: new UnconfiguredLearningComposer(
+                "no repository is configured to poll outcomes from (set GITHUB_REPOSITORY)",
+                [RuntimeSettingsComposer.GitHubRepository]));
+
+        var exception = await Assert.ThrowsAsync<RuntimeVerbException>(() => RuntimeVerbs.PollOutcomesAsync(
+            Settings, dryRun: true, live: false, NoConfirmEnv, dependencies, CancellationToken.None));
+
+        Assert.Contains("GITHUB_REPOSITORY", exception.Message);
+    }
+
+    [Fact]
+    public async Task A_poll_failure_is_reported_naming_the_product()
+    {
+        var dependencies = TestDependencies.Build(
+            learningComposer: new ScriptedLearningComposer(
+                new UnreachableOutcomeSource("search refused"), new RecordingLearningStore()));
+
+        var exception = await Assert.ThrowsAsync<RuntimeVerbException>(() => RuntimeVerbs.PollOutcomesAsync(
+            Settings, dryRun: true, live: false, NoConfirmEnv, dependencies, CancellationToken.None));
+
+        Assert.Contains("acme", exception.Message);
+        Assert.Contains("search refused", exception.Message);
+    }
+
+    [Fact]
+    public async Task A_recording_failure_is_reported_naming_the_intent_and_verdict()
+    {
+        var dependencies = TestDependencies.Build(
+            learningComposer: new ScriptedLearningComposer(
+                new RecordingOutcomeSource(Signal), new UnreachableLearningStore("write refused")));
+
+        var exception = await Assert.ThrowsAsync<RuntimeVerbException>(() => RuntimeVerbs.PollOutcomesAsync(
+            Settings, dryRun: false, live: true, ConfirmedEnv, dependencies, CancellationToken.None));
+
+        Assert.Contains("fingerprint-1:sentry", exception.Message);
+        Assert.Contains("write refused", exception.Message);
+    }
+}

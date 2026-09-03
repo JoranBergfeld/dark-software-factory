@@ -34,7 +34,8 @@ public sealed record RuntimeDependencies(
     ISourceAgentRosterReader SourceAgentRosterReader,
     IWebHostRunner WebHostRunner,
     IConveyorComposer ConveyorComposer,
-    ISourceIntegration SourceIntegration)
+    ISourceIntegration SourceIntegration,
+    ILearningComposer LearningComposer)
 {
     /// <summary>Production dependencies resolved from the real process environment.</summary>
     public static RuntimeDependencies Production() => Production(CurrentEnvironment());
@@ -48,7 +49,15 @@ public sealed record RuntimeDependencies(
             new AzureAppConfigurationSourceAgentRosterReader(),
             new WebApplicationHostRunner(),
             new EnvironmentConveyorComposer(env),
-            new HttpSourceIntegration(env));
+            new HttpSourceIntegration(env),
+            new EnvironmentLearningComposer(env));
+    }
+
+    /// <summary>The learning loop's collaborators for <paramref name="settings"/>'s product.</summary>
+    public LearningServices LearningServicesFor(RuntimeSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        return LearningComposer.ComposeFor(settings);
     }
 
     /// <summary>

@@ -58,11 +58,13 @@ public static class RuntimeCliApplication
         TextWriter stderr,
         RuntimeDependencies dependencies)
     {
-        var root = new RootCommand("Dark Software Factory — runtime host (run/sweep/serve-orchestrator/serve-agent)");
+        var root = new RootCommand(
+            "Dark Software Factory — runtime host (run/sweep/serve-orchestrator/serve-agent/poll-outcomes)");
         root.Subcommands.Add(BuildRunCommand(env, stdout, stderr, dependencies));
         root.Subcommands.Add(BuildSweepCommand(env, stdout, stderr, dependencies));
         root.Subcommands.Add(BuildServeOrchestratorCommand(env, stdout, stderr, dependencies));
         root.Subcommands.Add(BuildServeAgentCommand(env, stdout, stderr, dependencies));
+        root.Subcommands.Add(BuildPollOutcomesCommand(env, stdout, stderr, dependencies));
         return root;
     }
 
@@ -173,6 +175,75 @@ public static class RuntimeCliApplication
         return command;
     }
 
+    private static Command BuildPollOutcomesCommand(
+        IReadOnlyDictionary<string, string?> env,
+        TextWriter stdout,
+        TextWriter stderr,
+        RuntimeDependencies dependencies)
+    {
+        var dryRun = BoolOption("--dry-run", "poll and preview outcomes without recording them");
+        var live = BoolOption("--live", "poll and record outcomes for real (requires the manual confirmation gate)");
+        var product = StringOption("--product", "resolve runtime env for this product");
+        var command = new Command(
+            "poll-outcomes", "poll human outcome labels and record audited learning data (runtime)");
+        AddOptions(command, dryRun, live, product);
+        command.SetAction((parseResult, cancellationToken) => RunPollOutcomesVerb(
+            env,
+            stdout,
+            stderr,
+            parseResult.GetValue(product),
+            dependencies,
+            parseResult.GetValue(dryRun),
+            parseResult.GetValue(live),
+            cancellationToken));
+        return command;
+    }
+
+    /// <summary>
+    /// Composes settings and, once they validate, polls and (on <c>--live</c>)
+    /// records human outcomes, printing the result summary. Every failure --
+    /// invalid settings, an ambiguous or contradictory <c>--dry-run</c>/<c>--live</c>
+    /// pair, a missing manual confirmation gate, or a real poll/record failure --
+    /// exits non-zero rather than reporting partial success.
+    /// </summary>
+    private static async Task<int> RunPollOutcomesVerb(
+        IReadOnlyDictionary<string, string?> env,
+        TextWriter stdout,
+        TextWriter stderr,
+        string? productOption,
+        RuntimeDependencies dependencies,
+        bool dryRun,
+        bool live,
+        CancellationToken cancellationToken)
+    {
+        var settings = await ComposeSettings(env, stderr, productOption, dependencies, cancellationToken);
+        if (settings is null)
+        {
+            return Failure;
+        }
+
+        OutcomeSweepResult result;
+        try
+        {
+            result = await RuntimeVerbs.PollOutcomesAsync(settings, dryRun, live, env, dependencies, cancellationToken);
+        }
+        catch (RuntimeVerbException exception)
+        {
+            stderr.WriteLine($"[dsf] error: {exception.Message}");
+            return Failure;
+        }
+
+        foreach (var line in result.ToLines())
+        {
+            stdout.WriteLine(line);
+        }
+
+        return Success;
+    }
+
+    /// <summary>
+    /// Composes <see cref="RuntimeSettings"/> and, once they validate, runs the
+    /// verb's conveyor operation, printing the finished run's summary.
     /// <summary>
     /// Composes <see cref="RuntimeSettings"/> and, once they validate, runs the
     /// verb's conveyor operation, printing the finished run's summary. A run that

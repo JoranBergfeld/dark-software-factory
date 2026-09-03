@@ -196,6 +196,7 @@ public static class CliApplication
         root.Subcommands.Add(BuildSweepCommand());
         root.Subcommands.Add(BuildServeOrchestratorCommand());
         root.Subcommands.Add(BuildServeAgentCommand());
+        root.Subcommands.Add(BuildPollOutcomesCommand());
         root.Subcommands.Add(BuildCharterCommand(terminal, appConfig, charterRepository, charterStore));
 
         return root;
@@ -889,6 +890,24 @@ public static class CliApplication
                 Value("--kind", parseResult.GetValue(kind)),
                 Value("--host", parseResult.GetValue(host)),
                 Value("--port", parseResult.GetValue(port)?.ToString(CultureInfo.InvariantCulture)),
+                Value("--product", parseResult.GetValue(product))),
+            cancellationToken));
+        return command;
+    }
+
+    private static Command BuildPollOutcomesCommand()
+    {
+        var dryRun = BoolOption("--dry-run", "poll and preview outcomes without recording them");
+        var live = BoolOption("--live", "poll and record outcomes for real (requires the manual confirmation gate)");
+        var product = StringOption("--product", "resolve runtime env for this product");
+        var command = new Command(
+            "poll-outcomes", "poll human outcome labels and record audited learning data (runtime)");
+        AddOptions(command, dryRun, live, product);
+        command.SetAction((parseResult, cancellationToken) => RuntimeShell(
+            RuntimeArguments(
+                "poll-outcomes",
+                Flag("--dry-run", parseResult.GetValue(dryRun)),
+                Flag("--live", parseResult.GetValue(live)),
                 Value("--product", parseResult.GetValue(product))),
             cancellationToken));
         return command;

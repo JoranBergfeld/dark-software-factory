@@ -46,6 +46,21 @@ public static class RuntimeIntegrationSettings
     /// <summary>Container used when <see cref="CosmosContainer"/> is not set.</summary>
     public const string DefaultCosmosContainer = "runs";
 
+    /// <summary>Cosmos container holding audited human-outcome learning records.</summary>
+    public const string CosmosLearningContainer = "DSF_COSMOS_LEARNING_CONTAINER";
+
+    /// <summary>Container used when <see cref="CosmosLearningContainer"/> is not set.</summary>
+    public const string DefaultCosmosLearningContainer = "learning";
+
+    /// <summary>
+    /// The manual gate a live (non-<c>--dry-run</c>) outcome poll requires, in
+    /// addition to <c>--live</c>: an operator must set this to <c>true</c> before
+    /// the runtime will record real learning data against a live GitHub
+    /// repository and Cosmos account. An accidental live invocation without this
+    /// set fails loudly rather than recording anything.
+    /// </summary>
+    public const string ConfirmLiveOutcomes = "DSF_CONFIRM_LIVE_OUTCOMES";
+
     private static string Normalize(string kind) =>
         (kind ?? string.Empty).Trim().ToUpperInvariant().Replace('-', '_');
 }

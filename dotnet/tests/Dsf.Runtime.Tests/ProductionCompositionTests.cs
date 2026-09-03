@@ -72,7 +72,10 @@ public sealed class ProductionCompositionTests
             new EnvironmentConveyorComposer(
                 env ?? FullyConfigured,
                 privateKeySecretReader: privateKeySecretReader ?? new StubPrivateKeySecretReader()),
-            new HttpSourceIntegration(env ?? FullyConfigured));
+            new HttpSourceIntegration(env ?? FullyConfigured),
+            new EnvironmentLearningComposer(
+                env ?? FullyConfigured,
+                privateKeySecretReader: privateKeySecretReader ?? new StubPrivateKeySecretReader()));
 
     [Fact]
     public void Production_composition_without_source_agent_endpoints_names_the_unset_settings()

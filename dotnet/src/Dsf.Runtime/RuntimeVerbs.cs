@@ -21,6 +21,7 @@ namespace Dsf.Runtime;
 /// </summary>
 public static class RuntimeVerbs
 {
+
     /// <summary>Default bind host for the served runtime endpoints.</summary>
     public const string DefaultHost = "0.0.0.0";
 
@@ -223,6 +224,107 @@ public static class RuntimeVerbs
         }
 
         return run;
+    }
+
+    /// <summary>
+    /// Polls human outcomes on filed issues and records audited learning data.
+    /// Exactly one of <paramref name="dryRun"/>/<paramref name="live"/> must be
+    /// <c>true</c> -- an operator must say which they mean, rather than the verb
+    /// guessing. A dry run polls and reports every outcome found without
+    /// recording any of it. A live run additionally requires the manual gate
+    /// <see cref="RuntimeIntegrationSettings.ConfirmLiveOutcomes"/> to be set in
+    /// <paramref name="env"/>; without it, an accidental live invocation is
+    /// refused before anything is recorded, never silently downgraded to a
+    /// preview. Recording is idempotent: an outcome already recorded on a prior
+    /// poll is reported as such rather than written again.
+    /// </summary>
+    public static async Task<OutcomeSweepResult> PollOutcomesAsync(
+        RuntimeSettings settings,
+        bool dryRun,
+        bool live,
+        IReadOnlyDictionary<string, string?> env,
+        RuntimeDependencies dependencies,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        ArgumentNullException.ThrowIfNull(env);
+        ArgumentNullException.ThrowIfNull(dependencies);
+
+        if (dryRun && live)
+        {
+            throw new RuntimeVerbException(
+                "--dry-run and --live are mutually exclusive for poll-outcomes; pass exactly one.");
+        }
+
+        if (!dryRun && !live)
+        {
+            throw new RuntimeVerbException(
+                "poll-outcomes requires exactly one of --dry-run or --live: pass --dry-run to preview outcomes "
+                + "without recording, or --live to record them for real.");
+        }
+
+        LearningServices services;
+        try
+        {
+            services = dependencies.LearningServicesFor(settings);
+        }
+        catch (RuntimeConfigurationException exception)
+        {
+            throw new RuntimeVerbException(exception.Message);
+        }
+
+        if (live)
+        {
+            var confirmed = (env.TryGetValue(RuntimeIntegrationSettings.ConfirmLiveOutcomes, out var value) ? value : null)
+                ?.Trim();
+            if (!string.Equals(confirmed, "true", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new RuntimeVerbException(
+                    "refusing to poll outcomes live without an explicit manual gate: set "
+                    + $"{RuntimeIntegrationSettings.ConfirmLiveOutcomes}=true to confirm this run may record real "
+                    + "learning data against a live GitHub repository and Cosmos account.");
+            }
+        }
+
+        IReadOnlyList<OutcomeSignal> signals;
+        try
+        {
+            signals = await services.OutcomeSource.PollAsync(cancellationToken);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            throw new RuntimeVerbException(
+                $"could not poll human outcomes for product '{settings.Product}': {exception.Message}");
+        }
+
+        var outcomes = new List<OutcomeRecord>();
+        foreach (var signal in signals)
+        {
+            if (dryRun)
+            {
+                outcomes.Add(new OutcomeRecord(signal.IntentKey, signal.Verdict, signal.IssueUrl, signal.Title, Recorded: false));
+                continue;
+            }
+
+            bool recorded;
+            try
+            {
+                recorded = await services.LearningStore.RecordAsync(
+                    new LearningRecord(
+                        signal.IntentKey, signal.Verdict, signal.IssueUrl, signal.Title, DateTimeOffset.UtcNow),
+                    cancellationToken);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                throw new RuntimeVerbException(
+                    $"could not record the learning outcome for intent '{signal.IntentKey}' verdict "
+                    + $"'{signal.Verdict}': {exception.Message}");
+            }
+
+            outcomes.Add(new OutcomeRecord(signal.IntentKey, signal.Verdict, signal.IssueUrl, signal.Title, recorded));
+        }
+
+        return new OutcomeSweepResult(outcomes, dryRun);
     }
 
     /// <summary>

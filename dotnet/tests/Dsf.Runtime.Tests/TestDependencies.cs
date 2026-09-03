@@ -22,7 +22,8 @@ internal static class TestDependencies
         IRunStore? runStore = null,
         ISourceIntegration? sourceIntegration = null,
         IModelClient? modelClient = null,
-        ITracer? tracer = null) =>
+        ITracer? tracer = null,
+        ILearningComposer? learningComposer = null) =>
         new(
             ownerRuntimeIndexReader ?? new RecordingOwnerRuntimeIndexReader(),
             sourceAgentRosterReader ?? new RosterReader([]),
@@ -33,7 +34,66 @@ internal static class TestDependencies
                 runStore ?? new RecordingRunStore(),
                 modelClient ?? new RecordingModelClient(),
                 tracer ?? new RecordingTracer()),
-            sourceIntegration ?? new ScriptedSourceIntegration());
+            sourceIntegration ?? new ScriptedSourceIntegration(),
+            learningComposer ?? new ScriptedLearningComposer(new RecordingOutcomeSource(), new RecordingLearningStore()));
+}
+
+/// <summary>Composes learning services from collaborators the test supplied directly.</summary>
+internal sealed class ScriptedLearningComposer(IOutcomeSource outcomeSource, ILearningStore learningStore)
+    : ILearningComposer
+{
+    public LearningServices ComposeFor(RuntimeSettings settings) => new(outcomeSource, learningStore);
+}
+
+/// <summary>A learning composer that always reports missing settings, for gate/failure tests.</summary>
+internal sealed class UnconfiguredLearningComposer(string reason, IReadOnlyList<string> missing) : ILearningComposer
+{
+    public LearningServices ComposeFor(RuntimeSettings settings) =>
+        throw new RuntimeConfigurationException(reason, missing);
+}
+
+/// <summary>An outcome source that answers a fixed, scripted list of signals.</summary>
+internal sealed class RecordingOutcomeSource(params OutcomeSignal[] signals) : IOutcomeSource
+{
+    public int PollCount { get; private set; }
+
+    public Task<IReadOnlyList<OutcomeSignal>> PollAsync(CancellationToken cancellationToken)
+    {
+        PollCount++;
+        return Task.FromResult<IReadOnlyList<OutcomeSignal>>(signals);
+    }
+}
+
+/// <summary>An outcome source whose backend cannot be reached.</summary>
+internal sealed class UnreachableOutcomeSource(string reason) : IOutcomeSource
+{
+    public Task<IReadOnlyList<OutcomeSignal>> PollAsync(CancellationToken cancellationToken) =>
+        throw new InvalidOperationException(reason);
+}
+
+/// <summary>
+/// A learning store that records every outcome handed to it and reports it as
+/// newly-recorded the first time and already-recorded on any repeat, exactly
+/// like the real Cosmos-backed store's idempotency contract.
+/// </summary>
+internal sealed class RecordingLearningStore : ILearningStore
+{
+    private readonly HashSet<(string IntentKey, string Verdict)> seen = [];
+
+    public List<LearningRecord> Recorded { get; } = [];
+
+    public Task<bool> RecordAsync(LearningRecord record, CancellationToken cancellationToken)
+    {
+        Recorded.Add(record);
+        return Task.FromResult(seen.Add((record.IntentKey, record.Verdict)));
+    }
+}
+
+/// <summary>A learning store whose backend cannot be reached.</summary>
+internal sealed class UnreachableLearningStore(string reason) : ILearningStore
+{
+    public Task<bool> RecordAsync(LearningRecord record, CancellationToken cancellationToken) =>
+        throw new InvalidOperationException(reason);
 }
 
 /// <summary>Composes conveyor services from collaborators the test supplied directly.</summary>

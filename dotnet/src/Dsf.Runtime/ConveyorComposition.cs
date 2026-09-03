@@ -132,22 +132,14 @@ internal sealed class EnvironmentConveyorComposer(
     }
 
     private IGitHubAuthProvider BuildGitHubAppAuthProvider(
-        string appId, string installationId, string keyVaultUri, string privateKeySecret)
-    {
-        var apiUrl = Read(RuntimeIntegrationSettings.GitHubApiUrl);
-        var authHttpClient = new HttpClient
-        {
-            BaseAddress = new Uri(EnsureTrailingSlash(string.IsNullOrWhiteSpace(apiUrl) ? DefaultGitHubApiUrl : apiUrl)),
-        };
-
-        return new GitHubAppAuthProvider(
+        string appId, string installationId, string keyVaultUri, string privateKeySecret) =>
+        GitHubAppAuthProviderFactory.Build(
             appId,
             installationId,
-            new Uri(keyVaultUri),
+            keyVaultUri,
             privateKeySecret,
-            privateKeySecretReader ?? new AzureKeyVaultPrivateKeySecretReader(),
-            authHttpClient);
-    }
+            Read(RuntimeIntegrationSettings.GitHubApiUrl),
+            privateKeySecretReader);
 
     private IRunStore? ComposeRunStore(RuntimeSettings settings, List<string> missing)
     {
