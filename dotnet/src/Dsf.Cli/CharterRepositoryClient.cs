@@ -18,6 +18,62 @@ internal sealed class GitHubApiException(HttpStatusCode statusCode, string messa
     public HttpStatusCode StatusCode { get; } = statusCode;
 }
 
+/// <summary>A <c>gh</c> invocation that exited non-zero — retryable while watching a long build.</summary>
+internal sealed class GhCommandException(string message) : InvalidOperationException(message);
+
+/// <summary>The <c>gh</c> CLI is missing or could not be started — not retryable.</summary>
+internal sealed class GhUnavailableException(string message, Exception inner)
+    : InvalidOperationException(message, inner);
+
+/// <summary>GitHub answered a GraphQL call with an <c>errors</c> payload.</summary>
+internal sealed class GitHubGraphQlException(string message) : InvalidOperationException(message);
+
+/// <summary>Result of one <c>gh</c> CLI invocation.</summary>
+internal sealed record GhInvocationResult(int ExitCode, string StandardOutput, string StandardError);
+
+/// <summary>
+/// Runs one <c>gh</c> CLI invocation. Abstracted so tests can drive the charter client's
+/// gh-backed paths with canned output instead of a live GitHub account.
+/// </summary>
+internal interface IGhCliRunner
+{
+    GhInvocationResult Run(IReadOnlyList<string> arguments, CancellationToken cancellationToken);
+}
+
+/// <summary>Shells out to the real <c>gh</c> CLI on PATH.</summary>
+internal sealed class SystemGhCliRunner : IGhCliRunner
+{
+    public GhInvocationResult Run(IReadOnlyList<string> arguments, CancellationToken cancellationToken)
+    {
+        using var process = new System.Diagnostics.Process();
+        process.StartInfo.FileName = "gh";
+        foreach (var argument in arguments)
+        {
+            process.StartInfo.ArgumentList.Add(argument);
+        }
+
+        process.StartInfo.RedirectStandardOutput = true;
+        process.StartInfo.RedirectStandardError = true;
+        process.StartInfo.UseShellExecute = false;
+        try
+        {
+            process.Start();
+        }
+        catch (Exception exception) when (exception is System.ComponentModel.Win32Exception or IOException)
+        {
+            throw new GhUnavailableException(
+                $"gh CLI could not be started (is it installed and on PATH?): {exception.Message}",
+                exception);
+        }
+
+        var output = process.StandardOutput.ReadToEnd();
+        var error = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        cancellationToken.ThrowIfCancellationRequested();
+        return new GhInvocationResult(process.ExitCode, output, error);
+    }
+}
+
 internal interface ICharterRepositoryClient
 {
     Task<CharterFile?> ReadAsync(
@@ -98,9 +154,12 @@ internal interface ICharterRepositoryClient
 }
 
 /// <summary>Reads charter files from provisioned product repositories through GitHub's contents API.</summary>
-internal sealed class GitHubCharterRepositoryClient(HttpClient httpClient, string? token) : ICharterRepositoryClient
+internal sealed class GitHubCharterRepositoryClient(HttpClient httpClient, string? token, IGhCliRunner? ghRunner = null)
+    : ICharterRepositoryClient
 {
     private const string DefaultApiUrl = "https://api.github.com/";
+
+    private readonly IGhCliRunner ghRunner = ghRunner ?? new SystemGhCliRunner();
 
     public static GitHubCharterRepositoryClient FromEnvironment()
     {
@@ -291,7 +350,12 @@ internal sealed class GitHubCharterRepositoryClient(HttpClient httpClient, strin
 
         if (enableAutoMerge)
         {
-            RunGh(["pr", "merge", url, "--repo", repository, "--auto", "--squash"], cancellationToken);
+            // Best effort: a repository with auto-merge disabled rejects this, and the PR
+            // simply waits for a human merge instead of failing the whole operation.
+            RunGh(
+                ["pr", "merge", url, "--repo", repository, "--auto", "--squash"],
+                cancellationToken,
+                throwOnError: false);
         }
 
         return url;
@@ -397,9 +461,10 @@ internal sealed class GitHubCharterRepositoryClient(HttpClient httpClient, strin
             var nodes = actors.RootElement.GetProperty("data").GetProperty("repository")
                 .GetProperty("suggestedActors").GetProperty("nodes");
             var botId = nodes.EnumerateArray()
-                .FirstOrDefault(node => node.GetProperty("login").GetString() == "copilot-swe-agent")
-                .GetProperty("id")
-                .GetString();
+                .Where(node => node.TryGetProperty("login", out var login)
+                    && login.GetString() == "copilot-swe-agent")
+                .Select(node => node.TryGetProperty("id", out var id) ? id.GetString() : null)
+                .FirstOrDefault(id => !string.IsNullOrWhiteSpace(id));
             if (string.IsNullOrWhiteSpace(botId))
             {
                 return false;
@@ -417,6 +482,7 @@ internal sealed class GitHubCharterRepositoryClient(HttpClient httpClient, strin
         }
         catch (Exception exception) when (
             exception is GitHubApiException { StatusCode: HttpStatusCode.Forbidden or HttpStatusCode.UnprocessableEntity }
+                or GitHubGraphQlException
                 or JsonException
                 or KeyNotFoundException)
         {
@@ -530,10 +596,19 @@ internal sealed class GitHubCharterRepositoryClient(HttpClient httpClient, strin
         using var document = JsonDocument.Parse(output!);
         var requested = document.RootElement.GetProperty("data").GetProperty("repository").GetProperty("pullRequest")
             .GetProperty("reviewRequests").GetProperty("nodes").EnumerateArray()
-            .Any(node => (node.GetProperty("requestedReviewer").GetProperty("login").GetString() ?? string.Empty)
-                .Contains("copilot", StringComparison.OrdinalIgnoreCase));
+            .Select(ReviewerLogin)
+            .Any(login => login.Contains("copilot", StringComparison.OrdinalIgnoreCase));
         return Task.FromResult(requested);
     }
+
+    /// <summary>Login of a requested reviewer; empty for reviewers that carry none (e.g. teams).</summary>
+    private static string ReviewerLogin(JsonElement node) =>
+        node.TryGetProperty("requestedReviewer", out var reviewer)
+        && reviewer.ValueKind == JsonValueKind.Object
+        && reviewer.TryGetProperty("login", out var login)
+        && login.ValueKind == JsonValueKind.String
+            ? login.GetString() ?? string.Empty
+            : string.Empty;
 
     public Task RequestCopilotReviewAsync(
         string repository,
@@ -627,8 +702,9 @@ internal sealed class GitHubCharterRepositoryClient(HttpClient httpClient, strin
         var document = await ReadJsonAsync(response, cancellationToken);
         if (document.RootElement.TryGetProperty("errors", out var errors))
         {
+            var detail = errors.ToString();
             document.Dispose();
-            throw new InvalidOperationException($"GraphQL error: {errors}");
+            throw new GitHubGraphQlException($"GraphQL error: {detail}");
         }
 
         return document;
@@ -655,43 +731,31 @@ internal sealed class GitHubCharterRepositoryClient(HttpClient httpClient, strin
         return (parts[0], parts[1]);
     }
 
-    private static string? RunGh(
+    private string? RunGh(
         IReadOnlyList<string> arguments,
         CancellationToken cancellationToken,
         bool throwOnError = true)
     {
-        using var process = new System.Diagnostics.Process();
-        process.StartInfo.FileName = "gh";
-        foreach (var argument in arguments)
-        {
-            process.StartInfo.ArgumentList.Add(argument);
-        }
-
-        process.StartInfo.RedirectStandardOutput = true;
-        process.StartInfo.RedirectStandardError = true;
-        process.StartInfo.UseShellExecute = false;
+        GhInvocationResult result;
         try
         {
-            process.Start();
-            var output = process.StandardOutput.ReadToEnd();
-            var error = process.StandardError.ReadToEnd();
-            process.WaitForExit();
-            cancellationToken.ThrowIfCancellationRequested();
-            if (process.ExitCode == 0)
-            {
-                return output;
-            }
-
-            if (throwOnError)
-            {
-                throw new InvalidOperationException($"gh {string.Join(' ', arguments)} failed: {error}");
-            }
-
-            return null;
+            result = ghRunner.Run(arguments, cancellationToken);
         }
-        catch (System.ComponentModel.Win32Exception) when (!throwOnError)
+        catch (GhUnavailableException) when (!throwOnError)
         {
             return null;
         }
+
+        if (result.ExitCode == 0)
+        {
+            return result.StandardOutput;
+        }
+
+        if (throwOnError)
+        {
+            throw new GhCommandException($"gh {string.Join(' ', arguments)} failed: {result.StandardError}");
+        }
+
+        return null;
     }
 }

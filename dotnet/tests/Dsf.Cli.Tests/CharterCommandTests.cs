@@ -866,6 +866,47 @@ public sealed class CharterCommandTests
         });
     }
 
+    [Fact]
+    public async Task CharterWatch_retries_failed_gh_invocations()
+    {
+        await WithOwnerEndpointAsync(async () =>
+        {
+            var appConfig = new RecordingAppConfigurationClient(
+                new ProductLocation("demo", "acme/demo", "https://demo.azconfig.io"));
+            var retryRepository = new RecordingCharterRepositoryClient(null)
+            {
+                TransientFailuresBeforePullRequest = 1,
+                TransientPullRequestError = () => new GhCommandException("gh api graphql failed: 502"),
+                PullRequests =
+                [
+                    new RecordedCodingPullRequest(35, "https://github.test/acme/demo/pull/35", false, "OPEN"),
+                ],
+            };
+            var retryTerminal = NonInteractiveTerminal();
+            var retryExitCode = await CliApplication.InvokeAsync(
+                ["charter", "watch", "--product", "demo", "--issue", "3", "--timeout", "5", "--poll-interval", "0.01"],
+                CancellationToken.None,
+                retryTerminal,
+                appConfig,
+                retryRepository,
+                new RecordingCharterStore());
+
+            Assert.Equal(0, retryExitCode);
+            Assert.Equal(2, retryRepository.PullRequestLookups);
+            Assert.Equal([35], retryRepository.CopilotReviewRequests);
+            Assert.Contains("transient GitHub error", retryTerminal.Output, StringComparison.Ordinal);
+        });
+    }
+
+    [Fact]
+    public void Watch_poll_interval_has_a_one_second_floor()
+    {
+        Assert.Equal(1.0, CliApplication.ResolveWatchPollInterval(0.01));
+        Assert.Equal(1.0, CliApplication.ResolveWatchPollInterval(0));
+        Assert.Equal(45.0, CliApplication.ResolveWatchPollInterval(45.0));
+        Assert.Equal(20.0, CliApplication.ResolveWatchPollInterval(null));
+    }
+
     private static ScriptedTerminal NonInteractiveTerminal() => new(
         new TerminalCapabilities(IsInteractive: false, SupportsAnsi: false, SupportsEmoji: false),
         []);
@@ -937,6 +978,7 @@ internal sealed class RecordingCharterRepositoryClient(CharterFile? file) : ICha
     public bool GhAssignmentSucceeds { get; init; } = true;
     public Exception? NewestIssueError { get; init; }
     public int TransientFailuresBeforePullRequest { get; init; }
+    public Func<Exception> TransientPullRequestError { get; init; } = () => new HttpRequestException("transient");
     public int PullRequestLookups { get; private set; }
     public List<string> AppAssignmentAttempts { get; } = [];
     public List<string> GhAssignmentAttempts { get; } = [];
@@ -1047,7 +1089,7 @@ internal sealed class RecordingCharterRepositoryClient(CharterFile? file) : ICha
         PullRequestLookups++;
         if (PullRequestLookups <= TransientFailuresBeforePullRequest)
         {
-            throw new HttpRequestException("transient");
+            throw TransientPullRequestError();
         }
 
         var pullRequest = PullRequests.FirstOrDefault();

@@ -1026,6 +1026,7 @@ public static class CliApplication
     private const string CopilotModelRequest = "Claude Opus 4.8";
     private const double DefaultWatchTimeout = 1800.0;
     private const double DefaultWatchPollInterval = 20.0;
+    private const double MinimumWatchPollInterval = 1.0;
 
     private static async Task<int> RunCharterImplementAsync(
         string product,
@@ -1492,8 +1493,11 @@ public static class CliApplication
         return seconds <= 0 ? null : seconds;
     }
 
-    private static double ResolvePollInterval(double? explicitSeconds) =>
-        Math.Max(0.01, explicitSeconds ?? DefaultWatchPollInterval);
+    /// <summary>Poll cadence: explicit flag (floored at 1s, as the Python CLI does) else 20s.</summary>
+    internal static double ResolveWatchPollInterval(double? explicitSeconds) =>
+        explicitSeconds is null
+            ? DefaultWatchPollInterval
+            : Math.Max(MinimumWatchPollInterval, explicitSeconds.Value);
 
     private static bool TimedOut(DateTimeOffset start, double? seconds) =>
         seconds is not null && (DateTimeOffset.UtcNow - start).TotalSeconds >= seconds.Value;
@@ -1504,7 +1508,7 @@ public static class CliApplication
         double? pollInterval,
         CancellationToken cancellationToken)
     {
-        var delay = ResolvePollInterval(pollInterval);
+        var delay = ResolveWatchPollInterval(pollInterval);
         if (timeoutSeconds is not null)
         {
             var remaining = timeoutSeconds.Value - (DateTimeOffset.UtcNow - start).TotalSeconds;
@@ -1529,6 +1533,8 @@ public static class CliApplication
         exception is HttpRequestException
             or JsonException
             or KeyNotFoundException
+            or GhCommandException
+            or GitHubGraphQlException
             or GitHubApiException { StatusCode: HttpStatusCode.TooManyRequests }
             or GitHubApiException { StatusCode: >= HttpStatusCode.InternalServerError };
 
