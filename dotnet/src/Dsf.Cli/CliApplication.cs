@@ -16,7 +16,8 @@ public static class CliApplication
             args,
             cancellationToken,
             SystemCliTerminal.Detect(),
-            GitHubRestProvisioningClient.FromEnvironment());
+            GitHubRestProvisioningClient.FromEnvironment(),
+            AzureCliProvisioningClient.FromEnvironment());
 
     internal static async Task<int> InvokeAsync(
         string[] args,
@@ -26,13 +27,27 @@ public static class CliApplication
             args,
             cancellationToken,
             terminal,
-            GitHubRestProvisioningClient.FromEnvironment());
+            GitHubRestProvisioningClient.FromEnvironment(),
+            AzureCliProvisioningClient.FromEnvironment());
 
     internal static async Task<int> InvokeAsync(
         string[] args,
         CancellationToken cancellationToken,
         ICliTerminal terminal,
         IGitHubProvisioningClient github)
+        => await InvokeAsync(
+            args,
+            cancellationToken,
+            terminal,
+            github,
+            AzureCliProvisioningClient.FromEnvironment());
+
+    internal static async Task<int> InvokeAsync(
+        string[] args,
+        CancellationToken cancellationToken,
+        ICliTerminal terminal,
+        IGitHubProvisioningClient github,
+        IAzureProvisioningClient azure)
     {
         if (cancellationToken.IsCancellationRequested)
         {
@@ -43,7 +58,7 @@ public static class CliApplication
             .Where(arg => arg.StartsWith("--", StringComparison.Ordinal))
             .Select(arg => arg.Split('=', 2)[0])
             .ToHashSet();
-        var root = BuildRootCommand(terminal, providedOptions, github);
+        var root = BuildRootCommand(terminal, providedOptions, github, azure);
         var parseResult = root.Parse(args);
         try
         {
@@ -59,12 +74,14 @@ public static class CliApplication
     internal static RootCommand BuildRootCommand() => BuildRootCommand(
         SystemCliTerminal.Detect(),
         new HashSet<string>(),
-        GitHubRestProvisioningClient.FromEnvironment());
+        GitHubRestProvisioningClient.FromEnvironment(),
+        AzureCliProvisioningClient.FromEnvironment());
 
     private static RootCommand BuildRootCommand(
         ICliTerminal terminal,
         IReadOnlySet<string> providedOptions,
-        IGitHubProvisioningClient github)
+        IGitHubProvisioningClient github,
+        IAzureProvisioningClient azure)
     {
         var root = new RootCommand("Dark Software Factory — factory CLI (create product instances)");
         root.Options.Remove(root.Options.Single(option => option.Name == "--version"));
@@ -73,7 +90,7 @@ public static class CliApplication
         helpOption.Aliases.Remove("/?");
         helpOption.Aliases.Remove("/h");
 
-        root.Subcommands.Add(BuildNewCommand(terminal, providedOptions, github));
+        root.Subcommands.Add(BuildNewCommand(terminal, providedOptions, github, azure));
         root.Subcommands.Add(BuildListCommand());
         root.Subcommands.Add(BuildOffboardCommand());
         root.Subcommands.Add(BuildBootstrapCommand());
@@ -91,7 +108,8 @@ public static class CliApplication
     private static Command BuildNewCommand(
         ICliTerminal terminal,
         IReadOnlySet<string> providedOptions,
-        IGitHubProvisioningClient github)
+        IGitHubProvisioningClient github,
+        IAzureProvisioningClient azure)
     {
         var product = StringOption("--product", "product key (e.g. 'microbi')");
         var owner = StringOption("--owner", "GitHub owner/org for the product repo", string.Empty);
@@ -274,11 +292,18 @@ public static class CliApplication
             {
                 try
                 {
-                    var result = await GitHubProvisioningPlan.Build(definition)
+                    var githubResult = await GitHubProvisioningPlan.Build(definition)
                         .ExecuteAsync(github, cancellationToken);
-                    var updated = result.ApplyTo(definition);
-                    InstanceDefinitions.Write(updated, configRootValue ?? Directory.GetCurrentDirectory());
+                    var afterGitHub = githubResult.ApplyTo(definition);
+
+                    var azureRoot = configRootValue ?? Directory.GetCurrentDirectory();
+                    var azureResult = await AzureProvisioningPlan.Build(afterGitHub, azureRoot)
+                        .ExecuteAsync(azure, cancellationToken);
+                    var updated = azureResult.ApplyTo(afterGitHub);
+
+                    InstanceDefinitions.Write(updated, azureRoot);
                     terminal.WriteLine($"[dsf] GitHub provisioning complete for {updated.GitHub.FullName()}.");
+                    terminal.WriteLine($"[dsf] Azure provisioning complete for {updated.Product.Key} ({updated.Azure.ResourceGroup}).");
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
@@ -290,7 +315,7 @@ public static class CliApplication
                     or NotSupportedException
                     or InstanceDefinitionException)
                 {
-                    terminal.WriteErrorLine($"[dsf] error: GitHub provisioning failed: {exception.Message}");
+                    terminal.WriteErrorLine($"[dsf] error: provisioning failed: {exception.Message}");
                     return Failure;
                 }
             }

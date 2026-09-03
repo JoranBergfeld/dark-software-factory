@@ -192,7 +192,8 @@ public sealed class GitHubProvisioningPlaneTests
                 ],
                 CancellationToken.None,
                 PlainTerminal(),
-                client);
+                client,
+                new RecordingAzureProvisioningClient());
 
             Assert.Equal(0, exitCode);
             var written = InstanceDefinitions.Read(InstanceDefinitions.PathFor(root, "paritydemo"));
