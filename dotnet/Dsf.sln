@@ -31,6 +31,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Dsf.Runtime.Tests", "tests\
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Dsf.FeatureCouncil.Tests", "tests\Dsf.FeatureCouncil.Tests\Dsf.FeatureCouncil.Tests.csproj", "{A9C306AA-A8AB-4972-8283-A1FCDA54467A}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Dsf.ControlCenter.Tests", "tests\Dsf.ControlCenter.Tests\Dsf.ControlCenter.Tests.csproj", "{2320FDAC-117E-4353-BF07-7F47F5AC5DA7}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -185,6 +187,18 @@ Global
 		{A9C306AA-A8AB-4972-8283-A1FCDA54467A}.Release|x64.Build.0 = Release|Any CPU
 		{A9C306AA-A8AB-4972-8283-A1FCDA54467A}.Release|x86.ActiveCfg = Release|Any CPU
 		{A9C306AA-A8AB-4972-8283-A1FCDA54467A}.Release|x86.Build.0 = Release|Any CPU
+		{2320FDAC-117E-4353-BF07-7F47F5AC5DA7}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{2320FDAC-117E-4353-BF07-7F47F5AC5DA7}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{2320FDAC-117E-4353-BF07-7F47F5AC5DA7}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{2320FDAC-117E-4353-BF07-7F47F5AC5DA7}.Debug|x64.Build.0 = Debug|Any CPU
+		{2320FDAC-117E-4353-BF07-7F47F5AC5DA7}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{2320FDAC-117E-4353-BF07-7F47F5AC5DA7}.Debug|x86.Build.0 = Debug|Any CPU
+		{2320FDAC-117E-4353-BF07-7F47F5AC5DA7}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{2320FDAC-117E-4353-BF07-7F47F5AC5DA7}.Release|Any CPU.Build.0 = Release|Any CPU
+		{2320FDAC-117E-4353-BF07-7F47F5AC5DA7}.Release|x64.ActiveCfg = Release|Any CPU
+		{2320FDAC-117E-4353-BF07-7F47F5AC5DA7}.Release|x64.Build.0 = Release|Any CPU
+		{2320FDAC-117E-4353-BF07-7F47F5AC5DA7}.Release|x86.ActiveCfg = Release|Any CPU
+		{2320FDAC-117E-4353-BF07-7F47F5AC5DA7}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -202,5 +216,6 @@ Global
 		{6636F690-8F9A-48F1-9B67-EE93B4E2EE62} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 		{C8A5DD1F-9E81-4A9B-8195-FA6E38E85A02} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 		{A9C306AA-A8AB-4972-8283-A1FCDA54467A} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
+		{2320FDAC-117E-4353-BF07-7F47F5AC5DA7} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 	EndGlobalSection
 EndGlobal

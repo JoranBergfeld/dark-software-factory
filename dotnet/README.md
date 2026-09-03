@@ -12,8 +12,8 @@ directory holds the buildable seams only (no behavior migrated yet).
   References `Dsf.Core` only — no direct dependency on Feature Council internals.
 - `src/Dsf.Runtime` — runtime executable (run/sweep/serve-orchestrator/serve-agent).
   References `Dsf.Core` + `Dsf.FeatureCouncil`.
-- `src/Dsf.ControlCenter` — governance web executable (ASP.NET Core). References
-  `Dsf.Core` only.
+- `src/Dsf.ControlCenter` — governance web executable (`dsf-control-center`,
+  ASP.NET Core). References `Dsf.Core` only.
 - `src/Dsf.AgentHost` — optional reusable agent host executable. References
   `Dsf.Core` + `Dsf.FeatureCouncil`.
 - `src/Dsf.Testing` — deterministic doubles/test builders. References `Dsf.Core`
@@ -23,6 +23,10 @@ directory holds the buildable seams only (no behavior migrated yet).
   references `Dsf.Testing`.
 - `tests/Dsf.Core.Tests` — example test project demonstrating a test using both
   `Dsf.Core` and `Dsf.Testing`.
+- `tests/Dsf.ControlCenter.Tests` — Control Center governance surface: product
+  listing through the configuration authority, cookie + CSRF protected writes,
+  numeric policy validation, disabled unsupported controls, and startup
+  configuration failures.
 - `tests/Dsf.FeatureCouncil.Tests` — conveyor semantics: station order and
   checkpointing, resume past completed stations, terminal runs never re-driven,
   per-station failures as audited error states, and the dry-run filing preview.
@@ -98,6 +102,37 @@ The `dsf` front door (`src/Dsf.Cli`) forwards these verbs to the `dsf-runtime`
 executable as a child process — the same way the Python front door shells out to
 `python -m dsf.runtime.control` — so it never needs to reference the runtime
 module. It resolves the executable next to itself, or from `DSF_RUNTIME_HOST`.
+
+## Control Center
+
+`src/Dsf.ControlCenter` (`dsf-control-center`) is a separate governance web
+process. It refuses to start without `DSF_OWNER_APPCONFIG_ENDPOINT` (the owner
+App Configuration authority `dsf new` publishes products into) and
+`DSF_CONTROL_CENTER_TOKEN` (the operator credential), exiting non-zero and naming
+every unset setting. `DSF_CONTROL_CENTER_HOST`/`_PORT` (default `127.0.0.1:8081`)
+and `DSF_CONTROL_CENTER_SECURE_COOKIES` (default on) are optional.
+
+- **Product-first.** `/products` lists every product in the owner index;
+  `/products/{product}` shows that product's effective policy read from the
+  product's own App Configuration store — source agent enablement
+  (`agents.<kind>.enabled`, product label over unlabelled default, the same keys
+  `sweep` reads) and the product record's confidence threshold
+  (`threshold.<product>`).
+- **Protected writes.** A browser write needs both a server-issued HttpOnly
+  session cookie (`POST /session` with the operator token) and the CSRF token
+  minted with that session, echoed back by the form. A bearer token is *not*
+  accepted on the browser write routes — there is no bearer-only shortcut.
+  Automated clients use `/api/products*`, which is bearer-authenticated.
+- **Validated policy input.** Numeric policy input is parsed invariant-culture
+  and range-checked (confidence threshold `0`–`1`) before any write reaches the
+  authority; a rejected value is reported on the page and never persisted.
+- **Honest disabled controls.** Controls the current runtime cannot honour
+  (critic enablement, critic weights, trigger pause, a stored global dry-run
+  switch) render disabled with the reason and the supported alternative, and have
+  no write endpoint at all, rather than appearing as buttons that silently do
+  nothing.
+- **Loud failures.** An unreachable configuration authority is reported as such
+  (`502`, naming the store) instead of rendering an empty product list.
 
 ## Dependency management
 
