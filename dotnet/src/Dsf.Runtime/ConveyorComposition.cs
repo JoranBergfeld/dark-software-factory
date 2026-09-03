@@ -19,7 +19,8 @@ public interface IConveyorComposer
 /// <summary>
 /// The production composer: reads the runtime's environment and settings and wires
 /// the real adapters -- an A2A gatherer per configured source agent endpoint, the
-/// GitHub REST issue filer, and the Cosmos-backed run store. Anything unset raises
+/// GitHub REST issue filer, the Cosmos-backed run store, the Azure OpenAI-backed
+/// model client, and the Application Insights-backed tracer. Anything unset raises
 /// <see cref="RuntimeConfigurationException"/> naming every missing setting at
 /// once.
 /// </summary>
@@ -27,7 +28,9 @@ internal sealed class EnvironmentConveyorComposer(
     IReadOnlyDictionary<string, string?> env,
     HttpClient? httpClient = null,
     ICosmosDocumentGateway? cosmosGateway = null,
-    IPrivateKeySecretReader? privateKeySecretReader = null) : IConveyorComposer
+    IPrivateKeySecretReader? privateKeySecretReader = null,
+    IModelCompletionGateway? modelGateway = null,
+    ITelemetryGateway? telemetryGateway = null) : IConveyorComposer
 {
     private const string KindPlaceholder = "{kind}";
     private const string DefaultGitHubApiUrl = "https://api.github.com/";
@@ -42,6 +45,8 @@ internal sealed class EnvironmentConveyorComposer(
         var gatherers = ComposeGatherers(missing);
         var filer = ComposeFiler(settings, missing);
         var runStore = ComposeRunStore(settings, missing);
+        var modelClient = ComposeModelClient(settings, missing);
+        var tracer = ComposeTracer(settings, missing);
 
         if (missing.Count > 0)
         {
@@ -51,7 +56,7 @@ internal sealed class EnvironmentConveyorComposer(
                 missing);
         }
 
-        return new ConveyorServices(settings.Product, gatherers, filer, runStore!);
+        return new ConveyorServices(settings.Product, gatherers, filer, runStore!, modelClient!, tracer!);
     }
 
     /// <summary>One gatherer per source kind that has an agent endpoint configured.</summary>
@@ -83,14 +88,14 @@ internal sealed class EnvironmentConveyorComposer(
     }
 
     /// <summary>
-    /// Wires the GitHub issue filer. Production auth reuses the runtime's
-    /// existing GitHub App settings (<c>GITHUB_APP_ID</c>,
-    /// <c>GITHUB_INSTALLATION_ID</c>, <c>GITHUB_APP_PRIVATE_KEY_SECRET</c>,
-    /// <c>AZURE_KEYVAULT_URI</c>) -- the same names the Python runtime resolves
-    /// -- and mints installation access tokens through
-    /// <see cref="GitHubAppAuthProvider"/>. <c>GITHUB_TOKEN</c>/<c>GH_TOKEN</c>
-    /// remain a documented local-dev override, only consulted when the App
-    /// settings are not fully configured; they never replace the App settings.
+    /// Wires the GitHub issue filer. Auth reuses the runtime's existing GitHub App
+    /// settings (<c>GITHUB_APP_ID</c>, <c>GITHUB_INSTALLATION_ID</c>,
+    /// <c>GITHUB_APP_PRIVATE_KEY_SECRET</c>, <c>AZURE_KEYVAULT_URI</c>) -- the same
+    /// names the Python runtime resolves -- and mints installation access tokens
+    /// through <see cref="GitHubAppAuthProvider"/>. There is no
+    /// <c>GITHUB_TOKEN</c>/<c>GH_TOKEN</c> fallback in any environment: an
+    /// incomplete App configuration is reported as unset settings rather than
+    /// silently accepting a personal access token in its place.
     /// </summary>
     private IIssueFiler? ComposeFiler(RuntimeSettings settings, List<string> missing)
     {
@@ -119,19 +124,6 @@ internal sealed class EnvironmentConveyorComposer(
                     Read(RuntimeIntegrationSettings.GitHubApiUrl),
                     BuildGitHubAppAuthProvider(appId, installationId, keyVaultUri, privateKeySecret),
                     repository)
-                : null;
-        }
-
-        var devToken = Read(RuntimeIntegrationSettings.GitHubToken);
-        if (devToken.Length == 0)
-        {
-            devToken = Read(RuntimeIntegrationSettings.GitHubTokenAlternative);
-        }
-
-        if (devToken.Length > 0)
-        {
-            return repository.Length > 0
-                ? GitHubIssueFiler.Create(Read(RuntimeIntegrationSettings.GitHubApiUrl), devToken, repository)
                 : null;
         }
 
@@ -175,6 +167,47 @@ internal sealed class EnvironmentConveyorComposer(
             cosmosGateway ?? new AzureCosmosDocumentGateway());
     }
 
+    /// <summary>
+    /// Wires the model client synthesis and council reason with, over the
+    /// runtime's existing Azure OpenAI settings (<c>AZURE_OPENAI_ENDPOINT</c>,
+    /// <c>AZURE_OPENAI_DEPLOYMENT</c>).
+    /// </summary>
+    private IModelClient? ComposeModelClient(RuntimeSettings settings, List<string> missing)
+    {
+        var endpoint = settings.OpenAiEndpoint.Trim();
+        var deployment = settings.OpenAiDeployment.Trim();
+        if (endpoint.Length == 0)
+        {
+            missing.Add(RuntimeSettingsComposer.AzureOpenAiEndpoint);
+        }
+
+        if (deployment.Length == 0)
+        {
+            missing.Add(RuntimeSettingsComposer.AzureOpenAiDeployment);
+        }
+
+        return endpoint.Length > 0 && deployment.Length > 0
+            ? new AzureOpenAiModelClient(endpoint, deployment, modelGateway ?? new AzureOpenAiCompletionGateway())
+            : null;
+    }
+
+    /// <summary>
+    /// Wires the tracer the conveyor line reports run and station boundaries
+    /// through, over the runtime's existing
+    /// <c>APPLICATIONINSIGHTS_CONNECTION_STRING</c>.
+    /// </summary>
+    private ITracer? ComposeTracer(RuntimeSettings settings, List<string> missing)
+    {
+        var connectionString = settings.AppInsightsConnectionString.Trim();
+        if (connectionString.Length == 0)
+        {
+            missing.Add(RuntimeSettingsComposer.ApplicationInsightsConnectionString);
+            return null;
+        }
+
+        return new ApplicationInsightsTracer(connectionString, telemetryGateway ?? new ApplicationInsightsTelemetryGateway());
+    }
+
     /// <summary>Human-readable reasons, one per unmet requirement.</summary>
     private IEnumerable<string> Explain(RuntimeSettings settings)
     {
@@ -199,13 +232,9 @@ internal sealed class EnvironmentConveyorComposer(
             .Select(setting => setting.EnvVar)
             .ToList();
 
-        if (missingAppSettings.Count > 0
-            && Read(RuntimeIntegrationSettings.GitHubToken).Length == 0
-            && Read(RuntimeIntegrationSettings.GitHubTokenAlternative).Length == 0)
+        if (missingAppSettings.Count > 0)
         {
-            yield return "no GitHub App auth is configured (set "
-                + string.Join(", ", missingAppSettings)
-                + $", or a local-dev override via {RuntimeIntegrationSettings.GitHubToken})";
+            yield return "no GitHub App auth is configured (set " + string.Join(", ", missingAppSettings) + ")";
         }
 
         if (settings.GitHubRepository.Trim().Length == 0)
@@ -218,6 +247,26 @@ internal sealed class EnvironmentConveyorComposer(
         {
             yield return "no blackboard persistence is configured (set "
                 + $"{RuntimeSettingsComposer.AzureCosmosEndpoint})";
+        }
+
+        var missingOpenAiSettings = new (string Value, string EnvVar)[]
+        {
+            (settings.OpenAiEndpoint, RuntimeSettingsComposer.AzureOpenAiEndpoint),
+            (settings.OpenAiDeployment, RuntimeSettingsComposer.AzureOpenAiDeployment),
+        }
+            .Where(setting => setting.Value.Trim().Length == 0)
+            .Select(setting => setting.EnvVar)
+            .ToList();
+
+        if (missingOpenAiSettings.Count > 0)
+        {
+            yield return "no model is configured to reason with (set " + string.Join(", ", missingOpenAiSettings) + ")";
+        }
+
+        if (settings.AppInsightsConnectionString.Trim().Length == 0)
+        {
+            yield return "no tracing backend is configured (set "
+                + $"{RuntimeSettingsComposer.ApplicationInsightsConnectionString})";
         }
     }
 

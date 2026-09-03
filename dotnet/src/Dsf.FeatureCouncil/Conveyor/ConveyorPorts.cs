@@ -36,20 +36,51 @@ public interface IRunStore
 }
 
 /// <summary>
+/// The reasoning seam synthesis and council draw on: a single free-text
+/// completion over a prompt. Production wires a real Azure OpenAI-backed
+/// implementation; tests substitute a deterministic double so station behaviour
+/// stays predictable without a live model call.
+/// </summary>
+public interface IModelClient
+{
+    Task<string> CompleteAsync(string prompt, CancellationToken cancellationToken);
+}
+
+/// <summary>
+/// The observability seam: one telemetry event per station/run boundary the
+/// conveyor crosses. Production wires a real Application Insights-backed
+/// implementation; tests substitute a recording double.
+/// </summary>
+public interface ITracer
+{
+    Task TraceAsync(
+        string name, IReadOnlyDictionary<string, string?> properties, CancellationToken cancellationToken);
+}
+
+/// <summary>
 /// The collaborators a conveyor line needs: the product it is scoped to, the
 /// source agents it can gather evidence from, the filer it hands accepted
-/// proposals to, and the store its state is persisted through.
+/// proposals to, the store its state is persisted through, the model it reasons
+/// with, and the tracer it reports its progress through.
 /// <paramref name="IssueFiler"/> is nullable so the filing station can report an
-/// unwired filer at the real boundary; <paramref name="RunStore"/> is required --
-/// a run the factory cannot persist is a run it cannot govern.
+/// unwired filer at the real boundary; <paramref name="RunStore"/>,
+/// <paramref name="ModelClient"/> and <paramref name="Tracer"/> are required --
+/// a run the factory cannot persist, cannot reason over, or cannot trace is not
+/// one composition should ever hand to the line.
 /// </summary>
 public sealed record ConveyorServices(
     string Product,
     IReadOnlyList<IEvidenceGatherer> EvidenceGatherers,
     IIssueFiler? IssueFiler,
-    IRunStore RunStore)
+    IRunStore RunStore,
+    IModelClient ModelClient,
+    ITracer Tracer)
 {
     public IRunStore RunStore { get; } = RunStore ?? throw new ArgumentNullException(nameof(RunStore));
+
+    public IModelClient ModelClient { get; } = ModelClient ?? throw new ArgumentNullException(nameof(ModelClient));
+
+    public ITracer Tracer { get; } = Tracer ?? throw new ArgumentNullException(nameof(Tracer));
 
     public IEvidenceGatherer? GathererFor(string sourceKind) =>
         EvidenceGatherers.FirstOrDefault(

@@ -109,7 +109,7 @@ public sealed class RuntimeVerbsTests
             Assert.Single(run.Proposals);
             Assert.True(run.Proposals[0].Accepted);
             Assert.Contains("no GitHub issue filer is wired", run.Audit[^1].Message);
-            Assert.Contains("GITHUB_TOKEN", run.Audit[^1].Message);
+            Assert.Contains("GITHUB_APP_ID", run.Audit[^1].Message);
         }
         finally
         {
@@ -311,6 +311,103 @@ public sealed class RuntimeVerbsTests
             TimeSpan.FromSeconds(PeriodicSweepService.DefaultIntervalSeconds),
             PeriodicSweepService.ResolveInterval(null, new Dictionary<string, string?>()));
         Assert.Equal(TimeSpan.FromSeconds(1), PeriodicSweepService.ResolveInterval(0, env));
+    }
+
+    [Fact]
+    public async Task Run_calls_the_model_client_during_synthesis_and_council_for_every_proposal()
+    {
+        var path = await WriteSignalAsync("""{"product_hints": "acme", "source_kinds": ["sentry"]}""");
+        var model = new RecordingModelClient();
+        var dependencies = TestDependencies.Build(
+            evidenceGatherers: [new ScriptedEvidenceGatherer(
+                "sentry", new EvidenceItem("sentry", "SENTRY-1", "checkout 500s spiked"))],
+            modelClient: model);
+        try
+        {
+            var run = await RuntimeVerbs.RunAsync(Settings, path, dryRun: true, dependencies, CancellationToken.None);
+
+            Assert.Equal(RunStatus.Previewed, run.Status);
+            // One synthesis completion and one council completion per proposal.
+            Assert.Equal(2, model.Prompts.Count);
+            Assert.Contains(model.Prompts, prompt => prompt.Contains("sentry", StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task Run_fails_with_an_audited_error_when_the_model_client_call_fails()
+    {
+        var path = await WriteSignalAsync("""{"product_hints": "acme", "source_kinds": ["sentry"]}""");
+        var dependencies = TestDependencies.Build(
+            evidenceGatherers: [new ScriptedEvidenceGatherer(
+                "sentry", new EvidenceItem("sentry", "SENTRY-1", "checkout 500s spiked"))],
+            modelClient: new ThrowingModelClient("model deployment unreachable"));
+        try
+        {
+            var run = await RuntimeVerbs.RunAsync(Settings, path, dryRun: true, dependencies, CancellationToken.None);
+
+            Assert.Equal(RunStatus.Error, run.Status);
+            Assert.Contains(run.Audit, a => a.Message.Contains("model deployment unreachable"));
+            // Synthesis (where the model is first called) never checkpointed.
+            Assert.DoesNotContain("s3_synthesis", run.Checkpoints);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task Run_traces_every_station_boundary_plus_the_run_start_and_completion()
+    {
+        var path = await WriteSignalAsync("""{"product_hints": "acme", "source_kinds": ["sentry"]}""");
+        var tracer = new RecordingTracer();
+        var dependencies = TestDependencies.Build(
+            evidenceGatherers: [new ScriptedEvidenceGatherer(
+                "sentry", new EvidenceItem("sentry", "SENTRY-1", "checkout 500s spiked"))],
+            tracer: tracer);
+        try
+        {
+            var run = await RuntimeVerbs.RunAsync(Settings, path, dryRun: true, dependencies, CancellationToken.None);
+
+            Assert.Equal(RunStatus.Previewed, run.Status);
+            Assert.Contains(tracer.Traced, e => e.Name == "run.start");
+            Assert.Contains(tracer.Traced, e => e.Name == "run.complete");
+            foreach (var station in ConveyorLine.StationNames)
+            {
+                Assert.Contains(tracer.Traced, e => e.Name == "station.start" && e.Properties["station"] == station);
+                Assert.Contains(tracer.Traced, e => e.Name == "station.complete" && e.Properties["station"] == station);
+            }
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task Run_survives_an_unreachable_tracer_and_still_completes_the_line()
+    {
+        var path = await WriteSignalAsync("""{"product_hints": "acme", "source_kinds": ["sentry"]}""");
+        var dependencies = TestDependencies.Build(
+            evidenceGatherers: [new ScriptedEvidenceGatherer(
+                "sentry", new EvidenceItem("sentry", "SENTRY-1", "checkout 500s spiked"))],
+            tracer: new UnreachableTracer("telemetry ingestion refused the event"));
+        try
+        {
+            var run = await RuntimeVerbs.RunAsync(Settings, path, dryRun: true, dependencies, CancellationToken.None);
+
+            Assert.Equal(RunStatus.Previewed, run.Status);
+            Assert.Equal(ConveyorLine.StationNames, run.Checkpoints);
+            Assert.Contains(run.Audit, a => a.Message.Contains("telemetry ingestion refused the event"));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
     }
 
     private static string BaseAddress(WebApplication app) =>

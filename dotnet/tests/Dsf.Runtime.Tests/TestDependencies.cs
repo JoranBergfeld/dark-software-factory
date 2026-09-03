@@ -20,12 +20,19 @@ internal static class TestDependencies
         IReadOnlyList<IEvidenceGatherer>? evidenceGatherers = null,
         IIssueFiler? issueFiler = null,
         IRunStore? runStore = null,
-        ISourceIntegration? sourceIntegration = null) =>
+        ISourceIntegration? sourceIntegration = null,
+        IModelClient? modelClient = null,
+        ITracer? tracer = null) =>
         new(
             ownerRuntimeIndexReader ?? new RecordingOwnerRuntimeIndexReader(),
             sourceAgentRosterReader ?? new RosterReader([]),
             webHostRunner ?? new RecordingWebHostRunner(),
-            new ScriptedConveyorComposer(evidenceGatherers ?? [], issueFiler, runStore ?? new RecordingRunStore()),
+            new ScriptedConveyorComposer(
+                evidenceGatherers ?? [],
+                issueFiler,
+                runStore ?? new RecordingRunStore(),
+                modelClient ?? new RecordingModelClient(),
+                tracer ?? new RecordingTracer()),
             sourceIntegration ?? new ScriptedSourceIntegration());
 }
 
@@ -33,10 +40,50 @@ internal static class TestDependencies
 internal sealed class ScriptedConveyorComposer(
     IReadOnlyList<IEvidenceGatherer> gatherers,
     IIssueFiler? issueFiler,
-    IRunStore runStore) : IConveyorComposer
+    IRunStore runStore,
+    IModelClient modelClient,
+    ITracer tracer) : IConveyorComposer
 {
     public ConveyorServices ComposeFor(RuntimeSettings settings) =>
-        new(settings.Product, gatherers, issueFiler, runStore);
+        new(settings.Product, gatherers, issueFiler, runStore, modelClient, tracer);
+}
+
+/// <summary>A deterministic model client that answers a fixed, recorded completion for every prompt.</summary>
+internal sealed class RecordingModelClient(string response = "deterministic test completion") : IModelClient
+{
+    public List<string> Prompts { get; } = [];
+
+    public Task<string> CompleteAsync(string prompt, CancellationToken cancellationToken)
+    {
+        Prompts.Add(prompt);
+        return Task.FromResult(response);
+    }
+}
+
+/// <summary>A model client that always fails, so a model-dependent station's failure path can be exercised.</summary>
+internal sealed class ThrowingModelClient(string reason) : IModelClient
+{
+    public Task<string> CompleteAsync(string prompt, CancellationToken cancellationToken) =>
+        throw new InvalidOperationException(reason);
+}
+
+/// <summary>A tracer that records every event it was asked to send.</summary>
+internal sealed class RecordingTracer : ITracer
+{
+    public List<(string Name, IReadOnlyDictionary<string, string?> Properties)> Traced { get; } = [];
+
+    public Task TraceAsync(string name, IReadOnlyDictionary<string, string?> properties, CancellationToken cancellationToken)
+    {
+        Traced.Add((name, properties));
+        return Task.CompletedTask;
+    }
+}
+
+/// <summary>A tracer whose backend cannot be reached, so a tracing failure can be exercised without failing the run.</summary>
+internal sealed class UnreachableTracer(string reason) : ITracer
+{
+    public Task TraceAsync(string name, IReadOnlyDictionary<string, string?> properties, CancellationToken cancellationToken) =>
+        throw new InvalidOperationException(reason);
 }
 
 /// <summary>A run store that records every persisted checkpoint in order.</summary>

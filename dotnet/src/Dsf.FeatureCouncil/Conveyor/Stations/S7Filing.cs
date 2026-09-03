@@ -31,7 +31,8 @@ public sealed class S7Filing : IStation
         {
             throw new InvalidOperationException(
                 $"cannot file {accepted.Count} accepted proposal(s) for product '{services.Product}': no GitHub "
-                + $"issue filer is wired (set {RuntimeIntegrationSettings.GitHubToken} and "
+                + "issue filer is wired (set GITHUB_APP_ID, GITHUB_INSTALLATION_ID, "
+                + "GITHUB_APP_PRIVATE_KEY_SECRET, AZURE_KEYVAULT_URI, and "
                 + $"{RuntimeIntegrationSettings.GitHubRepository}). Re-run with --dry-run to preview the line "
                 + "without filing.");
         }

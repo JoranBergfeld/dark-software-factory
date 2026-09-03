@@ -9,6 +9,10 @@ namespace Dsf.FeatureCouncil.Conveyor;
 /// resumed run skips completed stations, a KILLED run stops the line early, and
 /// any per-station exception -- including a failed persist -- becomes an audited
 /// terminal <see cref="RunStatus.Error"/> rather than propagating to the caller.
+/// Each run and station boundary is traced through <see cref="ITracer"/>: a
+/// tracer send failure is recorded and swallowed rather than turned into a
+/// station failure, since telemetry must never be the reason a run that actually
+/// completed its work is reported as having failed.
 /// </summary>
 public static class ConveyorLine
 {
@@ -43,12 +47,16 @@ public static class ConveyorLine
             return run;
         }
 
+        await TraceAsync(services, "run.start", run, station: null, cancellationToken);
+
         foreach (var station in Stations)
         {
             if (run.Checkpoints.Contains(station.Name, StringComparer.Ordinal))
             {
                 continue;
             }
+
+            await TraceAsync(services, "station.start", run, station.Name, cancellationToken);
 
             try
             {
@@ -64,16 +72,22 @@ public static class ConveyorLine
                 run.Checkpoints.Remove(station.Name);
                 run.Status = RunStatus.Error;
                 run.Record(station.Name, $"station error ({exception.GetType().Name}): {exception.Message}");
+                await TraceAsync(services, "station.error", run, station.Name, cancellationToken);
                 await TryPersistAsync(run, station.Name, services, cancellationToken);
+                await TraceAsync(services, "run.complete", run, station: null, cancellationToken);
                 return run;
             }
 
+            await TraceAsync(services, "station.complete", run, station.Name, cancellationToken);
+
             if (run.Status == RunStatus.Killed)
             {
+                await TraceAsync(services, "run.complete", run, station: null, cancellationToken);
                 return run;
             }
         }
 
+        await TraceAsync(services, "run.complete", run, station: null, cancellationToken);
         return run;
     }
 
@@ -92,6 +106,36 @@ public static class ConveyorLine
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             run.Record(station, $"could not persist the failed run ({exception.GetType().Name}): {exception.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Sends one telemetry event for a run or station boundary. A tracer send
+    /// failure is audited on the run rather than propagated: the line's own
+    /// success or failure must never hinge on the telemetry backend being
+    /// reachable.
+    /// </summary>
+    private static async Task TraceAsync(
+        ConveyorServices services, string name, ConveyorRun run, string? station, CancellationToken cancellationToken)
+    {
+        var properties = new Dictionary<string, string?>
+        {
+            ["product"] = services.Product,
+            ["runId"] = run.Id,
+            ["status"] = run.Status.ToString(),
+        };
+        if (station is not null)
+        {
+            properties["station"] = station;
+        }
+
+        try
+        {
+            await services.Tracer.TraceAsync(name, properties, cancellationToken);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            run.Record(station ?? name, $"could not trace '{name}' ({exception.GetType().Name}): {exception.Message}");
         }
     }
 }

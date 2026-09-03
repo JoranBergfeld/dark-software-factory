@@ -28,12 +28,6 @@ public static class RuntimeIntegrationSettings
     public static string SourceIntegrationToken(string kind) =>
         $"DSF_SOURCE_{Normalize(kind)}_TOKEN";
 
-    /// <summary>Token the filing station authenticates to the GitHub REST API with.</summary>
-    public const string GitHubToken = "GITHUB_TOKEN";
-
-    /// <summary>Accepted alternative spelling of <see cref="GitHubToken"/>.</summary>
-    public const string GitHubTokenAlternative = "GH_TOKEN";
-
     /// <summary>The repository accepted proposals are filed into (<c>owner/name</c>).</summary>
     public const string GitHubRepository = "GITHUB_REPOSITORY";
 

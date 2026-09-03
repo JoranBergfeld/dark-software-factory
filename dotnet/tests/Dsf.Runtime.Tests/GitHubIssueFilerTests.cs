@@ -140,7 +140,10 @@ public sealed class GitHubIssueFilerTests
         run.Fingerprint = "abc123";
 
         await new Dsf.FeatureCouncil.Conveyor.Stations.S3Synthesis()
-            .RunAsync(run, new ConveyorServices("acme", [], null, new RecordingRunStore()), CancellationToken.None);
+            .RunAsync(
+            run,
+            new ConveyorServices("acme", [], null, new RecordingRunStore(), new RecordingModelClient(), new RecordingTracer()),
+            CancellationToken.None);
 
         var proposal = Assert.Single(run.Proposals);
         // Stable across runs of the same scope: the fingerprint, not the run id.

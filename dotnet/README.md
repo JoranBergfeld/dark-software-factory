@@ -64,12 +64,23 @@ gather, file, nor persist:
   `DSF_SOURCE_AGENT_ENDPOINT_<KIND>` or `DSF_SOURCE_AGENT_ENDPOINT_TEMPLATE` (a
   base URL containing `{kind}`). A run scoped to a kind with no gatherer fails at
   `s2_investigation`, naming the kind and the setting.
-- **Filing** — the GitHub REST filer, from `GITHUB_TOKEN` (or `GH_TOKEN`) and
-  `GITHUB_REPOSITORY`; `DSF_GITHUB_API_URL` overrides the API base URL.
+- **Filing** — the GitHub REST filer, authenticated as the DSF GitHub App
+  (`GITHUB_APP_ID`, `GITHUB_INSTALLATION_ID`, `GITHUB_APP_PRIVATE_KEY_SECRET`,
+  `AZURE_KEYVAULT_URI`) and `GITHUB_REPOSITORY`; `DSF_GITHUB_API_URL` overrides
+  the API base URL. There is no `GITHUB_TOKEN`/`GH_TOKEN` fallback in any
+  environment — incomplete App settings fail the composition by name.
 - **Persistence** — the run blackboard is upserted into Cosmos
   (`AZURE_COSMOS_ENDPOINT`, `DSF_COSMOS_DATABASE`/`DSF_COSMOS_CONTAINER`,
   defaulting to `dsf`/`runs`) after every station checkpoint, using the runtime's
   managed identity. A store that cannot be written to fails the run.
+- **Model** — synthesis and council reason over evidence through a real Azure
+  OpenAI chat completions deployment (`AZURE_OPENAI_ENDPOINT`,
+  `AZURE_OPENAI_DEPLOYMENT`), authenticated with the runtime's managed identity.
+  A failed completion fails the station it was called from.
+- **Tracing** — every run and station boundary is reported to Application
+  Insights (`APPLICATIONINSIGHTS_CONNECTION_STRING`). A tracing failure is
+  audited on the run but never fails it — telemetry reachability must never
+  decide whether a line that did its work is reported as having failed.
 
 The `dsf` front door (`src/Dsf.Cli`) forwards these verbs to the `dsf-runtime`
 executable as a child process — the same way the Python front door shells out to

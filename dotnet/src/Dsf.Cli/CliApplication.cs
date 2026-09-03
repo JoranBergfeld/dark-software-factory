@@ -841,11 +841,15 @@ public static class CliApplication
 
     private static Command BuildSweepCommand()
     {
+        var dryRun = BoolOption("--dry-run", "sweep the line but skip filing");
         var product = StringOption("--product", "resolve runtime env for this product");
         var command = new Command("sweep", "sweep enabled source agents once (runtime)");
-        AddOptions(command, product);
+        AddOptions(command, dryRun, product);
         command.SetAction((parseResult, cancellationToken) => RuntimeShell(
-            RuntimeArguments("sweep", Value("--product", parseResult.GetValue(product))),
+            RuntimeArguments(
+                "sweep",
+                Flag("--dry-run", parseResult.GetValue(dryRun)),
+                Value("--product", parseResult.GetValue(product))),
             cancellationToken));
         return command;
     }
@@ -854,14 +858,18 @@ public static class CliApplication
     {
         var loop = BoolOption("--loop", "sweep continuously");
         var interval = IntOption("--interval", "seconds between sweeps");
+        var host = StringOption("--host", "bind host", "0.0.0.0");
+        var port = IntOption("--port", "bind port", 8080);
         var product = StringOption("--product", "resolve runtime env for this product");
         var command = new Command("serve-orchestrator", "run the orchestrator worker (runtime)");
-        AddOptions(command, loop, interval, product);
+        AddOptions(command, loop, interval, host, port, product);
         command.SetAction((parseResult, cancellationToken) => RuntimeShell(
             RuntimeArguments(
                 "serve-orchestrator",
                 Flag("--loop", parseResult.GetValue(loop)),
                 Value("--interval", parseResult.GetValue(interval)?.ToString(CultureInfo.InvariantCulture)),
+                Value("--host", parseResult.GetValue(host)),
+                Value("--port", parseResult.GetValue(port)?.ToString(CultureInfo.InvariantCulture)),
                 Value("--product", parseResult.GetValue(product))),
             cancellationToken));
         return command;

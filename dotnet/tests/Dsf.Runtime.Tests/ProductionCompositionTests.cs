@@ -7,10 +7,11 @@ namespace Dsf.Runtime.Tests;
 
 /// <summary>
 /// The production dependency composition must be complete or fail by name. A
-/// runtime that cannot reach its source agents, cannot file, or cannot persist
-/// what it decided must say which setting is unset -- it must never compose an
-/// empty dependency set that lets a non-dry run finish "successfully" having
-/// gathered nothing and filed nothing.
+/// runtime that cannot reach its source agents, cannot file, cannot persist what
+/// it decided, cannot reason over evidence, or cannot trace its own stations must
+/// say which setting is unset -- it must never compose an empty dependency set
+/// that lets a non-dry run finish "successfully" having gathered nothing and
+/// filed nothing.
 /// </summary>
 public sealed class ProductionCompositionTests
 {
@@ -20,14 +21,17 @@ public sealed class ProductionCompositionTests
         string keyVaultUri = "",
         string githubAppId = "",
         string githubInstallationId = "",
-        string githubAppPrivateKeySecret = "") => new(
+        string githubAppPrivateKeySecret = "",
+        string appInsightsConnectionString = "InstrumentationKey=abc123",
+        string openAiEndpoint = "https://openai.example",
+        string openAiDeployment = "gpt-deploy") => new(
         Product: "acme",
         AppConfigEndpoint: "https://appconfig.example",
         KeyVaultUri: keyVaultUri,
-        AppInsightsConnectionString: "",
+        AppInsightsConnectionString: appInsightsConnectionString,
         CosmosEndpoint: cosmosEndpoint,
-        OpenAiEndpoint: "https://openai.example",
-        OpenAiDeployment: "gpt-deploy",
+        OpenAiEndpoint: openAiEndpoint,
+        OpenAiDeployment: openAiDeployment,
         OpenAiEmbeddingDeployment: "embed-deploy",
         GitHubAppId: githubAppId,
         GitHubInstallationId: githubInstallationId,
@@ -49,46 +53,95 @@ public sealed class ProductionCompositionTests
             Task.FromResult("unused-in-these-tests");
     }
 
+    /// <summary>
+    /// Everything a production composition needs, using the real GitHub App
+    /// settings -- no <c>GITHUB_TOKEN</c>/<c>GH_TOKEN</c> anywhere, so any test
+    /// built on this fixture proves the App settings alone are sufficient.
+    /// </summary>
     private static readonly Dictionary<string, string?> FullyConfigured = new()
     {
         ["DSF_SOURCE_AGENT_ENDPOINT_TEMPLATE"] = "https://acme-{kind}.internal",
-        ["GITHUB_TOKEN"] = "ghp_test",
     };
+
+    private static RuntimeDependencies ProductionDependencies(
+        Dictionary<string, string?>? env = null, IPrivateKeySecretReader? privateKeySecretReader = null) =>
+        new(
+            new AzureAppConfigurationOwnerRuntimeIndexReader(),
+            new AzureAppConfigurationSourceAgentRosterReader(),
+            new WebApplicationHostRunner(),
+            new EnvironmentConveyorComposer(
+                env ?? FullyConfigured,
+                privateKeySecretReader: privateKeySecretReader ?? new StubPrivateKeySecretReader()),
+            new HttpSourceIntegration(env ?? FullyConfigured));
 
     [Fact]
     public void Production_composition_without_source_agent_endpoints_names_the_unset_settings()
     {
-        var dependencies = RuntimeDependencies.Production(
-            new Dictionary<string, string?> { ["GITHUB_TOKEN"] = "ghp_test" });
+        var dependencies = ProductionDependencies(new Dictionary<string, string?>());
 
         var exception = Assert.Throws<RuntimeConfigurationException>(
-            () => dependencies.ConveyorServicesFor(SettingsWith()));
+            () => dependencies.ConveyorServicesFor(SettingsWithGitHubApp()));
 
         Assert.Contains("DSF_SOURCE_AGENT_ENDPOINT_TEMPLATE", exception.Message);
         Assert.Contains("DSF_SOURCE_AGENT_ENDPOINT_SENTRY", exception.Message);
     }
 
     [Fact]
-    public void Production_composition_without_a_github_token_names_the_unset_setting()
+    public void Production_composition_without_github_app_settings_names_the_unset_settings()
     {
-        var dependencies = RuntimeDependencies.Production(new Dictionary<string, string?>
-        {
-            ["DSF_SOURCE_AGENT_ENDPOINT_TEMPLATE"] = "https://acme-{kind}.internal",
-        });
+        var dependencies = ProductionDependencies();
 
         var exception = Assert.Throws<RuntimeConfigurationException>(
             () => dependencies.ConveyorServicesFor(SettingsWith()));
 
-        Assert.Contains("GITHUB_TOKEN", exception.Message);
+        Assert.Contains("GITHUB_APP_ID", exception.Message);
+        Assert.Contains("GITHUB_INSTALLATION_ID", exception.Message);
+        Assert.Contains("GITHUB_APP_PRIVATE_KEY_SECRET", exception.Message);
+        Assert.Contains("AZURE_KEYVAULT_URI", exception.Message);
+    }
+
+    /// <summary>
+    /// The core of finding #1: a <c>GITHUB_TOKEN</c>/<c>GH_TOKEN</c> present in
+    /// the environment must never substitute for the GitHub App settings, in any
+    /// environment -- production has no development opt-in for this. Incomplete
+    /// App settings must fail exactly as loudly with a bare PAT present as without
+    /// one.
+    /// </summary>
+    [Theory]
+    [InlineData("GITHUB_TOKEN")]
+    [InlineData("GH_TOKEN")]
+    public void Production_composition_never_falls_back_to_a_PAT_when_App_settings_are_incomplete(string variable)
+    {
+        var env = new Dictionary<string, string?>(FullyConfigured) { [variable] = "ghp_test" };
+        var dependencies = ProductionDependencies(env);
+
+        var exception = Assert.Throws<RuntimeConfigurationException>(
+            () => dependencies.ConveyorServicesFor(SettingsWith()));
+
+        Assert.Contains("GITHUB_APP_ID", exception.Message);
+        Assert.DoesNotContain("local-dev", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(variable, exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Production_composition_never_wires_a_filer_from_a_PAT_alone_even_with_a_repository_configured()
+    {
+        var env = new Dictionary<string, string?>(FullyConfigured) { ["GITHUB_TOKEN"] = "ghp_test" };
+        var dependencies = ProductionDependencies(env);
+
+        var exception = Assert.Throws<RuntimeConfigurationException>(
+            () => dependencies.ConveyorServicesFor(SettingsWith(repository: "acme/acme")));
+
+        Assert.Contains("GITHUB_APP_ID", exception.Message);
     }
 
     [Fact]
     public void Production_composition_without_a_repository_names_the_unset_setting()
     {
-        var dependencies = RuntimeDependencies.Production(FullyConfigured);
+        var dependencies = ProductionDependencies();
 
         var exception = Assert.Throws<RuntimeConfigurationException>(
-            () => dependencies.ConveyorServicesFor(SettingsWith(repository: "")));
+            () => dependencies.ConveyorServicesFor(SettingsWithGitHubApp(repository: "")));
 
         Assert.Contains("GITHUB_REPOSITORY", exception.Message);
     }
@@ -96,21 +149,48 @@ public sealed class ProductionCompositionTests
     [Fact]
     public void Production_composition_without_a_persistence_endpoint_names_the_unset_setting()
     {
-        var dependencies = RuntimeDependencies.Production(FullyConfigured);
+        var dependencies = ProductionDependencies();
 
         var exception = Assert.Throws<RuntimeConfigurationException>(
-            () => dependencies.ConveyorServicesFor(SettingsWith(cosmosEndpoint: "")));
+            () => dependencies.ConveyorServicesFor(SettingsWithGitHubApp(cosmosEndpoint: "")));
 
         Assert.Contains("AZURE_COSMOS_ENDPOINT", exception.Message);
     }
 
     [Fact]
-    public void Fully_configured_production_composition_wires_gatherers_a_filer_and_a_run_store()
+    public void Production_composition_without_azure_openai_settings_names_the_unset_settings()
     {
-        var services = RuntimeDependencies.Production(FullyConfigured).ConveyorServicesFor(SettingsWith());
+        var dependencies = ProductionDependencies();
+
+        var exception = Assert.Throws<RuntimeConfigurationException>(
+            () => dependencies.ConveyorServicesFor(
+                SettingsWithGitHubApp() with { OpenAiEndpoint = "", OpenAiDeployment = "" }));
+
+        Assert.Contains("AZURE_OPENAI_ENDPOINT", exception.Message);
+        Assert.Contains("AZURE_OPENAI_DEPLOYMENT", exception.Message);
+    }
+
+    [Fact]
+    public void Production_composition_without_an_application_insights_connection_string_names_the_unset_setting()
+    {
+        var dependencies = ProductionDependencies();
+
+        var exception = Assert.Throws<RuntimeConfigurationException>(
+            () => dependencies.ConveyorServicesFor(
+                SettingsWithGitHubApp() with { AppInsightsConnectionString = "" }));
+
+        Assert.Contains("APPLICATIONINSIGHTS_CONNECTION_STRING", exception.Message);
+    }
+
+    [Fact]
+    public void Fully_configured_production_composition_wires_gatherers_a_filer_a_run_store_a_model_client_and_a_tracer()
+    {
+        var services = ProductionDependencies().ConveyorServicesFor(SettingsWithGitHubApp());
 
         Assert.NotNull(services.IssueFiler);
         Assert.NotNull(services.RunStore);
+        Assert.NotNull(services.ModelClient);
+        Assert.NotNull(services.Tracer);
         foreach (var kind in SourceAgentKinds.Known)
         {
             Assert.NotNull(services.GathererFor(kind));
@@ -123,10 +203,9 @@ public sealed class ProductionCompositionTests
         var env = new Dictionary<string, string?>
         {
             ["DSF_SOURCE_AGENT_ENDPOINT_SENTRY"] = "https://sentry-agent.internal",
-            ["GITHUB_TOKEN"] = "ghp_test",
         };
 
-        var services = RuntimeDependencies.Production(env).ConveyorServicesFor(SettingsWith());
+        var services = ProductionDependencies(env).ConveyorServicesFor(SettingsWithGitHubApp());
 
         Assert.NotNull(services.GathererFor("sentry"));
         Assert.Null(services.GathererFor("grafana"));
@@ -145,7 +224,7 @@ public sealed class ProductionCompositionTests
     }
 
     [Fact]
-    public void GitHub_App_settings_take_precedence_over_a_dev_token_when_both_are_present()
+    public void GitHub_App_settings_are_used_even_when_a_dev_token_is_also_present()
     {
         var envWithDevToken = new Dictionary<string, string?>(FullyConfigured) { ["GITHUB_TOKEN"] = "ghp_test" };
         var composer = new EnvironmentConveyorComposer(
@@ -165,8 +244,7 @@ public sealed class ProductionCompositionTests
     public void Partially_configured_GitHub_App_settings_are_named_loudly()
     {
         var settings = SettingsWith(githubAppId: "12345");
-        var env = new Dictionary<string, string?>(FullyConfigured) { ["GITHUB_TOKEN"] = null, ["GH_TOKEN"] = null };
-        var composer = new EnvironmentConveyorComposer(env, privateKeySecretReader: new StubPrivateKeySecretReader());
+        var composer = new EnvironmentConveyorComposer(FullyConfigured, privateKeySecretReader: new StubPrivateKeySecretReader());
 
         var exception = Assert.Throws<RuntimeConfigurationException>(() => composer.ComposeFor(settings));
 
@@ -176,7 +254,7 @@ public sealed class ProductionCompositionTests
     }
 
     [Fact]
-    public void No_GitHub_auth_configured_at_all_names_the_App_settings_and_the_dev_override()
+    public void No_GitHub_auth_configured_at_all_names_only_the_App_settings()
     {
         var env = new Dictionary<string, string?>
         {
@@ -190,6 +268,7 @@ public sealed class ProductionCompositionTests
         Assert.Contains("GITHUB_INSTALLATION_ID", exception.Message);
         Assert.Contains("GITHUB_APP_PRIVATE_KEY_SECRET", exception.Message);
         Assert.Contains("AZURE_KEYVAULT_URI", exception.Message);
-        Assert.Contains("GITHUB_TOKEN", exception.Message);
+        Assert.DoesNotContain("GITHUB_TOKEN", exception.Message);
+        Assert.DoesNotContain("local-dev", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
 }

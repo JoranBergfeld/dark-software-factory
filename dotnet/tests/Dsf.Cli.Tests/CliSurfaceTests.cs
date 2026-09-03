@@ -214,6 +214,36 @@ public sealed class CliSurfaceTests
     }
 
     [Fact]
+    public async Task Runtime_sweep_dry_run_flag_is_forwarded_to_the_runtime_host()
+    {
+        var env = new Dictionary<string, string?> { ["DSF_PRODUCT"] = "acme" };
+
+        // The front door itself has no notion of missing endpoints; reaching the
+        // same failure as a plain `sweep` proves --dry-run was accepted and
+        // forwarded to the runtime host rather than rejected as an unrecognized
+        // option (which would exit 2, not 1).
+        var result = await DsfProcess.RunAsync(env, "sweep", "--dry-run");
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Equal(string.Empty, result.Stdout);
+        Assert.Contains("AZURE_APPCONFIG_ENDPOINT", result.Stderr);
+    }
+
+    [Fact]
+    public async Task Runtime_serve_orchestrator_host_and_port_are_forwarded_to_the_runtime_host()
+    {
+        // No DSF_PRODUCT at all: if --host/--port were unrecognized by the front
+        // door, parsing itself would fail (exit 2) before the runtime host ever
+        // got a chance to report the missing product.
+        var result = await DsfProcess.RunAsync("serve-orchestrator", "--host", "127.0.0.1", "--port", "9999");
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Equal(string.Empty, result.Stdout);
+        Assert.Contains(
+            "DSF_PRODUCT is required to scope the factory runtime (set DSF_PRODUCT=<product>).", result.Stderr);
+    }
+
+    [Fact]
     public async Task Runtime_verbs_are_executed_by_the_runtime_host_the_front_door_launches()
     {
         var env = new Dictionary<string, string?>
