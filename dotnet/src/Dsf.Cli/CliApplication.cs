@@ -1843,7 +1843,18 @@ public static class CliApplication
             string.Empty,
             definition.Governance.ConfidenceThreshold);
 
-    private static IReadOnlyDictionary<string, string> RuntimeIndexValues(
+    /// <summary>
+    /// Builds the runtime index entries published to owner App Configuration for
+    /// this instance. Must carry every setting <c>RuntimeSettingsComposer</c> (the
+    /// .NET runtime host, in <c>Dsf.Core.Runtime</c>) requires -- including the
+    /// Azure OpenAI deployment names and the GitHub App identifiers -- so a runtime
+    /// command resolving configuration through the owner authority (rather than
+    /// local env vars) can compose a complete <c>RuntimeSettings</c> for this
+    /// product. Internal (not private) so its contents are covered by a focused
+    /// unit test instead of only exercised indirectly through the full GitHub
+    /// provisioning flow.
+    /// </summary>
+    internal static IReadOnlyDictionary<string, string> RuntimeIndexValues(
         InstanceDefinition definition,
         string productEndpoint)
     {
@@ -1859,6 +1870,39 @@ public static class CliApplication
             {
                 values[$"AZURE_{key[..^"Endpoint".Length].ToUpperInvariant()}_ENDPOINT"] = value;
             }
+        }
+
+        if (definition.Azure.Outputs.TryGetValue("openaiDeployment", out var openAiDeployment)
+            && !string.IsNullOrWhiteSpace(openAiDeployment))
+        {
+            values["AZURE_OPENAI_DEPLOYMENT"] = openAiDeployment;
+        }
+
+        if (definition.Azure.Outputs.TryGetValue("openaiEmbeddingDeployment", out var openAiEmbeddingDeployment)
+            && !string.IsNullOrWhiteSpace(openAiEmbeddingDeployment))
+        {
+            values["AZURE_OPENAI_EMBEDDING_DEPLOYMENT"] = openAiEmbeddingDeployment;
+        }
+
+        if (definition.Azure.Outputs.TryGetValue("keyVaultUri", out var keyVaultUri)
+            && !string.IsNullOrWhiteSpace(keyVaultUri))
+        {
+            values["AZURE_KEYVAULT_URI"] = keyVaultUri;
+        }
+
+        if (!string.IsNullOrWhiteSpace(definition.GitHub.AppId))
+        {
+            values["GITHUB_APP_ID"] = definition.GitHub.AppId;
+        }
+
+        if (!string.IsNullOrWhiteSpace(definition.GitHub.InstallationId))
+        {
+            values["GITHUB_INSTALLATION_ID"] = definition.GitHub.InstallationId;
+        }
+
+        if (!string.IsNullOrWhiteSpace(definition.GitHub.PrivateKeySecretName))
+        {
+            values["GITHUB_APP_PRIVATE_KEY_SECRET"] = definition.GitHub.PrivateKeySecretName;
         }
 
         return values;

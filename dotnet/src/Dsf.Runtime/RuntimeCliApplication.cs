@@ -27,9 +27,19 @@ public static class RuntimeCliApplication
         IReadOnlyDictionary<string, string?> env,
         TextWriter stdout,
         TextWriter stderr,
+        CancellationToken cancellationToken) =>
+        await InvokeAsync(args, env, stdout, stderr, ownerRuntimeIndexReader: null, cancellationToken);
+
+    public static async Task<int> InvokeAsync(
+        string[] args,
+        IReadOnlyDictionary<string, string?> env,
+        TextWriter stdout,
+        TextWriter stderr,
+        IOwnerRuntimeIndexReader? ownerRuntimeIndexReader,
         CancellationToken cancellationToken)
     {
-        var root = BuildRootCommand(env, stdout, stderr);
+        ownerRuntimeIndexReader ??= new AzureCliOwnerRuntimeIndexReader();
+        var root = BuildRootCommand(env, stdout, stderr, ownerRuntimeIndexReader);
         var parseResult = root.Parse(args);
         var exitCode = await parseResult.InvokeAsync(cancellationToken: cancellationToken);
         return parseResult.Errors.Count > 0 ? 2 : exitCode;
@@ -37,82 +47,89 @@ public static class RuntimeCliApplication
 
     /// <summary>Builds the root command with no wiring, for command-grammar assertions.</summary>
     public static RootCommand BuildRootCommand() => BuildRootCommand(
-        new Dictionary<string, string?>(), Console.Out, Console.Error);
+        new Dictionary<string, string?>(), Console.Out, Console.Error, new AzureCliOwnerRuntimeIndexReader());
 
     private static RootCommand BuildRootCommand(
         IReadOnlyDictionary<string, string?> env,
         TextWriter stdout,
-        TextWriter stderr)
+        TextWriter stderr,
+        IOwnerRuntimeIndexReader ownerRuntimeIndexReader)
     {
         var root = new RootCommand("Dark Software Factory — runtime host (run/sweep/serve-orchestrator/serve-agent)");
-        root.Subcommands.Add(BuildRunCommand(env, stderr));
-        root.Subcommands.Add(BuildSweepCommand(env, stderr));
-        root.Subcommands.Add(BuildServeOrchestratorCommand(env, stderr));
-        root.Subcommands.Add(BuildServeAgentCommand(stderr));
+        root.Subcommands.Add(BuildRunCommand(env, stderr, ownerRuntimeIndexReader));
+        root.Subcommands.Add(BuildSweepCommand(env, stderr, ownerRuntimeIndexReader));
+        root.Subcommands.Add(BuildServeOrchestratorCommand(env, stderr, ownerRuntimeIndexReader));
+        root.Subcommands.Add(BuildServeAgentCommand(env, stderr, ownerRuntimeIndexReader));
         return root;
     }
 
-    private static Command BuildRunCommand(IReadOnlyDictionary<string, string?> env, TextWriter stderr)
+    private static Command BuildRunCommand(
+        IReadOnlyDictionary<string, string?> env, TextWriter stderr, IOwnerRuntimeIndexReader ownerRuntimeIndexReader)
     {
         var signal = StringOption("--signal", "path to a signal JSON file");
         var dryRun = BoolOption("--dry-run", "run the line but skip filing");
         var product = StringOption("--product", "resolve runtime env for this product");
         var command = new Command("run", "run the intake line for one signal (runtime)");
         AddOptions(command, signal, dryRun, product);
-        command.SetAction(parseResult =>
-            RunVerb(env, stderr, "run", parseResult.GetValue(product)));
+        command.SetAction((parseResult, cancellationToken) =>
+            RunVerb(env, stderr, "run", parseResult.GetValue(product), ownerRuntimeIndexReader, cancellationToken));
         return command;
     }
 
-    private static Command BuildSweepCommand(IReadOnlyDictionary<string, string?> env, TextWriter stderr)
+    private static Command BuildSweepCommand(
+        IReadOnlyDictionary<string, string?> env, TextWriter stderr, IOwnerRuntimeIndexReader ownerRuntimeIndexReader)
     {
         var product = StringOption("--product", "resolve runtime env for this product");
         var command = new Command("sweep", "sweep enabled source agents once (runtime)");
         AddOptions(command, product);
-        command.SetAction(parseResult =>
-            RunVerb(env, stderr, "sweep", parseResult.GetValue(product)));
+        command.SetAction((parseResult, cancellationToken) =>
+            RunVerb(env, stderr, "sweep", parseResult.GetValue(product), ownerRuntimeIndexReader, cancellationToken));
         return command;
     }
 
-    private static Command BuildServeOrchestratorCommand(IReadOnlyDictionary<string, string?> env, TextWriter stderr)
+    private static Command BuildServeOrchestratorCommand(
+        IReadOnlyDictionary<string, string?> env, TextWriter stderr, IOwnerRuntimeIndexReader ownerRuntimeIndexReader)
     {
         var loop = BoolOption("--loop", "sweep continuously");
         var interval = IntOption("--interval", "seconds between sweeps");
         var product = StringOption("--product", "resolve runtime env for this product");
         var command = new Command("serve-orchestrator", "run the orchestrator worker (runtime)");
         AddOptions(command, loop, interval, product);
-        command.SetAction(parseResult =>
-            RunVerb(env, stderr, "serve-orchestrator", parseResult.GetValue(product)));
+        command.SetAction((parseResult, cancellationToken) =>
+            RunVerb(
+                env, stderr, "serve-orchestrator", parseResult.GetValue(product), ownerRuntimeIndexReader, cancellationToken));
         return command;
     }
 
-    private static Command BuildServeAgentCommand(TextWriter stderr)
+    private static Command BuildServeAgentCommand(
+        IReadOnlyDictionary<string, string?> env, TextWriter stderr, IOwnerRuntimeIndexReader ownerRuntimeIndexReader)
     {
         var kind = StringOption("--kind", "source agent kind", "sentry");
         var host = StringOption("--host", "bind host", "0.0.0.0");
         var port = IntOption("--port", "bind port", 8080);
+        var product = StringOption("--product", "resolve runtime env for this product");
         var command = new Command("serve-agent", "serve a source agent over A2A (runtime)");
-        AddOptions(command, kind, host, port);
-        // serve-agent does not build the per-product Services bundle (parity with
-        // the Python _cmd_serve_agent, which serves the ASGI app directly) so it
-        // never requires the Azure runtime settings.
-        command.SetAction(_ =>
-        {
-            stderr.WriteLine("[dsf] error: serve-agent is not yet implemented in the .NET runtime host.");
-            return Failure;
-        });
+        AddOptions(command, kind, host, port, product);
+        // serve-agent must still validate required runtime config before its loud
+        // not-implemented failure, exactly like every other verb -- it must never
+        // report "not yet implemented" for a product that isn't configured yet.
+        command.SetAction((parseResult, cancellationToken) =>
+            RunVerb(
+                env, stderr, "serve-agent", parseResult.GetValue(product), ownerRuntimeIndexReader, cancellationToken));
         return command;
     }
 
-    private static int RunVerb(
+    private static async Task<int> RunVerb(
         IReadOnlyDictionary<string, string?> env,
         TextWriter stderr,
         string verb,
-        string? productOption)
+        string? productOption,
+        IOwnerRuntimeIndexReader ownerRuntimeIndexReader,
+        CancellationToken cancellationToken)
     {
         try
         {
-            RuntimeSettingsComposer.FromEnvironment(env, productOption);
+            await RuntimeSettingsComposer.ComposeAsync(env, productOption, ownerRuntimeIndexReader, cancellationToken);
         }
         catch (RuntimeConfigurationException exception)
         {

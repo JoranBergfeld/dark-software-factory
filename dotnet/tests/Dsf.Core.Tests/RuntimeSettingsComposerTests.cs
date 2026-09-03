@@ -138,4 +138,105 @@ public sealed class RuntimeSettingsComposerTests
         Assert.Equal(string.Empty, settings.GitHubAppPrivateKeySecret);
         Assert.Equal(string.Empty, settings.GitHubRepository);
     }
+
+    [Fact]
+    public async Task ComposeAsync_fills_missing_settings_from_the_owner_runtime_index_when_configured()
+    {
+        var env = new Dictionary<string, string?>
+        {
+            ["DSF_PRODUCT"] = "acme",
+            ["DSF_OWNER_APPCONFIG_ENDPOINT"] = "https://owner-appconfig.example",
+        };
+        var reader = new StubOwnerRuntimeIndexReader(new Dictionary<string, string>
+        {
+            ["AZURE_APPCONFIG_ENDPOINT"] = "https://appconfig.example",
+            ["AZURE_COSMOS_ENDPOINT"] = "https://cosmos.example",
+            ["AZURE_OPENAI_ENDPOINT"] = "https://openai.example",
+            ["AZURE_OPENAI_DEPLOYMENT"] = "gpt-deploy",
+            ["AZURE_OPENAI_EMBEDDING_DEPLOYMENT"] = "embed-deploy",
+            ["GITHUB_REPOSITORY"] = "acme/acme",
+        });
+
+        var settings = await RuntimeSettingsComposer.ComposeAsync(env, productOverride: null, reader, CancellationToken.None);
+
+        Assert.Equal("acme", settings.Product);
+        Assert.Equal("https://appconfig.example", settings.AppConfigEndpoint);
+        Assert.Equal("https://cosmos.example", settings.CosmosEndpoint);
+        Assert.Equal("https://openai.example", settings.OpenAiEndpoint);
+        Assert.Equal("gpt-deploy", settings.OpenAiDeployment);
+        Assert.Equal("embed-deploy", settings.OpenAiEmbeddingDeployment);
+        Assert.Equal("acme/acme", settings.GitHubRepository);
+        Assert.Equal("acme", reader.RequestedProduct);
+        Assert.Equal("https://owner-appconfig.example", reader.RequestedOwnerEndpoint);
+    }
+
+    [Fact]
+    public async Task ComposeAsync_local_environment_values_take_precedence_over_the_owner_runtime_index()
+    {
+        var env = new Dictionary<string, string?>(FullEnvironment)
+        {
+            ["DSF_OWNER_APPCONFIG_ENDPOINT"] = "https://owner-appconfig.example",
+        };
+        var reader = new StubOwnerRuntimeIndexReader(new Dictionary<string, string>
+        {
+            ["AZURE_APPCONFIG_ENDPOINT"] = "https://remote-appconfig.example",
+        });
+
+        var settings = await RuntimeSettingsComposer.ComposeAsync(env, productOverride: null, reader, CancellationToken.None);
+
+        Assert.Equal("https://appconfig.example", settings.AppConfigEndpoint);
+    }
+
+    [Fact]
+    public async Task ComposeAsync_never_consults_the_owner_runtime_index_when_no_owner_endpoint_is_configured()
+    {
+        var reader = new ThrowingOwnerRuntimeIndexReader();
+
+        var settings = await RuntimeSettingsComposer.ComposeAsync(FullEnvironment, productOverride: null, reader, CancellationToken.None);
+
+        Assert.Equal("acme", settings.Product);
+    }
+
+    [Fact]
+    public async Task ComposeAsync_fails_loudly_when_the_owner_runtime_index_lookup_fails()
+    {
+        var env = new Dictionary<string, string?>
+        {
+            ["DSF_PRODUCT"] = "acme",
+            ["DSF_OWNER_APPCONFIG_ENDPOINT"] = "https://owner-appconfig.example",
+        };
+        var reader = new ThrowingOwnerRuntimeIndexReader();
+
+        var exception = await Assert.ThrowsAsync<RuntimeConfigurationException>(
+            () => RuntimeSettingsComposer.ComposeAsync(env, productOverride: null, reader, CancellationToken.None));
+
+        Assert.Contains("acme", exception.Message);
+        Assert.Contains("https://owner-appconfig.example", exception.Message);
+    }
+
+    private sealed class StubOwnerRuntimeIndexReader(IReadOnlyDictionary<string, string> values) : IOwnerRuntimeIndexReader
+    {
+        public string? RequestedOwnerEndpoint { get; private set; }
+
+        public string? RequestedProduct { get; private set; }
+
+        public Task<IReadOnlyDictionary<string, string>> ReadAsync(
+            string ownerAppConfigEndpoint,
+            string product,
+            CancellationToken cancellationToken)
+        {
+            RequestedOwnerEndpoint = ownerAppConfigEndpoint;
+            RequestedProduct = product;
+            return Task.FromResult(values);
+        }
+    }
+
+    private sealed class ThrowingOwnerRuntimeIndexReader : IOwnerRuntimeIndexReader
+    {
+        public Task<IReadOnlyDictionary<string, string>> ReadAsync(
+            string ownerAppConfigEndpoint,
+            string product,
+            CancellationToken cancellationToken) =>
+            throw new InvalidOperationException($"product '{product}' is absent from the owner runtime index at '{ownerAppConfigEndpoint}'.");
+    }
 }
