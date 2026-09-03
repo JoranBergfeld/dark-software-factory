@@ -144,7 +144,7 @@ public static class CliApplication
                 return Failure;
             }
 
-            var productValue = interaction.Product ?? parseResult.GetValue(product) ?? string.Empty;
+            var productValue = (interaction.Product ?? parseResult.GetValue(product) ?? string.Empty).Trim();
             var ownerValue = parseResult.GetValue(owner) ?? string.Empty;
             var repoValue = parseResult.GetValue(repo) ?? string.Empty;
             var visibilityValue = parseResult.GetValue(visibility) ?? "private";
@@ -152,6 +152,16 @@ public static class CliApplication
             var locationValue = parseResult.GetValue(location) ?? "swedencentral";
             var configRootValue = parseResult.GetValue(configRoot);
             var effectivePrefix = BuildNamePrefix(prefix.Length > 0 ? prefix : productValue);
+            try
+            {
+                InstanceDefinitions.EnsureSafeProductKey(productValue);
+            }
+            catch (InstanceDefinitionException exception)
+            {
+                terminal.WriteErrorLine($"[dsf] error: {exception.Message}");
+                return Failure;
+            }
+
             if (parseResult.GetValue(dryRun))
             {
                 PrintDryRunPlan(
@@ -321,7 +331,7 @@ public static class CliApplication
         var repoFull = string.IsNullOrWhiteSpace(owner) ? repoName : $"{owner}/{repoName}";
         var visibilityFlag = visibility == "public" ? "--public" : visibility == "internal" ? "--internal" : "--private";
         var root = configRoot ?? Directory.GetCurrentDirectory();
-        var manifestPath = Path.Combine(root, "config", "instances", $"{product}.json");
+        var manifestPath = InstanceDefinitions.PathFor(root, product);
         var bicepPath = Path.Combine(root, "infra", "main.bicep");
 
         terminal.WriteLine("[dsf] WARNING: DSF_OWNER_KEYVAULT_URI is unset and --owner-keyvault-uri was not passed.");

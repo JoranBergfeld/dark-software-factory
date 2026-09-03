@@ -28,9 +28,67 @@ public static class InstanceDefinitions
     /// <summary>Directory holding per-product instance definitions.</summary>
     public static string DirectoryFor(string repoRoot) => Path.Combine(repoRoot, "config", "instances");
 
-    /// <summary>Conventional path of one product's instance definition.</summary>
-    public static string PathFor(string repoRoot, string product) =>
-        Path.Combine(DirectoryFor(repoRoot), $"{product}.json");
+    /// <summary>
+    /// Conventional path of one product's instance definition.
+    /// The product key is caller-supplied text, so this is the single choke point that
+    /// refuses anything able to steer the path out of <c>config/instances</c>.
+    /// </summary>
+    public static string PathFor(string repoRoot, string product)
+    {
+        var directory = DirectoryFor(repoRoot);
+        var path = Path.Combine(directory, $"{EnsureSafeProductKey(product)}.json");
+
+        var resolvedDirectory = Path.TrimEndingDirectorySeparator(Path.GetFullPath(directory));
+        var resolvedPath = Path.GetFullPath(path);
+        if (Path.GetDirectoryName(resolvedPath) != resolvedDirectory)
+        {
+            throw new InstanceDefinitionException(
+                $"Refusing to use product key '{product}': it resolves to '{resolvedPath}', " +
+                $"outside '{resolvedDirectory}'.");
+        }
+
+        return path;
+    }
+
+    /// <summary>
+    /// Validates a product key as a bare file-name stem: no separators, no traversal,
+    /// no absolute or rooted paths. Returns the key when it is safe; throws otherwise.
+    /// </summary>
+    public static string EnsureSafeProductKey(string product)
+    {
+        if (string.IsNullOrWhiteSpace(product))
+        {
+            throw new InstanceDefinitionException("Refusing an empty product key.");
+        }
+
+        if (product != product.Trim())
+        {
+            throw new InstanceDefinitionException(
+                $"Refusing to use product key '{product}': it has leading or trailing whitespace.");
+        }
+
+        if (product is "." or ".." || product.Contains("..", StringComparison.Ordinal))
+        {
+            throw new InstanceDefinitionException(
+                $"Refusing to use product key '{product}': '.' and '..' path segments are not allowed.");
+        }
+
+        if (product.IndexOfAny(['/', '\\', ':']) >= 0
+            || product.Contains(Path.DirectorySeparatorChar)
+            || product.Contains(Path.AltDirectorySeparatorChar))
+        {
+            throw new InstanceDefinitionException(
+                $"Refusing to use product key '{product}': path separators are not allowed.");
+        }
+
+        if (Path.IsPathRooted(product) || Path.GetFileName(product) != product)
+        {
+            throw new InstanceDefinitionException(
+                $"Refusing to use product key '{product}': it must be a bare name, not a path.");
+        }
+
+        return product;
+    }
 
     public static string Serialize(InstanceDefinition definition) =>
         JsonSerializer.Serialize(definition, SerializerOptions) + "\n";
