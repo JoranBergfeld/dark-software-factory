@@ -23,6 +23,7 @@ public sealed class InstanceDefinitionTests
         {
             ConfidenceThreshold = 0.6,
             LabelTaxonomy = GovernanceSettings.DefaultLabelTaxonomy,
+            AdminPrincipalId = "11111111-2222-3333-4444-555555555555",
         },
         GitHub = new GitHubSettings
         {
@@ -43,6 +44,11 @@ public sealed class InstanceDefinitionTests
                 ResourceGroup = "rg-dsf-sre-paritydemo",
                 Location = "swedencentral",
                 MonitoredResourceGroups = ["rg-dsf-paritydemo"],
+            },
+            OwnerAuthority = new OwnerAuthoritySettings
+            {
+                KeyVaultUri = "https://kv-owner.vault.azure.net/",
+                AppConfigEndpoint = "https://appcs-owner.azconfig.io",
             },
         },
         Status = new InstanceStatus
@@ -83,6 +89,39 @@ public sealed class InstanceDefinitionTests
         }
 
         Assert.Contains("privateKeySecretName", json, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Owner_authority_and_admin_principal_survive_serialization()
+    {
+        var json = InstanceDefinitions.Serialize(Sample());
+
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+
+        var ownerAuthority = root.GetProperty("azure").GetProperty("ownerAuthority");
+        Assert.Equal("https://kv-owner.vault.azure.net/", ownerAuthority.GetProperty("keyVaultUri").GetString());
+        Assert.Equal("https://appcs-owner.azconfig.io", ownerAuthority.GetProperty("appConfigEndpoint").GetString());
+        Assert.Equal(
+            "11111111-2222-3333-4444-555555555555",
+            root.GetProperty("governance").GetProperty("adminPrincipalId").GetString());
+    }
+
+    [Fact]
+    public void Owner_authority_defaults_to_empty_when_not_supplied()
+    {
+        var definition = Sample() with
+        {
+            Governance = new GovernanceSettings(),
+            Azure = Sample().Azure with { OwnerAuthority = new OwnerAuthoritySettings() },
+        };
+
+        var json = InstanceDefinitions.Serialize(definition);
+        var read = InstanceDefinitions.Parse(json, "demo.json");
+
+        Assert.Null(read.Azure.OwnerAuthority.KeyVaultUri);
+        Assert.Null(read.Azure.OwnerAuthority.AppConfigEndpoint);
+        Assert.Null(read.Governance.AdminPrincipalId);
     }
 
     [Fact]

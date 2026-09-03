@@ -91,6 +91,63 @@ public sealed class NewInstanceDefinitionTests
     }
 
     [Fact]
+    public async Task Write_plan_persists_owner_authority_and_admin_principal_options()
+    {
+        var root = TempRoot();
+        try
+        {
+            var exitCode = await CliApplication.InvokeAsync(
+                [
+                    "new", "--product", "paritydemo", "--owner", "acme",
+                    "--dry-run", "--write-plan", "--config-root", root,
+                    "--owner-keyvault-uri", "https://kv-owner.vault.azure.net/",
+                    "--owner-appconfig-endpoint", "https://appcs-owner.azconfig.io",
+                    "--admin-principal-id", "11111111-2222-3333-4444-555555555555",
+                ],
+                CancellationToken.None,
+                PlainTerminal());
+
+            Assert.Equal(0, exitCode);
+
+            var definition = InstanceDefinitions.Read(Path.Combine(root, "config", "instances", "paritydemo.json"));
+
+            Assert.Equal("https://kv-owner.vault.azure.net/", definition.Azure.OwnerAuthority.KeyVaultUri);
+            Assert.Equal("https://appcs-owner.azconfig.io", definition.Azure.OwnerAuthority.AppConfigEndpoint);
+            Assert.Equal("11111111-2222-3333-4444-555555555555", definition.Governance.AdminPrincipalId);
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public async Task Write_plan_omits_owner_authority_values_when_options_are_absent()
+    {
+        var root = TempRoot();
+        try
+        {
+            await CliApplication.InvokeAsync(
+                [
+                    "new", "--product", "paritydemo", "--owner", "acme",
+                    "--dry-run", "--write-plan", "--config-root", root,
+                ],
+                CancellationToken.None,
+                PlainTerminal());
+
+            var definition = InstanceDefinitions.Read(Path.Combine(root, "config", "instances", "paritydemo.json"));
+
+            Assert.Null(definition.Azure.OwnerAuthority.KeyVaultUri);
+            Assert.Null(definition.Azure.OwnerAuthority.AppConfigEndpoint);
+            Assert.Null(definition.Governance.AdminPrincipalId);
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
     public async Task Dry_run_without_write_plan_writes_nothing()
     {
         var root = TempRoot();

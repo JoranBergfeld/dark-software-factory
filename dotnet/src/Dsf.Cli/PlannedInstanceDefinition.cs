@@ -20,6 +20,9 @@ internal static class PlannedInstanceDefinition
         string location,
         string creationMaturity,
         string namePrefix,
+        string? ownerKeyVaultUri,
+        string? ownerAppConfigEndpoint,
+        string? adminPrincipalId,
         DateTimeOffset generatedAt)
     {
         var resourceGroup = $"rg-dsf-{product}";
@@ -37,7 +40,10 @@ internal static class PlannedInstanceDefinition
                 Target = runtimeTarget,
                 Image = DefaultRuntimeImage,
             },
-            Governance = new GovernanceSettings(),
+            Governance = new GovernanceSettings
+            {
+                AdminPrincipalId = Trimmed(adminPrincipalId),
+            },
             GitHub = new GitHubSettings
             {
                 Owner = owner,
@@ -57,6 +63,11 @@ internal static class PlannedInstanceDefinition
                     Location = location,
                     MonitoredResourceGroups = [resourceGroup],
                 },
+                OwnerAuthority = new OwnerAuthoritySettings
+                {
+                    KeyVaultUri = Trimmed(ownerKeyVaultUri),
+                    AppConfigEndpoint = Trimmed(ownerAppConfigEndpoint),
+                },
             },
             Status = new InstanceStatus
             {
@@ -65,4 +76,8 @@ internal static class PlannedInstanceDefinition
             },
         };
     }
+
+    /// <summary>Absent options arrive as empty strings; they are stored as absent, not as blanks.</summary>
+    private static string? Trimmed(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 }

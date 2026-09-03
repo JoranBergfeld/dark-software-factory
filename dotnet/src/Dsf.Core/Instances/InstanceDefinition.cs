@@ -62,12 +62,17 @@ public sealed record GovernanceSettings
 
     public IReadOnlyDictionary<string, IReadOnlyList<string>> LabelTaxonomy { get; init; } = DefaultLabelTaxonomy;
 
+    /// <summary>Object id of the human owner who governs this instance from outside the loop.</summary>
+    public string? AdminPrincipalId { get; init; }
+
     public bool Equals(GovernanceSettings? other) =>
         other is not null
         && ConfidenceThreshold.Equals(other.ConfidenceThreshold)
+        && AdminPrincipalId == other.AdminPrincipalId
         && TaxonomyEquals(LabelTaxonomy, other.LabelTaxonomy);
 
-    public override int GetHashCode() => HashCode.Combine(ConfidenceThreshold, LabelTaxonomy.Count);
+    public override int GetHashCode() =>
+        HashCode.Combine(ConfidenceThreshold, AdminPrincipalId, LabelTaxonomy.Count);
 
     private static bool TaxonomyEquals(
         IReadOnlyDictionary<string, IReadOnlyList<string>> left,
@@ -108,6 +113,9 @@ public sealed record AzureSettings
 
     public required SreAgentSettings SreAgent { get; init; }
 
+    /// <summary>Endpoints of the owner-level authority this instance is seeded from (endpoints only, never secret values).</summary>
+    public OwnerAuthoritySettings OwnerAuthority { get; init; } = new();
+
     /// <summary>Deployment outputs (endpoints, resource names) — never secret values.</summary>
     public IReadOnlyDictionary<string, string> Outputs { get; init; } =
         new Dictionary<string, string>(StringComparer.Ordinal);
@@ -119,11 +127,25 @@ public sealed record AzureSettings
         && ResourceGroup == other.ResourceGroup
         && DeploymentName == other.DeploymentName
         && SreAgent == other.SreAgent
+        && OwnerAuthority == other.OwnerAuthority
         && Outputs.Count == other.Outputs.Count
         && Outputs.All(entry => other.Outputs.TryGetValue(entry.Key, out var value) && value == entry.Value);
 
     public override int GetHashCode() =>
-        HashCode.Combine(Location, NamePrefix, ResourceGroup, DeploymentName, SreAgent, Outputs.Count);
+        HashCode.Combine(Location, NamePrefix, ResourceGroup, DeploymentName, SreAgent, OwnerAuthority, Outputs.Count);
+}
+
+/// <summary>
+/// Owner-authority endpoints the factory reads shared configuration and secrets from.
+/// URIs only: the secret values themselves stay in Key Vault.
+/// </summary>
+public sealed record OwnerAuthoritySettings
+{
+    /// <summary>URI of the owner Key Vault holding shared secrets (e.g. the DSF App private key).</summary>
+    public string? KeyVaultUri { get; init; }
+
+    /// <summary>Endpoint of the owner App Configuration store holding the runtime index.</summary>
+    public string? AppConfigEndpoint { get; init; }
 }
 
 /// <summary>Azure SRE Agent placement and monitoring scope.</summary>

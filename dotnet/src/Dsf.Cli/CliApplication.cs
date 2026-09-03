@@ -177,6 +177,9 @@ public static class CliApplication
                         locationValue,
                         parseResult.GetValue(creationMaturity) ?? "low",
                         effectivePrefix,
+                        parseResult.GetValue(ownerKeyVaultUri),
+                        parseResult.GetValue(ownerAppConfigEndpoint),
+                        parseResult.GetValue(adminPrincipalId),
                         configRootValue))
                 {
                     return Failure;
@@ -361,6 +364,9 @@ public static class CliApplication
         string location,
         string creationMaturity,
         string namePrefix,
+        string? ownerKeyVaultUri,
+        string? ownerAppConfigEndpoint,
+        string? adminPrincipalId,
         string? configRoot)
     {
         var definition = PlannedInstanceDefinition.Build(
@@ -373,6 +379,9 @@ public static class CliApplication
             location,
             creationMaturity,
             namePrefix,
+            ownerKeyVaultUri,
+            ownerAppConfigEndpoint,
+            adminPrincipalId,
             DateTimeOffset.UtcNow);
 
         try
