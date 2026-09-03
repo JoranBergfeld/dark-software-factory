@@ -25,3 +25,7 @@ config/
 
 # Local git worktrees (superpowers)
 .worktrees/
+
+# .NET build artifacts (dotnet/ solution)
+dotnet/**/bin/
+dotnet/**/obj/

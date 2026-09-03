@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Dsf.AgentHost</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Dsf.Core\Dsf.Core.csproj" />
+    <ProjectReference Include="..\Dsf.FeatureCouncil\Dsf.FeatureCouncil.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,46 @@
+name: dotnet-ci
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "dotnet/**"
+      - ".github/workflows/dotnet-ci.yml"
+  pull_request:
+    paths:
+      - "dotnet/**"
+      - ".github/workflows/dotnet-ci.yml"
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: dotnet
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Setup .NET
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5.4.0
+        with:
+          global-json-file: dotnet/global.json
+      - name: Restore (locked)
+        run: dotnet restore Dsf.sln --locked-mode
+      - name: Build
+        run: dotnet build Dsf.sln --no-restore --configuration Release
+      - name: Test
+        run: dotnet test Dsf.sln --no-build --configuration Release
+      - name: Module-reference boundary check
+        run: dotnet test tests/Dsf.ModuleBoundaries.Tests --no-build --configuration Release
+      - name: Dependency audit
+        run: |
+          set -euo pipefail
+          output="$(dotnet list Dsf.sln package --vulnerable --include-transitive)"
+          echo "$output"
+          if grep -qi "has the following vulnerable packages" <<< "$output"; then
+            echo "::error::Vulnerable NuGet packages detected." >&2
+            exit 1
+          fi
