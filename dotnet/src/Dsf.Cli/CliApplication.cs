@@ -12,12 +12,23 @@ public static class CliApplication
     public const int CanceledExitCode = 130;
 
     public static async Task<int> InvokeAsync(string[] args, CancellationToken cancellationToken)
-        => await InvokeAsync(args, cancellationToken, SystemCliTerminal.Detect());
+        => await InvokeAsync(
+            args,
+            cancellationToken,
+            SystemCliTerminal.Detect(),
+            new UnavailableGitHubProvisioningClient());
 
     internal static async Task<int> InvokeAsync(
         string[] args,
         CancellationToken cancellationToken,
         ICliTerminal terminal)
+        => await InvokeAsync(args, cancellationToken, terminal, new UnavailableGitHubProvisioningClient());
+
+    internal static async Task<int> InvokeAsync(
+        string[] args,
+        CancellationToken cancellationToken,
+        ICliTerminal terminal,
+        IGitHubProvisioningClient github)
     {
         if (cancellationToken.IsCancellationRequested)
         {
@@ -28,15 +39,21 @@ public static class CliApplication
             .Where(arg => arg.StartsWith("--", StringComparison.Ordinal))
             .Select(arg => arg.Split('=', 2)[0])
             .ToHashSet();
-        var root = BuildRootCommand(terminal, providedOptions);
+        var root = BuildRootCommand(terminal, providedOptions, github);
         var parseResult = root.Parse(args);
         var exitCode = await parseResult.InvokeAsync(cancellationToken: cancellationToken);
         return parseResult.Errors.Count > 0 ? 2 : exitCode;
     }
 
-    internal static RootCommand BuildRootCommand() => BuildRootCommand(SystemCliTerminal.Detect(), new HashSet<string>());
+    internal static RootCommand BuildRootCommand() => BuildRootCommand(
+        SystemCliTerminal.Detect(),
+        new HashSet<string>(),
+        new UnavailableGitHubProvisioningClient());
 
-    private static RootCommand BuildRootCommand(ICliTerminal terminal, IReadOnlySet<string> providedOptions)
+    private static RootCommand BuildRootCommand(
+        ICliTerminal terminal,
+        IReadOnlySet<string> providedOptions,
+        IGitHubProvisioningClient github)
     {
         var root = new RootCommand("Dark Software Factory — factory CLI (create product instances)");
         root.Options.Remove(root.Options.Single(option => option.Name == "--version"));
@@ -45,7 +62,7 @@ public static class CliApplication
         helpOption.Aliases.Remove("/?");
         helpOption.Aliases.Remove("/h");
 
-        root.Subcommands.Add(BuildNewCommand(terminal, providedOptions));
+        root.Subcommands.Add(BuildNewCommand(terminal, providedOptions, github));
         root.Subcommands.Add(BuildListCommand());
         root.Subcommands.Add(BuildOffboardCommand());
         root.Subcommands.Add(BuildBootstrapCommand());
@@ -60,7 +77,10 @@ public static class CliApplication
         return root;
     }
 
-    private static Command BuildNewCommand(ICliTerminal terminal, IReadOnlySet<string> providedOptions)
+    private static Command BuildNewCommand(
+        ICliTerminal terminal,
+        IReadOnlySet<string> providedOptions,
+        IGitHubProvisioningClient github)
     {
         var product = StringOption("--product", "product key (e.g. 'microbi')");
         var owner = StringOption("--owner", "GitHub owner/org for the product repo", string.Empty);
@@ -162,6 +182,21 @@ public static class CliApplication
                 return Failure;
             }
 
+            var definition = BuildPlannedDefinition(
+                productValue,
+                ownerValue,
+                repoValue,
+                visibilityValue,
+                parseResult.GetValue(runtimeTarget) ?? "aca",
+                environmentValue,
+                locationValue,
+                parseResult.GetValue(creationMaturity) ?? "low",
+                effectivePrefix,
+                parseResult.GetValue(ownerKeyVaultUri),
+                parseResult.GetValue(ownerAppConfigEndpoint),
+                parseResult.GetValue(adminPrincipalId),
+                configRootValue);
+
             if (parseResult.GetValue(dryRun))
             {
                 PrintDryRunPlan(
@@ -178,18 +213,7 @@ public static class CliApplication
                 if (parseResult.GetValue(writePlan)
                     && !WritePlannedDefinition(
                         terminal,
-                        productValue,
-                        ownerValue,
-                        repoValue,
-                        visibilityValue,
-                        parseResult.GetValue(runtimeTarget) ?? "aca",
-                        environmentValue,
-                        locationValue,
-                        parseResult.GetValue(creationMaturity) ?? "low",
-                        effectivePrefix,
-                        parseResult.GetValue(ownerKeyVaultUri),
-                        parseResult.GetValue(ownerAppConfigEndpoint),
-                        parseResult.GetValue(adminPrincipalId),
+                        definition,
                         configRootValue))
                 {
                     return Failure;
@@ -197,7 +221,24 @@ public static class CliApplication
             }
             else
             {
-                terminal.WriteLine("[dsf] new is not implemented in the .NET migration shell.");
+                try
+                {
+                    var result = GitHubProvisioningPlan.Build(definition)
+                        .ExecuteAsync(github, CancellationToken.None)
+                        .GetAwaiter()
+                        .GetResult();
+                    InstanceDefinitions.Write(result.ApplyTo(definition), configRootValue ?? Directory.GetCurrentDirectory());
+                    terminal.WriteLine($"[dsf] GitHub provisioning complete for {definition.GitHub.FullName()}.");
+                }
+                catch (Exception exception) when (exception is InvalidOperationException
+                    or IOException
+                    or UnauthorizedAccessException
+                    or NotSupportedException
+                    or InstanceDefinitionException)
+                {
+                    terminal.WriteErrorLine($"[dsf] error: GitHub provisioning failed: {exception.Message}");
+                    return Failure;
+                }
             }
 
             return Success;
@@ -365,6 +406,26 @@ public static class CliApplication
     /// </summary>
     private static bool WritePlannedDefinition(
         ICliTerminal terminal,
+        InstanceDefinition definition,
+        string? configRoot)
+    {
+        try
+        {
+            InstanceDefinitions.Write(definition, configRoot ?? Directory.GetCurrentDirectory());
+            return true;
+        }
+        catch (Exception exception) when (exception is IOException
+            or UnauthorizedAccessException
+            or NotSupportedException
+            or InstanceDefinitionException)
+        {
+            terminal.WriteErrorLine(
+                $"[dsf] error: could not write the instance definition for '{definition.Product.Key}': {exception.Message}");
+            return false;
+        }
+    }
+
+    private static InstanceDefinition BuildPlannedDefinition(
         string product,
         string owner,
         string repo,
@@ -379,7 +440,9 @@ public static class CliApplication
         string? adminPrincipalId,
         string? configRoot)
     {
-        var definition = PlannedInstanceDefinition.Build(
+        var root = configRoot ?? Directory.GetCurrentDirectory();
+        var existing = ReadExistingDefinition(root, product);
+        return PlannedInstanceDefinition.Build(
             product,
             owner,
             repo,
@@ -392,21 +455,20 @@ public static class CliApplication
             ownerKeyVaultUri,
             ownerAppConfigEndpoint,
             adminPrincipalId,
-            DateTimeOffset.UtcNow);
+            DateTimeOffset.UtcNow,
+            existing);
+    }
 
+    private static InstanceDefinition? ReadExistingDefinition(string root, string product)
+    {
         try
         {
-            InstanceDefinitions.Write(definition, configRoot ?? Directory.GetCurrentDirectory());
-            return true;
+            var path = InstanceDefinitions.PathFor(root, product);
+            return File.Exists(path) ? InstanceDefinitions.Read(path) : null;
         }
-        catch (Exception exception) when (exception is IOException
-            or UnauthorizedAccessException
-            or NotSupportedException
-            or InstanceDefinitionException)
+        catch (InstanceDefinitionException)
         {
-            terminal.WriteErrorLine(
-                $"[dsf] error: could not write the instance definition for '{product}': {exception.Message}");
-            return false;
+            return null;
         }
     }
 

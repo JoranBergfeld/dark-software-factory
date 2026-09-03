@@ -23,9 +23,15 @@ internal static class PlannedInstanceDefinition
         string? ownerKeyVaultUri,
         string? ownerAppConfigEndpoint,
         string? adminPrincipalId,
-        DateTimeOffset generatedAt)
+        DateTimeOffset generatedAt,
+        InstanceDefinition? existing = null)
     {
         var resourceGroup = $"rg-dsf-{product}";
+        var repoName = string.IsNullOrWhiteSpace(repo) ? product : repo;
+        var reusableGitHubIdentity = existing?.GitHub.Owner == owner
+            && existing.GitHub.Repository == repoName
+            ? existing.GitHub
+            : null;
 
         return new InstanceDefinition
         {
@@ -47,8 +53,13 @@ internal static class PlannedInstanceDefinition
             GitHub = new GitHubSettings
             {
                 Owner = owner,
-                Repository = string.IsNullOrWhiteSpace(repo) ? product : repo,
+                Repository = repoName,
                 Visibility = visibility,
+                AppId = reusableGitHubIdentity?.AppId,
+                InstallationId = reusableGitHubIdentity?.InstallationId,
+                RepositoryId = reusableGitHubIdentity?.RepositoryId,
+                DefaultBranch = reusableGitHubIdentity?.DefaultBranch ?? "main",
+                BranchProtectionRulesetId = reusableGitHubIdentity?.BranchProtectionRulesetId,
             },
             Azure = new AzureSettings
             {

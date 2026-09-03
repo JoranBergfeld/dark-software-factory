@@ -96,6 +96,10 @@ public sealed record GitHubSettings
 
     public long? RepositoryId { get; init; }
 
+    public string DefaultBranch { get; init; } = "main";
+
+    public long? BranchProtectionRulesetId { get; init; }
+
     /// <summary>Key Vault secret <em>name</em> the runtime reads the App private key from.</summary>
     public string PrivateKeySecretName { get; init; } = "github-app-private-key";
 }
