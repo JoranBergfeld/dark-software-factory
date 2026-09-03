@@ -11,6 +11,20 @@ internal sealed class GitHubRestProvisioningClient : IGitHubProvisioningClient
     private readonly HttpClient httpClient;
     private readonly string? token;
 
+    public const string DefaultBaselineCiWorkflow = """
+        name: ci
+        on:
+          pull_request:
+          push:
+            branches: [main]
+        jobs:
+          ci:
+            runs-on: ubuntu-latest
+            steps:
+              - run: echo "baseline ci check - replace with real build and test steps"
+
+        """;
+
     internal GitHubRestProvisioningClient(HttpClient httpClient, string? token)
     {
         this.httpClient = httpClient;
@@ -39,27 +53,44 @@ internal sealed class GitHubRestProvisioningClient : IGitHubProvisioningClient
         EnsureRepositoryRequest request,
         CancellationToken cancellationToken)
     {
+        var owner = request.Owner;
+        var isUser = false;
+        if (string.IsNullOrWhiteSpace(owner))
+        {
+            using var userResponse = await SendAsync(
+                HttpMethod.Get,
+                "user",
+                body: null,
+                cancellationToken);
+            using var user = await ReadJsonAsync(userResponse, cancellationToken);
+            owner = user.RootElement.GetProperty("login").GetString() ?? string.Empty;
+            isUser = true;
+        }
+
         using var existing = await SendAsync(
             HttpMethod.Get,
-            $"repos/{request.Owner}/{request.Repository}",
+            $"repos/{owner}/{request.Repository}",
             body: null,
             cancellationToken,
             allowNotFound: true);
         if (existing.StatusCode != HttpStatusCode.NotFound)
         {
-            return await ReadRepositoryAsync(existing, request.DefaultBranch, cancellationToken);
+            return await ReadRepositoryAsync(existing, request.DefaultBranch, owner, cancellationToken);
         }
 
-        using var userResponse = await SendAsync(
-            HttpMethod.Get,
-            "user",
-            body: null,
-            cancellationToken);
-        using var user = await ReadJsonAsync(userResponse, cancellationToken);
-        var login = user.RootElement.GetProperty("login").GetString();
-        var path = string.Equals(login, request.Owner, StringComparison.OrdinalIgnoreCase)
-            ? "user/repos"
-            : $"orgs/{request.Owner}/repos";
+        if (!isUser)
+        {
+            using var userResponse = await SendAsync(
+                HttpMethod.Get,
+                "user",
+                body: null,
+                cancellationToken);
+            using var user = await ReadJsonAsync(userResponse, cancellationToken);
+            var login = user.RootElement.GetProperty("login").GetString();
+            isUser = string.Equals(login, owner, StringComparison.OrdinalIgnoreCase);
+        }
+
+        var path = isUser ? "user/repos" : $"orgs/{owner}/repos";
         using var created = await SendAsync(
             HttpMethod.Post,
             path,
@@ -69,7 +100,36 @@ internal sealed class GitHubRestProvisioningClient : IGitHubProvisioningClient
                 ["visibility"] = request.Visibility,
             },
             cancellationToken);
-        return await ReadRepositoryAsync(created, request.DefaultBranch, cancellationToken);
+        return await ReadRepositoryAsync(created, request.DefaultBranch, owner, cancellationToken);
+    }
+
+    public async Task EnsureSeedRepoAsync(
+        EnsureSeedRepoRequest request,
+        CancellationToken cancellationToken)
+    {
+        using var existing = await SendAsync(
+            HttpMethod.Get,
+            $"repos/{request.RepositoryFullName}/contents/{request.WorkflowPath}",
+            body: null,
+            cancellationToken,
+            allowNotFound: true);
+        if (existing.StatusCode != HttpStatusCode.NotFound)
+        {
+            return;
+        }
+
+        var contentBytes = System.Text.Encoding.UTF8.GetBytes(DefaultBaselineCiWorkflow);
+        var base64Content = Convert.ToBase64String(contentBytes);
+        using var created = await SendAsync(
+            HttpMethod.Put,
+            $"repos/{request.RepositoryFullName}/contents/{request.WorkflowPath}",
+            new Dictionary<string, object?>
+            {
+                ["message"] = "chore: seed baseline ci workflow",
+                ["content"] = base64Content,
+                ["branch"] = request.DefaultBranch,
+            },
+            cancellationToken);
     }
 
     public async Task EnsureLabelsAsync(
@@ -319,6 +379,7 @@ internal sealed class GitHubRestProvisioningClient : IGitHubProvisioningClient
     private static async Task<GitHubRepositoryProvisioningResult> ReadRepositoryAsync(
         HttpResponseMessage response,
         string fallbackDefaultBranch,
+        string fallbackOwner,
         CancellationToken cancellationToken)
     {
         using var repository = await ReadJsonAsync(response, cancellationToken);
@@ -326,9 +387,14 @@ internal sealed class GitHubRestProvisioningClient : IGitHubProvisioningClient
         var defaultBranch = root.TryGetProperty("default_branch", out var branch)
             ? branch.GetString()
             : null;
+        var owner = root.TryGetProperty("owner", out var ownerElement)
+            && ownerElement.TryGetProperty("login", out var loginElement)
+            ? loginElement.GetString()
+            : fallbackOwner;
         return new GitHubRepositoryProvisioningResult(
             root.GetProperty("id").GetInt64(),
-            string.IsNullOrWhiteSpace(defaultBranch) ? fallbackDefaultBranch : defaultBranch);
+            string.IsNullOrWhiteSpace(defaultBranch) ? fallbackDefaultBranch : defaultBranch,
+            string.IsNullOrWhiteSpace(owner) ? fallbackOwner : owner);
     }
 
     private static async Task<JsonDocument> ReadJsonAsync(

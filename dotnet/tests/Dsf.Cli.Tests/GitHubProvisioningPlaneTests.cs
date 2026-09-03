@@ -102,6 +102,14 @@ public sealed class GitHubProvisioningPlaneTests
             },
             request =>
             {
+                var seed = Assert.IsType<EnsureSeedRepoRequest>(request);
+                Assert.Equal("seed_repo", seed.Method);
+                Assert.Equal("acme/paritydemo", seed.RepositoryFullName);
+                Assert.Equal("main", seed.DefaultBranch);
+                Assert.Equal(".github/workflows/ci.yml", seed.WorkflowPath);
+            },
+            request =>
+            {
                 var labels = Assert.IsType<EnsureLabelsRequest>(request);
                 Assert.Equal("ensure_labels", labels.Method);
                 Assert.Equal("acme/paritydemo", labels.RepositoryFullName);
@@ -133,6 +141,74 @@ public sealed class GitHubProvisioningPlaneTests
                 Assert.Equal("dsf-creation", ruleset.Name);
                 Assert.Null(ruleset.ExistingRulesetId);
             });
+    }
+
+    [Fact]
+    public async Task Execution_honors_cancellation_token_during_github_provisioning()
+    {
+        var root = ArtifactRoot();
+        try
+        {
+            using var cts = new CancellationTokenSource();
+            var client = new RecordingGitHubProvisioningClient
+            {
+                OnEnsureRepository = () => cts.Cancel(),
+            };
+
+            var exitCode = await CliApplication.InvokeAsync(
+                [
+                    "new", "--product", "paritydemo", "--owner", "acme",
+                    "--config-root", root,
+                ],
+                cts.Token,
+                PlainTerminal(),
+                client);
+
+            Assert.Equal(CliApplication.CanceledExitCode, exitCode);
+            var manifestPath = InstanceDefinitions.PathFor(root, "paritydemo");
+            Assert.False(File.Exists(manifestPath), "Manifest should not be written when canceled.");
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public async Task Executed_plan_with_omitted_owner_resolves_and_persists_authenticated_owner()
+    {
+        var root = ArtifactRoot();
+        try
+        {
+            var client = new RecordingGitHubProvisioningClient
+            {
+                ResolvedOwner = "octocat",
+            };
+
+            var exitCode = await CliApplication.InvokeAsync(
+                [
+                    "new", "--product", "paritydemo",
+                    "--config-root", root,
+                ],
+                CancellationToken.None,
+                PlainTerminal(),
+                client);
+
+            Assert.Equal(0, exitCode);
+            var written = InstanceDefinitions.Read(InstanceDefinitions.PathFor(root, "paritydemo"));
+            Assert.Equal("octocat", written.GitHub.Owner);
+
+            Assert.Collection(
+                client.Requests,
+                r => Assert.Equal("", Assert.IsType<EnsureRepositoryRequest>(r).Owner),
+                r => Assert.Equal("octocat/paritydemo", Assert.IsType<EnsureSeedRepoRequest>(r).RepositoryFullName),
+                r => Assert.Equal("octocat/paritydemo", Assert.IsType<EnsureLabelsRequest>(r).RepositoryFullName),
+                r => Assert.Equal("octocat/paritydemo", Assert.IsType<EnsureBranchProtectionRulesetRequest>(r).RepositoryFullName));
+        }
+        finally
+        {
+            Cleanup(root);
+        }
     }
 
     [Fact]
@@ -280,17 +356,32 @@ internal sealed class RecordingGitHubProvisioningClient : IGitHubProvisioningCli
 
     public long RulesetId { get; init; } = 456;
 
+    public string? ResolvedOwner { get; init; }
+
+    public Action? OnEnsureRepository { get; init; }
+
     public Task<GitHubRepositoryProvisioningResult> EnsureRepositoryAsync(
         EnsureRepositoryRequest request,
         CancellationToken cancellationToken)
     {
         Requests.Add(request);
-        return Task.FromResult(new GitHubRepositoryProvisioningResult(RepositoryId, request.DefaultBranch));
+        OnEnsureRepository?.Invoke();
+        cancellationToken.ThrowIfCancellationRequested();
+        var owner = string.IsNullOrWhiteSpace(request.Owner) ? (ResolvedOwner ?? "octocat") : request.Owner;
+        return Task.FromResult(new GitHubRepositoryProvisioningResult(RepositoryId, request.DefaultBranch, owner));
+    }
+
+    public Task EnsureSeedRepoAsync(EnsureSeedRepoRequest request, CancellationToken cancellationToken)
+    {
+        Requests.Add(request);
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.CompletedTask;
     }
 
     public Task EnsureLabelsAsync(EnsureLabelsRequest request, CancellationToken cancellationToken)
     {
         Requests.Add(request);
+        cancellationToken.ThrowIfCancellationRequested();
         return Task.CompletedTask;
     }
 
@@ -299,6 +390,7 @@ internal sealed class RecordingGitHubProvisioningClient : IGitHubProvisioningCli
         CancellationToken cancellationToken)
     {
         Requests.Add(request);
+        cancellationToken.ThrowIfCancellationRequested();
         return Task.FromResult<GitHubAppBindingProvisioningResult?>(
             new GitHubAppBindingProvisioningResult(AppId, InstallationId));
     }
@@ -308,6 +400,7 @@ internal sealed class RecordingGitHubProvisioningClient : IGitHubProvisioningCli
         CancellationToken cancellationToken)
     {
         Requests.Add(request);
+        cancellationToken.ThrowIfCancellationRequested();
         return Task.FromResult(new GitHubRulesetProvisioningResult(RulesetId));
     }
 }

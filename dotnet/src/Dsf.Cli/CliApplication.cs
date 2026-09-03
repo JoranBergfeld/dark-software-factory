@@ -45,14 +45,21 @@ public static class CliApplication
             .ToHashSet();
         var root = BuildRootCommand(terminal, providedOptions, github);
         var parseResult = root.Parse(args);
-        var exitCode = await parseResult.InvokeAsync(cancellationToken: cancellationToken);
-        return parseResult.Errors.Count > 0 ? 2 : exitCode;
+        try
+        {
+            var exitCode = await parseResult.InvokeAsync(cancellationToken: cancellationToken);
+            return parseResult.Errors.Count > 0 ? 2 : exitCode;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return CanceledExitCode;
+        }
     }
 
     internal static RootCommand BuildRootCommand() => BuildRootCommand(
         SystemCliTerminal.Detect(),
         new HashSet<string>(),
-        new UnavailableGitHubProvisioningClient());
+        GitHubRestProvisioningClient.FromEnvironment());
 
     private static RootCommand BuildRootCommand(
         ICliTerminal terminal,
@@ -152,7 +159,7 @@ public static class CliApplication
             githubInstallationId,
         };
 
-        command.SetAction(parseResult =>
+        command.SetAction(async (parseResult, cancellationToken) =>
         {
             if (!ResolveNewInteraction(
                     parseResult,
@@ -212,22 +219,31 @@ public static class CliApplication
                 return Failure;
             }
 
-            var definition = BuildPlannedDefinition(
-                productValue,
-                ownerValue,
-                repoValue,
-                visibilityValue,
-                parseResult.GetValue(runtimeTarget) ?? "aca",
-                environmentValue,
-                locationValue,
-                parseResult.GetValue(creationMaturity) ?? "low",
-                effectivePrefix,
-                parseResult.GetValue(ownerKeyVaultUri),
-                parseResult.GetValue(ownerAppConfigEndpoint),
-                parseResult.GetValue(adminPrincipalId),
-                githubAppIdValue,
-                githubInstallationIdValue,
-                configRootValue);
+            InstanceDefinition definition;
+            try
+            {
+                definition = BuildPlannedDefinition(
+                    productValue,
+                    ownerValue,
+                    repoValue,
+                    visibilityValue,
+                    parseResult.GetValue(runtimeTarget) ?? "aca",
+                    environmentValue,
+                    locationValue,
+                    parseResult.GetValue(creationMaturity) ?? "low",
+                    effectivePrefix,
+                    parseResult.GetValue(ownerKeyVaultUri),
+                    parseResult.GetValue(ownerAppConfigEndpoint),
+                    parseResult.GetValue(adminPrincipalId),
+                    githubAppIdValue,
+                    githubInstallationIdValue,
+                    configRootValue);
+            }
+            catch (InstanceDefinitionException exception)
+            {
+                terminal.WriteErrorLine($"[dsf] error: {exception.Message}");
+                return Failure;
+            }
 
             if (parseResult.GetValue(dryRun))
             {
@@ -258,12 +274,15 @@ public static class CliApplication
             {
                 try
                 {
-                    var result = GitHubProvisioningPlan.Build(definition)
-                        .ExecuteAsync(github, CancellationToken.None)
-                        .GetAwaiter()
-                        .GetResult();
-                    InstanceDefinitions.Write(result.ApplyTo(definition), configRootValue ?? Directory.GetCurrentDirectory());
-                    terminal.WriteLine($"[dsf] GitHub provisioning complete for {definition.GitHub.FullName()}.");
+                    var result = await GitHubProvisioningPlan.Build(definition)
+                        .ExecuteAsync(github, cancellationToken);
+                    var updated = result.ApplyTo(definition);
+                    InstanceDefinitions.Write(updated, configRootValue ?? Directory.GetCurrentDirectory());
+                    terminal.WriteLine($"[dsf] GitHub provisioning complete for {updated.GitHub.FullName()}.");
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    return CanceledExitCode;
                 }
                 catch (Exception exception) when (exception is InvalidOperationException
                     or IOException
@@ -540,15 +559,8 @@ public static class CliApplication
 
     private static InstanceDefinition? ReadExistingDefinition(string root, string product)
     {
-        try
-        {
-            var path = InstanceDefinitions.PathFor(root, product);
-            return File.Exists(path) ? InstanceDefinitions.Read(path) : null;
-        }
-        catch (InstanceDefinitionException)
-        {
-            return null;
-        }
+        var path = InstanceDefinitions.PathFor(root, product);
+        return File.Exists(path) ? InstanceDefinitions.Read(path) : null;
     }
 
     private static string BuildNamePrefix(string value)

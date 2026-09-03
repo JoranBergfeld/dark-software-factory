@@ -8,6 +8,10 @@ internal interface IGitHubProvisioningClient
         EnsureRepositoryRequest request,
         CancellationToken cancellationToken);
 
+    Task EnsureSeedRepoAsync(
+        EnsureSeedRepoRequest request,
+        CancellationToken cancellationToken);
+
     Task EnsureLabelsAsync(EnsureLabelsRequest request, CancellationToken cancellationToken);
 
     Task<GitHubAppBindingProvisioningResult?> EnsureAppBindingAsync(
@@ -33,6 +37,9 @@ internal sealed record GitHubProvisioningPlan(IReadOnlyList<GitHubProvisioningRe
                     definition.GitHub.Owner,
                     definition.GitHub.Repository,
                     definition.GitHub.Visibility,
+                    defaultBranch),
+                new EnsureSeedRepoRequest(
+                    repoFullName,
                     defaultBranch),
                 new EnsureLabelsRequest(repoFullName, LabelDefinitions()),
                 new EnsureAppBindingRequest(
@@ -61,6 +68,7 @@ internal sealed record GitHubProvisioningPlan(IReadOnlyList<GitHubProvisioningRe
         GitHubRepositoryProvisioningResult? repository = null;
         GitHubAppBindingProvisioningResult? appBinding = null;
         GitHubRulesetProvisioningResult? ruleset = null;
+        string? resolvedRepoFullName = null;
 
         foreach (var request in Requests)
         {
@@ -71,18 +79,37 @@ internal sealed record GitHubProvisioningPlan(IReadOnlyList<GitHubProvisioningRe
                     repository = await client.EnsureRepositoryAsync(
                         repositoryRequest,
                         cancellationToken);
+                    if (!string.IsNullOrWhiteSpace(repository?.Owner))
+                    {
+                        resolvedRepoFullName = $"{repository.Owner}/{repositoryRequest.Repository}";
+                    }
+                    break;
+                case EnsureSeedRepoRequest seedRequest:
+                    var effectiveSeed = resolvedRepoFullName is not null && seedRequest.RepositoryFullName != resolvedRepoFullName
+                        ? seedRequest with { RepositoryFullName = resolvedRepoFullName }
+                        : seedRequest;
+                    await client.EnsureSeedRepoAsync(effectiveSeed, cancellationToken);
                     break;
                 case EnsureLabelsRequest labelsRequest:
-                    await client.EnsureLabelsAsync(labelsRequest, cancellationToken);
+                    var effectiveLabels = resolvedRepoFullName is not null && labelsRequest.RepositoryFullName != resolvedRepoFullName
+                        ? labelsRequest with { RepositoryFullName = resolvedRepoFullName }
+                        : labelsRequest;
+                    await client.EnsureLabelsAsync(effectiveLabels, cancellationToken);
                     break;
                 case EnsureAppBindingRequest { InstallationId: not null } appRequest:
-                    appBinding = await client.EnsureAppBindingAsync(appRequest, cancellationToken);
+                    var effectiveApp = resolvedRepoFullName is not null && appRequest.RepositoryFullName != resolvedRepoFullName
+                        ? appRequest with { RepositoryFullName = resolvedRepoFullName }
+                        : appRequest;
+                    appBinding = await client.EnsureAppBindingAsync(effectiveApp, cancellationToken);
                     break;
                 case EnsureAppBindingRequest:
                     break;
                 case EnsureBranchProtectionRulesetRequest rulesetRequest:
+                    var effectiveRuleset = resolvedRepoFullName is not null && rulesetRequest.RepositoryFullName != resolvedRepoFullName
+                        ? rulesetRequest with { RepositoryFullName = resolvedRepoFullName }
+                        : rulesetRequest;
                     ruleset = await client.EnsureBranchProtectionRulesetAsync(
-                        rulesetRequest,
+                        effectiveRuleset,
                         cancellationToken);
                     break;
             }
@@ -126,6 +153,12 @@ internal sealed record EnsureRepositoryRequest(
     string DefaultBranch)
     : GitHubProvisioningRequest("ensure_repository");
 
+internal sealed record EnsureSeedRepoRequest(
+    string RepositoryFullName,
+    string DefaultBranch,
+    string WorkflowPath = ".github/workflows/ci.yml")
+    : GitHubProvisioningRequest("seed_repo");
+
 internal sealed record EnsureLabelsRequest(
     string RepositoryFullName,
     IReadOnlyList<GitHubLabelDefinition> Labels)
@@ -152,7 +185,7 @@ internal sealed record GitHubLabelDefinition(
     string? Color = null,
     string? Description = null);
 
-internal sealed record GitHubRepositoryProvisioningResult(long RepositoryId, string DefaultBranch);
+internal sealed record GitHubRepositoryProvisioningResult(long RepositoryId, string DefaultBranch, string? Owner = null);
 
 internal sealed record GitHubAppBindingProvisioningResult(string? AppId, string InstallationId);
 
@@ -168,6 +201,9 @@ internal sealed record GitHubProvisioningResult(
         {
             GitHub = definition.GitHub with
             {
+                Owner = string.IsNullOrWhiteSpace(definition.GitHub.Owner)
+                    ? Repository?.Owner ?? definition.GitHub.Owner
+                    : definition.GitHub.Owner,
                 RepositoryId = Repository?.RepositoryId ?? definition.GitHub.RepositoryId,
                 DefaultBranch = Repository?.DefaultBranch ?? definition.GitHub.DefaultBranch,
                 AppId = AppBinding?.AppId ?? definition.GitHub.AppId,
@@ -176,30 +212,6 @@ internal sealed record GitHubProvisioningResult(
                     ?? definition.GitHub.BranchProtectionRulesetId,
             },
         };
-}
-
-internal sealed class UnavailableGitHubProvisioningClient : IGitHubProvisioningClient
-{
-    public Task<GitHubRepositoryProvisioningResult> EnsureRepositoryAsync(
-        EnsureRepositoryRequest request,
-        CancellationToken cancellationToken) =>
-        throw NotConfigured();
-
-    public Task EnsureLabelsAsync(EnsureLabelsRequest request, CancellationToken cancellationToken) =>
-        throw NotConfigured();
-
-    public Task<GitHubAppBindingProvisioningResult?> EnsureAppBindingAsync(
-        EnsureAppBindingRequest request,
-        CancellationToken cancellationToken) =>
-        throw NotConfigured();
-
-    public Task<GitHubRulesetProvisioningResult> EnsureBranchProtectionRulesetAsync(
-        EnsureBranchProtectionRulesetRequest request,
-        CancellationToken cancellationToken) =>
-        throw NotConfigured();
-
-    private static InvalidOperationException NotConfigured() =>
-        new("GitHub provisioning client is not configured; use --dry-run to preview safely.");
 }
 
 internal static class GitHubSettingsExtensions

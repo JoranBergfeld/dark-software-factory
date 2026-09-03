@@ -197,7 +197,7 @@ public sealed class NewInstanceDefinitionTests
     }
 
     [Fact]
-    public async Task Write_plan_overwrites_a_legacy_manifest_only_after_regeneration()
+    public async Task Malformed_or_unsupported_existing_manifest_fails_loudly_before_mutations_or_write()
     {
         var root = TempRoot();
         try
@@ -206,17 +206,30 @@ public sealed class NewInstanceDefinitionTests
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             await File.WriteAllTextAsync(path, """{"spec": {"product": "paritydemo"}, "plan": {"steps": []}}""");
 
-            Assert.Throws<InstanceDefinitionException>(() => InstanceDefinitions.Read(path));
-
+            var terminal = PlainTerminal();
             var exitCode = await CliApplication.InvokeAsync(
                 [
                     "new", "--product", "paritydemo", "--owner", "acme",
                     "--dry-run", "--write-plan", "--config-root", root,
                 ],
                 CancellationToken.None,
-                PlainTerminal());
+                terminal);
 
-            Assert.Equal(0, exitCode);
+            Assert.Equal(1, exitCode);
+            Assert.Contains("legacy execution manifest", terminal.Error, StringComparison.Ordinal);
+
+            // Once deleted, regeneration succeeds
+            File.Delete(path);
+            var regenTerminal = PlainTerminal();
+            var regenExitCode = await CliApplication.InvokeAsync(
+                [
+                    "new", "--product", "paritydemo", "--owner", "acme",
+                    "--dry-run", "--write-plan", "--config-root", root,
+                ],
+                CancellationToken.None,
+                regenTerminal);
+
+            Assert.Equal(0, regenExitCode);
             Assert.Equal(1, InstanceDefinitions.Read(path).SchemaVersion);
         }
         finally

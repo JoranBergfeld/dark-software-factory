@@ -23,6 +23,94 @@ public sealed class GitHubRestProvisioningClientTests
     }
 
     [Fact]
+    public async Task EnsureRepository_with_omitted_owner_resolves_authenticated_user_and_creates_user_repo()
+    {
+        var handler = new RecordingHttpMessageHandler(
+            Response(HttpStatusCode.OK, """{"login":"octocat"}"""),
+            Response(HttpStatusCode.NotFound),
+            Response(HttpStatusCode.Created, """{"id":456,"default_branch":"main","owner":{"login":"octocat"}}"""));
+        var client = new GitHubRestProvisioningClient(new HttpClient(handler), "test-token");
+
+        var result = await client.EnsureRepositoryAsync(
+            new EnsureRepositoryRequest("", "demo", "private", "main"),
+            CancellationToken.None);
+
+        Assert.Equal(456, result.RepositoryId);
+        Assert.Equal("main", result.DefaultBranch);
+        Assert.Equal("octocat", result.Owner);
+        Assert.Collection(
+            handler.Requests,
+            request =>
+            {
+                Assert.Equal(HttpMethod.Get, request.Method);
+                Assert.Equal("/user", request.Path);
+            },
+            request =>
+            {
+                Assert.Equal(HttpMethod.Get, request.Method);
+                Assert.Equal("/repos/octocat/demo", request.Path);
+            },
+            request =>
+            {
+                Assert.Equal(HttpMethod.Post, request.Method);
+                Assert.Equal("/user/repos", request.Path);
+                using var payload = JsonDocument.Parse(request.Body!);
+                Assert.Equal("demo", payload.RootElement.GetProperty("name").GetString());
+                Assert.Equal("private", payload.RootElement.GetProperty("visibility").GetString());
+            });
+    }
+
+    [Fact]
+    public async Task Missing_seed_repo_workflow_is_created_via_contents_api()
+    {
+        var handler = new RecordingHttpMessageHandler(
+            Response(HttpStatusCode.NotFound),
+            Response(HttpStatusCode.Created, """{"content":{"sha":"def456"}}"""));
+        var client = new GitHubRestProvisioningClient(new HttpClient(handler), "test-token");
+
+        await client.EnsureSeedRepoAsync(
+            new EnsureSeedRepoRequest("acme/demo", "main"),
+            CancellationToken.None);
+
+        Assert.Collection(
+            handler.Requests,
+            request =>
+            {
+                Assert.Equal(HttpMethod.Get, request.Method);
+                Assert.Equal("/repos/acme/demo/contents/.github/workflows/ci.yml", request.Path);
+            },
+            request =>
+            {
+                Assert.Equal(HttpMethod.Put, request.Method);
+                Assert.Equal("/repos/acme/demo/contents/.github/workflows/ci.yml", request.Path);
+                using var payload = JsonDocument.Parse(request.Body!);
+                Assert.Equal("chore: seed baseline ci workflow", payload.RootElement.GetProperty("message").GetString());
+                Assert.Equal("main", payload.RootElement.GetProperty("branch").GetString());
+                var contentBase64 = payload.RootElement.GetProperty("content").GetString();
+                Assert.NotNull(contentBase64);
+                var decoded = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(contentBase64));
+                Assert.Contains("name: ci", decoded, StringComparison.Ordinal);
+                Assert.Contains("runs-on: ubuntu-latest", decoded, StringComparison.Ordinal);
+            });
+    }
+
+    [Fact]
+    public async Task Existing_seed_repo_workflow_skips_creation_mutation()
+    {
+        var handler = new RecordingHttpMessageHandler(
+            Response(HttpStatusCode.OK, """{"sha":"abc123"}"""));
+        var client = new GitHubRestProvisioningClient(new HttpClient(handler), "test-token");
+
+        await client.EnsureSeedRepoAsync(
+            new EnsureSeedRepoRequest("acme/demo", "main"),
+            CancellationToken.None);
+
+        Assert.Single(handler.Requests);
+        Assert.Equal(HttpMethod.Get, handler.Requests[0].Method);
+        Assert.Equal("/repos/acme/demo/contents/.github/workflows/ci.yml", handler.Requests[0].Path);
+    }
+
+    [Fact]
     public async Task Missing_organization_repository_is_created_once()
     {
         var handler = new RecordingHttpMessageHandler(
