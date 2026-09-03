@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "dsf",
+    "sweep"
+  ],
+  "authority": "authoritative",
+  "captured_at": "2026-09-03T08:24:03.665+02:00",
+  "exit_code": 1,
+  "notes": "Captured from current Python implementation without live external services.",
+  "stderr": "[dsf] error: DSF_PRODUCT is required to scope the factory runtime (set DSF_PRODUCT=<product>).\n",
+  "stdout": ""
+}

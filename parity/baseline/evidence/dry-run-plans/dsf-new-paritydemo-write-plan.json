@@ -1,0 +1,387 @@
+{
+  "argv": [
+    "dsf",
+    "new",
+    "--product",
+    "paritydemo",
+    "--owner",
+    "acme",
+    "--name-prefix",
+    "paritydemo",
+    "--dry-run",
+    "--write-plan",
+    "--config-root",
+    "<repo>/.parity-capture"
+  ],
+  "authority": "authoritative",
+  "captured_at": "2026-09-03T08:24:03.665+02:00",
+  "exit_code": 0,
+  "manifest": {
+    "azure": null,
+    "executed": false,
+    "github_app": null,
+    "plan": {
+      "product": "paritydemo",
+      "steps": [
+        {
+          "command": [
+            "gh",
+            "repo",
+            "create",
+            "acme/paritydemo",
+            "--private"
+          ],
+          "commands": [],
+          "cwd": "",
+          "deferred": false,
+          "description": "Create GitHub repo acme/paritydemo (private)",
+          "error": "",
+          "executed": false,
+          "name": "create_repo",
+          "result": "dry-run"
+        },
+        {
+          "command": [],
+          "commands": [],
+          "cwd": "",
+          "deferred": false,
+          "description": "Seed acme/paritydemo with the Spec Kit scaffold (specify init) and a baseline ci workflow so the required 'ci' check is producible before branch protection",
+          "error": "",
+          "executed": false,
+          "name": "seed_repo",
+          "result": "seeded (dry-run)"
+        },
+        {
+          "command": [],
+          "commands": [
+            [
+              "gh",
+              "label",
+              "create",
+              "feature",
+              "--repo",
+              "acme/paritydemo",
+              "--force"
+            ],
+            [
+              "gh",
+              "label",
+              "create",
+              "bug",
+              "--repo",
+              "acme/paritydemo",
+              "--force"
+            ],
+            [
+              "gh",
+              "label",
+              "create",
+              "chore",
+              "--repo",
+              "acme/paritydemo",
+              "--force"
+            ],
+            [
+              "gh",
+              "label",
+              "create",
+              "api",
+              "--repo",
+              "acme/paritydemo",
+              "--force"
+            ],
+            [
+              "gh",
+              "label",
+              "create",
+              "ui",
+              "--repo",
+              "acme/paritydemo",
+              "--force"
+            ],
+            [
+              "gh",
+              "label",
+              "create",
+              "infra",
+              "--repo",
+              "acme/paritydemo",
+              "--force"
+            ],
+            [
+              "gh",
+              "label",
+              "create",
+              "sev-low",
+              "--repo",
+              "acme/paritydemo",
+              "--force"
+            ],
+            [
+              "gh",
+              "label",
+              "create",
+              "sev-medium",
+              "--repo",
+              "acme/paritydemo",
+              "--force"
+            ],
+            [
+              "gh",
+              "label",
+              "create",
+              "sev-high",
+              "--repo",
+              "acme/paritydemo",
+              "--force"
+            ],
+            [
+              "gh",
+              "label",
+              "create",
+              "sev-critical",
+              "--repo",
+              "acme/paritydemo",
+              "--force"
+            ],
+            [
+              "gh",
+              "label",
+              "create",
+              "creation:ready",
+              "--repo",
+              "acme/paritydemo",
+              "--color",
+              "1d76db",
+              "--description",
+              "Council-filed issue ready for the creation phase (Coding Agent)",
+              "--force"
+            ],
+            [
+              "gh",
+              "label",
+              "create",
+              "incident",
+              "--repo",
+              "acme/paritydemo",
+              "--color",
+              "b60205",
+              "--description",
+              "SRE-filed incident the feature council reflects on",
+              "--force"
+            ]
+          ],
+          "cwd": "",
+          "deferred": false,
+          "description": "Create the label taxonomy + handoff label in acme/paritydemo",
+          "error": "",
+          "executed": false,
+          "name": "create_labels",
+          "result": "dry-run"
+        },
+        {
+          "command": [],
+          "commands": [],
+          "cwd": "",
+          "deferred": false,
+          "description": "Add acme/paritydemo to the DSF App installation <installation>",
+          "error": "",
+          "executed": false,
+          "name": "install_app",
+          "result": "skipped (no owner App configured)"
+        },
+        {
+          "command": [
+            "az",
+            "group",
+            "create",
+            "--name",
+            "rg-dsf-paritydemo",
+            "--location",
+            "swedencentral",
+            "--tags",
+            "project=dark-software-factory",
+            "managed-by=dsf",
+            "product=paritydemo",
+            "component=backing-services"
+          ],
+          "commands": [],
+          "cwd": "",
+          "deferred": false,
+          "description": "Create dedicated Azure resource group rg-dsf-paritydemo",
+          "error": "",
+          "executed": false,
+          "name": "create_resource_group",
+          "result": "dry-run"
+        },
+        {
+          "command": [
+            "az",
+            "deployment",
+            "group",
+            "create",
+            "-g",
+            "rg-dsf-paritydemo",
+            "-n",
+            "dsf-paritydemo",
+            "-f",
+            "<repo>/.parity-capture/infra/main.bicep",
+            "-p",
+            "namePrefix=parityde0000",
+            "environmentName=dev",
+            "location=swedencentral",
+            "product=paritydemo",
+            "runtimeImage=ghcr.io/joranbergfeld/dsf-runtime:latest",
+            "githubAppId=",
+            "githubInstallationId=",
+            "githubRepository=acme/paritydemo",
+            "allowPublicNetworkAccess=true",
+            "--no-wait"
+          ],
+          "commands": [],
+          "cwd": "",
+          "deferred": false,
+          "description": "Deploy backing services into rg-dsf-paritydemo from infra/main.bicep",
+          "error": "",
+          "executed": false,
+          "name": "provision_azure",
+          "result": "dry-run"
+        },
+        {
+          "command": [],
+          "commands": [],
+          "cwd": "",
+          "deferred": false,
+          "description": "Seed the canonical config/defaults.json into App Configuration for paritydemo (critic/agent flags + thresholds)",
+          "error": "",
+          "executed": false,
+          "name": "seed_appconfig",
+          "result": "seeded (dry-run)"
+        },
+        {
+          "command": [],
+          "commands": [],
+          "cwd": "",
+          "deferred": false,
+          "description": "Seed the DSF App private key from the owner Key Vault into the product Key Vault for paritydemo",
+          "error": "",
+          "executed": false,
+          "name": "seed_app_key",
+          "result": "skipped (no owner App configured)"
+        },
+        {
+          "command": [],
+          "commands": [],
+          "cwd": "",
+          "deferred": false,
+          "description": "Seed the WebIQ API key from the owner Key Vault into the product Key Vault for paritydemo",
+          "error": "",
+          "executed": false,
+          "name": "seed_webiq_key",
+          "result": "skipped (no owner App configured)"
+        },
+        {
+          "command": [],
+          "commands": [],
+          "cwd": "",
+          "deferred": false,
+          "description": "Seed the paritydemo Product record (repo, taxonomy, source scopes, threshold) into its per-product App Configuration",
+          "error": "",
+          "executed": false,
+          "name": "seed_product_record",
+          "result": "seeded (dry-run)"
+        },
+        {
+          "command": [],
+          "commands": [],
+          "cwd": "",
+          "deferred": false,
+          "description": "Publish paritydemo runtime env (endpoints + pointers) to the owner App Configuration index",
+          "error": "",
+          "executed": false,
+          "name": "publish_runtime_index",
+          "result": "skipped (no owner App Config configured)"
+        },
+        {
+          "command": [],
+          "commands": [],
+          "cwd": "",
+          "deferred": false,
+          "description": "Render + bring up the feature-council runtime scoped to paritydemo",
+          "error": "",
+          "executed": false,
+          "name": "deploy_council",
+          "result": "rendered (dry-run)"
+        },
+        {
+          "command": [],
+          "commands": [],
+          "cwd": "",
+          "deferred": false,
+          "description": "Apply the 'low' creation maturity dial to acme/paritydemo as a branch-protection ruleset (required reviews + green 'ci' check)",
+          "error": "",
+          "executed": false,
+          "name": "branch_protection",
+          "result": "ruleset planned (dry-run)"
+        },
+        {
+          "command": [],
+          "commands": [],
+          "cwd": "",
+          "deferred": false,
+          "description": "Provision the Azure SRE Agent for paritydemo (agent + RBAC on rg-dsf-paritydemo + Azure Monitor)",
+          "error": "",
+          "executed": false,
+          "name": "deploy_sre_agent",
+          "result": "deployed (dry-run)"
+        },
+        {
+          "command": [],
+          "commands": [],
+          "cwd": "",
+          "deferred": false,
+          "description": "Write instance manifest to config/instances/paritydemo.json",
+          "error": "",
+          "executed": true,
+          "name": "write_config",
+          "result": "<repo>/.parity-capture/config/instances/paritydemo.json"
+        }
+      ]
+    },
+    "spec": {
+      "confidence_threshold": 0.6,
+      "creation_maturity": "low",
+      "environment": "dev",
+      "label_taxonomy": {
+        "area": [
+          "api",
+          "ui",
+          "infra"
+        ],
+        "severity": [
+          "sev-low",
+          "sev-medium",
+          "sev-high",
+          "sev-critical"
+        ],
+        "type": [
+          "feature",
+          "bug",
+          "chore"
+        ]
+      },
+      "location": "swedencentral",
+      "monitored_resource_groups": [],
+      "name_prefix": "parityde0000",
+      "owner": "acme",
+      "product": "paritydemo",
+      "repo": "",
+      "runtime_image": "ghcr.io/joranbergfeld/dsf-runtime:latest",
+      "runtime_target": "aca",
+      "sre_agent_location": "swedencentral",
+      "visibility": "private"
+    }
+  },
+  "notes": "Dry-run/write-plan persisted by current Python dsf new with deterministic token patch; no cloud calls made.",
+  "stdout": "[dsf] WARNING: DSF_OWNER_KEYVAULT_URI is unset and --owner-keyvault-uri was not passed.\n[dsf] WARNING: install_app, seed_app_key, seed_webiq_key, publish_runtime_index will be SKIPPED.\n[dsf] WARNING: the GitHub App won't be wired; `dsf charter init` and runtime GitHub access will fail.\n[dsf] WARNING: fix: run `dsf bootstrap` once, then export DSF_OWNER_KEYVAULT_URI and DSF_OWNER_APPCONFIG_ENDPOINT, then re-run `dsf new`.\n[dsf] instance plan for product=paritydemo (DRY-RUN)\n[dsf]  1. create_repo    [dry-run] Create GitHub repo acme/paritydemo (private)\n[dsf]       $ gh repo create acme/paritydemo --private\n[dsf]  2. seed_repo      [seeded (dry-run)] Seed acme/paritydemo with the Spec Kit scaffold (specify init) and a baseline ci workflow so the required 'ci' check is producible before branch protection\n[dsf]  3. create_labels  [dry-run] Create the label taxonomy + handoff label in acme/paritydemo\n[dsf]  4. install_app    [skipped (no owner App configured)] Add acme/paritydemo to the DSF App installation <installation>\n[dsf]  5. create_resource_group [dry-run] Create dedicated Azure resource group rg-dsf-paritydemo\n[dsf]       $ az group create --name rg-dsf-paritydemo --location swedencentral --tags project=dark-software-factory managed-by=dsf product=paritydemo component=backing-services\n[dsf]  6. provision_azure [dry-run] Deploy backing services into rg-dsf-paritydemo from infra/main.bicep\n[dsf]       $ az deployment group create -g rg-dsf-paritydemo -n dsf-paritydemo -f <repo>/.parity-capture/infra/main.bicep -p namePrefix=parityde0000 environmentName=dev location=swedencentral product=paritydemo runtimeImage=ghcr.io/joranbergfeld/dsf-runtime:latest githubAppId= githubInstallationId= githubRepository=acme/paritydemo allowPublicNetworkAccess=true --no-wait\n[dsf]  7. seed_appconfig [seeded (dry-run)] Seed the canonical config/defaults.json into App Configuration for paritydemo (critic/agent flags + thresholds)\n[dsf]  8. seed_app_key   [skipped (no owner App configured)] Seed the DSF App private key from the owner Key Vault into the product Key Vault for paritydemo\n[dsf]  9. seed_webiq_key [skipped (no owner App configured)] Seed the WebIQ API key from the owner Key Vault into the product Key Vault for paritydemo\n[dsf]  10. seed_product_record [seeded (dry-run)] Seed the paritydemo Product record (repo, taxonomy, source scopes, threshold) into its per-product App Configuration\n[dsf]  11. publish_runtime_index [skipped (no owner App Config configured)] Publish paritydemo runtime env (endpoints + pointers) to the owner App Configuration index\n[dsf]  12. deploy_council [rendered (dry-run)] Render + bring up the feature-council runtime scoped to paritydemo\n[dsf]  13. branch_protection [ruleset planned (dry-run)] Apply the 'low' creation maturity dial to acme/paritydemo as a branch-protection ruleset (required reviews + green 'ci' check)\n[dsf]  14. deploy_sre_agent [deployed (dry-run)] Provision the Azure SRE Agent for paritydemo (agent + RBAC on rg-dsf-paritydemo + Azure Monitor)\n[dsf]  15. write_config   [<repo>/.parity-capture/config/instances/paritydemo.json] Write instance manifest to config/instances/paritydemo.json\n"
+}

@@ -1,0 +1,27 @@
+{
+  "authority": "authoritative",
+  "captured_at": "2026-09-03T08:24:03.665+02:00",
+  "requests": [
+    {
+      "body": "B",
+      "labels": [
+        "creation:ready"
+      ],
+      "method": "create_issue",
+      "repo": "org/alpha",
+      "title": "T"
+    },
+    {
+      "body": "B",
+      "branch": "b",
+      "content": "x",
+      "enable_auto_merge": true,
+      "message": "m",
+      "method": "open_file_pr",
+      "path": "p",
+      "repo": "org/alpha",
+      "title": "T"
+    }
+  ],
+  "source": "cli/tests/test_recording_repo_client.py"
+}

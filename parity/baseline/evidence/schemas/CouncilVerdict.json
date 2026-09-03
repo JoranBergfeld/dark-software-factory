@@ -1,0 +1,139 @@
+{
+  "$defs": {
+    "CriticScore": {
+      "description": "One critic's score on a proposal.",
+      "properties": {
+        "critic": {
+          "title": "Critic",
+          "type": "string"
+        },
+        "rationale": {
+          "default": "",
+          "title": "Rationale",
+          "type": "string"
+        },
+        "score": {
+          "title": "Score",
+          "type": "number"
+        },
+        "veto": {
+          "default": false,
+          "title": "Veto",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "critic",
+        "score"
+      ],
+      "title": "CriticScore",
+      "type": "object"
+    },
+    "JurorVote": {
+      "description": "One juror's go / no-go vote validating a council recommendation.",
+      "properties": {
+        "go": {
+          "title": "Go",
+          "type": "boolean"
+        },
+        "juror": {
+          "title": "Juror",
+          "type": "string"
+        },
+        "rationale": {
+          "default": "",
+          "title": "Rationale",
+          "type": "string"
+        }
+      },
+      "required": [
+        "juror",
+        "go"
+      ],
+      "title": "JurorVote",
+      "type": "object"
+    },
+    "JuryResult": {
+      "description": "The validation jury's panel of votes over a recommendation.",
+      "properties": {
+        "votes": {
+          "items": {
+            "$ref": "#/$defs/JurorVote"
+          },
+          "title": "Votes",
+          "type": "array"
+        }
+      },
+      "title": "JuryResult",
+      "type": "object"
+    },
+    "Verdict": {
+      "description": "Council verdict outcome.",
+      "enum": [
+        "ACCEPT",
+        "ESCALATE",
+        "KILL"
+      ],
+      "title": "Verdict",
+      "type": "string"
+    }
+  },
+  "description": "The council's aggregated decision on a proposal.",
+  "properties": {
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "jury": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JuryResult"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "proposal_id": {
+      "title": "Proposal Id",
+      "type": "string"
+    },
+    "rationale": {
+      "default": "",
+      "title": "Rationale",
+      "type": "string"
+    },
+    "scores": {
+      "items": {
+        "$ref": "#/$defs/CriticScore"
+      },
+      "title": "Scores",
+      "type": "array"
+    },
+    "threshold": {
+      "title": "Threshold",
+      "type": "number"
+    },
+    "verdict": {
+      "$ref": "#/$defs/Verdict"
+    },
+    "weighted_score": {
+      "title": "Weighted Score",
+      "type": "number"
+    }
+  },
+  "required": [
+    "proposal_id",
+    "verdict",
+    "weighted_score",
+    "threshold"
+  ],
+  "title": "CouncilVerdict",
+  "type": "object"
+}

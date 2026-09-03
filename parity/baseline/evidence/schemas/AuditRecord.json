@@ -1,0 +1,28 @@
+{
+  "description": "One audit-trail line written by a station.",
+  "properties": {
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "message": {
+      "title": "Message",
+      "type": "string"
+    },
+    "station": {
+      "title": "Station",
+      "type": "string"
+    }
+  },
+  "required": [
+    "station",
+    "message"
+  ],
+  "title": "AuditRecord",
+  "type": "object"
+}

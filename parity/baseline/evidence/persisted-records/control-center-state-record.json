@@ -1,0 +1,36 @@
+{
+  "authority": "authoritative",
+  "captured_at": "2026-09-03T08:24:03.665+02:00",
+  "notes": "Minimal shape example; exhaustive critic/agent/trigger values are in control-center app constants and matrix.",
+  "record": {
+    "agents": [
+      {
+        "enabled": true,
+        "name": "SENTRY"
+      }
+    ],
+    "calibration": null,
+    "critics": [
+      {
+        "enabled": true,
+        "name": "grounding"
+      }
+    ],
+    "products": [],
+    "snapshot": {},
+    "thresholds": {
+      "default": 0.5,
+      "products": {}
+    },
+    "triggers": [
+      {
+        "name": "SIGNAL",
+        "paused": false
+      }
+    ],
+    "weights": {
+      "grounding": 1.0
+    }
+  },
+  "source": "control-center/src/dsf/control_center/app.py:_state"
+}

@@ -1,0 +1,16 @@
+{
+  "argv": [
+    "dsf",
+    "offboard",
+    "ghost",
+    "--dry-run",
+    "--config-root",
+    "<repo>/parity/nonexistent-root"
+  ],
+  "authority": "authoritative",
+  "captured_at": "2026-09-03T08:24:03.665+02:00",
+  "exit_code": 1,
+  "notes": "Current Python raises FileNotFoundError for missing offboard manifest; retained as observable exit behavior.",
+  "stderr": "Traceback (most recent call last):\n  File \"<stdin>\", line 17, in capture_command\n  File \"<stdin>\", line 36, in <lambda>\n  File \"<repo>/cli/src/dsf/cli/factory.py\", line 805, in main\n    return args.func(args)\n           ~~~~~~~~~^^^^^^\n  File \"<repo>/cli/src/dsf/cli/factory.py\", line 388, in _cmd_offboard\n    plan = offboarder.apply(execute=execute, on_event=_print_step_event)\n  File \"<repo>/cli/src/dsf/instance/provisioner.py\", line 1299, in apply\n    plan = self.plan()\n  File \"<repo>/cli/src/dsf/instance/provisioner.py\", line 1239, in plan\n    spec = self._load_manifest().spec\n           ~~~~~~~~~~~~~~~~~~~^^\n  File \"<repo>/cli/src/dsf/instance/provisioner.py\", line 1356, in _load_manifest\n    raise FileNotFoundError(\n    ...<2 lines>...\n    )\nFileNotFoundError: Instance manifest not found: <repo>/parity/nonexistent-root/config/instances/ghost.json. Offboard requires config/instances/ghost.json.\n",
+  "stdout": ""
+}

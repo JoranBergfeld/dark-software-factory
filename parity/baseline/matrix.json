@@ -1,0 +1,240 @@
+{
+  "authority_rules": [
+    "Observable repo-evidenced behavior captured here is authoritative.",
+    "Ambiguous, stale, live-service-only, or implementation-only behavior is non-authoritative/deferred unless the matrix marks it authoritative.",
+    "Server lifetimes and live Azure/GitHub side effects are not captured as authoritative in this ticket."
+  ],
+  "captured_at": "2026-09-03T08:24:03.665+02:00",
+  "parent": 132,
+  "scope": "Frozen Python parity baseline for .NET migration tests; no later test should execute Python for these observations.",
+  "surfaces": [
+    {
+      "authority": "authoritative",
+      "evidence": [
+        "evidence/commands/dsf-new-dry-run-write-plan.json",
+        "evidence/commands/dsf-new-invalid-prefix.json",
+        "evidence/dry-run-plans/dsf-new-paritydemo-write-plan.json",
+        "evidence/persisted-records/instance-manifest-paritydemo.json"
+      ],
+      "evidence_kinds": [
+        "command-behavior",
+        "exit-behavior",
+        "dry-run-plan",
+        "persisted-record"
+      ],
+      "surface": "dsf new"
+    },
+    {
+      "authority": "authoritative",
+      "evidence": [
+        "evidence/commands/dsf-list-json-no-owner-index.json",
+        "evidence/commands/dsf-parser-surface-snapshot.json"
+      ],
+      "evidence_kinds": [
+        "command-behavior",
+        "exit-behavior",
+        "machine-readable-output"
+      ],
+      "surface": "dsf list"
+    },
+    {
+      "authority": "authoritative",
+      "evidence": [
+        "evidence/commands/dsf-offboard-dry-run-missing-manifest.json",
+        "evidence/commands/dsf-parser-surface-snapshot.json"
+      ],
+      "evidence_kinds": [
+        "command-behavior",
+        "exit-behavior",
+        "dry-run-plan"
+      ],
+      "surface": "dsf offboard"
+    },
+    {
+      "authority": "authoritative",
+      "evidence": [
+        "evidence/commands/dsf-delete-missing-manifest.json",
+        "evidence/commands/dsf-parser-surface-snapshot.json"
+      ],
+      "evidence_kinds": [
+        "command-behavior",
+        "exit-behavior",
+        "dry-run-plan"
+      ],
+      "surface": "dsf delete/deprovision"
+    },
+    {
+      "authority": "authoritative",
+      "evidence": [
+        "evidence/commands/dsf-runtime-run-missing-env.json",
+        "evidence/request-shapes/runtime-signal-to-run.json",
+        "evidence/schemas/Run.json"
+      ],
+      "evidence_kinds": [
+        "command-behavior",
+        "exit-behavior",
+        "request-shape",
+        "schema-snapshot"
+      ],
+      "surface": "dsf run"
+    },
+    {
+      "authority": "authoritative",
+      "evidence": [
+        "evidence/commands/dsf-runtime-sweep-missing-env.json",
+        "evidence/commands/dsf-parser-surface-snapshot.json"
+      ],
+      "evidence_kinds": [
+        "command-behavior",
+        "exit-behavior"
+      ],
+      "surface": "dsf sweep"
+    },
+    {
+      "authority": "authoritative",
+      "evidence": [
+        "evidence/commands/dsf-parser-surface-snapshot.json",
+        "evidence/commands/dsf-runtime-sweep-missing-env.json"
+      ],
+      "evidence_kinds": [
+        "command-behavior",
+        "exit-behavior"
+      ],
+      "surface": "dsf serve-orchestrator"
+    },
+    {
+      "authority": "authoritative",
+      "evidence": [
+        "evidence/commands/dsf-parser-surface-snapshot.json"
+      ],
+      "evidence_kinds": [
+        "command-behavior"
+      ],
+      "surface": "dsf serve-agent"
+    },
+    {
+      "authority": "deferred",
+      "evidence": [
+        "evidence/commands/dsf-parser-surface-snapshot.json",
+        "evidence/request-shapes/github-repo-client-recorded-requests.json"
+      ],
+      "evidence_kinds": [
+        "command-behavior",
+        "request-shape"
+      ],
+      "surface": "dsf charter init"
+    },
+    {
+      "authority": "deferred",
+      "evidence": [
+        "evidence/commands/dsf-parser-surface-snapshot.json",
+        "evidence/persisted-records/blackboard-run-record.json"
+      ],
+      "evidence_kinds": [
+        "command-behavior",
+        "persisted-record"
+      ],
+      "surface": "dsf charter sync"
+    },
+    {
+      "authority": "deferred",
+      "evidence": [
+        "evidence/commands/dsf-parser-surface-snapshot.json"
+      ],
+      "evidence_kinds": [
+        "command-behavior"
+      ],
+      "surface": "dsf charter status"
+    },
+    {
+      "authority": "deferred",
+      "evidence": [
+        "evidence/commands/dsf-parser-surface-snapshot.json",
+        "evidence/request-shapes/github-repo-client-recorded-requests.json"
+      ],
+      "evidence_kinds": [
+        "command-behavior",
+        "request-shape"
+      ],
+      "surface": "dsf charter implement"
+    },
+    {
+      "authority": "deferred",
+      "evidence": [
+        "evidence/commands/dsf-parser-surface-snapshot.json",
+        "evidence/request-shapes/github-repo-client-recorded-requests.json"
+      ],
+      "evidence_kinds": [
+        "command-behavior",
+        "request-shape"
+      ],
+      "surface": "dsf charter watch"
+    },
+    {
+      "authority": "authoritative",
+      "evidence": [
+        "evidence/commands/dsf-control-center-parser-snapshot.json"
+      ],
+      "evidence_kinds": [
+        "command-behavior",
+        "exit-behavior"
+      ],
+      "surface": "dsf-control-center"
+    },
+    {
+      "authority": "authoritative",
+      "evidence": [
+        "evidence/request-shapes/control-center-http-requests.json",
+        "evidence/persisted-records/control-center-state-record.json"
+      ],
+      "evidence_kinds": [
+        "machine-readable-output",
+        "request-shape",
+        "persisted-record"
+      ],
+      "surface": "control-center GET /api/state"
+    },
+    {
+      "authority": "authoritative",
+      "evidence": [
+        "evidence/request-shapes/control-center-http-requests.json",
+        "evidence/persisted-records/control-center-state-record.json"
+      ],
+      "evidence_kinds": [
+        "request-shape",
+        "persisted-record"
+      ],
+      "surface": "control-center POST /toggle"
+    },
+    {
+      "authority": "authoritative",
+      "evidence": [
+        "evidence/request-shapes/control-center-http-requests.json",
+        "evidence/persisted-records/control-center-state-record.json"
+      ],
+      "evidence_kinds": [
+        "request-shape",
+        "persisted-record"
+      ],
+      "surface": "control-center POST /set-value"
+    },
+    {
+      "authority": "authoritative",
+      "evidence": [
+        "evidence/schemas/Run.json",
+        "evidence/schemas/Proposal.json",
+        "evidence/schemas/EvidenceItem.json",
+        "evidence/schemas/CouncilVerdict.json",
+        "evidence/schemas/RoutedIssue.json",
+        "evidence/persisted-records/blackboard-run-record.json",
+        "evidence/persisted-records/blackboard-checkpoint-record.json"
+      ],
+      "evidence_kinds": [
+        "schema-snapshot",
+        "persisted-record"
+      ],
+      "surface": "blackboard contracts"
+    }
+  ],
+  "ticket": 133
+}

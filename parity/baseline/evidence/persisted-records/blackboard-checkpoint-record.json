@@ -1,0 +1,10 @@
+{
+  "authority": "authoritative",
+  "captured_at": "2026-09-03T08:24:03.665+02:00",
+  "record": {
+    "done": true,
+    "run_id": "run-parity-0001",
+    "station": "S1:triage"
+  },
+  "source": "feature-council/tests/orchestrator/test_blackboard.py"
+}

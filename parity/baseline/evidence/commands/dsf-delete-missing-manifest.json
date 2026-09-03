@@ -1,0 +1,16 @@
+{
+  "argv": [
+    "dsf",
+    "delete",
+    "ghost",
+    "--dry-run",
+    "--config-root",
+    "<repo>/parity/nonexistent-root"
+  ],
+  "authority": "authoritative",
+  "captured_at": "2026-09-03T08:24:03.665+02:00",
+  "exit_code": 1,
+  "notes": "Captured from current Python implementation without live external services.",
+  "stderr": "[dsf] error: no manifest found for product 'ghost'. Run 'dsf new' first or check the product name.\n",
+  "stdout": ""
+}

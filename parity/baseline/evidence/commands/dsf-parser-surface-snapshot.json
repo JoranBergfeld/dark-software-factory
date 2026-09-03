@@ -1,0 +1,235 @@
+{
+  "argv": [
+    "dsf",
+    "<subcommand>"
+  ],
+  "authority": "authoritative",
+  "captured_at": "2026-09-03T08:24:03.665+02:00",
+  "cases": [
+    {
+      "argv": [
+        "dsf",
+        "new",
+        "--product",
+        "demo"
+      ],
+      "namespace": {
+        "admin_principal_id": "",
+        "command": "new",
+        "config_root": null,
+        "creation_maturity": "low",
+        "dry_run": false,
+        "environment": "dev",
+        "location": "swedencentral",
+        "name_prefix": "",
+        "no_charter": false,
+        "owner": "",
+        "owner_appconfig_endpoint": null,
+        "owner_keyvault_uri": "",
+        "product": "demo",
+        "repo": "",
+        "runtime_target": "aca",
+        "visibility": "private",
+        "write_plan": false
+      }
+    },
+    {
+      "argv": [
+        "dsf",
+        "list",
+        "--json"
+      ],
+      "namespace": {
+        "command": "list",
+        "json": true,
+        "owner_appconfig_endpoint": null
+      }
+    },
+    {
+      "argv": [
+        "dsf",
+        "offboard",
+        "demo",
+        "--dry-run"
+      ],
+      "namespace": {
+        "command": "offboard",
+        "config_root": null,
+        "dry_run": true,
+        "owner_appconfig_endpoint": null,
+        "product": "demo",
+        "purge": false,
+        "yes": false
+      }
+    },
+    {
+      "argv": [
+        "dsf",
+        "delete",
+        "demo",
+        "--dry-run",
+        "--yes"
+      ],
+      "namespace": {
+        "command": "delete",
+        "config_root": null,
+        "dry_run": true,
+        "owner_appconfig_endpoint": null,
+        "product": "demo",
+        "purge": false,
+        "yes": true
+      }
+    },
+    {
+      "argv": [
+        "dsf",
+        "run",
+        "--signal",
+        "signal.json",
+        "--dry-run"
+      ],
+      "namespace": {
+        "command": "run",
+        "dry_run": true,
+        "product": null,
+        "signal": "signal.json"
+      }
+    },
+    {
+      "argv": [
+        "dsf",
+        "sweep",
+        "--product",
+        "demo"
+      ],
+      "namespace": {
+        "command": "sweep",
+        "product": "demo"
+      }
+    },
+    {
+      "argv": [
+        "dsf",
+        "serve-orchestrator",
+        "--loop",
+        "--interval",
+        "12"
+      ],
+      "namespace": {
+        "command": "serve-orchestrator",
+        "interval": 12,
+        "loop": true,
+        "product": null
+      }
+    },
+    {
+      "argv": [
+        "dsf",
+        "serve-agent",
+        "--kind",
+        "grafana",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "9000"
+      ],
+      "namespace": {
+        "command": "serve-agent",
+        "host": "127.0.0.1",
+        "kind": "grafana",
+        "port": 9000
+      }
+    },
+    {
+      "argv": [
+        "dsf",
+        "charter",
+        "init",
+        "--product",
+        "demo"
+      ],
+      "namespace": {
+        "charter_command": "init",
+        "command": "charter",
+        "product": "demo"
+      }
+    },
+    {
+      "argv": [
+        "dsf",
+        "charter",
+        "sync",
+        "--product",
+        "demo",
+        "--file",
+        ".dsf/charter.md"
+      ],
+      "namespace": {
+        "charter_command": "sync",
+        "command": "charter",
+        "file": ".dsf/charter.md",
+        "product": "demo",
+        "ref": null
+      }
+    },
+    {
+      "argv": [
+        "dsf",
+        "charter",
+        "status",
+        "--product",
+        "demo",
+        "--ref",
+        "main"
+      ],
+      "namespace": {
+        "charter_command": "status",
+        "command": "charter",
+        "file": null,
+        "product": "demo",
+        "ref": "main"
+      }
+    },
+    {
+      "argv": [
+        "dsf",
+        "charter",
+        "implement",
+        "--product",
+        "demo",
+        "--no-wait"
+      ],
+      "namespace": {
+        "charter_command": "implement",
+        "command": "charter",
+        "no_wait": true,
+        "poll_interval": null,
+        "product": "demo",
+        "timeout": null
+      }
+    },
+    {
+      "argv": [
+        "dsf",
+        "charter",
+        "watch",
+        "--product",
+        "demo",
+        "--issue",
+        "7"
+      ],
+      "namespace": {
+        "charter_command": "watch",
+        "command": "charter",
+        "issue": 7,
+        "poll_interval": null,
+        "product": "demo",
+        "timeout": null
+      }
+    }
+  ],
+  "exit_code": 0,
+  "notes": "argparse namespace snapshot for lifecycle, runtime forwarding, and charter verbs.",
+  "stderr": "",
+  "stdout": ""
+}

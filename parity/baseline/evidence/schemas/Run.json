@@ -1,0 +1,210 @@
+{
+  "$defs": {
+    "AuditRecord": {
+      "description": "One audit-trail line written by a station.",
+      "properties": {
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "station": {
+          "title": "Station",
+          "type": "string"
+        }
+      },
+      "required": [
+        "station",
+        "message"
+      ],
+      "title": "AuditRecord",
+      "type": "object"
+    },
+    "EvidenceItem": {
+      "description": "A single grounded claim emitted by a source agent.",
+      "properties": {
+        "claim": {
+          "title": "Claim",
+          "type": "string"
+        },
+        "confidence": {
+          "default": 0.0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "product_hints": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Product Hints",
+          "type": "array"
+        },
+        "provenance": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "raw_citation": {
+          "title": "Raw Citation",
+          "type": "string"
+        },
+        "source_agent": {
+          "title": "Source Agent",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_agent",
+        "claim",
+        "raw_citation",
+        "provenance"
+      ],
+      "title": "EvidenceItem",
+      "type": "object"
+    },
+    "Provenance": {
+      "description": "Where/when/how an evidence claim was obtained.",
+      "properties": {
+        "query_used": {
+          "title": "Query Used",
+          "type": "string"
+        },
+        "source_kind": {
+          "$ref": "#/$defs/SourceKind"
+        },
+        "timestamp": {
+          "format": "date-time",
+          "title": "Timestamp",
+          "type": "string"
+        }
+      },
+      "required": [
+        "query_used",
+        "source_kind"
+      ],
+      "title": "Provenance",
+      "type": "object"
+    },
+    "RunStatus": {
+      "description": "Lifecycle status of a conveyor run.",
+      "enum": [
+        "OPEN",
+        "INVESTIGATING",
+        "SYNTHESIZING",
+        "GROUNDING",
+        "COUNCIL",
+        "ROUTING",
+        "FILED",
+        "KILLED",
+        "ERROR"
+      ],
+      "title": "RunStatus",
+      "type": "string"
+    },
+    "SourceKind": {
+      "description": "Kind of source backend that produced evidence.",
+      "enum": [
+        "SENTRY",
+        "GRAFANA",
+        "FOUNDRYIQ",
+        "WEBIQ",
+        "TICKETS"
+      ],
+      "title": "SourceKind",
+      "type": "string"
+    },
+    "TriggerKind": {
+      "description": "How a run was triggered.",
+      "enum": [
+        "SCHEDULED",
+        "SIGNAL"
+      ],
+      "title": "TriggerKind",
+      "type": "string"
+    }
+  },
+  "description": "A conveyor run \u2014 the central blackboard object.",
+  "properties": {
+    "audit": {
+      "items": {
+        "$ref": "#/$defs/AuditRecord"
+      },
+      "title": "Audit",
+      "type": "array"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "dry_run": {
+      "default": false,
+      "title": "Dry Run",
+      "type": "boolean"
+    },
+    "evidence": {
+      "items": {
+        "$ref": "#/$defs/EvidenceItem"
+      },
+      "title": "Evidence",
+      "type": "array"
+    },
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "proposals": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Proposals",
+      "type": "array"
+    },
+    "scope_product_hints": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Scope Product Hints",
+      "type": "array"
+    },
+    "signal_payload": {
+      "additionalProperties": true,
+      "title": "Signal Payload",
+      "type": "object"
+    },
+    "source_kinds": {
+      "items": {
+        "$ref": "#/$defs/SourceKind"
+      },
+      "title": "Source Kinds",
+      "type": "array"
+    },
+    "status": {
+      "$ref": "#/$defs/RunStatus",
+      "default": "OPEN"
+    },
+    "trigger": {
+      "$ref": "#/$defs/TriggerKind"
+    }
+  },
+  "required": [
+    "trigger"
+  ],
+  "title": "Run",
+  "type": "object"
+}

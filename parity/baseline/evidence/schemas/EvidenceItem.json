@@ -1,0 +1,86 @@
+{
+  "$defs": {
+    "Provenance": {
+      "description": "Where/when/how an evidence claim was obtained.",
+      "properties": {
+        "query_used": {
+          "title": "Query Used",
+          "type": "string"
+        },
+        "source_kind": {
+          "$ref": "#/$defs/SourceKind"
+        },
+        "timestamp": {
+          "format": "date-time",
+          "title": "Timestamp",
+          "type": "string"
+        }
+      },
+      "required": [
+        "query_used",
+        "source_kind"
+      ],
+      "title": "Provenance",
+      "type": "object"
+    },
+    "SourceKind": {
+      "description": "Kind of source backend that produced evidence.",
+      "enum": [
+        "SENTRY",
+        "GRAFANA",
+        "FOUNDRYIQ",
+        "WEBIQ",
+        "TICKETS"
+      ],
+      "title": "SourceKind",
+      "type": "string"
+    }
+  },
+  "description": "A single grounded claim emitted by a source agent.",
+  "properties": {
+    "claim": {
+      "title": "Claim",
+      "type": "string"
+    },
+    "confidence": {
+      "default": 0.0,
+      "title": "Confidence",
+      "type": "number"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "product_hints": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Product Hints",
+      "type": "array"
+    },
+    "provenance": {
+      "$ref": "#/$defs/Provenance"
+    },
+    "raw_citation": {
+      "title": "Raw Citation",
+      "type": "string"
+    },
+    "source_agent": {
+      "title": "Source Agent",
+      "type": "string"
+    }
+  },
+  "required": [
+    "source_agent",
+    "claim",
+    "raw_citation",
+    "provenance"
+  ],
+  "title": "EvidenceItem",
+  "type": "object"
+}

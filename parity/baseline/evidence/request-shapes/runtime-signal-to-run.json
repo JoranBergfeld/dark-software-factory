@@ -1,0 +1,38 @@
+{
+  "authority": "authoritative",
+  "captured_at": "2026-09-03T08:24:03.665+02:00",
+  "input": {
+    "incident": "INC-42",
+    "product_hints": [
+      "microbi"
+    ],
+    "source_kinds": [
+      "SENTRY",
+      "GRAFANA",
+      "unknown"
+    ]
+  },
+  "normalized_run_fields": {
+    "dry_run": false,
+    "scope_product_hints": [
+      "microbi"
+    ],
+    "signal_payload": {
+      "incident": "INC-42",
+      "product_hints": [
+        "microbi"
+      ],
+      "source_kinds": [
+        "SENTRY",
+        "GRAFANA",
+        "unknown"
+      ]
+    },
+    "source_kinds": [
+      "SENTRY",
+      "GRAFANA"
+    ],
+    "status": "OPEN",
+    "trigger": "SIGNAL"
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "authority": "authoritative",
+  "captured_at": "2026-09-03T08:24:03.665+02:00",
+  "notes": "IDs/timestamps are intentionally fixed for .NET tests; field names and enum values mirror Pydantic dumps.",
+  "record": {
+    "audit": [
+      {
+        "message": "hello",
+        "station": "S1:triage"
+      }
+    ],
+    "dry_run": true,
+    "evidence": [],
+    "id": "run-parity-0001",
+    "proposals": [],
+    "scope_product_hints": [
+      "microbi"
+    ],
+    "signal_payload": {
+      "incident": "INC-42"
+    },
+    "source_kinds": [
+      "SENTRY"
+    ],
+    "status": "OPEN",
+    "trigger": "SIGNAL"
+  },
+  "source": "feature-council/tests/orchestrator/test_blackboard.py"
+}

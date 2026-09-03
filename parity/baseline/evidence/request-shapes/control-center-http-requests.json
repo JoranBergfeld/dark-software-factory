@@ -1,0 +1,35 @@
+{
+  "authority": "authoritative",
+  "captured_at": "2026-09-03T08:24:03.665+02:00",
+  "requests": [
+    {
+      "auth": "none for read",
+      "body": null,
+      "method": "GET",
+      "path": "/api/state"
+    },
+    {
+      "auth": "Authorization: Bearer <CC_BEARER_TOKEN> when configured",
+      "content_type": "application/x-www-form-urlencoded",
+      "fields": {
+        "csrf_token": "<cookie cc_csrf>",
+        "flag": "agents.sentry.enabled",
+        "product": "microbi",
+        "value": "false"
+      },
+      "method": "POST",
+      "path": "/toggle"
+    },
+    {
+      "auth": "Authorization: Bearer <CC_BEARER_TOKEN> when configured",
+      "content_type": "application/x-www-form-urlencoded",
+      "fields": {
+        "csrf_token": "<cookie cc_csrf>",
+        "key": "council.threshold",
+        "value": "0.75"
+      },
+      "method": "POST",
+      "path": "/set-value"
+    }
+  ]
+}

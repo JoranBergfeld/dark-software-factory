@@ -1,0 +1,19 @@
+{
+  "argv": [
+    "dsf-control-center",
+    "--host",
+    "127.0.0.1",
+    "--port",
+    "8081"
+  ],
+  "authority": "authoritative",
+  "captured_at": "2026-09-03T08:24:03.665+02:00",
+  "exit_code": 0,
+  "namespace": {
+    "host": "127.0.0.1",
+    "port": 8081
+  },
+  "notes": "Default parser values captured from dsf.control_center.app.main; server startup itself is long-running and not invoked.",
+  "stderr": "",
+  "stdout": ""
+}

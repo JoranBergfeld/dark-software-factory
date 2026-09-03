@@ -1,0 +1,29 @@
+{
+  "description": "One critic's score on a proposal.",
+  "properties": {
+    "critic": {
+      "title": "Critic",
+      "type": "string"
+    },
+    "rationale": {
+      "default": "",
+      "title": "Rationale",
+      "type": "string"
+    },
+    "score": {
+      "title": "Score",
+      "type": "number"
+    },
+    "veto": {
+      "default": false,
+      "title": "Veto",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "critic",
+    "score"
+  ],
+  "title": "CriticScore",
+  "type": "object"
+}
