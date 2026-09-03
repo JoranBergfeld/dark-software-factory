@@ -345,7 +345,9 @@ jobs:
           mkdir -p "$payload"
           case "$archive" in
             *.tar.gz) tar -xzf "$archive" -C "$payload" ;;
-            *.zip) tar -xf "$archive" -C "$payload" ;;
+            *.zip)
+              pwsh -NoProfile -Command "Expand-Archive -Path '$archive' -DestinationPath '$payload' -Force"
+              ;;
             *)
               echo "Unsupported final artifact archive: $archive" >&2
               exit 1

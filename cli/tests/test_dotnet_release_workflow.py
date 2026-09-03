@@ -43,3 +43,14 @@ def test_dotnet_release_publish_jobs_wait_for_final_native_smoke():
 
     assert "needs: final-native-smoke-test" in github_publish_job
     assert "final-native-smoke-test" in nuget_publish_job
+
+
+def test_final_smoke_extracts_windows_zip_without_gnu_tar():
+    workflow = _workflow_text()
+
+    smoke_job = workflow.split("final-native-smoke-test:", maxsplit=1)[1].split(
+        "\n  publish-github-release:", maxsplit=1
+    )[0]
+
+    assert "Expand-Archive" in smoke_job
+    assert 'tar -xf "$archive"' not in smoke_job
