@@ -10,21 +10,65 @@ public sealed class CliInteractionTests
     {
         var terminal = new ScriptedTerminal(
             new TerminalCapabilities(IsInteractive: true, SupportsAnsi: false, SupportsEmoji: false),
-            ["demo", ""]);
+            ["demo"]);
 
         var exitCode = await CliApplication.InvokeAsync(["new", "--dry-run"], CancellationToken.None, terminal);
 
         Assert.Equal(0, exitCode);
-        Assert.Equal(
-            [
-                "Product key: ",
-                "Name prefix [demo]: ",
-            ],
-            terminal.Prompts);
+        Assert.Equal(["Product key: "], terminal.Prompts);
         Assert.Contains("[dsf] equivalent: dsf new --dry-run", terminal.Output);
+        Assert.Contains("[dsf] equivalent: dsf new --product demo --dry-run", terminal.Output);
+        Assert.Contains("[dsf] instance plan for product=demo (DRY-RUN)", terminal.Output);
+    }
+
+    [Fact]
+    public async Task New_equivalent_command_includes_every_explicit_option()
+    {
+        var terminal = new ScriptedTerminal(
+            new TerminalCapabilities(IsInteractive: true, SupportsAnsi: false, SupportsEmoji: false),
+            ["demo"]);
+
+        var exitCode = await CliApplication.InvokeAsync(
+            [
+                "new",
+                "--owner",
+                "acme",
+                "--repo",
+                "demo-repo",
+                "--visibility",
+                "public",
+                "--creation-maturity",
+                "high",
+                "--dry-run",
+                "--config-root",
+                "/tmp/root",
+            ],
+            CancellationToken.None,
+            terminal);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(["Product key: "], terminal.Prompts);
         Assert.Contains(
-            "[dsf] equivalent: dsf new --product demo --name-prefix demo --location swedencentral --environment dev --dry-run",
+            "[dsf] equivalent: dsf new --product demo --owner acme --repo demo-repo --visibility public"
+                + " --creation-maturity high --dry-run --config-root /tmp/root",
             terminal.Output);
+    }
+
+    [Fact]
+    public async Task New_does_not_prompt_for_name_prefix_when_product_supplies_the_default()
+    {
+        var terminal = new ScriptedTerminal(
+            new TerminalCapabilities(IsInteractive: true, SupportsAnsi: false, SupportsEmoji: false),
+            []);
+
+        var exitCode = await CliApplication.InvokeAsync(
+            ["new", "--product", "demo", "--dry-run"],
+            CancellationToken.None,
+            terminal);
+
+        Assert.Equal(0, exitCode);
+        Assert.Empty(terminal.Prompts);
+        Assert.DoesNotContain("[dsf] equivalent:", terminal.Output);
         Assert.Contains("[dsf] instance plan for product=demo (DRY-RUN)", terminal.Output);
     }
 

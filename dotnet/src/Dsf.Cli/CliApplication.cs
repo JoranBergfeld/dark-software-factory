@@ -98,16 +98,33 @@ public static class CliApplication
             ownerAppConfigEndpoint,
             adminPrincipalId);
 
+        var newOptions = new Option[]
+        {
+            product,
+            owner,
+            repo,
+            visibility,
+            runtimeTarget,
+            namePrefix,
+            environment,
+            location,
+            creationMaturity,
+            dryRun,
+            noCharter,
+            writePlan,
+            configRoot,
+            ownerKeyVaultUri,
+            ownerAppConfigEndpoint,
+            adminPrincipalId,
+        };
+
         command.SetAction(parseResult =>
         {
             if (!ResolveNewInteraction(
                     parseResult,
                     terminal,
                     product,
-                    namePrefix,
-                    location,
-                    environment,
-                    dryRun,
+                    newOptions,
                     providedOptions,
                     out var interaction))
             {
@@ -115,9 +132,9 @@ public static class CliApplication
             }
 
             var prefix = parseResult.GetValue(namePrefix) ?? string.Empty;
-            if (!string.IsNullOrEmpty(interaction.NamePrefix))
+            if (prefix.Length == 0)
             {
-                prefix = interaction.NamePrefix;
+                prefix = interaction.Product ?? parseResult.GetValue(product) ?? string.Empty;
             }
             if (prefix.Length > 0 && !char.IsAsciiLetter(prefix[0]))
             {
@@ -130,8 +147,8 @@ public static class CliApplication
             var ownerValue = parseResult.GetValue(owner) ?? string.Empty;
             var repoValue = parseResult.GetValue(repo) ?? string.Empty;
             var visibilityValue = parseResult.GetValue(visibility) ?? "private";
-            var environmentValue = interaction.Environment ?? parseResult.GetValue(environment) ?? "dev";
-            var locationValue = interaction.Location ?? parseResult.GetValue(location) ?? "swedencentral";
+            var environmentValue = parseResult.GetValue(environment) ?? "dev";
+            var locationValue = parseResult.GetValue(location) ?? "swedencentral";
             var configRootValue = parseResult.GetValue(configRoot);
             var effectivePrefix = BuildNamePrefix(prefix.Length > 0 ? prefix : productValue);
             if (parseResult.GetValue(dryRun))
@@ -162,85 +179,82 @@ public static class CliApplication
         ParseResult parseResult,
         ICliTerminal terminal,
         Option<string> product,
-        Option<string> namePrefix,
-        Option<string> location,
-        Option<string> environment,
-        Option<bool> dryRun,
+        IReadOnlyList<Option> options,
         IReadOnlySet<string> providedOptions,
         out NewInteraction interaction)
     {
-        interaction = new NewInteraction(
-            ProvidedValue(parseResult, providedOptions, product),
-            ProvidedValue(parseResult, providedOptions, namePrefix),
-            parseResult.GetValue(location) ?? "swedencentral",
-            parseResult.GetValue(environment) ?? "dev");
+        var explicitArguments = ExplicitArguments(parseResult, providedOptions, options);
+        interaction = new NewInteraction(null, explicitArguments);
 
-        var productProvided = WasProvided(providedOptions, product);
-        var namePrefixProvided = WasProvided(providedOptions, namePrefix);
-        var needsPrompts = !productProvided || !namePrefixProvided;
-        if (!needsPrompts)
+        if (WasProvided(providedOptions, product))
         {
             return true;
         }
 
         if (!terminal.Capabilities.IsInteractive)
         {
-            if (!productProvided)
-            {
-                terminal.WriteErrorLine(
-                    $"[dsf] error: --product is required when prompts are unavailable. Run: {RenderNewCommand(interaction, parseResult.GetValue(dryRun), productPlaceholder: true)}");
-                return false;
-            }
-
-            return true;
+            terminal.WriteErrorLine(
+                $"[dsf] error: --product is required when prompts are unavailable. Run: {RenderNewCommand(interaction, productPlaceholder: true)}");
+            return false;
         }
 
-        ShowEquivalentCommand(terminal, interaction, parseResult.GetValue(dryRun));
+        ShowEquivalentCommand(terminal, interaction);
 
-        if (!productProvided)
+        var answer = terminal.Prompt("Product key: ");
+        if (string.IsNullOrWhiteSpace(answer))
         {
-            var answer = terminal.Prompt("Product key: ");
-            if (string.IsNullOrWhiteSpace(answer))
-            {
-                terminal.WriteErrorLine("[dsf] error: product key is required.");
-                return false;
-            }
-
-            interaction = interaction with { Product = answer.Trim() };
-            ShowEquivalentCommand(terminal, interaction, parseResult.GetValue(dryRun));
+            terminal.WriteErrorLine("[dsf] error: product key is required.");
+            return false;
         }
 
-        if (!namePrefixProvided)
-        {
-            var defaultPrefix = interaction.Product ?? string.Empty;
-            var answer = terminal.Prompt($"Name prefix [{defaultPrefix}]: ");
-            interaction = interaction with
-            {
-                NamePrefix = string.IsNullOrWhiteSpace(answer) ? defaultPrefix : answer.Trim(),
-            };
-            ShowEquivalentCommand(terminal, interaction, parseResult.GetValue(dryRun));
-        }
-
+        interaction = interaction with { Product = answer.Trim() };
+        ShowEquivalentCommand(terminal, interaction);
         return true;
     }
 
-    private static bool WasProvided<T>(IReadOnlySet<string> providedOptions, Option<T> option) =>
-        providedOptions.Contains(option.Name) || option.Aliases.Any(providedOptions.Contains);
-
-    private static string? ProvidedValue(
+    /// <summary>
+    /// Replays every option the caller actually passed, in declaration order, so the
+    /// equivalent command reproduces the same invocation rather than a defaults-only shape.
+    /// </summary>
+    private static List<string> ExplicitArguments(
         ParseResult parseResult,
         IReadOnlySet<string> providedOptions,
-        Option<string> option) =>
-        WasProvided(providedOptions, option) ? parseResult.GetValue(option) : null;
+        IReadOnlyList<Option> options)
+    {
+        var arguments = new List<string>();
+        foreach (var option in options)
+        {
+            if (!WasProvided(providedOptions, option))
+            {
+                continue;
+            }
 
-    private static void ShowEquivalentCommand(ICliTerminal terminal, NewInteraction interaction, bool dryRun) =>
+            switch (option)
+            {
+                case Option<bool> flag:
+                    if (parseResult.GetValue(flag))
+                    {
+                        arguments.Add(flag.Name);
+                    }
+
+                    break;
+                case Option<string> text:
+                    AddValue(arguments, text.Name, parseResult.GetValue(text));
+                    break;
+            }
+        }
+
+        return arguments;
+    }
+
+    private static bool WasProvided(IReadOnlySet<string> providedOptions, Option option) =>
+        providedOptions.Contains(option.Name) || option.Aliases.Any(providedOptions.Contains);
+
+    private static void ShowEquivalentCommand(ICliTerminal terminal, NewInteraction interaction) =>
         terminal.WriteLine(
-            CliPresentation.EquivalentCommand(terminal.Capabilities, RenderNewCommand(interaction, dryRun)));
+            CliPresentation.EquivalentCommand(terminal.Capabilities, RenderNewCommand(interaction)));
 
-    private static string RenderNewCommand(
-        NewInteraction interaction,
-        bool dryRun,
-        bool productPlaceholder = false)
+    private static string RenderNewCommand(NewInteraction interaction, bool productPlaceholder = false)
     {
         var args = new List<string> { "dsf", "new" };
         if (productPlaceholder)
@@ -254,17 +268,7 @@ public static class CliApplication
             args.Add(interaction.Product);
         }
 
-        if (!productPlaceholder && !string.IsNullOrWhiteSpace(interaction.Product))
-        {
-            AddValue(args, "--name-prefix", interaction.NamePrefix);
-            AddValue(args, "--location", interaction.Location);
-            AddValue(args, "--environment", interaction.Environment);
-        }
-        if (dryRun)
-        {
-            args.Add("--dry-run");
-        }
-
+        args.AddRange(interaction.ExplicitArguments);
         return string.Join(' ', args);
     }
 
@@ -279,11 +283,7 @@ public static class CliApplication
         args.Add(value);
     }
 
-    private sealed record NewInteraction(
-        string? Product,
-        string? NamePrefix,
-        string? Location,
-        string? Environment);
+    private sealed record NewInteraction(string? Product, IReadOnlyList<string> ExplicitArguments);
 
     private static void PrintDryRunPlan(
         ICliTerminal terminal,
