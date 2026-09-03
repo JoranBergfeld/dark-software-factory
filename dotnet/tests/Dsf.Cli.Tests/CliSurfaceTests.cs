@@ -175,7 +175,7 @@ public sealed class CliSurfaceTests
 
         var result = await CliApplication.InvokeAsync(["list"], cts.Token);
 
-        Assert.NotEqual(0, result);
+        Assert.Equal(CliApplication.CanceledExitCode, result);
     }
 
     private static class DsfProcess
@@ -200,9 +200,23 @@ public sealed class CliSurfaceTests
             }
 
             using var process = Process.Start(startInfo) ?? throw new InvalidOperationException("dotnet run failed to start.");
-            var stdout = await process.StandardOutput.ReadToEndAsync();
-            var stderr = await process.StandardError.ReadToEndAsync();
-            await process.WaitForExitAsync();
+            var stdoutTask = process.StandardOutput.ReadToEndAsync();
+            var stderrTask = process.StandardError.ReadToEndAsync();
+
+            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+            try
+            {
+                await process.WaitForExitAsync(timeoutCts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                process.Kill(entireProcessTree: true);
+                throw new TimeoutException(
+                    $"dotnet run for '{string.Join(' ', args)}' did not exit within 60s; killed the process tree.");
+            }
+
+            var stdout = await stdoutTask;
+            var stderr = await stderrTask;
             return new CommandResult(process.ExitCode, stdout, stderr);
         }
 

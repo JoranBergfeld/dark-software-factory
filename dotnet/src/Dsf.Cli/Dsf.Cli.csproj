@@ -14,4 +14,8 @@
     <PackageReference Include="System.CommandLine" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Dsf.Cli.Tests" />
+  </ItemGroup>
+
 </Project>

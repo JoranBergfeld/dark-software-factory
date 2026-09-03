@@ -7,20 +7,22 @@ public static class CliApplication
 {
     private const int Success = 0;
     private const int Failure = 1;
-    private const int Canceled = 130;
+
+    /// <summary>Canonical exit code for a canceled invocation (e.g. Ctrl+C / SIGINT).</summary>
+    public const int CanceledExitCode = 130;
 
     public static Task<int> InvokeAsync(string[] args, CancellationToken cancellationToken)
     {
         if (cancellationToken.IsCancellationRequested)
         {
-            return Task.FromResult(Canceled);
+            return Task.FromResult(CanceledExitCode);
         }
 
         var root = BuildRootCommand();
         return root.Parse(args).InvokeAsync(cancellationToken: cancellationToken);
     }
 
-    private static RootCommand BuildRootCommand()
+    internal static RootCommand BuildRootCommand()
     {
         var root = new RootCommand("Dark Software Factory — factory CLI (create product instances)");
         root.Options.Remove(root.Options.Single(option => option.Name == "--version"));
