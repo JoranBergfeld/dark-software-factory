@@ -1,4 +1,5 @@
 using System.CommandLine;
+using Dsf.Core.Instances;
 
 namespace Dsf.Cli;
 
@@ -163,6 +164,23 @@ public static class CliApplication
                     environmentValue,
                     effectivePrefix,
                     configRootValue);
+
+                if (parseResult.GetValue(writePlan)
+                    && !WritePlannedDefinition(
+                        terminal,
+                        productValue,
+                        ownerValue,
+                        repoValue,
+                        visibilityValue,
+                        parseResult.GetValue(runtimeTarget) ?? "aca",
+                        environmentValue,
+                        locationValue,
+                        parseResult.GetValue(creationMaturity) ?? "low",
+                        effectivePrefix,
+                        configRootValue))
+                {
+                    return Failure;
+                }
             }
             else
             {
@@ -326,6 +344,51 @@ public static class CliApplication
         terminal.WriteLine($"[dsf]  13. branch_protection [ruleset planned (dry-run)] Apply the 'low' creation maturity dial to {repoFull} as a branch-protection ruleset (required reviews + green 'ci' check)");
         terminal.WriteLine($"[dsf]  14. deploy_sre_agent [deployed (dry-run)] Provision the Azure SRE Agent for {product} (agent + RBAC on rg-dsf-{product} + Azure Monitor)");
         terminal.WriteLine($"[dsf]  15. write_config   [{manifestPath}] Write instance manifest to config/instances/{product}.json");
+    }
+
+    /// <summary>
+    /// Persists the clean planned instance definition for `--dry-run --write-plan`.
+    /// Only configuration is written: no command log, no execution plan, no secret values.
+    /// </summary>
+    private static bool WritePlannedDefinition(
+        ICliTerminal terminal,
+        string product,
+        string owner,
+        string repo,
+        string visibility,
+        string runtimeTarget,
+        string environment,
+        string location,
+        string creationMaturity,
+        string namePrefix,
+        string? configRoot)
+    {
+        var definition = PlannedInstanceDefinition.Build(
+            product,
+            owner,
+            repo,
+            visibility,
+            runtimeTarget,
+            environment,
+            location,
+            creationMaturity,
+            namePrefix,
+            DateTimeOffset.UtcNow);
+
+        try
+        {
+            InstanceDefinitions.Write(definition, configRoot ?? Directory.GetCurrentDirectory());
+            return true;
+        }
+        catch (Exception exception) when (exception is IOException
+            or UnauthorizedAccessException
+            or NotSupportedException
+            or InstanceDefinitionException)
+        {
+            terminal.WriteErrorLine(
+                $"[dsf] error: could not write the instance definition for '{product}': {exception.Message}");
+            return false;
+        }
     }
 
     private static string BuildNamePrefix(string value)

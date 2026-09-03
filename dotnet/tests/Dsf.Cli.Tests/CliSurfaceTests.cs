@@ -104,7 +104,7 @@ public sealed class CliSurfaceTests
     }
 
     [Fact]
-    public async Task New_dry_run_write_plan_prints_deterministic_path_without_filesystem_writes()
+    public async Task New_dry_run_write_plan_persists_a_clean_instance_definition()
     {
         var root = DsfProcess.FindSolutionRoot();
         var configRoot = Path.Combine(root.FullName, ".test-artifacts", "cli-tests", Guid.NewGuid().ToString("N"));
@@ -129,8 +129,35 @@ public sealed class CliSurfaceTests
             Assert.Contains("[dsf]  15. write_config", result.Stdout);
             Assert.Equal(string.Empty, result.Stderr);
 
-            var manifestPath = Path.Combine(configRoot, "config", "instances", "paritydemo.json");
-            Assert.Contains($"[dsf]  15. write_config   [{manifestPath}]", result.Stdout);
+            var definitionPath = Path.Combine(configRoot, "config", "instances", "paritydemo.json");
+            Assert.Contains($"[dsf]  15. write_config   [{definitionPath}]", result.Stdout);
+            Assert.True(File.Exists(definitionPath), $"--write-plan must persist {definitionPath}");
+
+            var json = await File.ReadAllTextAsync(definitionPath);
+            Assert.Contains("\"schemaVersion\": 1", json, StringComparison.Ordinal);
+            Assert.DoesNotContain("\"steps\"", json, StringComparison.Ordinal);
+            Assert.DoesNotContain("gh repo create", json, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(configRoot))
+            {
+                Directory.Delete(configRoot, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task New_dry_run_without_write_plan_makes_no_filesystem_writes()
+    {
+        var root = DsfProcess.FindSolutionRoot();
+        var configRoot = Path.Combine(root.FullName, ".test-artifacts", "cli-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var result = await DsfProcess.RunAsync(
+                "new", "--product", "paritydemo", "--owner", "acme", "--dry-run", "--config-root", configRoot);
+
+            Assert.Equal(0, result.ExitCode);
             Assert.False(Directory.Exists(configRoot), $"Dry-run must not create {configRoot}");
         }
         finally
