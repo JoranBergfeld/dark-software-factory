@@ -5,6 +5,7 @@ using System.Text.Json;
 using Dsf.Core.Charters;
 using Dsf.Core.Instances;
 using Dsf.Core.Products;
+using Dsf.Core.Runtime;
 
 namespace Dsf.Cli;
 
@@ -860,8 +861,8 @@ public static class CliApplication
         AddOptions(command, kind, host, port);
         command.SetAction(_ =>
         {
-            Console.Out.WriteLine("[dsf] serve-agent is not implemented in the .NET migration shell.");
-            return Success;
+            Console.Error.WriteLine("[dsf] error: serve-agent is not yet implemented in the .NET runtime host.");
+            return Failure;
         });
         return command;
     }
@@ -1010,15 +1011,18 @@ public static class CliApplication
 
     private static int RuntimeShell(string? product, string verb)
     {
-        product ??= Environment.GetEnvironmentVariable("DSF_PRODUCT");
-        if (string.IsNullOrWhiteSpace(product))
+        try
         {
-            Console.Error.WriteLine("[dsf] error: DSF_PRODUCT is required to scope the factory runtime (set DSF_PRODUCT=<product>).");
+            RuntimeSettingsComposer.FromEnvironment(product);
+        }
+        catch (RuntimeConfigurationException exception)
+        {
+            Console.Error.WriteLine($"[dsf] error: {exception.Message}");
             return Failure;
         }
 
-        Console.Out.WriteLine($"[dsf] {verb} is not implemented in the .NET migration shell for product={product}.");
-        return Success;
+        Console.Error.WriteLine($"[dsf] error: {verb} is not yet implemented in the .NET runtime host.");
+        return Failure;
     }
 
     private const string ConstitutionPath = ".specify/memory/constitution.md";

@@ -2,12 +2,21 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
+    <AssemblyName>dsf-runtime</AssemblyName>
     <RootNamespace>Dsf.Runtime</RootNamespace>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Dsf.Core\Dsf.Core.csproj" />
     <ProjectReference Include="..\Dsf.FeatureCouncil\Dsf.FeatureCouncil.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.CommandLine" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Dsf.Runtime.Tests" />
   </ItemGroup>
 
 </Project>

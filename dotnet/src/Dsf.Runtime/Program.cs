@@ -1,4 +1,10 @@
-using Dsf.Core;
-using Dsf.FeatureCouncil;
+using Dsf.Runtime;
 
-Console.WriteLine($"{CoreModule.Name} + {FeatureCouncilModule.Name} :: Dsf.Runtime skeleton (run/sweep/serve-orchestrator/serve-agent)");
+using var cts = new CancellationTokenSource();
+Console.CancelKeyPress += (_, eventArgs) =>
+{
+    eventArgs.Cancel = true;
+    cts.Cancel();
+};
+
+return await RuntimeCliApplication.InvokeAsync(args, cts.Token);

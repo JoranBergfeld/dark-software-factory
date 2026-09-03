@@ -198,6 +198,42 @@ public sealed class CliSurfaceTests
     }
 
     [Fact]
+    public async Task Runtime_sweep_with_product_but_missing_endpoints_names_every_unset_endpoint()
+    {
+        var env = new Dictionary<string, string?> { ["DSF_PRODUCT"] = "acme" };
+
+        var result = await DsfProcess.RunAsync(env, "sweep");
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Equal(string.Empty, result.Stdout);
+        Assert.Contains("AZURE_APPCONFIG_ENDPOINT", result.Stderr);
+        Assert.Contains("AZURE_COSMOS_ENDPOINT", result.Stderr);
+        Assert.Contains("AZURE_OPENAI_ENDPOINT", result.Stderr);
+        Assert.Contains("AZURE_OPENAI_DEPLOYMENT", result.Stderr);
+        Assert.Contains("AZURE_OPENAI_EMBEDDING_DEPLOYMENT", result.Stderr);
+    }
+
+    [Fact]
+    public async Task Runtime_verbs_fail_loudly_instead_of_pretending_success_once_settings_validate()
+    {
+        var env = new Dictionary<string, string?>
+        {
+            ["DSF_PRODUCT"] = "acme",
+            ["AZURE_APPCONFIG_ENDPOINT"] = "https://appconfig.example",
+            ["AZURE_COSMOS_ENDPOINT"] = "https://cosmos.example",
+            ["AZURE_OPENAI_ENDPOINT"] = "https://openai.example",
+            ["AZURE_OPENAI_DEPLOYMENT"] = "gpt-deploy",
+            ["AZURE_OPENAI_EMBEDDING_DEPLOYMENT"] = "embed-deploy",
+        };
+
+        var result = await DsfProcess.RunAsync(env, "sweep");
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Equal(string.Empty, result.Stdout);
+        Assert.Contains("not yet implemented", result.Stderr, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task Unknown_command_and_invalid_option_return_python_parity_exit_2()
     {
         var unknown = await DsfProcess.RunAsync("wat");
@@ -253,7 +289,10 @@ public sealed class CliSurfaceTests
 
     private static class DsfProcess
     {
-        public static async Task<CommandResult> RunAsync(params string[] args)
+        public static Task<CommandResult> RunAsync(params string[] args) =>
+            RunAsync(env: null, args);
+
+        public static async Task<CommandResult> RunAsync(IReadOnlyDictionary<string, string?>? env, params string[] args)
         {
             var root = FindSolutionRoot();
             var startInfo = new ProcessStartInfo("dotnet")
@@ -263,6 +302,11 @@ public sealed class CliSurfaceTests
                 RedirectStandardError = true,
             };
             startInfo.Environment.Remove("DSF_PRODUCT");
+            foreach (var entry in env ?? new Dictionary<string, string?>())
+            {
+                startInfo.Environment[entry.Key] = entry.Value;
+            }
+
             startInfo.ArgumentList.Add("run");
             startInfo.ArgumentList.Add("--project");
             startInfo.ArgumentList.Add("src/Dsf.Cli/Dsf.Cli.csproj");
