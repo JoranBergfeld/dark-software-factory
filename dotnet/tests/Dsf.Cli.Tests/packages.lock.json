@@ -93,14 +93,21 @@
           "xunit.extensibility.core": "[2.9.2]"
         }
       },
-      "dsf.cli": {
+      "dsf": {
         "type": "Project",
         "dependencies": {
-          "Dsf.Core": "[1.0.0, )"
+          "Dsf.Core": "[1.0.0, )",
+          "System.CommandLine": "[2.0.11, )"
         }
       },
       "dsf.core": {
         "type": "Project"
+      },
+      "System.CommandLine": {
+        "type": "CentralTransitive",
+        "requested": "[2.0.11, )",
+        "resolved": "2.0.11",
+        "contentHash": "Pmg3/T0M37ZS3ovwPHtfBNTCdqNpnxo+tnZMg8JDHVR0qD8KwcPUKlheEiZysb1En8IyH7yDoa9QDq97Ny/vhQ=="
       }
     }
   }
