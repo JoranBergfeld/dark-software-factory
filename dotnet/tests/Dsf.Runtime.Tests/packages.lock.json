@@ -155,6 +155,7 @@
         "dependencies": {
           "Azure.Data.AppConfiguration": "[1.11.1, )",
           "Azure.Identity": "[1.21.0, )",
+          "Azure.Security.KeyVault.Secrets": "[4.11.1, )",
           "Dsf.Core": "[1.0.0, )",
           "Dsf.FeatureCouncil": "[1.0.0, )",
           "System.CommandLine": "[2.0.11, )"
@@ -185,6 +186,15 @@
         "contentHash": "GeFv8sGwRKvDKwI2WFy8r0mhmlxEVZg24Sit2NogTjiSO8RVjllWM65OT6e1sKjOvG8V74y7hAbaELUUPjZQSw==",
         "dependencies": {
           "Azure.Core": "1.53.0"
+        }
+      },
+      "Azure.Security.KeyVault.Secrets": {
+        "type": "CentralTransitive",
+        "requested": "[4.11.1, )",
+        "resolved": "4.11.1",
+        "contentHash": "/yFMJGQYPPvBSrupjJ388qqXZ1h70Yrer1vG+z+jddgovEmIE7IhShU6ZGIi24IPArY8HBH6FFtgVK369TWhmQ==",
+        "dependencies": {
+          "Azure.Core": "1.54.0"
         }
       },
       "System.CommandLine": {

@@ -2,47 +2,58 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Dsf.FeatureCouncil.Conveyor;
+using Dsf.Runtime.GitHubApp;
 
 namespace Dsf.Runtime;
 
 /// <summary>
-/// Files accepted proposals as GitHub issues over the REST API, authenticated with
-/// the runtime's token. Filing is idempotent through the proposal's durable intent
-/// key: the key is stamped into the issue body as an HTML comment and searched for
-/// before filing, so a scope the council reaches the same conclusion about twice
-/// resolves to the issue that already exists instead of filing a duplicate.
+/// Files accepted proposals as GitHub issues over the REST API, authenticated
+/// through an <see cref="IGitHubAuthProvider"/> -- production runs mint a GitHub
+/// App installation token from the runtime's existing App settings, while a
+/// documented local-dev override can supply a fixed token instead. Filing is
+/// idempotent through the proposal's durable intent key: the key is stamped into
+/// the issue body as an HTML comment and searched for before filing, so a scope
+/// the council reaches the same conclusion about twice resolves to the issue that
+/// already exists instead of filing a duplicate.
 /// </summary>
 internal sealed class GitHubIssueFiler : IIssueFiler
 {
     private const string DefaultApiUrl = "https://api.github.com/";
 
     private readonly HttpClient httpClient;
-    private readonly string token;
+    private readonly IGitHubAuthProvider authProvider;
     private readonly string repository;
 
     public GitHubIssueFiler(HttpClient httpClient, string token, string repository)
+        : this(httpClient, new StaticGitHubAuthProvider(token), repository)
+    {
+    }
+
+    public GitHubIssueFiler(HttpClient httpClient, IGitHubAuthProvider authProvider, string repository)
     {
         this.httpClient = httpClient;
-        this.token = token.Trim();
+        this.authProvider = authProvider;
         this.repository = repository.Trim();
         this.httpClient.BaseAddress ??= new Uri(DefaultApiUrl);
         this.httpClient.DefaultRequestHeaders.Accept.Add(
             new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
         this.httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("dsf-runtime");
         this.httpClient.DefaultRequestHeaders.Add("X-GitHub-Api-Version", "2022-11-28");
-        this.httpClient.DefaultRequestHeaders.Authorization =
-            new AuthenticationHeaderValue("Bearer", this.token);
     }
 
-    /// <summary>Builds a filer against the configured API base URL.</summary>
+    /// <summary>Builds a filer against the configured API base URL, authenticated with a fixed token.</summary>
     public static GitHubIssueFiler Create(string apiUrl, string token, string repository) =>
+        Create(apiUrl, new StaticGitHubAuthProvider(token), repository);
+
+    /// <summary>Builds a filer against the configured API base URL, authenticated through <paramref name="authProvider"/>.</summary>
+    public static GitHubIssueFiler Create(string apiUrl, IGitHubAuthProvider authProvider, string repository) =>
         new(
             new HttpClient
             {
                 BaseAddress = new Uri(EnsureTrailingSlash(
                     string.IsNullOrWhiteSpace(apiUrl) ? DefaultApiUrl : apiUrl)),
             },
-            token,
+            authProvider,
             repository);
 
     /// <summary>The marker an issue carries so its filing intent can be recognized.</summary>
@@ -64,6 +75,7 @@ internal sealed class GitHubIssueFiler : IIssueFiler
             return existing;
         }
 
+        await AuthorizeAsync(cancellationToken);
         using var response = await httpClient.PostAsJsonAsync(
             $"repos/{repository}/issues",
             new
@@ -97,6 +109,7 @@ internal sealed class GitHubIssueFiler : IIssueFiler
     private async Task<string?> FindExistingAsync(string intentKey, CancellationToken cancellationToken)
     {
         var query = Uri.EscapeDataString($"repo:{repository} in:body \"{intentKey}\"");
+        await AuthorizeAsync(cancellationToken);
         using var response = await httpClient.GetAsync($"search/issues?q={query}", cancellationToken);
         var body = await response.Content.ReadAsStringAsync(cancellationToken);
         if (!response.IsSuccessStatusCode)
@@ -126,6 +139,16 @@ internal sealed class GitHubIssueFiler : IIssueFiler
 
         return null;
     }
+
+    /// <summary>
+    /// Refreshes the client's bearer token before each call so a GitHub App
+    /// installation token minted per <see cref="GitHubAppAuthProvider"/> is
+    /// re-fetched (or served from its cache) on every request rather than fixed
+    /// once at construction, where it could go stale mid-run.
+    /// </summary>
+    private async Task AuthorizeAsync(CancellationToken cancellationToken) =>
+        httpClient.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", await authProvider.GetTokenAsync(cancellationToken));
 
     private static string Body(Proposal proposal) =>
         string.Join(

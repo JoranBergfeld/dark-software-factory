@@ -1,5 +1,6 @@
 using Dsf.Core.Runtime;
 using Dsf.FeatureCouncil.Conveyor;
+using Dsf.Runtime.GitHubApp;
 
 namespace Dsf.Runtime;
 
@@ -25,9 +26,11 @@ public interface IConveyorComposer
 internal sealed class EnvironmentConveyorComposer(
     IReadOnlyDictionary<string, string?> env,
     HttpClient? httpClient = null,
-    ICosmosDocumentGateway? cosmosGateway = null) : IConveyorComposer
+    ICosmosDocumentGateway? cosmosGateway = null,
+    IPrivateKeySecretReader? privateKeySecretReader = null) : IConveyorComposer
 {
     private const string KindPlaceholder = "{kind}";
+    private const string DefaultGitHubApiUrl = "https://api.github.com/";
 
     private readonly HttpClient httpClient = httpClient ?? new HttpClient();
 
@@ -79,27 +82,79 @@ internal sealed class EnvironmentConveyorComposer(
         return gatherers;
     }
 
+    /// <summary>
+    /// Wires the GitHub issue filer. Production auth reuses the runtime's
+    /// existing GitHub App settings (<c>GITHUB_APP_ID</c>,
+    /// <c>GITHUB_INSTALLATION_ID</c>, <c>GITHUB_APP_PRIVATE_KEY_SECRET</c>,
+    /// <c>AZURE_KEYVAULT_URI</c>) -- the same names the Python runtime resolves
+    /// -- and mints installation access tokens through
+    /// <see cref="GitHubAppAuthProvider"/>. <c>GITHUB_TOKEN</c>/<c>GH_TOKEN</c>
+    /// remain a documented local-dev override, only consulted when the App
+    /// settings are not fully configured; they never replace the App settings.
+    /// </summary>
     private IIssueFiler? ComposeFiler(RuntimeSettings settings, List<string> missing)
     {
-        var token = Read(RuntimeIntegrationSettings.GitHubToken);
-        if (token.Length == 0)
-        {
-            token = Read(RuntimeIntegrationSettings.GitHubTokenAlternative);
-        }
-
-        if (token.Length == 0)
-        {
-            missing.Add(RuntimeIntegrationSettings.GitHubToken);
-        }
-
-        if (settings.GitHubRepository.Trim().Length == 0)
+        var repository = settings.GitHubRepository.Trim();
+        if (repository.Length == 0)
         {
             missing.Add(RuntimeIntegrationSettings.GitHubRepository);
         }
 
-        return token.Length > 0 && settings.GitHubRepository.Trim().Length > 0
-            ? GitHubIssueFiler.Create(Read(RuntimeIntegrationSettings.GitHubApiUrl), token, settings.GitHubRepository)
-            : null;
+        var appId = settings.GitHubAppId.Trim();
+        var installationId = settings.GitHubInstallationId.Trim();
+        var privateKeySecret = settings.GitHubAppPrivateKeySecret.Trim();
+        var keyVaultUri = settings.KeyVaultUri.Trim();
+        var appSettings = new (string Value, string EnvVar)[]
+        {
+            (appId, RuntimeSettingsComposer.GitHubAppId),
+            (installationId, RuntimeSettingsComposer.GitHubInstallationId),
+            (privateKeySecret, RuntimeSettingsComposer.GitHubAppPrivateKeySecret),
+            (keyVaultUri, RuntimeSettingsComposer.AzureKeyVaultUri),
+        };
+
+        if (appSettings.All(setting => setting.Value.Length > 0))
+        {
+            return repository.Length > 0
+                ? GitHubIssueFiler.Create(
+                    Read(RuntimeIntegrationSettings.GitHubApiUrl),
+                    BuildGitHubAppAuthProvider(appId, installationId, keyVaultUri, privateKeySecret),
+                    repository)
+                : null;
+        }
+
+        var devToken = Read(RuntimeIntegrationSettings.GitHubToken);
+        if (devToken.Length == 0)
+        {
+            devToken = Read(RuntimeIntegrationSettings.GitHubTokenAlternative);
+        }
+
+        if (devToken.Length > 0)
+        {
+            return repository.Length > 0
+                ? GitHubIssueFiler.Create(Read(RuntimeIntegrationSettings.GitHubApiUrl), devToken, repository)
+                : null;
+        }
+
+        missing.AddRange(appSettings.Where(setting => setting.Value.Length == 0).Select(setting => setting.EnvVar));
+        return null;
+    }
+
+    private IGitHubAuthProvider BuildGitHubAppAuthProvider(
+        string appId, string installationId, string keyVaultUri, string privateKeySecret)
+    {
+        var apiUrl = Read(RuntimeIntegrationSettings.GitHubApiUrl);
+        var authHttpClient = new HttpClient
+        {
+            BaseAddress = new Uri(EnsureTrailingSlash(string.IsNullOrWhiteSpace(apiUrl) ? DefaultGitHubApiUrl : apiUrl)),
+        };
+
+        return new GitHubAppAuthProvider(
+            appId,
+            installationId,
+            new Uri(keyVaultUri),
+            privateKeySecret,
+            privateKeySecretReader ?? new AzureKeyVaultPrivateKeySecretReader(),
+            authHttpClient);
     }
 
     private IRunStore? ComposeRunStore(RuntimeSettings settings, List<string> missing)
@@ -133,10 +188,24 @@ internal sealed class EnvironmentConveyorComposer(
                 + $"{RuntimeIntegrationSettings.SourceAgentEndpoint("sentry")})";
         }
 
-        if (Read(RuntimeIntegrationSettings.GitHubToken).Length == 0
+        var missingAppSettings = new (string Value, string EnvVar)[]
+        {
+            (settings.GitHubAppId, RuntimeSettingsComposer.GitHubAppId),
+            (settings.GitHubInstallationId, RuntimeSettingsComposer.GitHubInstallationId),
+            (settings.GitHubAppPrivateKeySecret, RuntimeSettingsComposer.GitHubAppPrivateKeySecret),
+            (settings.KeyVaultUri, RuntimeSettingsComposer.AzureKeyVaultUri),
+        }
+            .Where(setting => setting.Value.Trim().Length == 0)
+            .Select(setting => setting.EnvVar)
+            .ToList();
+
+        if (missingAppSettings.Count > 0
+            && Read(RuntimeIntegrationSettings.GitHubToken).Length == 0
             && Read(RuntimeIntegrationSettings.GitHubTokenAlternative).Length == 0)
         {
-            yield return $"no GitHub token is configured (set {RuntimeIntegrationSettings.GitHubToken})";
+            yield return "no GitHub App auth is configured (set "
+                + string.Join(", ", missingAppSettings)
+                + $", or a local-dev override via {RuntimeIntegrationSettings.GitHubToken})";
         }
 
         if (settings.GitHubRepository.Trim().Length == 0)

@@ -1,5 +1,6 @@
 using Dsf.Core.Runtime;
 using Dsf.FeatureCouncil.Conveyor;
+using Dsf.Runtime.GitHubApp;
 using Xunit;
 
 namespace Dsf.Runtime.Tests;
@@ -13,20 +14,40 @@ namespace Dsf.Runtime.Tests;
 /// </summary>
 public sealed class ProductionCompositionTests
 {
-    private static RuntimeSettings SettingsWith(string cosmosEndpoint = "https://cosmos.example",
-        string repository = "acme/acme") => new(
+    private static RuntimeSettings SettingsWith(
+        string cosmosEndpoint = "https://cosmos.example",
+        string repository = "acme/acme",
+        string keyVaultUri = "",
+        string githubAppId = "",
+        string githubInstallationId = "",
+        string githubAppPrivateKeySecret = "") => new(
         Product: "acme",
         AppConfigEndpoint: "https://appconfig.example",
-        KeyVaultUri: "",
+        KeyVaultUri: keyVaultUri,
         AppInsightsConnectionString: "",
         CosmosEndpoint: cosmosEndpoint,
         OpenAiEndpoint: "https://openai.example",
         OpenAiDeployment: "gpt-deploy",
         OpenAiEmbeddingDeployment: "embed-deploy",
-        GitHubAppId: "",
-        GitHubInstallationId: "",
-        GitHubAppPrivateKeySecret: "",
+        GitHubAppId: githubAppId,
+        GitHubInstallationId: githubInstallationId,
+        GitHubAppPrivateKeySecret: githubAppPrivateKeySecret,
         GitHubRepository: repository);
+
+    private static RuntimeSettings SettingsWithGitHubApp(
+        string cosmosEndpoint = "https://cosmos.example", string repository = "acme/acme") => SettingsWith(
+        cosmosEndpoint: cosmosEndpoint,
+        repository: repository,
+        keyVaultUri: "https://acme-kv.vault.azure.net/",
+        githubAppId: "12345",
+        githubInstallationId: "67890",
+        githubAppPrivateKeySecret: "gh-app-private-key");
+
+    private sealed class StubPrivateKeySecretReader : IPrivateKeySecretReader
+    {
+        public Task<string> GetSecretAsync(Uri vaultUri, string secretName, CancellationToken cancellationToken) =>
+            Task.FromResult("unused-in-these-tests");
+    }
 
     private static readonly Dictionary<string, string?> FullyConfigured = new()
     {
@@ -109,5 +130,66 @@ public sealed class ProductionCompositionTests
 
         Assert.NotNull(services.GathererFor("sentry"));
         Assert.Null(services.GathererFor("grafana"));
+    }
+
+    [Fact]
+    public void Composition_succeeds_from_existing_GitHub_App_settings_with_no_GITHUB_TOKEN_configured()
+    {
+        var composer = new EnvironmentConveyorComposer(
+            FullyConfigured,
+            privateKeySecretReader: new StubPrivateKeySecretReader());
+
+        var services = composer.ComposeFor(SettingsWithGitHubApp());
+
+        Assert.NotNull(services.IssueFiler);
+    }
+
+    [Fact]
+    public void GitHub_App_settings_take_precedence_over_a_dev_token_when_both_are_present()
+    {
+        var envWithDevToken = new Dictionary<string, string?>(FullyConfigured) { ["GITHUB_TOKEN"] = "ghp_test" };
+        var composer = new EnvironmentConveyorComposer(
+            envWithDevToken,
+            privateKeySecretReader: new StubPrivateKeySecretReader());
+
+        var services = composer.ComposeFor(SettingsWithGitHubApp());
+
+        Assert.NotNull(services.IssueFiler);
+        var authProviderField = services.IssueFiler!.GetType()
+            .GetField("authProvider", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        var authProvider = authProviderField?.GetValue(services.IssueFiler);
+        Assert.IsType<GitHubAppAuthProvider>(authProvider);
+    }
+
+    [Fact]
+    public void Partially_configured_GitHub_App_settings_are_named_loudly()
+    {
+        var settings = SettingsWith(githubAppId: "12345");
+        var env = new Dictionary<string, string?>(FullyConfigured) { ["GITHUB_TOKEN"] = null, ["GH_TOKEN"] = null };
+        var composer = new EnvironmentConveyorComposer(env, privateKeySecretReader: new StubPrivateKeySecretReader());
+
+        var exception = Assert.Throws<RuntimeConfigurationException>(() => composer.ComposeFor(settings));
+
+        Assert.Contains("GITHUB_INSTALLATION_ID", exception.Message);
+        Assert.Contains("GITHUB_APP_PRIVATE_KEY_SECRET", exception.Message);
+        Assert.Contains("AZURE_KEYVAULT_URI", exception.Message);
+    }
+
+    [Fact]
+    public void No_GitHub_auth_configured_at_all_names_the_App_settings_and_the_dev_override()
+    {
+        var env = new Dictionary<string, string?>
+        {
+            ["DSF_SOURCE_AGENT_ENDPOINT_TEMPLATE"] = "https://acme-{kind}.internal",
+        };
+        var composer = new EnvironmentConveyorComposer(env, privateKeySecretReader: new StubPrivateKeySecretReader());
+
+        var exception = Assert.Throws<RuntimeConfigurationException>(() => composer.ComposeFor(SettingsWith()));
+
+        Assert.Contains("GITHUB_APP_ID", exception.Message);
+        Assert.Contains("GITHUB_INSTALLATION_ID", exception.Message);
+        Assert.Contains("GITHUB_APP_PRIVATE_KEY_SECRET", exception.Message);
+        Assert.Contains("AZURE_KEYVAULT_URI", exception.Message);
+        Assert.Contains("GITHUB_TOKEN", exception.Message);
     }
 }
