@@ -1,5 +1,6 @@
 using Dsf.Core.Runtime;
 using Dsf.FeatureCouncil.Conveyor;
+using Dsf.FeatureCouncil.Conveyor.Stations;
 
 namespace Dsf.Runtime.Tests;
 
@@ -109,10 +110,13 @@ internal sealed class ScriptedConveyorComposer(
     IIssueFiler? issueFiler,
     IRunStore runStore,
     IModelClient modelClient,
-    ITracer tracer) : IConveyorComposer
+    ITracer tracer,
+    IConfidenceThresholdReader? confidenceThresholdReader = null) : IConveyorComposer
 {
     public ConveyorServices ComposeFor(RuntimeSettings settings) =>
-        new(settings.Product, gatherers, issueFiler, runStore, modelClient, tracer);
+        new(
+            settings.Product, gatherers, issueFiler, runStore, modelClient, tracer,
+            confidenceThresholdReader ?? new FixedConfidenceThresholdReader(S5Council.DefaultThreshold));
 }
 
 /// <summary>A deterministic model client that answers a fixed, recorded completion for every prompt.</summary>
@@ -186,6 +190,19 @@ internal sealed class UnreachableRunStore(string reason) : IRunStore
         throw new InvalidOperationException(reason);
 
     public Task<ConveyorRun?> LoadAsync(string runId, CancellationToken cancellationToken) =>
+        throw new InvalidOperationException(reason);
+}
+
+/// <summary>A confidence threshold reader that always answers a fixed value.</summary>
+internal sealed class FixedConfidenceThresholdReader(double threshold) : IConfidenceThresholdReader
+{
+    public Task<double> ReadThresholdAsync(CancellationToken cancellationToken) => Task.FromResult(threshold);
+}
+
+/// <summary>A confidence threshold reader whose backing store cannot be reached.</summary>
+internal sealed class UnreachableConfidenceThresholdReader(string reason) : IConfidenceThresholdReader
+{
+    public Task<double> ReadThresholdAsync(CancellationToken cancellationToken) =>
         throw new InvalidOperationException(reason);
 }
 

@@ -1,4 +1,5 @@
 using Dsf.FeatureCouncil.Conveyor;
+using Dsf.FeatureCouncil.Conveyor.Stations;
 
 namespace Dsf.FeatureCouncil.Tests;
 
@@ -17,6 +18,7 @@ internal static class ConveyorDoubles
         IRunStore? runStore = null,
         IModelClient? modelClient = null,
         ITracer? tracer = null,
+        IConfidenceThresholdReader? confidenceThresholdReader = null,
         ILearningStore? learningStore = null) =>
         new(
             Product,
@@ -25,7 +27,21 @@ internal static class ConveyorDoubles
             runStore ?? new RecordingRunStore(),
             modelClient ?? new RecordingModelClient(),
             tracer ?? new RecordingTracer(),
+            confidenceThresholdReader ?? new FixedConfidenceThresholdReader(S5Council.DefaultThreshold),
             learningStore);
+}
+
+/// <summary>A confidence threshold reader that always answers a fixed value.</summary>
+internal sealed class FixedConfidenceThresholdReader(double threshold) : IConfidenceThresholdReader
+{
+    public Task<double> ReadThresholdAsync(CancellationToken cancellationToken) => Task.FromResult(threshold);
+}
+
+/// <summary>A confidence threshold reader whose backing store cannot be reached.</summary>
+internal sealed class UnreachableConfidenceThresholdReader(string reason) : IConfidenceThresholdReader
+{
+    public Task<double> ReadThresholdAsync(CancellationToken cancellationToken) =>
+        throw new InvalidOperationException(reason);
 }
 
 /// <summary>

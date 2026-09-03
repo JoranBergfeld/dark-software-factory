@@ -34,13 +34,16 @@ internal sealed class EnvironmentConveyorComposer(
     IPrivateKeySecretReader? privateKeySecretReader = null,
     IModelCompletionGateway? modelGateway = null,
     ITelemetryGateway? telemetryGateway = null,
-    ISourceIntegration? sourceIntegration = null) : IConveyorComposer
+    ISourceIntegration? sourceIntegration = null,
+    IConfigurationSettingsGateway? configurationSettingsGateway = null) : IConveyorComposer
 {
     private const string KindPlaceholder = "{kind}";
     private const string DefaultGitHubApiUrl = "https://api.github.com/";
 
     private readonly HttpClient httpClient = httpClient ?? new HttpClient();
     private readonly ISourceIntegration sourceIntegration = sourceIntegration ?? new HttpSourceIntegration(env);
+    private readonly IConfigurationSettingsGateway configurationSettingsGateway =
+        configurationSettingsGateway ?? new AzureConfigurationSettingsGateway();
 
     public ConveyorServices ComposeFor(RuntimeSettings settings)
     {
@@ -65,8 +68,12 @@ internal sealed class EnvironmentConveyorComposer(
         // Cosmos endpoint is unset still composes and runs the line exactly as
         // before, just without any prior verdict for synthesis to consult.
         var learningStore = ComposeLearningStore(settings);
+        var confidenceThresholdReader = new AzureAppConfigurationConfidenceThresholdReader(
+            configurationSettingsGateway, settings);
 
-        return new ConveyorServices(settings.Product, gatherers, filer, runStore!, modelClient!, tracer!, learningStore);
+        return new ConveyorServices(
+            settings.Product, gatherers, filer, runStore!, modelClient!, tracer!, confidenceThresholdReader,
+            learningStore);
     }
 
     /// <summary>

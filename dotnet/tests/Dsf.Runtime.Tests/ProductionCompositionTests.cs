@@ -255,6 +255,14 @@ public sealed class ProductionCompositionTests
     }
 
     [Fact]
+    public void Fully_configured_production_composition_wires_a_confidence_threshold_reader_the_council_can_consult()
+    {
+        var services = ProductionDependencies().ConveyorServicesFor(SettingsWithGitHubApp());
+
+        Assert.IsType<AzureAppConfigurationConfidenceThresholdReader>(services.ConfidenceThresholdReader);
+    }
+
+    [Fact]
     public void Fully_configured_production_composition_also_wires_a_learning_store_for_synthesis_to_consult()
     {
         var services = ProductionDependencies().ConveyorServicesFor(SettingsWithGitHubApp());

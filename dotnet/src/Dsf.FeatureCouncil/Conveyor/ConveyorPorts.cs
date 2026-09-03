@@ -68,18 +68,34 @@ public interface ITracer
 }
 
 /// <summary>
+/// The confidence bar seam the council reads its acceptance threshold through:
+/// a governable, per-product value (Control Center's <c>threshold.&lt;product&gt;</c>
+/// write) rather than a value baked into the station. Production wires a reader
+/// over the product's own App Configuration store; tests substitute a fixed
+/// double so a station test can assert exactly how a given threshold changes the
+/// council's verdict.
+/// </summary>
+public interface IConfidenceThresholdReader
+{
+    Task<double> ReadThresholdAsync(CancellationToken cancellationToken);
+}
+
+/// <summary>
 /// The collaborators a conveyor line needs: the product it is scoped to, the
 /// source agents it can gather evidence from, the filer it hands accepted
 /// proposals to, the store its state is persisted through, the model it reasons
-/// with, and the tracer it reports its progress through.
+/// with, the tracer it reports its progress through, and the confidence
+/// threshold reader the council reads its acceptance bar from.
 /// <paramref name="IssueFiler"/> is nullable so the filing station can report an
 /// unwired filer at the real boundary; <paramref name="RunStore"/>,
-/// <paramref name="ModelClient"/> and <paramref name="Tracer"/> are required --
-/// a run the factory cannot persist, cannot reason over, or cannot trace is not
-/// one composition should ever hand to the line. <paramref name="LearningStore"/>
-/// is nullable and defaults to unwired: a factory without a configured learning
-/// store still synthesizes proposals exactly as before, just blind to any prior
-/// verdict its own recurring intents have already received.
+/// <paramref name="ModelClient"/>, <paramref name="Tracer"/> and
+/// <paramref name="ConfidenceThresholdReader"/> are required -- a run the
+/// factory cannot persist, cannot reason over, cannot trace, or cannot read a
+/// governed acceptance bar for is not one composition should ever hand to the
+/// line. <paramref name="LearningStore"/> is nullable and defaults to unwired: a
+/// factory without a configured learning store still synthesizes proposals
+/// exactly as before, just blind to any prior verdict its own recurring intents
+/// have already received.
 /// </summary>
 public sealed record ConveyorServices(
     string Product,
@@ -88,6 +104,7 @@ public sealed record ConveyorServices(
     IRunStore RunStore,
     IModelClient ModelClient,
     ITracer Tracer,
+    IConfidenceThresholdReader ConfidenceThresholdReader,
     ILearningStore? LearningStore = null)
 {
     public IRunStore RunStore { get; } = RunStore ?? throw new ArgumentNullException(nameof(RunStore));
@@ -95,6 +112,9 @@ public sealed record ConveyorServices(
     public IModelClient ModelClient { get; } = ModelClient ?? throw new ArgumentNullException(nameof(ModelClient));
 
     public ITracer Tracer { get; } = Tracer ?? throw new ArgumentNullException(nameof(Tracer));
+
+    public IConfidenceThresholdReader ConfidenceThresholdReader { get; } =
+        ConfidenceThresholdReader ?? throw new ArgumentNullException(nameof(ConfidenceThresholdReader));
 
     public IEvidenceGatherer? GathererFor(string sourceKind) =>
         EvidenceGatherers.FirstOrDefault(

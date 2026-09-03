@@ -142,7 +142,9 @@ public sealed class GitHubIssueFilerTests
         await new Dsf.FeatureCouncil.Conveyor.Stations.S3Synthesis()
             .RunAsync(
             run,
-            new ConveyorServices("acme", [], null, new RecordingRunStore(), new RecordingModelClient(), new RecordingTracer()),
+            new ConveyorServices(
+                "acme", [], null, new RecordingRunStore(), new RecordingModelClient(), new RecordingTracer(),
+                new FixedConfidenceThresholdReader(0.6)),
             CancellationToken.None);
 
         var proposal = Assert.Single(run.Proposals);

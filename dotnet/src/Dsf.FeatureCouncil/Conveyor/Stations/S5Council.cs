@@ -14,8 +14,13 @@ public sealed class S5Council : IStation
     public const string StationName = "s5_council";
 
     /// <summary>
-    /// Confidence a proposal must reach to be accepted, matching the Python
-    /// <c>DEFAULT_THRESHOLD</c> fallback in <c>dsf.config.flags</c>.
+    /// Confidence a proposal must reach to be accepted when the product's own
+    /// App Configuration store carries no <c>threshold.&lt;product&gt;</c> entry,
+    /// matching the Python <c>DEFAULT_THRESHOLD</c> fallback in
+    /// <c>dsf.config.flags</c> and Control Center's own documented default. The
+    /// governed value -- read per run via <see cref="ConveyorServices.ConfidenceThresholdReader"/>
+    /// -- is what the council actually compares against; this constant is only
+    /// the fallback a reader falls back to when nothing is configured.
     /// </summary>
     public const double DefaultThreshold = 0.6;
 
@@ -23,11 +28,12 @@ public sealed class S5Council : IStation
 
     public async Task RunAsync(ConveyorRun run, ConveyorServices services, CancellationToken cancellationToken)
     {
+        var threshold = await services.ConfidenceThresholdReader.ReadThresholdAsync(cancellationToken);
         var total = run.Evidence.Count;
         foreach (var proposal in run.Proposals)
         {
             proposal.Confidence = total == 0 ? 0d : (double)proposal.EvidenceReferences.Count / total;
-            proposal.Accepted = proposal.Confidence >= DefaultThreshold;
+            proposal.Accepted = proposal.Confidence >= threshold;
             run.Record(
                 StationName,
                 $"proposal '{proposal.Id}' confidence={proposal.Confidence:F2} "
