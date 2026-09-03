@@ -79,6 +79,22 @@ def test_parity_matrix_covers_every_in_scope_surface_and_evidence_kind() -> None
             assert (BASELINE / evidence_path).is_file(), (entry["surface"], evidence_path)
 
 
+def test_parity_matrix_references_every_frozen_evidence_file() -> None:
+    matrix = _load_json("matrix.json")
+    referenced = {
+        evidence_path
+        for entry in matrix["surfaces"]
+        for evidence_path in entry["evidence"]
+    }
+    frozen_evidence = {
+        path.relative_to(BASELINE).as_posix()
+        for path in EVIDENCE.rglob("*")
+        if path.is_file()
+    }
+
+    assert frozen_evidence <= referenced
+
+
 def test_command_evidence_is_self_contained_without_python_runtime() -> None:
     for path in sorted((EVIDENCE / "commands").glob("*.json")):
         evidence = json.loads(path.read_text(encoding="utf-8"))

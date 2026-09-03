@@ -226,6 +226,9 @@
         "evidence/schemas/EvidenceItem.json",
         "evidence/schemas/CouncilVerdict.json",
         "evidence/schemas/RoutedIssue.json",
+        "evidence/schemas/AuditRecord.json",
+        "evidence/schemas/CriticScore.json",
+        "evidence/schemas/Provenance.json",
         "evidence/persisted-records/blackboard-run-record.json",
         "evidence/persisted-records/blackboard-checkpoint-record.json"
       ],
