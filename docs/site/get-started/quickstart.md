@@ -20,6 +20,9 @@ For the big picture, read [The loop](../concept/the-loop.md) and
 - The [Azure CLI](https://learn.microsoft.com/cli/azure/) (`az`) logged in to the target
   subscription for real provisioning.
 - The packaged DSF CLI, installed as a global tool or from a self-contained release archive.
+- The [.NET SDK](https://dotnet.microsoft.com/download) (10.0 or later) **only** if you install
+  the global tool with `dotnet tool install`. The self-contained release archives bundle their
+  own runtime and need no .NET SDK.
 
 ## Install DSF
 

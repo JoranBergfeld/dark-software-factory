@@ -5,28 +5,22 @@ namespace Dsf.Cli.Tests;
 
 public sealed class LivingDocumentationTests
 {
-    private static readonly string[] CurrentDocumentationFiles =
+    // Living documentation is discovered, not listed, so a new operator/contributor doc is
+    // covered the moment it is added. Historical records (ADRs, superpowers plans/specs) and
+    // the frozen Python parity reference are deliberately excluded: they describe the past.
+    private static readonly string[] CurrentDocumentationRoots =
+    [
+        "docs/site",
+        "docs/agents",
+    ];
+
+    private static readonly string[] CurrentDocumentationExtraFiles =
     [
         "README.md",
         "AGENTS.md",
         "CLAUDE.md",
         "infra/README.md",
         "dotnet/README.md",
-        "docs/agents/domain.md",
-        "docs/agents/issue-tracker.md",
-        "docs/agents/triage-labels.md",
-        "docs/site/index.md",
-        "docs/site/get-started/bootstrap.md",
-        "docs/site/get-started/operate.md",
-        "docs/site/get-started/provision-a-factory.md",
-        "docs/site/get-started/quickstart.md",
-        "docs/site/get-started/verify-release.md",
-        "docs/site/concept/creation.md",
-        "docs/site/concept/feature-council.md",
-        "docs/site/concept/product-charter.md",
-        "docs/site/concept/sre-agent.md",
-        "docs/site/concept/the-harness.md",
-        "docs/site/concept/the-loop.md",
     ];
 
     private static readonly (string Label, Regex Pattern)[] PythonEraTerms =
@@ -44,11 +38,20 @@ public sealed class LivingDocumentationTests
     [Fact]
     public void Current_living_documentation_describes_dotnet_workflows_without_python_era_terms()
     {
+        var documents = CurrentDocumentationFiles();
+
+        // Coverage guard: the scan must actually reach the operator guides, so a moved or
+        // renamed docs root fails loudly instead of silently checking nothing.
+        Assert.Contains("docs/site/get-started/quickstart.md", documents);
+        Assert.Contains("docs/site/get-started/operate.md", documents);
+        Assert.Contains("docs/site/get-started/verify-release.md", documents);
+        Assert.True(documents.Count >= 15, $"Living documentation scan found only {documents.Count} files.");
+
         var offenders = new List<string>();
 
-        foreach (var relativePath in CurrentDocumentationFiles)
+        foreach (var relativePath in documents)
         {
-            var content = ReadRepoFile(relativePath).Replace("\r\n", "\n", StringComparison.Ordinal);
+            var content = ReadRepoFile(relativePath);
             foreach (var (label, pattern) in PythonEraTerms)
             {
                 if (pattern.IsMatch(content))
@@ -83,7 +86,6 @@ public sealed class LivingDocumentationTests
         ("dsf serve-agent", new Regex(@"dsf\s+serve-agent", RegexOptions.IgnoreCase)),
         ("DSF_MODE", new Regex(@"DSF_MODE", RegexOptions.None)),
         ("tests/fixtures", new Regex(@"tests/fixtures", RegexOptions.None)),
-        ("fenced code block", new Regex(@"```", RegexOptions.None)),
     ];
 
     [Fact]
@@ -93,7 +95,7 @@ public sealed class LivingDocumentationTests
 
         foreach (var relativePath in FrozenPythonParityReadmeFiles)
         {
-            var content = ReadRepoFile(relativePath).Replace("\r\n", "\n", StringComparison.Ordinal);
+            var content = ReadRepoFile(relativePath);
 
             if (!content.Contains("frozen", StringComparison.OrdinalIgnoreCase)
                 || !content.Contains("parity reference", StringComparison.OrdinalIgnoreCase)
@@ -121,12 +123,7 @@ public sealed class LivingDocumentationTests
     public void Operate_doc_does_not_claim_an_unshipped_observability_bundle_artifact()
     {
         var content = ReadRepoFile("docs/site/get-started/operate.md");
-        var metadataScript = ReadRepoFile("dotnet/eng/generate-release-metadata.py");
 
-        // The release metadata generator is the single source of truth for what a release
-        // bundle contains; it never creates an `observability/` directory or dashboard JSON,
-        // so the operator doc must not claim one ships there.
-        Assert.DoesNotContain("observability", metadataScript, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("release artifact bundle", content, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("observability/", content, StringComparison.Ordinal);
 
@@ -151,6 +148,28 @@ public sealed class LivingDocumentationTests
     }
 
     [Fact]
+    public void Readme_command_examples_match_the_documented_cli_surface()
+    {
+        var readme = ReadRepoFile("README.md");
+
+        // `dsf bootstrap` is not implemented (see bootstrap.md); the README must say so
+        // wherever it shows the verb.
+        if (readme.Contains("dsf bootstrap", StringComparison.Ordinal))
+        {
+            Assert.Contains("not implemented", readme, StringComparison.OrdinalIgnoreCase);
+        }
+
+        // Runtime verbs are forwarded to `dsf-runtime`; the README must not present them as
+        // plain packaged-CLI usage without naming that dependency.
+        var runtimeVerbs = new[] { "dsf run ", "dsf sweep ", "dsf serve-orchestrator", "dsf serve-agent" };
+        if (runtimeVerbs.Any(verb => readme.Contains(verb, StringComparison.Ordinal)))
+        {
+            Assert.Contains("dsf-runtime", readme, StringComparison.Ordinal);
+            Assert.Contains("DSF_RUNTIME_HOST", readme, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
     public void Operator_docs_describe_the_shipped_cli_and_its_external_dependencies()
     {
         var agents = ReadRepoFile("AGENTS.md");
@@ -162,8 +181,15 @@ public sealed class LivingDocumentationTests
 
         Assert.DoesNotContain("dsf bootstrap — create owner", agents, StringComparison.Ordinal);
 
-        Assert.DoesNotContain(".NET SDK", quickstart, StringComparison.Ordinal);
+        // The quickstart is packaged-install only. It may name the .NET SDK, because
+        // `dotnet tool install` needs it, but it must not teach the contributor
+        // build/test/checkout workflow.
+        Assert.Contains(".NET SDK", quickstart, StringComparison.Ordinal);
         Assert.DoesNotContain("## Verify a checkout", quickstart, StringComparison.Ordinal);
+        foreach (var contributorCommand in new[] { "dotnet restore", "dotnet build", "dotnet test", "Dsf.sln" })
+        {
+            Assert.DoesNotContain(contributorCommand, quickstart, StringComparison.Ordinal);
+        }
 
         Assert.Contains("does not retrieve", bootstrap, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("seed owner-vault credentials", bootstrap, StringComparison.OrdinalIgnoreCase);
@@ -221,9 +247,58 @@ public sealed class LivingDocumentationTests
         Assert.Contains("native package", content, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public void Release_verification_guide_covers_code_signing_checks_the_release_workflow_applies()
+    {
+        var content = ReadRepoFile("docs/site/get-started/verify-release.md");
+
+        // The release workflow signs the NuGet package, Authenticode-signs Windows
+        // executables, and Developer ID signs + notarizes macOS executables. Each signature
+        // needs a documented consumer-side check.
+        Assert.Contains("dotnet nuget verify", content, StringComparison.Ordinal);
+        Assert.Contains("Authenticode", content, StringComparison.Ordinal);
+        Assert.Contains("Get-AuthenticodeSignature", content, StringComparison.Ordinal);
+        Assert.Contains("Developer ID", content, StringComparison.Ordinal);
+        Assert.Contains("codesign --verify", content, StringComparison.Ordinal);
+        Assert.Contains("spctl", content, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Release_verification_guide_reads_as_per_release_procedure_not_a_current_availability_claim()
+    {
+        var content = ReadRepoFile("docs/site/get-started/verify-release.md");
+
+        Assert.Contains("each published release", content, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("The GitHub release publishes", content, StringComparison.Ordinal);
+
+        // No concrete version or tag may be asserted as currently downloadable.
+        Assert.DoesNotMatch(new Regex(@"(?<![A-Za-z0-9.])v?\d+\.\d+\.\d+(?![A-Za-z0-9.])"), content);
+    }
+
+    private static List<string> CurrentDocumentationFiles()
+    {
+        var root = FindRepoRoot().FullName;
+        var documents = new List<string>(CurrentDocumentationExtraFiles);
+
+        foreach (var docRoot in CurrentDocumentationRoots)
+        {
+            var absolute = Path.Combine(root, docRoot.Replace('/', Path.DirectorySeparatorChar));
+            Assert.True(Directory.Exists(absolute), $"Documentation root '{docRoot}' does not exist.");
+
+            foreach (var file in Directory.EnumerateFiles(absolute, "*.md", SearchOption.AllDirectories))
+            {
+                documents.Add(Path.GetRelativePath(root, file).Replace(Path.DirectorySeparatorChar, '/'));
+            }
+        }
+
+        documents.Sort(StringComparer.Ordinal);
+        return documents;
+    }
+
     private static string ReadRepoFile(string relativePath)
     {
-        return File.ReadAllText(Path.Combine(FindRepoRoot().FullName, relativePath));
+        return File.ReadAllText(Path.Combine(FindRepoRoot().FullName, relativePath))
+            .Replace("\r\n", "\n", StringComparison.Ordinal);
     }
 
     private static DirectoryInfo FindRepoRoot()

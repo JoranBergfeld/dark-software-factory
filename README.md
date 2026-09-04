@@ -53,14 +53,32 @@ directory on `PATH`, and run `dsf`.
 
 ## Use DSF
 
+The packaged `dsf` tool runs these verbs on its own:
+
 ```bash
 dsf --help
-dsf bootstrap --help
 dsf new --product <product> --dry-run
+dsf charter status --product <product>
+```
+
+`dsf bootstrap` is **not implemented** in the current .NET CLI: it exits successfully without
+provisioning anything. See [Bootstrap](docs/site/get-started/bootstrap.md).
+
+### Runtime verbs need a runtime host
+
+`dsf run`, `dsf sweep`, `dsf serve-orchestrator`, and `dsf serve-agent` are forwarded to a
+separate `dsf-runtime` executable, which the global tool and release archives do not ship.
+Deploy or build the runtime host separately, point `DSF_RUNTIME_HOST` at it, and only then use
+these verbs through the `dsf` front door:
+
+```bash
+export DSF_RUNTIME_HOST=/absolute/path/to/dsf-runtime
 dsf run --product <product> --signal /absolute/path/to/operator-signal.json --dry-run
 dsf sweep --product <product> --dry-run
 dsf serve-orchestrator --product <product> --loop --interval 300
 ```
+
+See [Operate the factory](docs/site/get-started/operate.md) for runtime-host deployment.
 
 ## Contribute
 
