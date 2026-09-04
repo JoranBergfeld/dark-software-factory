@@ -81,6 +81,32 @@ public sealed class LivingDocumentationTests
     }
 
     [Fact]
+    public void Bootstrap_docs_do_not_claim_unimplemented_owner_provisioning()
+    {
+        var bootstrap = ReadRepoFile("docs/site/get-started/bootstrap.md");
+        var quickstart = ReadRepoFile("docs/site/get-started/quickstart.md");
+        var provisioning = ReadRepoFile("docs/site/get-started/provision-a-factory.md");
+
+        Assert.Contains("not implemented", bootstrap, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("not implemented", quickstart, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("creates the DSF GitHub App", bootstrap, StringComparison.Ordinal);
+        Assert.DoesNotContain("dsf bootstrap creates that once", quickstart, StringComparison.Ordinal);
+        Assert.DoesNotContain("created by [`dsf bootstrap`", provisioning, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Operate_doc_describes_runtime_host_distribution_and_manual_charter_control()
+    {
+        var content = ReadRepoFile("docs/site/get-started/operate.md");
+
+        Assert.Contains("dsf-runtime", content, StringComparison.Ordinal);
+        Assert.Contains("DSF_RUNTIME_HOST", content, StringComparison.Ordinal);
+        Assert.Contains("not synchronized by runtime sweeps", content, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("runtime syncs it on every sweep", content, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("sweeps may propose charter amendments", content, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void Release_verification_guide_covers_public_artifact_verification()
     {
         var content = ReadRepoFile("docs/site/get-started/verify-release.md");

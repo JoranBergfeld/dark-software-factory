@@ -51,40 +51,18 @@ dotnet build Dsf.sln --no-restore
 dotnet test Dsf.sln --no-build
 ```
 
-## Bootstrap the owner once
+## Owner bootstrap unavailable
 
-Before provisioning any product, the **owner** account needs one shared GitHub App and a home
-for its secrets. `dsf bootstrap` creates that once; later `dsf new`, `dsf charter`, and
-`dsf sweep` reuse it.
+`dsf bootstrap` is **not implemented** in the current .NET CLI. It exits successfully without
+provisioning a GitHub App, owner Key Vault, App Configuration, or credentials. Configure that
+owner infrastructure outside DSF before using product provisioning.
 
-```bash
-dsf bootstrap \
-  --app-name "DSF <your-org>" \
-  --keyvault-name dsf-owner-kv \
-  --appconfig-name dsf-owner-cfg
-```
-
-It opens GitHub in your browser to create the master DSF GitHub App, then provisions the
-owner-level Azure resources and stores the App credentials.
-
-```mermaid
-flowchart TD
-    op["dsf bootstrap"] --> app["master DSF GitHub App<br/>issues, PRs, contents, admin: write"]
-    op --> rg["owner resource group<br/>rg-dsf-app"]
-    rg --> kv["owner Key Vault<br/>app id, installation id, private key"]
-    rg --> cfg["owner App Configuration<br/>runtime config + product index"]
-    app -->|credentials stored in| kv
-    kv --> e1["export DSF_OWNER_KEYVAULT_URI"]
-    cfg --> e2["export DSF_OWNER_APPCONFIG_ENDPOINT"]
-    e1 --> reuse["reused by every dsf command"]
-    e2 --> reuse
-```
-
-Export the values printed at the end:
+For an already configured owner, export the owner endpoints:
 
 ```bash
-export DSF_OWNER_KEYVAULT_URI=https://dsf-owner-kv.vault.azure.net/
-export DSF_OWNER_APPCONFIG_ENDPOINT=https://dsf-owner-cfg.azconfig.io
+export DSF_OWNER_KEYVAULT_URI=https://<owner-keyvault>.vault.azure.net/
+export DSF_OWNER_APPCONFIG_ENDPOINT=https://<owner-appconfig>.azconfig.io
 ```
 
+The stores must also contain the GitHub App and source-agent credentials required by `dsf new`.
 Next: [provision a factory](provision-a-factory.md).

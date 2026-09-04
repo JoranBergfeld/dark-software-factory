@@ -1,9 +1,9 @@
 # Provision a factory
 
-!!! warning "Bootstrap the owner first"
-    `dsf new` reuses the master DSF GitHub App, owner Key Vault, and owner App Configuration
-    created by [`dsf bootstrap`](quickstart.md#bootstrap-the-owner-once). Export
-    `DSF_OWNER_KEYVAULT_URI` and `DSF_OWNER_APPCONFIG_ENDPOINT` before provisioning.
+!!! warning "Configure the owner outside DSF"
+    `dsf bootstrap` is not implemented in the .NET CLI. Before running `dsf new`, configure
+    the master DSF GitHub App, owner Key Vault, owner App Configuration, and their credentials
+    outside DSF. Export `DSF_OWNER_KEYVAULT_URI` and `DSF_OWNER_APPCONFIG_ENDPOINT`.
 
 The factory CLI is `dsf`. Provisioning a product needs only `--product`:
 
@@ -47,7 +47,8 @@ Run `dsf new --help` for the full flag list.
 Provisioning spans GitHub, Azure resources, and Azure RBAC. The principal running `dsf new`
 needs:
 
-- **Owner bootstrap:** `DSF_OWNER_KEYVAULT_URI` and `DSF_OWNER_APPCONFIG_ENDPOINT` exported.
+- **Owner configuration:** `DSF_OWNER_KEYVAULT_URI` and `DSF_OWNER_APPCONFIG_ENDPOINT`
+  exported, with required GitHub App and source-agent credentials already in the owner stores.
 - **GitHub:** a `gh auth login` session that can create repositories under `--owner` and seed
   baseline CI.
 - **Spec Kit CLI:** `specify` on `PATH`, pinned by your operator image or workstation setup.
@@ -60,8 +61,8 @@ needs:
 
 !!! warning "Configure the owner App before `dsf new`"
     If the owner endpoints are missing, GitHub App install, secret seed, source-key seed, and
-    product-index publication cannot complete. Bootstrap first, export both values, then rerun
-    `dsf new`.
+    product-index publication cannot complete. Configure the owner services outside DSF, export
+    both values, then rerun `dsf new`.
 
 ## What gets provisioned
 
@@ -76,7 +77,7 @@ A complete, isolated factory for the product:
 
 ```mermaid
 flowchart TD
-    boot["owner bootstrap<br/>App + owner stores"] -.->|reused| new
+    boot["externally configured owner<br/>App + owner stores"] -.->|reused| new
     new["dsf new --product PRODUCT"]
     new --> ghp["GitHub plane"]
     new --> azp["Azure plane"]

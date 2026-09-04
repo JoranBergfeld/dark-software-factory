@@ -18,7 +18,21 @@ inbound work queue. The deployed app runs a continuous sweep loop:
 dsf serve-orchestrator --product <product> --loop --interval 300
 ```
 
-Manual operator checks use the same packaged CLI:
+### Packaged CLI and runtime host
+
+The packaged global tool and release archive publish `dsf` (`Dsf.Cli`) only. Runtime verbs
+(`run`, `sweep`, `serve-orchestrator`, and `serve-agent`) are forwarded to a separate
+`dsf-runtime` executable; they do not run from a standalone packaged `dsf`.
+
+Install `dsf-runtime` beside `dsf`, or point the front door to its executable before using a
+runtime verb:
+
+```bash
+export DSF_RUNTIME_HOST=/absolute/path/to/dsf-runtime
+```
+
+With a sibling runtime host or `DSF_RUNTIME_HOST` configured, manual operator checks use the
+`dsf` front door:
 
 ```bash
 dsf run --product <product> --signal tests/fixtures/sample_signal.json --dry-run
@@ -29,8 +43,8 @@ dsf serve-agent --kind sentry --host 127.0.0.1 --port 8082
 ## Product charter
 
 The charter (`.dsf/charter.md` in the product repository) states what the product is for. The
-runtime syncs it on every sweep. If the file is missing or invalid, the council keeps the last
-good charter and reports status instead of silently dropping intent.
+charter is not synchronized by runtime sweeps. The current .NET runtime does not read or amend
+it during sweeps; manage charter state through the operator commands below.
 
 Operator commands:
 
@@ -44,17 +58,6 @@ Operator commands:
 `dsf charter` reaches the product repository through the master DSF GitHub App. Keep
 `DSF_OWNER_KEYVAULT_URI` and `DSF_OWNER_APPCONFIG_ENDPOINT` exported so the CLI can resolve
 App credentials and product records.
-
-## Living charter amendments
-
-When `charter.amendment.enabled` is set for a product, sweeps may propose charter amendments
-from accumulated lessons. Amendments are human-gated PRs against `.dsf/charter.md`; the
-factory never edits the stored charter directly.
-
-- Off by default; opt in per product.
-- Tunables: `charter.amendment.min_lessons` and `charter.amendment.cooldown_hours`.
-- Guardrails: one open amendment PR per product, cooldown, evidence bundle, governance labels,
-  and non-proposer review.
 
 ## Control Center
 
