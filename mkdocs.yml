@@ -60,5 +60,7 @@ nav:
       - The harness: concept/the-harness.md
   - Get started:
       - Quickstart: get-started/quickstart.md
+      - Bootstrap the owner: get-started/bootstrap.md
       - Provision a factory: get-started/provision-a-factory.md
       - Operate it: get-started/operate.md
+      - Verify a release: get-started/verify-release.md

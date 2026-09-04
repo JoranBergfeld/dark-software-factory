@@ -1,157 +1,91 @@
-# .NET solution skeleton
+# .NET workspace
 
-Migration-branch spine for the Dark Software Factory rewrite. See
-`docs/adr/` and `docs/site/concept/` for the target architecture; this
-directory holds the buildable seams only (no behavior migrated yet).
+This directory is the active Dark Software Factory implementation.
 
 ## Layout
 
-- `src/Dsf.Core` — shared core library. References no application module.
-- `src/Dsf.FeatureCouncil` — Feature Council library. References `Dsf.Core` only.
-- `src/Dsf.Cli` — CLI executable (factory/provisioning + runtime-verb forwarding).
-  References `Dsf.Core` only — no direct dependency on Feature Council internals.
-- `src/Dsf.Runtime` — runtime executable (run/sweep/serve-orchestrator/serve-agent).
-  References `Dsf.Core` + `Dsf.FeatureCouncil`.
-- `src/Dsf.ControlCenter` — governance web executable (`dsf-control-center`,
-  ASP.NET Core). References `Dsf.Core` only.
-- `src/Dsf.AgentHost` — optional reusable agent host executable. References
-  `Dsf.Core` + `Dsf.FeatureCouncil`.
-- `src/Dsf.Testing` — deterministic doubles/test builders. References `Dsf.Core`
-  only; **no production project may reference this module**.
-- `tests/Dsf.ModuleBoundaries.Tests` — parses every `src/*.csproj` and asserts the
-  allowed `ProjectReference` set per module, and that no production project
-  references `Dsf.Testing`.
-- `tests/Dsf.Core.Tests` — example test project demonstrating a test using both
-  `Dsf.Core` and `Dsf.Testing`.
-- `tests/Dsf.ControlCenter.Tests` — Control Center governance surface: product
-  listing through the configuration authority, cookie + CSRF protected writes,
-  numeric policy validation, disabled unsupported controls, and startup
-  configuration failures.
-- `tests/Dsf.FeatureCouncil.Tests` — conveyor semantics: station order and
-  checkpointing, resume past completed stations, terminal runs never re-driven,
-  per-station failures as audited error states, and the dry-run filing preview.
-
-## Runtime host
-
-`src/Dsf.Runtime` (`dsf-runtime`) is the deployed runtime entrypoint. Each verb
-composes `RuntimeSettings` from the existing env var names first (naming every
-unset requirement and exiting non-zero), then does its real work:
-
-- `run --signal <path> [--dry-run]` — parses the signal and drives the Feature
-  Council conveyor (`Dsf.FeatureCouncil.Conveyor`, stations `s1_triage` ..
-  `s7_filing`), printing the finished run: status, evidence/proposal counts,
-  station checkpoints and the audit trail. `--dry-run` stops deliberately at the
-  filing station (`previewed`), reporting every issue it would have filed (title,
-  labels, intent key) without creating any of them and without touching the
-  filer. A run that fails a station is reported with the failing station as the
-  cause and exits non-zero; a telemetry or persistence failure on the way out
-  never displaces that cause. Without `--dry-run`, accepted proposals are filed
-  as GitHub issues, idempotently: each proposal carries a durable intent key
-  (scope fingerprint + source kind) that is stamped into the issue body and
-  searched for before filing. Reaching the filing boundary with no filer wired
-  fails the run — after stations S1..S6 have run and checkpointed.
-- `sweep [--dry-run]` — reads the enabled source agent roster from the product's
-  App Configuration store (`agents.<KIND>.enabled`, product label overriding the
-  unlabelled default) and drives that scheduled run through the conveyor. An empty
-  roster is a real, audited empty sweep, never an assumed one.
-- `serve-orchestrator [--host --port --loop --interval]` — serves `GET /healthz`
-  and `POST /run` (a conveyor dry-run over the posted signal payload). `--loop`
-  additionally sweeps every `--interval` seconds (or `DSF_SWEEP_INTERVAL`, default
-  300) for as long as the host serves.
-- `serve-agent --kind <kind> [--host --port]` — serves one source agent's A2A card
-  at `/.well-known/agent-card.json`. `POST /gather` reads the kind's configured
-  upstream integration (`DSF_SOURCE_<KIND>_ENDPOINT`, optionally
-  `DSF_SOURCE_<KIND>_TOKEN`) and answers with the evidence it found; an
-  unconfigured kind answers `503` naming that setting and a failing upstream
-  answers `502` with the reason. An unknown `--kind` is rejected by name.
-
-### Runtime dependency composition
-
-Every conveyor-driving verb composes its collaborators before running a line, and
-fails naming each unset setting rather than running a line that can neither
-gather, file, nor persist:
-
-- **Source agents** — in-process by default: each known kind gathers directly
-  from its configured upstream integration (`DSF_SOURCE_<KIND>_ENDPOINT`,
-  optionally `DSF_SOURCE_<KIND>_TOKEN`) in the orchestrator's own process, no
-  separately served agent required. A remote, served source agent is used
-  instead only for a kind whose agent endpoint is explicitly configured
-  (`DSF_SOURCE_AGENT_ENDPOINT_<KIND>` or `DSF_SOURCE_AGENT_ENDPOINT_TEMPLATE`, a
-  base URL containing `{kind}`), gathered from over the same `/gather` protocol
-  `serve-agent` serves. Either way, a kind whose upstream integration is
-  unconfigured fails at `s2_investigation`, naming the kind and the setting.
-- **Filing** — the GitHub REST filer, authenticated as the DSF GitHub App
-  (`GITHUB_APP_ID`, `GITHUB_INSTALLATION_ID`, `GITHUB_APP_PRIVATE_KEY_SECRET`,
-  `AZURE_KEYVAULT_URI`) and `GITHUB_REPOSITORY`; `DSF_GITHUB_API_URL` overrides
-  the API base URL. There is no `GITHUB_TOKEN`/`GH_TOKEN` fallback in any
-  environment — incomplete App settings fail the composition by name.
-- **Persistence** — the run blackboard is upserted into Cosmos
-  (`AZURE_COSMOS_ENDPOINT`, `DSF_COSMOS_DATABASE`/`DSF_COSMOS_CONTAINER`,
-  defaulting to `dsf`/`runs`) after every station checkpoint, using the runtime's
-  managed identity. A store that cannot be written to fails the run.
-- **Model** — synthesis and council reason over evidence through a real Azure
-  OpenAI chat completions deployment (`AZURE_OPENAI_ENDPOINT`,
-  `AZURE_OPENAI_DEPLOYMENT`), authenticated with the runtime's managed identity.
-  A failed completion fails the station it was called from.
-- **Tracing** — every run and station boundary is reported to Application
-  Insights (`APPLICATIONINSIGHTS_CONNECTION_STRING`). A tracing failure is
-  audited on the run but never fails it — telemetry reachability must never
-  decide whether a line that did its work is reported as having failed.
-
-The `dsf` front door (`src/Dsf.Cli`) forwards these verbs to the `dsf-runtime`
-executable as a child process — the same way the Python front door shells out to
-`python -m dsf.runtime.control` — so it never needs to reference the runtime
-module. It resolves the executable next to itself, or from `DSF_RUNTIME_HOST`.
-
-## Control Center
-
-`src/Dsf.ControlCenter` (`dsf-control-center`) is a separate governance web
-process. It refuses to start without `DSF_OWNER_APPCONFIG_ENDPOINT` (the owner
-App Configuration authority `dsf new` publishes products into) and
-`DSF_CONTROL_CENTER_TOKEN` (the operator credential), exiting non-zero and naming
-every unset setting. `DSF_CONTROL_CENTER_HOST`/`_PORT` (default `127.0.0.1:8081`)
-and `DSF_CONTROL_CENTER_SECURE_COOKIES` (default on) are optional.
-
-- **Product-first.** `/products` lists every product in the owner index;
-  `/products/{product}` shows that product's effective policy read from the
-  product's own App Configuration store — source agent enablement
-  (`agents.<kind>.enabled`, product label over unlabelled default, the same keys
-  `sweep` reads) and the product record's confidence threshold
-  (`threshold.<product>`).
-- **Protected writes.** A browser write needs both a server-issued HttpOnly
-  session cookie (`POST /session` with the operator token) and the CSRF token
-  minted with that session, echoed back by the form. A bearer token is *not*
-  accepted on the browser write routes — there is no bearer-only shortcut.
-  Automated clients use `/api/products*`, which is bearer-authenticated.
-- **Validated policy input.** Numeric policy input is parsed invariant-culture
-  and range-checked (confidence threshold `0`–`1`) before any write reaches the
-  authority; a rejected value is reported on the page and never persisted.
-- **Honest disabled controls.** Controls the current runtime cannot honour
-  (critic enablement, critic weights, trigger pause, a stored global dry-run
-  switch) render disabled with the reason and the supported alternative, and have
-  no write endpoint at all, rather than appearing as buttons that silently do
-  nothing.
-- **Loud failures.** An unreachable configuration authority is reported as such
-  (`502`, naming the store) instead of rendering an empty product list.
-
-## Dependency management
-
-- `global.json` pins the SDK (`10.0.301`, `rollForward: latestPatch`, no
-  prerelease).
-- `Directory.Packages.props` enables Central Package Management with exact,
-  pinned direct dependency versions.
-- Each project restores with a committed `packages.lock.json`
-  (`RestorePackagesWithLockFile`); CI restores with `--locked-mode`.
-- `NuGet.config` maps all packages to `nuget.org` only.
-- `Directory.Build.props` enables `NuGetAudit` (direct dependencies, `low`
-  severity floor).
+- `src/Dsf.Core` — shared domain, contracts, runtime settings, product records, and charters.
+- `src/Dsf.FeatureCouncil` — Feature Council conveyor and stations.
+- `src/Dsf.Cli` — packaged `dsf` global tool; factory provisioning, charter commands, runtime forwarding.
+- `src/Dsf.Runtime` — deployed runtime host for `run`, `sweep`, `serve-orchestrator`, `serve-agent`, and `poll-outcomes`.
+- `src/Dsf.ControlCenter` — governance web process (`dsf-control-center`).
+- `src/Dsf.AgentHost` — reusable source-agent host.
+- `src/Dsf.Testing` — deterministic test helpers; production projects must not reference it.
+- `tests/*` — xUnit suites, including module-boundary tests.
 
 ## Common commands
 
 ```bash
-cd dotnet
 dotnet restore Dsf.sln --locked-mode
 dotnet build Dsf.sln --no-restore
 dotnet test Dsf.sln --no-build
 dotnet list Dsf.sln package --vulnerable --include-transitive
 ```
+
+Target one suite or test:
+
+```bash
+dotnet test tests/Dsf.Runtime.Tests/Dsf.Runtime.Tests.csproj --no-build
+dotnet test tests/Dsf.Cli.Tests/Dsf.Cli.Tests.csproj --filter FullyQualifiedName~CliSurfaceTests --no-build
+```
+
+## Package and publish
+
+Build the NuGet global tool:
+
+```bash
+dotnet pack src/Dsf.Cli/Dsf.Cli.csproj -c Release -o artifacts/release/nuget
+```
+
+Publish a self-contained CLI archive payload:
+
+```bash
+dotnet publish src/Dsf.Cli/Dsf.Cli.csproj -c Release -r linux-x64 --self-contained true \
+  -p:PublishSingleFile=true -p:PublishTrimmed=false -o artifacts/release/linux-x64
+```
+
+Supported release runtime identifiers are `linux-x64`, `linux-arm64`, `osx-x64`,
+`osx-arm64`, `win-x64`, and `win-arm64`.
+
+## Runtime host
+
+`src/Dsf.Runtime` (`dsf-runtime`) is the deployed runtime entrypoint. The `dsf` front door
+resolves it next to itself or from `DSF_RUNTIME_HOST`, then forwards runtime verbs without a
+project reference.
+
+- `run --signal <path> [--dry-run] [--product <product>]` — parse a signal and drive the
+  Feature Council conveyor. Dry-run stops at filing and prints the issues it would file.
+- `sweep [--dry-run] [--product <product>]` — read the enabled source-agent roster and drive
+  a scheduled run.
+- `serve-orchestrator [--host --port --loop --interval --product]` — serve health/run
+  endpoints; with `--loop`, sweep continuously.
+- `serve-agent --kind <kind> [--host --port]` — serve one source agent's A2A card and gather
+  endpoint.
+- `poll-outcomes [--product <product>]` — record audited learning data from downstream human
+  outcome labels.
+
+## Runtime dependency composition
+
+Every conveyor-driving verb composes collaborators before work starts and fails naming each
+unset setting rather than running with missing dependencies:
+
+- **Source agents** — in-process unless a remote source-agent endpoint is configured.
+- **Filing** — GitHub REST filer authenticated as the DSF GitHub App.
+- **Persistence** — Cosmos run blackboard, written after every station checkpoint.
+- **Model** — Azure OpenAI chat completions for synthesis and council reasoning.
+- **Tracing** — Application Insights; trace failures are audited but do not decide run status.
+
+## Control Center
+
+`src/Dsf.ControlCenter` (`dsf-control-center`) is a separate governance web process. It refuses
+to start without `DSF_OWNER_APPCONFIG_ENDPOINT` and `DSF_CONTROL_CENTER_TOKEN`. Optional
+settings are `DSF_CONTROL_CENTER_HOST`, `DSF_CONTROL_CENTER_PORT`, and
+`DSF_CONTROL_CENTER_SECURE_COOKIES`.
+
+## Dependency management
+
+- `global.json` pins the SDK (`10.0.301`, `rollForward: latestPatch`).
+- `Directory.Packages.props` enables Central Package Management with exact direct versions.
+- Each project restores with committed `packages.lock.json`; CI restores in locked mode.
+- `NuGet.config` maps all packages to `nuget.org` only.
+- `Directory.Build.props` enables NuGet audit for direct dependencies.

@@ -4,15 +4,15 @@
 > keeps it running. People stay outside the process and govern it.
 
 Dark Software Factory (DSF) runs the software development loop on agents: a **Feature
-Council** decides what to build, a **Coding Squad** builds it, and an **SRE Agent** operates
-it and feeds production back to the start. People sit outside the loop and govern it through a
-harness of guardrails, policy, and configuration. This repository is the blueprint — one
-command stamps out a complete, isolated factory per product.
+Council** decides what to build, a **Creation phase** builds it, and an **SRE Agent** operates
+it and feeds production back to the start. People govern the loop through guardrails, policy,
+and configuration. This repository is the blueprint — one command stamps out a complete,
+isolated factory per product.
 
 ```mermaid
 flowchart LR
     signals(["market and operational signals"]) --> FC["Feature Council<br/>decide what to build"]
-    FC -->|issues| CS["Coding Squad<br/>build it"]
+    FC -->|issues| CS["Creation phase<br/>build it"]
     CS -->|PRs| SRE["SRE Agent<br/>operate and feed back"]
     SRE --> prod(["production"])
     SRE -->|fix-forward incidents| CS
@@ -25,36 +25,53 @@ The concept and how-to-use guides live on the documentation site:
 
 **<https://joranbergfeld.github.io/dark-software-factory/>**
 
-It covers the loop, each phase, the governance harness, and how to provision and operate a
-factory. The site source lives under `docs/site/`; architecture decisions stay in
-[`docs/adr/`](docs/adr/).
+Start with the [Quickstart](docs/site/get-started/quickstart.md), then
+[provision a factory](docs/site/get-started/provision-a-factory.md),
+[operate it](docs/site/get-started/operate.md), and
+[verify releases](docs/site/get-started/verify-release.md).
 
-## Build
+## Install the CLI
 
-DSF is a `uv` workspace with four members, all sharing the one PEP 420 `dsf` namespace:
-
-| Member | Package | Role |
-|---|---|---|
-| `core/` | `dsf-core` | shared base: contracts, ports, config, memory, model, observability, a2a |
-| `feature-council/` | `dsf-feature-council` | the runtime: agents, council, orchestrator, triggers, evals |
-| `cli/` | `dsf-cli` | factory CLI (`dsf`) + per-product provisioning |
-| `control-center/` | `dsf-control-center` | governance web UI (FastAPI + Jinja) |
-
-Canonical commands:
+Use the packaged .NET tool for normal operator use:
 
 ```bash
-make install       # uv sync --all-packages
-make test          # uv run pytest -q
-make lint          # uv run ruff check .
-make lint-imports  # enforce cross-member import boundaries (gates CI)
+dotnet tool install --global DarkSoftwareFactory.Cli
+# later
+dotnet tool update --global DarkSoftwareFactory.Cli
 ```
 
-Run the docs site locally:
+Pinned install:
 
 ```bash
-uv run --group docs mkdocs serve              # preview at http://127.0.0.1:8000
-uv run --group docs mkdocs build --strict     # what CI builds
+dotnet tool install --global DarkSoftwareFactory.Cli --version <version>
 ```
 
-New here? Start with the
-[Quickstart](https://joranbergfeld.github.io/dark-software-factory/get-started/quickstart/).
+GitHub Releases also publish self-contained archives named
+`dsf-cli-<rid>.tar.gz` or `dsf-cli-<rid>.zip` for `linux-x64`, `linux-arm64`,
+`osx-x64`, `osx-arm64`, `win-x64`, and `win-arm64`. Extract the archive, put that
+directory on `PATH`, and run `dsf`.
+
+## Use DSF
+
+```bash
+dsf --help
+dsf bootstrap --help
+dsf new --product <product> --dry-run
+dsf run --product <product> --signal tests/fixtures/sample_signal.json --dry-run
+dsf sweep --product <product> --dry-run
+dsf serve-orchestrator --product <product> --loop --interval 300
+```
+
+## Contribute
+
+The active implementation lives in `dotnet/`.
+
+```bash
+cd dotnet
+dotnet restore Dsf.sln --locked-mode
+dotnet build Dsf.sln --no-restore
+dotnet test Dsf.sln --no-build
+dotnet pack src/Dsf.Cli/Dsf.Cli.csproj -c Release -o artifacts/release/nuget
+dotnet publish src/Dsf.Cli/Dsf.Cli.csproj -c Release -r linux-x64 --self-contained true \
+  -p:PublishSingleFile=true -p:PublishTrimmed=false -o artifacts/release/linux-x64
+```
