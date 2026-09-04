@@ -57,7 +57,7 @@ directory on `PATH`, and run `dsf`.
 dsf --help
 dsf bootstrap --help
 dsf new --product <product> --dry-run
-dsf run --product <product> --signal tests/fixtures/sample_signal.json --dry-run
+dsf run --product <product> --signal /absolute/path/to/operator-signal.json --dry-run
 dsf sweep --product <product> --dry-run
 dsf serve-orchestrator --product <product> --loop --interval 300
 ```

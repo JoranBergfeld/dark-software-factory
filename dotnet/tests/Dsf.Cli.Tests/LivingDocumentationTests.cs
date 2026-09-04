@@ -122,6 +122,7 @@ public sealed class LivingDocumentationTests
 
         var operatorDocs = new[]
         {
+            ReadRepoFile("README.md"),
             bootstrap,
             quickstart,
             operate,
