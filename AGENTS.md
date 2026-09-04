@@ -16,7 +16,7 @@ Work from `dotnet/` and use the .NET SDK.
 - Pack tool: `dotnet pack src/Dsf.Cli/Dsf.Cli.csproj -c Release -o artifacts/release/nuget`
 - Publish native CLI: `dotnet publish src/Dsf.Cli/Dsf.Cli.csproj -c Release -r linux-x64 --self-contained true -p:PublishSingleFile=true -p:PublishTrimmed=false -o artifacts/release/linux-x64`
 
-CI for current code is `.github/workflows/dotnet-ci.yml`; release automation is
+CI for current code is `.github/workflows/ci.yml`; release automation is
 `.github/workflows/dotnet-release.yml`.
 
 ## Workspace layout

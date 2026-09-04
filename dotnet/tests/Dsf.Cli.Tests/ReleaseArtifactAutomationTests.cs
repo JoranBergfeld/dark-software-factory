@@ -92,17 +92,21 @@ public sealed class ReleaseArtifactAutomationTests
     {
         var workflow = ReadRepoFile(".github", "workflows", "dotnet-release.yml");
         var manifest = ReadRepoFile("dotnet", "eng", "release-manifest.json");
-        var metadataScript = ReadRepoFile("dotnet", "eng", "generate-release-metadata.py");
+        var metadataGenerator = ReadRepoFile(
+            "dotnet",
+            "eng",
+            "ReleaseMetadataGenerator",
+            "Program.cs");
 
         Assert.Contains("final-artifacts", workflow, StringComparison.Ordinal);
         Assert.Contains("Generate hashes, SBOMs, provenance, keys, native metadata", workflow, StringComparison.Ordinal);
         Assert.Contains("actions/attest-build-provenance", workflow, StringComparison.Ordinal);
-        Assert.Contains("SHA256SUMS", metadataScript, StringComparison.Ordinal);
-        Assert.Contains("SPDX-2.3", metadataScript, StringComparison.Ordinal);
-        Assert.Contains(".spdx.json", metadataScript, StringComparison.Ordinal);
-        Assert.Contains(".spdx.json.sig", metadataScript, StringComparison.Ordinal);
-        Assert.Contains("release-verification-key.pem", metadataScript, StringComparison.Ordinal);
-        Assert.Contains("provenance.json", metadataScript, StringComparison.Ordinal);
+        Assert.Contains("SHA256SUMS", metadataGenerator, StringComparison.Ordinal);
+        Assert.Contains("SPDX-2.3", metadataGenerator, StringComparison.Ordinal);
+        Assert.Contains(".spdx.json", metadataGenerator, StringComparison.Ordinal);
+        Assert.Contains(".spdx.json.sig", metadataGenerator, StringComparison.Ordinal);
+        Assert.Contains("release-verification-key.pem", metadataGenerator, StringComparison.Ordinal);
+        Assert.Contains("provenance.json", metadataGenerator, StringComparison.Ordinal);
         Assert.Contains("winget-portable", manifest, StringComparison.Ordinal);
         Assert.Contains("homebrew-cask", manifest, StringComparison.Ordinal);
         Assert.Contains("debian", manifest, StringComparison.Ordinal);
@@ -111,11 +115,11 @@ public sealed class ReleaseArtifactAutomationTests
     }
 
     [Fact]
-    public void Dotnet_ci_runs_release_static_tests_when_release_workflow_changes()
+    public void Ci_runs_release_static_tests_when_release_workflow_changes()
     {
-        var ciWorkflow = ReadRepoFile(".github", "workflows", "dotnet-ci.yml");
+        var ciWorkflow = ReadRepoFile(".github", "workflows", "ci.yml");
 
-        Assert.Contains(".github/workflows/dotnet-release.yml", ciWorkflow, StringComparison.Ordinal);
+        Assert.DoesNotContain("paths:", ciWorkflow, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -146,7 +150,10 @@ public sealed class ReleaseArtifactAutomationTests
         Assert.Contains("dotnet nuget sign", workflow, StringComparison.Ordinal);
         Assert.Contains("NUGET_SIGNING_CERTIFICATE_BASE64", workflow, StringComparison.Ordinal);
 
-        AssertContainsBefore(workflow, "dotnet nuget sign", "python3 dotnet/eng/generate-release-metadata.py");
+        AssertContainsBefore(
+            workflow,
+            "dotnet nuget sign",
+            "dotnet run --project dotnet/eng/ReleaseMetadataGenerator");
         AssertContainsBefore(workflow, "dotnet nuget sign", "publish-nuget:");
     }
 
@@ -169,13 +176,17 @@ public sealed class ReleaseArtifactAutomationTests
     [Fact]
     public void Sboms_include_dependency_components_and_relationships()
     {
-        var metadataScript = ReadRepoFile("dotnet", "eng", "generate-release-metadata.py");
+        var metadataGenerator = ReadRepoFile(
+            "dotnet",
+            "eng",
+            "ReleaseMetadataGenerator",
+            "Program.cs");
 
-        Assert.Contains("packages.lock.json", metadataScript, StringComparison.Ordinal);
-        Assert.Contains("collect_lockfile_components", metadataScript, StringComparison.Ordinal);
-        Assert.Contains("component_spdx_id", metadataScript, StringComparison.Ordinal);
-        Assert.Contains("\"relationships\"", metadataScript, StringComparison.Ordinal);
-        Assert.Contains("DEPENDS_ON", metadataScript, StringComparison.Ordinal);
+        Assert.Contains("packages.lock.json", metadataGenerator, StringComparison.Ordinal);
+        Assert.Contains("CollectLockfileComponents", metadataGenerator, StringComparison.Ordinal);
+        Assert.Contains("ComponentSpdxId", metadataGenerator, StringComparison.Ordinal);
+        Assert.Contains("relationships =", metadataGenerator, StringComparison.Ordinal);
+        Assert.Contains("DEPENDS_ON", metadataGenerator, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -192,11 +203,11 @@ public sealed class ReleaseArtifactAutomationTests
             var keyPath = Path.Combine(tempRoot.FullName, "signing-key.pem");
             RunProcess(repoRoot, "openssl", $"genpkey -algorithm Ed25519 -out \"{keyPath}\"");
 
-            var scriptPath = Path.Combine(repoRoot, "dotnet", "eng", "generate-release-metadata.py");
             RunProcess(
                 repoRoot,
-                "python3",
-                $"\"{scriptPath}\" --artifact-root \"{artifactRoot}\" --version 9.9.9 --commit deadbeef " +
+                "dotnet",
+                $"run --project \"{Path.Combine(repoRoot, "dotnet", "eng", "ReleaseMetadataGenerator")}\" -- " +
+                $"--artifact-root \"{artifactRoot}\" --version 9.9.9 --commit deadbeef " +
                 $"--repository dark-software-factory/dark-software-factory --run-id 1 --private-key \"{keyPath}\"");
 
             var sbomPath = Directory.GetFiles(Path.Combine(artifactRoot, "release-metadata"), "*.spdx.json")
@@ -245,12 +256,16 @@ public sealed class ReleaseArtifactAutomationTests
     [Fact]
     public void Native_metadata_files_are_included_in_hashes_and_provenance_subjects()
     {
-        var metadataScript = ReadRepoFile("dotnet", "eng", "generate-release-metadata.py");
+        var metadataGenerator = ReadRepoFile(
+            "dotnet",
+            "eng",
+            "ReleaseMetadataGenerator",
+            "Program.cs");
 
-        Assert.Contains("write_native_metadata", metadataScript, StringComparison.Ordinal);
+        Assert.Contains("WriteNativeMetadata", metadataGenerator, StringComparison.Ordinal);
 
-        var callNativeIndex = metadataScript.IndexOf("write_native_metadata(native_root", StringComparison.Ordinal);
-        var callHashesIndex = metadataScript.IndexOf("write_hashes(metadata_root", StringComparison.Ordinal);
+        var callNativeIndex = metadataGenerator.IndexOf("WriteNativeMetadata(", StringComparison.Ordinal);
+        var callHashesIndex = metadataGenerator.IndexOf("WriteHashes(", StringComparison.Ordinal);
 
         Assert.True(callNativeIndex >= 0);
         Assert.True(callHashesIndex >= 0);
@@ -258,7 +273,10 @@ public sealed class ReleaseArtifactAutomationTests
             callNativeIndex < callHashesIndex,
             "native metadata must be generated before hashes/provenance are collected so it is included as a release asset");
 
-        Assert.DoesNotContain("GENERATED_DIRS = {\"release-metadata\", \"native-metadata\"}", metadataScript, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "GeneratedDirectories = [\"release-metadata\", \"native-metadata\"]",
+            metadataGenerator,
+            StringComparison.Ordinal);
     }
 
     [Fact]

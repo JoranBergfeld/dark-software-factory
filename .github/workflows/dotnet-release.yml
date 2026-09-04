@@ -227,6 +227,10 @@ jobs:
     environment: release-metadata-signing
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Setup .NET
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5.4.0
+        with:
+          global-json-file: dotnet/global.json
       - name: Download Linux release artifacts
         uses: actions/download-artifact@v4
         with:
@@ -277,7 +281,8 @@ jobs:
           printf '%s' "$RELEASE_ED25519_PRIVATE_KEY_PEM" > dotnet/artifacts/final-artifacts/release-metadata/release-signing-key.pem
       - name: Generate hashes, SBOMs, provenance, keys, native metadata
         run: >
-          python3 dotnet/eng/generate-release-metadata.py
+          dotnet run --project dotnet/eng/ReleaseMetadataGenerator
+          --
           --artifact-root dotnet/artifacts/final-artifacts
           --version "${{ inputs.version }}"
           --commit "${{ github.sha }}"

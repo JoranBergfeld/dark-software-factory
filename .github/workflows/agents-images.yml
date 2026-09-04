@@ -1,114 +1,22 @@
 name: agents-images
 
-# Build each Python source agent, and the .NET runtime (dsf-runtime, the
-# orchestrator worker; see dotnet/src/Dsf.Runtime), as its own container image
-# and push to the GitHub Container Registry (GHCR). Change-detection: an agent
-# rebuilds only when its own code/config changes; a change to shared core
-# (contracts/ports/a2a/base/container or pyproject) rebuilds ALL agents. The
-# runtime image rebuilds on any dotnet/ source change. Images are pushed on
-# main; pull requests build only (validation, no push). Hosting/deployment is
-# out of scope.
-
 on:
   push:
     branches: [main]
     paths:
-      - 'core/src/**'
-      - 'feature-council/src/**'
-      - 'pyproject.toml'
-      - 'core/pyproject.toml'
-      - 'feature-council/pyproject.toml'
-      - 'dotnet/**'
-      - '.github/workflows/agents-images.yml'
+      - dotnet/**
+      - .github/workflows/agents-images.yml
   pull_request:
     paths:
-      - 'core/src/**'
-      - 'feature-council/src/**'
-      - 'pyproject.toml'
-      - 'core/pyproject.toml'
-      - 'feature-council/pyproject.toml'
-      - 'dotnet/**'
-      - '.github/workflows/agents-images.yml'
+      - dotnet/**
+      - .github/workflows/agents-images.yml
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  detect:
-    runs-on: ubuntu-latest
-    outputs:
-      matrix: ${{ steps.set.outputs.matrix }}
-      any: ${{ steps.set.outputs.any }}
-      runtime: ${{ steps.set.outputs.runtime }}
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          fetch-depth: 0
-
-      - id: filter
-        uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4.0.1
-        with:
-          filters: |
-            core:
-              - 'pyproject.toml'
-              - 'core/pyproject.toml'
-              - 'feature-council/pyproject.toml'
-              - 'core/src/dsf/contracts/**'
-              - 'core/src/dsf/ports/**'
-              - 'core/src/dsf/a2a/**'
-              - 'feature-council/src/dsf/agents/base.py'
-              - 'core/src/dsf/container.py'
-            sentry:
-              - 'feature-council/src/dsf/agents/sentry/**'
-            grafana:
-              - 'feature-council/src/dsf/agents/grafana/**'
-            foundryiq:
-              - 'feature-council/src/dsf/agents/foundryiq/**'
-            webiq:
-              - 'feature-council/src/dsf/agents/webiq/**'
-            runtime:
-              - 'dotnet/**'
-              - 'feature-council/src/dsf/runtime/Dockerfile'
-
-      - id: set
-        env:
-          CORE: ${{ steps.filter.outputs.core }}
-          SENTRY: ${{ steps.filter.outputs.sentry }}
-          GRAFANA: ${{ steps.filter.outputs.grafana }}
-          FOUNDRYIQ: ${{ steps.filter.outputs.foundryiq }}
-          WEBIQ: ${{ steps.filter.outputs.webiq }}
-          RUNTIME: ${{ steps.filter.outputs.runtime }}
-          DISPATCH: ${{ github.event_name == 'workflow_dispatch' }}
-        run: |
-          set -euo pipefail
-          agents=()
-          if [ "$CORE" = "true" ] || [ "$DISPATCH" = "true" ]; then
-            agents=(sentry grafana foundryiq webiq)
-          else
-            [ "$SENTRY" = "true" ] && agents+=(sentry) || true
-            [ "$GRAFANA" = "true" ] && agents+=(grafana) || true
-            [ "$FOUNDRYIQ" = "true" ] && agents+=(foundryiq) || true
-            [ "$WEBIQ" = "true" ] && agents+=(webiq) || true
-          fi
-          if [ ${#agents[@]} -eq 0 ]; then
-            echo "matrix=[]" >> "$GITHUB_OUTPUT"
-            echo "any=false" >> "$GITHUB_OUTPUT"
-          else
-            json=$(printf '%s\n' "${agents[@]}" | jq -R . | jq -cs .)
-            echo "matrix=$json" >> "$GITHUB_OUTPUT"
-            echo "any=true" >> "$GITHUB_OUTPUT"
-          fi
-          if [ "$RUNTIME" = "true" ] || [ "$DISPATCH" = "true" ]; then
-            echo "runtime=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "runtime=false" >> "$GITHUB_OUTPUT"
-          fi
-          echo "Selected agents: ${agents[*]:-none}; runtime: ${RUNTIME:-false}"
-
   build:
-    needs: detect
-    if: needs.detect.outputs.any == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -116,13 +24,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        agent: ${{ fromJSON(needs.detect.outputs.matrix) }}
+        include:
+          - image: dsf-agent-host
+            dockerfile: dotnet/src/Dsf.AgentHost/Dockerfile
+          - image: dsf-runtime
+            dockerfile: dotnet/src/Dsf.Runtime/Dockerfile
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-
       - name: Set up Buildx
         uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
-
       - name: Log in to GHCR
         if: github.event_name != 'pull_request'
         uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
@@ -130,112 +40,10 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Image metadata
-        id: meta
-        uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9 # v6.1.0
-        with:
-          images: ghcr.io/${{ github.repository_owner }}/dsf-agent-${{ matrix.agent }}
-          tags: |
-            type=sha,format=long
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=ref,event=pr
-
-      - name: Build (load for scanning)
-        id: build-scan
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
-        with:
-          context: .
-          file: feature-council/src/dsf/agents/${{ matrix.agent }}/Dockerfile
-          load: true
-          tags: dsf-agent-${{ matrix.agent }}:scan
-          cache-from: type=gha
-
-      - name: Scan image with Trivy
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          image-ref: dsf-agent-${{ matrix.agent }}:scan
-          format: table
-          exit-code: '0'
-          ignore-unfixed: true
-          vuln-type: os,library
-          severity: CRITICAL,HIGH
-
       - name: Build and push
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
-          file: feature-council/src/dsf/agents/${{ matrix.agent }}/Dockerfile
+          file: ${{ matrix.dockerfile }}
           push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-  build-runtime:
-    needs: detect
-    if: needs.detect.outputs.runtime == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-
-      - name: Set up Buildx
-        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
-
-      - name: Log in to GHCR
-        if: github.event_name != 'pull_request'
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Image metadata
-        id: meta
-        uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9 # v6.1.0
-        with:
-          images: ghcr.io/${{ github.repository_owner }}/dsf-runtime
-          tags: |
-            type=sha,format=long
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=ref,event=pr
-
-      - name: Build (load for scanning)
-        id: build-scan
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
-        with:
-          context: .
-          file: feature-council/src/dsf/runtime/Dockerfile
-          load: true
-          tags: dsf-runtime:scan
-          cache-from: type=gha
-
-      - name: Scan image with Trivy
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          image-ref: dsf-runtime:scan
-          format: table
-          exit-code: '0'
-          ignore-unfixed: true
-          vuln-type: os,library
-          severity: CRITICAL,HIGH
-
-      - name: Smoke test entrypoint
-        run: |
-          set -euo pipefail
-          docker run --rm dsf-runtime:scan --help
-          docker run --rm dsf-runtime:scan --version
-
-      - name: Build and push
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
-        with:
-          context: .
-          file: feature-council/src/dsf/runtime/Dockerfile
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          tags: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:${{ github.sha }}

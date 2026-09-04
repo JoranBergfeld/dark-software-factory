@@ -1,16 +1,16 @@
-.PHONY: install test lint lint-imports fmt
+.PHONY: restore build test pack publish
 
-install:
-	uv sync --all-packages
+restore:
+	cd dotnet && dotnet restore Dsf.sln --locked-mode
 
-test:
-	uv run pytest -q
+build: restore
+	cd dotnet && dotnet build Dsf.sln --no-restore --configuration Release
 
-lint:
-	uv run ruff check .
+test: build
+	cd dotnet && dotnet test Dsf.sln --no-build --configuration Release
 
-lint-imports:
-	uv run lint-imports
+pack: build
+	cd dotnet && dotnet pack src/Dsf.Cli/Dsf.Cli.csproj --no-build --configuration Release --output artifacts/release/nuget
 
-fmt:
-	uv run ruff check --fix .
+publish: build
+	cd dotnet && dotnet publish src/Dsf.Cli/Dsf.Cli.csproj --no-build --configuration Release -r linux-x64 --self-contained true -p:PublishSingleFile=true -p:PublishTrimmed=false -o artifacts/release/linux-x64
