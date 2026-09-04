@@ -62,6 +62,25 @@ public sealed class LivingDocumentationTests
     }
 
     [Fact]
+    public void Operate_doc_does_not_claim_an_unshipped_observability_bundle_artifact()
+    {
+        var content = ReadRepoFile("docs/site/get-started/operate.md");
+        var metadataScript = ReadRepoFile("dotnet/eng/generate-release-metadata.py");
+
+        // The release metadata generator is the single source of truth for what a release
+        // bundle contains; it never creates an `observability/` directory or dashboard JSON,
+        // so the operator doc must not claim one ships there.
+        Assert.DoesNotContain("observability", metadataScript, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("release artifact bundle", content, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("observability/", content, StringComparison.Ordinal);
+
+        // The doc must instead describe the real telemetry the runtime emits.
+        Assert.Contains("ApplicationInsightsTracer", content, StringComparison.Ordinal);
+        Assert.Contains("run.start", content, StringComparison.Ordinal);
+        Assert.Contains("station.complete", content, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Release_verification_guide_covers_public_artifact_verification()
     {
         var content = ReadRepoFile("docs/site/get-started/verify-release.md");

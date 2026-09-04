@@ -73,8 +73,12 @@ server-issued session cookie plus CSRF token; automation uses bearer-authenticat
 
 ## Watching it
 
-The runtime emits traces to Application Insights. Import the dashboard JSON shipped in the
-release artifact bundle's `observability/` directory once App Insights is wired.
+The runtime's `ApplicationInsightsTracer` posts a custom event per conveyor boundary
+(`run.start`, `station.start`, `station.complete`, `station.error`, `run.complete`) to the
+Application Insights ingestion endpoint parsed from `APPLICATIONINSIGHTS_CONNECTION_STRING`.
+Dry runs never post: events carrying a `dryRun` property stay local to the run's audit trail.
+Build workbooks or alerts against these event names directly in Application Insights; no
+dashboard JSON ships with the release artifacts.
 
 ## Closed loop
 
