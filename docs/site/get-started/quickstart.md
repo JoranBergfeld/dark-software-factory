@@ -9,10 +9,14 @@ For the big picture, read [The loop](../concept/the-loop.md) and
 
 ## Prerequisites
 
-- [.NET SDK](https://dotnet.microsoft.com/download) matching `dotnet/global.json` for
-  contributor builds.
-- The [GitHub CLI](https://cli.github.com/) (`gh`), authenticated with `gh auth login`, for
-  repository ownership and GitHub release access.
+- A GitHub API token that can create repositories under the selected owner:
+
+  ```bash
+  export GH_TOKEN="$(gh auth token)"
+  ```
+
+  `GITHUB_TOKEN` is also supported. `dsf new` uses this environment credential; it does not
+  retrieve GitHub credentials from `gh` or an owner Key Vault.
 - The [Azure CLI](https://learn.microsoft.com/cli/azure/) (`az`) logged in to the target
   subscription for real provisioning.
 - The packaged DSF CLI, installed as a global tool or from a self-contained release archive.
@@ -40,29 +44,19 @@ Self-contained install:
 3. Extract it and put the extracted directory on `PATH`.
 4. Run `dsf --help`.
 
-## Verify a checkout
-
-Contributors validate the active implementation from the .NET workspace:
-
-```bash
-cd dotnet
-dotnet restore Dsf.sln --locked-mode
-dotnet build Dsf.sln --no-restore
-dotnet test Dsf.sln --no-build
-```
-
 ## Owner bootstrap unavailable
 
 `dsf bootstrap` is **not implemented** in the current .NET CLI. It exits successfully without
 provisioning a GitHub App, owner Key Vault, App Configuration, or credentials. Configure that
-owner infrastructure outside DSF before using product provisioning.
+owner infrastructure outside DSF before using product provisioning. `dsf new` does not retrieve
+or seed credentials from configured owner stores; provide its GitHub credential and any GitHub App
+or installation identifiers with the documented options or environment variables.
 
-For an already configured owner, export the owner endpoints:
+For an already configured owner, export the App Configuration endpoint needed to publish the
+product index:
 
 ```bash
-export DSF_OWNER_KEYVAULT_URI=https://<owner-keyvault>.vault.azure.net/
 export DSF_OWNER_APPCONFIG_ENDPOINT=https://<owner-appconfig>.azconfig.io
 ```
 
-The stores must also contain the GitHub App and source-agent credentials required by `dsf new`.
 Next: [provision a factory](provision-a-factory.md).

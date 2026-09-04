@@ -95,6 +95,36 @@ public sealed class LivingDocumentationTests
     }
 
     [Fact]
+    public void Operator_docs_describe_the_shipped_cli_and_its_external_dependencies()
+    {
+        var agents = ReadRepoFile("AGENTS.md");
+        var bootstrap = ReadRepoFile("docs/site/get-started/bootstrap.md");
+        var quickstart = ReadRepoFile("docs/site/get-started/quickstart.md");
+        var operate = ReadRepoFile("docs/site/get-started/operate.md");
+        var provisioning = ReadRepoFile("docs/site/get-started/provision-a-factory.md");
+        var releaseVerification = ReadRepoFile("docs/site/get-started/verify-release.md");
+
+        Assert.DoesNotContain("dsf bootstrap — create owner", agents, StringComparison.Ordinal);
+
+        Assert.DoesNotContain(".NET SDK", quickstart, StringComparison.Ordinal);
+        Assert.DoesNotContain("## Verify a checkout", quickstart, StringComparison.Ordinal);
+
+        Assert.Contains("does not retrieve", bootstrap, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("seed owner-vault credentials", bootstrap, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("does not retrieve", quickstart, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("seed credentials", quickstart, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("GH_TOKEN", provisioning, StringComparison.Ordinal);
+        Assert.Contains("does not retrieve credentials", provisioning, StringComparison.OrdinalIgnoreCase);
+
+        Assert.DoesNotContain("Install `dsf-runtime` beside `dsf`", operate, StringComparison.Ordinal);
+        Assert.Contains("source or service deployment", operate, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("DSF_RUNTIME_HOST", operate, StringComparison.Ordinal);
+
+        Assert.Contains("dsf-cli-linux-x64-tar-gz.spdx.json", releaseVerification, StringComparison.Ordinal);
+        Assert.DoesNotContain("dsf-cli-linux-x64.tar.gz.spdx.json", releaseVerification, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Operate_doc_describes_runtime_host_distribution_and_manual_charter_control()
     {
         var content = ReadRepoFile("docs/site/get-started/operate.md");

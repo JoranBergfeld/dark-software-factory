@@ -63,7 +63,7 @@ Deterministic doubles belong in `Dsf.Testing` or test projects.
 ### Entry points
 
 - `dsf new` — provision an isolated product factory.
-- `dsf bootstrap` — create owner GitHub App, Key Vault, and App Configuration.
+- `dsf bootstrap` — unavailable migration-shell placeholder; it creates no owner infrastructure.
 - `dsf charter ...` — manage product intent.
 - `dsf run|sweep|serve-orchestrator|serve-agent|poll-outcomes` — forwarded runtime verbs.
 - `dsf-control-center` — governance web process.

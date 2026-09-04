@@ -7,14 +7,16 @@
 
 ## Current path
 
-Configure the owner GitHub App, Key Vault, App Configuration store, and required credentials
-outside the current DSF CLI. After those owner services exist, export their endpoints:
+Configure any owner GitHub App, Key Vault, and App Configuration services outside the current
+DSF CLI. The CLI does not retrieve or seed owner-vault credentials for `dsf new`; supply GitHub
+credentials and GitHub App identifiers through the command's documented options or environment
+variables. After those owner services exist, export the App Configuration endpoint required to
+publish the product index:
 
 ```bash
-export DSF_OWNER_KEYVAULT_URI=https://<owner-keyvault>.vault.azure.net/
 export DSF_OWNER_APPCONFIG_ENDPOINT=https://<owner-appconfig>.azconfig.io
 ```
 
 Then use the packaged `dsf` release to [provision a factory](provision-a-factory.md) with
-`dsf new`. The owner endpoints alone are not credentials; the configured owner stores must
-contain the GitHub App and source-agent secrets required by that workflow.
+`dsf new`. Owner endpoints identify configuration services; they do not supply credentials to the
+CLI.

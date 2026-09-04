@@ -2,8 +2,8 @@
 
 !!! warning "Configure the owner outside DSF"
     `dsf bootstrap` is not implemented in the .NET CLI. Before running `dsf new`, configure
-    the master DSF GitHub App, owner Key Vault, owner App Configuration, and their credentials
-    outside DSF. Export `DSF_OWNER_KEYVAULT_URI` and `DSF_OWNER_APPCONFIG_ENDPOINT`.
+    any owner services outside DSF. Export `DSF_OWNER_APPCONFIG_ENDPOINT` when publishing the
+    product index. `dsf new` does not retrieve credentials from an owner Key Vault.
 
 The factory CLI is `dsf`. Provisioning a product needs only `--product`:
 
@@ -48,21 +48,20 @@ Provisioning spans GitHub, Azure resources, and Azure RBAC. The principal runnin
 needs:
 
 - **Owner configuration:** `DSF_OWNER_KEYVAULT_URI` and `DSF_OWNER_APPCONFIG_ENDPOINT`
-  exported, with required GitHub App and source-agent credentials already in the owner stores.
-- **GitHub:** a `gh auth login` session that can create repositories under `--owner` and seed
-  baseline CI.
+  are optional configuration inputs; `DSF_OWNER_APPCONFIG_ENDPOINT` (or
+  `--owner-appconfig-endpoint`) is required for a live run to publish the product index.
+- **GitHub:** `GH_TOKEN` or `GITHUB_TOKEN` that can create repositories under `--owner` and seed
+  baseline CI. The CLI does not retrieve credentials from owner stores. Pass GitHub App and
+  installation identifiers with `--github-app-id` and `--github-installation-id`, or set
+  `DSF_GITHUB_APP_ID` and `DSF_GITHUB_INSTALLATION_ID`.
 - **Spec Kit CLI:** `specify` on `PATH`, pinned by your operator image or workstation setup.
 - **Azure subscription RBAC:** **Owner**, or **Contributor + User Access Administrator**, on
   the subscription.
-- **Key Vault reachability:** the provisioning host can reach the owner and product Key Vault
-  data planes.
-- **Owner vault secrets:** required GitHub App credentials and source-agent secrets are present
-  with tenant-compliant expiration/content type.
 
 !!! warning "Configure the owner App before `dsf new`"
-    If the owner endpoints are missing, GitHub App install, secret seed, source-key seed, and
-    product-index publication cannot complete. Configure the owner services outside DSF, export
-    both values, then rerun `dsf new`.
+    A live run cannot publish the product index if `DSF_OWNER_APPCONFIG_ENDPOINT` (or
+    `--owner-appconfig-endpoint`) is missing. Configure the owner App Configuration service
+    outside DSF, export its endpoint, then rerun `dsf new`.
 
 ## What gets provisioned
 

@@ -37,8 +37,8 @@ Use the published public key to verify each SBOM's detached signature:
 ```bash
 openssl pkeyutl -verify -rawin \
   -pubin -inkey release-metadata/release-verification-key.pem \
-  -in release-metadata/dsf-cli-linux-x64.tar.gz.spdx.json \
-  -sigfile release-metadata/dsf-cli-linux-x64.tar.gz.spdx.json.sig
+  -in release-metadata/dsf-cli-linux-x64-tar-gz.spdx.json \
+  -sigfile release-metadata/dsf-cli-linux-x64-tar-gz.spdx.json.sig
 ```
 
 Repeat for the SBOM matching the artifact you plan to install. The command exits non-zero if

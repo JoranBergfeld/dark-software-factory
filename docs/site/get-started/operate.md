@@ -24,15 +24,15 @@ The packaged global tool and release archive publish `dsf` (`Dsf.Cli`) only. Run
 (`run`, `sweep`, `serve-orchestrator`, and `serve-agent`) are forwarded to a separate
 `dsf-runtime` executable; they do not run from a standalone packaged `dsf`.
 
-Install `dsf-runtime` beside `dsf`, or point the front door to its executable before using a
-runtime verb:
+Deploy or run the runtime host separately through a source or service deployment. For a local `dsf`
+front door, point `DSF_RUNTIME_HOST` at an existing, separately deployed or built runtime-host
+executable before using a runtime verb:
 
 ```bash
 export DSF_RUNTIME_HOST=/absolute/path/to/dsf-runtime
 ```
 
-With a sibling runtime host or `DSF_RUNTIME_HOST` configured, manual operator checks use the
-`dsf` front door:
+With `DSF_RUNTIME_HOST` configured, manual operator checks use the `dsf` front door:
 
 ```bash
 dsf run --product <product> --signal tests/fixtures/sample_signal.json --dry-run
