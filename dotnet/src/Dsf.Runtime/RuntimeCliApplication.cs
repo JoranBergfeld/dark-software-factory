@@ -5,10 +5,10 @@ using Dsf.FeatureCouncil.Conveyor;
 namespace Dsf.Runtime;
 
 /// <summary>
-/// The .NET runtime host's command grammar and entrypoint dispatch. Mirrors the
-/// Python <c>feature-council/src/dsf/runtime/control.py</c> verb surface (<c>run</c>,
-/// <c>sweep</c>, <c>serve-orchestrator</c>, <c>serve-agent --kind</c>) so an operator
-/// can run either runtime the same way. Every verb composes
+/// The .NET runtime host's command grammar and entrypoint dispatch. Exposes
+/// <c>run</c>, <c>sweep</c>, <c>serve-orchestrator</c>, and
+/// <c>serve-agent --kind</c> so operators have one packaged runtime surface.
+/// Every verb composes
 /// <see cref="RuntimeSettings"/> from the existing env var names before doing
 /// anything else; a missing required setting names every unset requirement and
 /// exits non-zero rather than proceeding. Once settings validate, the verb does its

@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using Dsf.Cli;
 using Xunit;
 
 namespace Dsf.Cli.Tests;
@@ -107,6 +108,33 @@ public sealed class CutoverAcceptanceTests
     }
 
     [Fact]
+    public async Task Command_evidence_drives_executable_dotnet_parity_checks()
+    {
+        await AssertProcessMatchesCommandEvidenceAsync("dsf-new-invalid-prefix.json");
+        await AssertProcessMatchesCommandEvidenceAsync("dsf-runtime-run-missing-env.json");
+        await AssertProcessMatchesCommandEvidenceAsync("dsf-runtime-sweep-missing-env.json");
+
+        var listEvidence = LoadCommandEvidence("dsf-list-json-no-owner-index.json");
+        await WithEnvironmentAsync("DSF_OWNER_APPCONFIG_ENDPOINT", "https://owner.azconfig.io", async () =>
+        {
+            var terminal = NonInteractiveTerminal();
+            var exitCode = await CliApplication.InvokeAsync(
+                TrimExecutable(listEvidence.Argv),
+                CancellationToken.None,
+                terminal,
+                new RecordingGitHubProvisioningClient(),
+                new RecordingAzureProvisioningClient(),
+                new RecordingAppConfigurationClient(),
+                new RecordingCharterRepositoryClient(null),
+                new RecordingCharterStore());
+
+            Assert.Equal(listEvidence.ExitCode, exitCode);
+            Assert.Equal(listEvidence.Stdout, terminal.Output);
+            Assert.Equal(listEvidence.Stderr, terminal.Error);
+        });
+    }
+
+    [Fact]
     public void Cutover_preserves_frozen_parity_evidence_and_records_merge_time_archive_steps()
     {
         var root = FindRepoRoot().FullName;
@@ -150,6 +178,113 @@ public sealed class CutoverAcceptanceTests
         File.ReadAllText(Path.Combine(FindRepoRoot().FullName, relativePath))
             .Replace("\r\n", "\n", StringComparison.Ordinal);
 
+    private static async Task AssertProcessMatchesCommandEvidenceAsync(string fileName)
+    {
+        var evidence = LoadCommandEvidence(fileName);
+        var result = await RunDsfProcessAsync(TrimExecutable(evidence.Argv));
+
+        Assert.Equal(evidence.ExitCode, result.ExitCode);
+        Assert.Equal(evidence.Stdout, result.Stdout);
+        Assert.Equal(evidence.Stderr, result.Stderr);
+    }
+
+    private static CommandEvidence LoadCommandEvidence(string fileName)
+    {
+        var path = $"parity/baseline/evidence/commands/{fileName}";
+        var json = JsonNode.Parse(ReadRepoFile(path))
+            ?? throw new InvalidOperationException($"Command evidence is empty: {path}");
+        return new CommandEvidence(
+            json["argv"]!.AsArray().Select(value => value!.GetValue<string>()).ToArray(),
+            json["exit_code"]!.GetValue<int>(),
+            json["stdout"]!.GetValue<string>(),
+            json["stderr"]!.GetValue<string>());
+    }
+
+    private static string[] TrimExecutable(IReadOnlyList<string> argv)
+    {
+        Assert.NotEmpty(argv);
+        Assert.Equal("dsf", argv[0]);
+        return argv.Skip(1).ToArray();
+    }
+
+    private static async Task<CommandResult> RunDsfProcessAsync(params string[] args)
+    {
+        var solution = FindSolutionRoot();
+        var startInfo = new System.Diagnostics.ProcessStartInfo("dotnet")
+        {
+            WorkingDirectory = solution.FullName,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        startInfo.Environment.Remove("DSF_PRODUCT");
+        startInfo.Environment["DSF_RUNTIME_HOST"] = FindRuntimeHostExecutable();
+        startInfo.ArgumentList.Add("run");
+        startInfo.ArgumentList.Add("--project");
+        startInfo.ArgumentList.Add("src/Dsf.Cli/Dsf.Cli.csproj");
+        startInfo.ArgumentList.Add("--");
+        foreach (var arg in args)
+        {
+            startInfo.ArgumentList.Add(arg);
+        }
+
+        using var process = System.Diagnostics.Process.Start(startInfo)
+            ?? throw new InvalidOperationException("dotnet run failed to start.");
+        var stdoutTask = process.StandardOutput.ReadToEndAsync();
+        var stderrTask = process.StandardError.ReadToEndAsync();
+        await process.WaitForExitAsync();
+        return new CommandResult(process.ExitCode, await stdoutTask, await stderrTask);
+    }
+
+    private static string FindRuntimeHostExecutable()
+    {
+        var configuration = AppContext.BaseDirectory.Contains(
+            $"{Path.DirectorySeparatorChar}Release{Path.DirectorySeparatorChar}",
+            StringComparison.Ordinal)
+            ? "Release"
+            : "Debug";
+        var fileName = OperatingSystem.IsWindows() ? "dsf-runtime.exe" : "dsf-runtime";
+        var path = Path.Combine(
+            FindSolutionRoot().FullName,
+            "src",
+            "Dsf.Runtime",
+            "bin",
+            configuration,
+            "net10.0",
+            fileName);
+
+        Assert.True(File.Exists(path), $"Expected the runtime host executable at {path}.");
+        return path;
+    }
+
+    private static DirectoryInfo FindSolutionRoot()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "Dsf.sln")))
+        {
+            dir = dir.Parent;
+        }
+
+        return dir ?? throw new InvalidOperationException("Could not locate Dsf.sln.");
+    }
+
+    private static ScriptedTerminal NonInteractiveTerminal() => new(
+        new TerminalCapabilities(IsInteractive: false, SupportsAnsi: false, SupportsEmoji: false),
+        []);
+
+    private static async Task WithEnvironmentAsync(string name, string value, Func<Task> action)
+    {
+        var prior = Environment.GetEnvironmentVariable(name);
+        Environment.SetEnvironmentVariable(name, value);
+        try
+        {
+            await action();
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(name, prior);
+        }
+    }
+
     private static DirectoryInfo FindRepoRoot()
     {
         var current = new DirectoryInfo(AppContext.BaseDirectory);
@@ -162,4 +297,12 @@ public sealed class CutoverAcceptanceTests
 
         return current ?? throw new DirectoryNotFoundException("Could not find repository root.");
     }
+
+    private sealed record CommandEvidence(
+        IReadOnlyList<string> Argv,
+        int ExitCode,
+        string Stdout,
+        string Stderr);
+
+    private sealed record CommandResult(int ExitCode, string Stdout, string Stderr);
 }

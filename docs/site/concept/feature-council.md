@@ -152,11 +152,12 @@ adjustable while the line runs.
 
 ## Where it lives and how autonomous it is today
 
-The Feature Council is implemented in this repository, in the `feature-council/`
-workspace member. It runs end to end offline in dry-run, and in production as an
-Azure Container App scoped to a single product (ADR 0004). It is the most
-built-out phase of the loop: the full conveyor, the grounding gate, and the
-filing path all run today.
+The Feature Council is implemented in this repository under
+`dotnet/src/Dsf.FeatureCouncil/` and hosted by `dotnet/src/Dsf.Runtime/`. It runs
+end to end in dry-run through the real .NET runtime composition, and in
+production as Azure Container Apps scoped to a single product (ADR 0004). It is
+the most built-out phase of the loop: the full conveyor, the grounding gate, and
+the filing path all run today.
 
 The decision path is the intended shape. The proposer tier is the deliberation
 council: five role lenses debate over one or two see-and-revise rounds, grounding
