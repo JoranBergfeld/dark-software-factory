@@ -61,6 +61,62 @@ public sealed class LivingDocumentationTests
         Assert.True(offenders.Count == 0, "Python-era terms remain in current docs:\n" + string.Join("\n", offenders));
     }
 
+    // These packages are the pre-cutover Python implementation (evals gate + source
+    // agents), retained solely as the #149 parity-reference baseline. They are not
+    // current/living docs, so they still describe Python/uv/pytest/fixtures internals --
+    // but they must not read as operator or contributor instructions telling readers to
+    // build, run, or test the product with that Python toolchain.
+    private static readonly string[] FrozenPythonParityReadmeFiles =
+    [
+        "feature-council/src/dsf/evals/README.md",
+        "feature-council/src/dsf/agents/sentry/README.md",
+        "feature-council/src/dsf/agents/grafana/README.md",
+        "feature-council/src/dsf/agents/foundryiq/README.md",
+        "feature-council/src/dsf/agents/webiq/README.md",
+    ];
+
+    private static readonly (string Label, Regex Pattern)[] OperatorInstructionTerms =
+    [
+        ("python -m", new Regex(@"python\s+-m", RegexOptions.IgnoreCase)),
+        ("uv run", new Regex(@"uv\s+run", RegexOptions.IgnoreCase)),
+        ("pytest invocation", new Regex(@"(?<![A-Za-z0-9])pytest\s", RegexOptions.IgnoreCase)),
+        ("dsf serve-agent", new Regex(@"dsf\s+serve-agent", RegexOptions.IgnoreCase)),
+        ("DSF_MODE", new Regex(@"DSF_MODE", RegexOptions.None)),
+        ("tests/fixtures", new Regex(@"tests/fixtures", RegexOptions.None)),
+        ("fenced code block", new Regex(@"```", RegexOptions.None)),
+    ];
+
+    [Fact]
+    public void Frozen_python_parity_reference_docs_disclose_frozen_status_and_carry_no_operator_instructions()
+    {
+        var offenders = new List<string>();
+
+        foreach (var relativePath in FrozenPythonParityReadmeFiles)
+        {
+            var content = ReadRepoFile(relativePath).Replace("\r\n", "\n", StringComparison.Ordinal);
+
+            if (!content.Contains("frozen", StringComparison.OrdinalIgnoreCase)
+                || !content.Contains("parity reference", StringComparison.OrdinalIgnoreCase)
+                || !content.Contains("#149", StringComparison.Ordinal))
+            {
+                offenders.Add($"{relativePath}: missing frozen/parity-reference/#149 disclaimer");
+            }
+
+            foreach (var (label, pattern) in OperatorInstructionTerms)
+            {
+                if (pattern.IsMatch(content))
+                {
+                    offenders.Add($"{relativePath}: {label}");
+                }
+            }
+        }
+
+        Assert.True(
+            offenders.Count == 0,
+            "Frozen Python parity-reference docs must disclose frozen status and contain no runnable operator/contributor instructions:\n"
+                + string.Join("\n", offenders));
+    }
+
     [Fact]
     public void Operate_doc_does_not_claim_an_unshipped_observability_bundle_artifact()
     {
