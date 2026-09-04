@@ -110,9 +110,12 @@ public sealed class CutoverAcceptanceTests
     [Fact]
     public async Task Command_evidence_drives_executable_dotnet_parity_checks()
     {
+        await AssertNewDryRunMatchesCommandEvidenceAsync();
         await AssertProcessMatchesCommandEvidenceAsync("dsf-new-invalid-prefix.json");
+        await AssertProcessMatchesCommandEvidenceAsync("dsf-delete-missing-manifest.json");
         await AssertProcessMatchesCommandEvidenceAsync("dsf-runtime-run-missing-env.json");
         await AssertProcessMatchesCommandEvidenceAsync("dsf-runtime-sweep-missing-env.json");
+        await AssertOffboardMissingManifestUsesDotnetErrorAsync();
 
         var listEvidence = LoadCommandEvidence("dsf-list-json-no-owner-index.json");
         await WithEnvironmentAsync("DSF_OWNER_APPCONFIG_ENDPOINT", "https://owner.azconfig.io", async () =>
@@ -181,11 +184,45 @@ public sealed class CutoverAcceptanceTests
     private static async Task AssertProcessMatchesCommandEvidenceAsync(string fileName)
     {
         var evidence = LoadCommandEvidence(fileName);
-        var result = await RunDsfProcessAsync(TrimExecutable(evidence.Argv));
+        var result = await RunDsfProcessAsync(NormalizeArgv(evidence.Argv));
 
         Assert.Equal(evidence.ExitCode, result.ExitCode);
+        Assert.Equal(NormalizeRepoToken(evidence.Stdout), result.Stdout);
+        Assert.Equal(NormalizeRepoToken(evidence.Stderr), result.Stderr);
+    }
+
+    private static async Task AssertNewDryRunMatchesCommandEvidenceAsync()
+    {
+        var evidence = LoadCommandEvidence("dsf-new-dry-run-write-plan.json");
+        var captureRoot = Path.Combine(FindRepoRoot().FullName, ".parity-capture");
+        try
+        {
+            var result = await RunDsfProcessAsync(NormalizeArgv(evidence.Argv));
+
+            Assert.Equal(evidence.ExitCode, result.ExitCode);
+            Assert.Equal(NormalizeRepoToken(evidence.Stdout), result.Stdout);
+            Assert.Equal(evidence.Stderr, result.Stderr);
+        }
+        finally
+        {
+            if (Directory.Exists(captureRoot))
+            {
+                Directory.Delete(captureRoot, recursive: true);
+            }
+        }
+    }
+
+    private static async Task AssertOffboardMissingManifestUsesDotnetErrorAsync()
+    {
+        var evidence = LoadCommandEvidence("dsf-offboard-dry-run-missing-manifest.json");
+        var result = await RunDsfProcessAsync(NormalizeArgv(evidence.Argv));
+
+        Assert.Contains("FileNotFoundError", evidence.Stderr, StringComparison.Ordinal);
+        Assert.Equal(evidence.ExitCode, result.ExitCode);
         Assert.Equal(evidence.Stdout, result.Stdout);
-        Assert.Equal(evidence.Stderr, result.Stderr);
+        Assert.DoesNotContain("Traceback", result.Stderr, StringComparison.Ordinal);
+        Assert.Contains("Instance manifest not found for product 'ghost'", result.Stderr);
+        Assert.Contains("Offboard requires config/instances/ghost.json", result.Stderr);
     }
 
     private static CommandEvidence LoadCommandEvidence(string fileName)
@@ -200,12 +237,18 @@ public sealed class CutoverAcceptanceTests
             json["stderr"]!.GetValue<string>());
     }
 
+    private static string[] NormalizeArgv(IReadOnlyList<string> argv)
+        => TrimExecutable(argv).Select(NormalizeRepoToken).ToArray();
+
     private static string[] TrimExecutable(IReadOnlyList<string> argv)
     {
         Assert.NotEmpty(argv);
         Assert.Equal("dsf", argv[0]);
         return argv.Skip(1).ToArray();
     }
+
+    private static string NormalizeRepoToken(string value) =>
+        value.Replace("<repo>", FindRepoRoot().FullName, StringComparison.Ordinal);
 
     private static async Task<CommandResult> RunDsfProcessAsync(params string[] args)
     {
