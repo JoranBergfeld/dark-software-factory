@@ -53,6 +53,11 @@ public sealed class CutoverAcceptanceTests
         }
 
         Assert.Contains("dotnet/src/Dsf.AgentHost/Dockerfile", images, StringComparison.Ordinal);
+        Assert.Contains("docker/metadata-action", images, StringComparison.Ordinal);
+        Assert.Contains("type=raw,value=latest", images, StringComparison.Ordinal);
+        Assert.Contains("aquasecurity/trivy-action", images, StringComparison.Ordinal);
+        Assert.Contains("docker run --rm dsf-runtime:scan --help", images, StringComparison.Ordinal);
+        Assert.Contains("docker run --rm dsf-runtime:scan --version", images, StringComparison.Ordinal);
         Assert.True(File.Exists(Path.Combine(root, "dotnet/src/Dsf.AgentHost/Dockerfile")));
         Assert.True(
             File.Exists(Path.Combine(root, "dotnet/eng/ReleaseMetadataGenerator/ReleaseMetadataGenerator.csproj")));
