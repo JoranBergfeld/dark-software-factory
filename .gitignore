@@ -1,11 +1,4 @@
-__pycache__/
-*.pyc
-.venv/
-venv/
 .env
-*.egg-info/
-.pytest_cache/
-.ruff_cache/
 node_modules/
 dist/
 .azure/

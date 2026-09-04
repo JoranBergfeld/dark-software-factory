@@ -7,10 +7,8 @@ namespace Dsf.Cli;
 /// <summary>
 /// Launches the runtime host for a runtime verb. The factory CLI is the operator's
 /// front door for the runtime verbs, but the runtime itself (the conveyor, the
-/// source agent hosts) lives in its own module the CLI must not reference -- so,
-/// exactly like the Python front door shelling out to
-/// <c>python -m dsf.runtime.control</c>, the .NET front door runs the
-/// <c>dsf-runtime</c> executable and returns its exit code.
+/// source agent hosts) lives in its own executable the CLI must not reference, so
+/// the front door runs <c>dsf-runtime</c> and returns its exit code.
 /// </summary>
 internal interface IRuntimeHostLauncher
 {
