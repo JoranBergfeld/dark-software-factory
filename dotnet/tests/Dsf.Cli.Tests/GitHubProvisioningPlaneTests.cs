@@ -139,9 +139,47 @@ public sealed class GitHubProvisioningPlaneTests
                 Assert.Equal(["ci"], ruleset.RequiredStatusChecks);
                 Assert.Equal(1, ruleset.RequiredApprovingReviewCount);
                 Assert.False(ruleset.AllowAutoMerge);
+                Assert.False(ruleset.RequireCopilotApprovalGate);
                 Assert.Equal("dsf-creation", ruleset.Name);
                 Assert.Null(ruleset.ExistingRulesetId);
             });
+    }
+
+    [Fact]
+    public void Plan_gates_medium_maturity_on_copilot_approval_without_retry_workflow()
+    {
+        var definition = SampleDefinition() with
+        {
+            Product = SampleDefinition().Product with { CreationMaturity = "medium" },
+        };
+
+        var plan = GitHubProvisioningPlan.Build(definition);
+
+        var ruleset = Assert.IsType<EnsureBranchProtectionRulesetRequest>(plan.Requests[4]);
+        Assert.Equal(1, ruleset.RequiredApprovingReviewCount);
+        Assert.True(ruleset.AllowAutoMerge);
+        Assert.True(ruleset.RequireCopilotApprovalGate);
+        Assert.DoesNotContain(plan.Requests, request => request is EnsureCreationRetryWorkflowRequest);
+    }
+
+    [Fact]
+    public void Plan_adds_retry_workflow_at_high_maturity_using_the_shared_credential()
+    {
+        var definition = SampleDefinition() with
+        {
+            Product = SampleDefinition().Product with { CreationMaturity = "high" },
+        };
+
+        var plan = GitHubProvisioningPlan.Build(definition);
+
+        var ruleset = Assert.IsType<EnsureBranchProtectionRulesetRequest>(plan.Requests[4]);
+        Assert.Equal(1, ruleset.RequiredApprovingReviewCount);
+        Assert.True(ruleset.AllowAutoMerge);
+        Assert.True(ruleset.RequireCopilotApprovalGate);
+
+        var retryWorkflow = Assert.IsType<EnsureCreationRetryWorkflowRequest>(plan.Requests[5]);
+        Assert.Equal("acme/paritydemo", retryWorkflow.RepositoryFullName);
+        Assert.Equal(definition.GitHub.CloudAgentCredentialSecretName, retryWorkflow.CredentialSecretName);
     }
 
     [Fact]
@@ -411,5 +449,14 @@ internal sealed class RecordingGitHubProvisioningClient : IGitHubProvisioningCli
         Requests.Add(request);
         cancellationToken.ThrowIfCancellationRequested();
         return Task.FromResult(new GitHubRulesetProvisioningResult(RulesetId));
+    }
+
+    public Task EnsureCreationRetryWorkflowAsync(
+        EnsureCreationRetryWorkflowRequest request,
+        CancellationToken cancellationToken)
+    {
+        Requests.Add(request);
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.CompletedTask;
     }
 }

@@ -35,8 +35,11 @@ public sealed record ProductSettings
 
     public string Environment { get; init; } = "dev";
 
-    /// <summary>Creation-phase autonomy dial: <c>low</c> or <c>high</c>.</summary>
+    /// <summary>Creation-phase autonomy dial: <c>low</c>, <c>medium</c>, or <c>high</c>.</summary>
     public string CreationMaturity { get; init; } = "low";
+
+    /// <summary>Operation-phase autonomy dial: <c>low</c>, <c>medium</c>, or <c>high</c>.</summary>
+    public string OperationMaturity { get; init; } = "low";
 }
 
 /// <summary>Where and how the factory runtime is hosted.</summary>
@@ -102,6 +105,17 @@ public sealed record GitHubSettings
 
     /// <summary>Key Vault secret <em>name</em> the runtime reads the App private key from.</summary>
     public string PrivateKeySecretName { get; init; } = "github-app-private-key";
+
+    /// <summary>
+    /// GitHub Actions repository secret <em>name</em> (not the value) that carries the DSF
+    /// user-to-server GitHub credential (PAT/OAuth/App user token) — the only kind of token
+    /// GitHub accepts for re-invoking the Cloud Agent (a server-to-server installation token
+    /// cannot). Consumed by the Creation-phase retry workflow (high <see
+    /// cref="ProductSettings.CreationMaturity"/>) and, where wired, by SRE-Agent-to-Cloud-Agent
+    /// auto-assignment. Provisioning this ticket only makes the name referenceable; seeding the
+    /// secret's actual value is a separate, later concern.
+    /// </summary>
+    public string CloudAgentCredentialSecretName { get; init; } = "DSF_CLOUD_AGENT_TOKEN";
 }
 
 /// <summary>Azure resource identifiers plus any outputs discovered after deployment.</summary>

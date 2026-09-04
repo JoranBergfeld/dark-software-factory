@@ -19,6 +19,7 @@ internal static class PlannedInstanceDefinition
         string environment,
         string location,
         string creationMaturity,
+        string operationMaturity,
         string namePrefix,
         string? ownerKeyVaultUri,
         string? ownerAppConfigEndpoint,
@@ -42,6 +43,7 @@ internal static class PlannedInstanceDefinition
                 Key = product,
                 Environment = environment,
                 CreationMaturity = creationMaturity,
+                OperationMaturity = operationMaturity,
             },
             Runtime = new RuntimeSettings
             {

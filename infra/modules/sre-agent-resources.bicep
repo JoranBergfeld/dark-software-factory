@@ -29,13 +29,13 @@ param appInsightsConnectionString string = ''
 @description('Log Analytics workspace resource id.')
 param logAnalyticsId string
 
-@description('Permission level; only "Reader" RBAC is wired today. "Privileged" accepted for future use.')
-@allowed(['Reader', 'Privileged'])
-// Intentionally declared but not yet used to drive RBAC logic — the deploy command supplies
-// it so this param must exist. TODO(future): wire Privileged-tier role assignments (e.g.
-// Monitoring Contributor on the agent's own RG) when the Privileged level is productionised.
+@description('Operation maturity dial ("low"/"medium"/"high"); only carried here for naming/tagging symmetry. The actual RBAC differences it drives live in sre-agent.bicep (via sre-rg-remediation-role.bicep), not in this module.')
+@allowed(['low', 'medium', 'high'])
+// Intentionally declared but not yet used to drive RBAC logic in this module — the deploy
+// command supplies it so this param must exist for parity with the caller. The RBAC
+// difference at "high" is wired one level up, in sre-agent.bicep.
 #disable-next-line no-unused-params
-param permissionLevel string = 'Reader'
+param operationMaturity string = 'low'
 
 @description('Tags applied to the resources.')
 param tags object = {}

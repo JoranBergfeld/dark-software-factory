@@ -279,6 +279,72 @@ internal sealed class GitHubRestProvisioningClient : IGitHubProvisioningClient
         }
     }
 
+    /// <summary>
+    /// Seeds (idempotently) the Creation-phase retry workflow at <c>high</c> creation maturity.
+    /// The workflow reads a repository secret (<see
+    /// cref="EnsureCreationRetryWorkflowRequest.CredentialSecretName"/>) carrying the DSF
+    /// user-to-server GitHub credential — the retry step re-invokes the Coding Agent, and
+    /// GitHub does not accept a server-to-server installation token for that call.
+    /// </summary>
+    public async Task EnsureCreationRetryWorkflowAsync(
+        EnsureCreationRetryWorkflowRequest request,
+        CancellationToken cancellationToken)
+    {
+        using var existing = await SendAsync(
+            HttpMethod.Get,
+            $"repos/{request.RepositoryFullName}/contents/{request.WorkflowPath}",
+            body: null,
+            cancellationToken,
+            allowNotFound: true);
+        if (existing.StatusCode != HttpStatusCode.NotFound)
+        {
+            return;
+        }
+
+        var contentBytes = System.Text.Encoding.UTF8.GetBytes(CreationRetryWorkflow(request.CredentialSecretName));
+        var base64Content = Convert.ToBase64String(contentBytes);
+        using var created = await SendAsync(
+            HttpMethod.Put,
+            $"repos/{request.RepositoryFullName}/contents/{request.WorkflowPath}",
+            new Dictionary<string, object?>
+            {
+                ["message"] = "chore: seed creation-phase retry workflow",
+                ["content"] = base64Content,
+                ["branch"] = request.DefaultBranch,
+            },
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// Re-invokes the Coding Agent whenever a review requests changes or a required check
+    /// fails, so a high-maturity Creation phase does not stall waiting for a human to notice.
+    /// TODO(confirm): the exact re-invocation call — <c>POST
+    /// /agents/repos/{owner}/{repo}/tasks</c> vs. the GraphQL <c>agentAssignment</c> mutation —
+    /// against a live repo; see docs/research/github-cloud-agent-review-automation.md.
+    /// </summary>
+    private static string CreationRetryWorkflow(string credentialSecretName) =>
+        """
+        name: creation-retry
+        on:
+          pull_request_review:
+            types: [submitted]
+          check_suite:
+            types: [completed]
+        jobs:
+          retry:
+            if: >
+              (github.event_name == 'pull_request_review' && github.event.review.state == 'changes_requested') ||
+              (github.event_name == 'check_suite' && github.event.check_suite.conclusion == 'failure')
+            runs-on: ubuntu-latest
+            steps:
+              - name: Re-invoke the GitHub Coding Agent
+                env:
+                  DSF_CLOUD_AGENT_TOKEN: ${{ secrets.__CREDENTIAL_SECRET_NAME__ }}
+                run: |
+                  echo "TODO(confirm): call the Coding Agent re-invocation API using DSF_CLOUD_AGENT_TOKEN (a user-to-server credential; a server-to-server token is not accepted here)."
+
+        """.Replace("__CREDENTIAL_SECRET_NAME__", credentialSecretName, StringComparison.Ordinal);
+
     private async Task<long?> FindRulesetIdAsync(
         EnsureBranchProtectionRulesetRequest request,
         CancellationToken cancellationToken)
@@ -433,6 +499,15 @@ internal sealed class GitHubRestProvisioningClient : IGitHubProvisioningClient
                         ["require_code_owner_review"] = false,
                         ["require_last_push_approval"] = false,
                         ["required_review_thread_resolution"] = false,
+                        // TODO(confirm): 'automatic_copilot_code_review_enabled' against a live
+                        // ruleset pull_request rule payload; see
+                        // docs/research/github-cloud-agent-review-automation.md. Enabling this
+                        // requests a Copilot review automatically; the repo must additionally
+                        // have Settings -> Copilot -> Code review -> "Allow Copilot approvals to
+                        // count toward merge requirements" turned on (no confirmed REST/GraphQL
+                        // surface for that toggle yet), so a medium/high Copilot approval can
+                        // satisfy required_approving_review_count above.
+                        ["automatic_copilot_code_review_enabled"] = request.RequireCopilotApprovalGate,
                     },
                 },
                 new Dictionary<string, object?>

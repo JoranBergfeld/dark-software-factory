@@ -21,6 +21,10 @@ internal interface IGitHubProvisioningClient
     Task<GitHubRulesetProvisioningResult> EnsureBranchProtectionRulesetAsync(
         EnsureBranchProtectionRulesetRequest request,
         CancellationToken cancellationToken);
+
+    Task EnsureCreationRetryWorkflowAsync(
+        EnsureCreationRetryWorkflowRequest request,
+        CancellationToken cancellationToken);
 }
 
 internal sealed record GitHubProvisioningPlan(IReadOnlyList<GitHubProvisioningRequest> Requests)
@@ -31,32 +35,41 @@ internal sealed record GitHubProvisioningPlan(IReadOnlyList<GitHubProvisioningRe
 
         var repoFullName = definition.GitHub.FullName();
         var defaultBranch = definition.GitHub.DefaultBranch;
-        return new GitHubProvisioningPlan(
-            [
-                new EnsureRepositoryRequest(
-                    definition.GitHub.Owner,
-                    definition.GitHub.Repository,
-                    definition.GitHub.Visibility,
-                    defaultBranch),
-                new EnsureSeedRepoRequest(
-                    repoFullName,
-                    defaultBranch),
-                new EnsureLabelsRequest(repoFullName, LabelDefinitions()),
-                new EnsureAppBindingRequest(
-                    repoFullName,
-                    definition.GitHub.AppId,
-                    definition.GitHub.InstallationId),
-                new EnsureBranchProtectionRulesetRequest(
-                    repoFullName,
-                    defaultBranch,
-                    ["ci"],
-                    RequiredApprovingReviews(definition.Product.CreationMaturity),
-                    definition.GitHub.BranchProtectionRulesetId,
-                    AllowAutoMerge: string.Equals(
-                        definition.Product.CreationMaturity,
-                        "high",
-                        StringComparison.Ordinal)),
-            ]);
+        var creationMaturity = definition.Product.CreationMaturity;
+        var requests = new List<GitHubProvisioningRequest>
+        {
+            new EnsureRepositoryRequest(
+                definition.GitHub.Owner,
+                definition.GitHub.Repository,
+                definition.GitHub.Visibility,
+                defaultBranch),
+            new EnsureSeedRepoRequest(
+                repoFullName,
+                defaultBranch),
+            new EnsureLabelsRequest(repoFullName, LabelDefinitions()),
+            new EnsureAppBindingRequest(
+                repoFullName,
+                definition.GitHub.AppId,
+                definition.GitHub.InstallationId),
+            new EnsureBranchProtectionRulesetRequest(
+                repoFullName,
+                defaultBranch,
+                ["ci"],
+                RequiredApprovingReviews(creationMaturity),
+                definition.GitHub.BranchProtectionRulesetId,
+                AllowAutoMerge: AllowsAutoMerge(creationMaturity),
+                RequireCopilotApprovalGate: RequiresCopilotApprovalGate(creationMaturity)),
+        };
+
+        if (string.Equals(creationMaturity, "high", StringComparison.Ordinal))
+        {
+            requests.Add(new EnsureCreationRetryWorkflowRequest(
+                repoFullName,
+                defaultBranch,
+                definition.GitHub.CloudAgentCredentialSecretName));
+        }
+
+        return new GitHubProvisioningPlan(requests);
     }
 
     public async Task<GitHubProvisioningResult> ExecuteAsync(
@@ -112,6 +125,13 @@ internal sealed record GitHubProvisioningPlan(IReadOnlyList<GitHubProvisioningRe
                         effectiveRuleset,
                         cancellationToken);
                     break;
+                case EnsureCreationRetryWorkflowRequest retryWorkflowRequest:
+                    var effectiveRetryWorkflow = resolvedRepoFullName is not null
+                        && retryWorkflowRequest.RepositoryFullName != resolvedRepoFullName
+                        ? retryWorkflowRequest with { RepositoryFullName = resolvedRepoFullName }
+                        : retryWorkflowRequest;
+                    await client.EnsureCreationRetryWorkflowAsync(effectiveRetryWorkflow, cancellationToken);
+                    break;
             }
         }
 
@@ -152,8 +172,25 @@ internal sealed record GitHubProvisioningPlan(IReadOnlyList<GitHubProvisioningRe
                 "Human verdict: the council's proposal needs changes before it can land"),
         ];
 
-    private static int RequiredApprovingReviews(string creationMaturity) =>
-        string.Equals(creationMaturity, "high", StringComparison.Ordinal) ? 0 : 1;
+    /// <summary>
+    /// A required-reviews count of 1 is used at every maturity level: at <c>low</c> that
+    /// approval must come from a human; at <c>medium</c>/<c>high</c> the same slot is instead
+    /// satisfied by a Copilot code-review approval (see <see
+    /// cref="RequiresCopilotApprovalGate"/>), never by dropping the requirement to zero.
+    /// </summary>
+    private static int RequiredApprovingReviews(string creationMaturity) => 1;
+
+    /// <summary>Auto-merge is available once the gating review can be satisfied unattended.</summary>
+    private static bool AllowsAutoMerge(string creationMaturity) =>
+        creationMaturity is "medium" or "high";
+
+    /// <summary>
+    /// Medium and high both auto-merge on a Copilot approval rather than a standing human
+    /// review; they differ only in whether a failed review/check also triggers an automatic
+    /// retry (<c>high</c> only, via <see cref="EnsureCreationRetryWorkflowRequest"/>).
+    /// </summary>
+    private static bool RequiresCopilotApprovalGate(string creationMaturity) =>
+        creationMaturity is "medium" or "high";
 }
 
 internal abstract record GitHubProvisioningRequest(string Method);
@@ -189,8 +226,23 @@ internal sealed record EnsureBranchProtectionRulesetRequest(
     int RequiredApprovingReviewCount,
     long? ExistingRulesetId,
     string Name = "dsf-creation",
-    bool AllowAutoMerge = false)
+    bool AllowAutoMerge = false,
+    bool RequireCopilotApprovalGate = false)
     : GitHubProvisioningRequest("ensure_branch_protection_ruleset");
+
+/// <summary>
+/// Seeds the Creation-phase retry workflow (<c>high</c> creation maturity only): re-invokes
+/// the Coding Agent when a Copilot review requests changes or a required check fails, using
+/// the repository secret named by <see cref="CredentialSecretName"/> — the DSF user-to-server
+/// GitHub credential, since GitHub does not accept a server-to-server installation token for
+/// re-invoking the agent.
+/// </summary>
+internal sealed record EnsureCreationRetryWorkflowRequest(
+    string RepositoryFullName,
+    string DefaultBranch,
+    string CredentialSecretName,
+    string WorkflowPath = ".github/workflows/creation-retry.yml")
+    : GitHubProvisioningRequest("ensure_creation_retry_workflow");
 
 internal sealed record GitHubLabelDefinition(
     string Name,

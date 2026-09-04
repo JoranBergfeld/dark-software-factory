@@ -204,6 +204,7 @@ internal sealed class AzureCliProvisioningClient : IAzureProvisioningClient
             $"githubInstallationId={request.GitHubInstallationId}",
             $"githubRepository={request.GitHubRepository}",
             $"allowPublicNetworkAccess={(request.AllowPublicNetworkAccess ? "true" : "false")}",
+            $"operationMaturity={request.OperationMaturity}",
         };
         if (!string.IsNullOrWhiteSpace(request.AdminPrincipalId))
         {
@@ -254,7 +255,7 @@ internal sealed class AzureCliProvisioningClient : IAzureProvisioningClient
             $"targetResourceGroups={JsonSerializer.Serialize(request.TargetResourceGroups)}",
             $"appInsightsId={request.AppInsightsId}",
             $"logAnalyticsId={request.LogAnalyticsId}",
-            $"permissionLevel={request.PermissionLevel}",
+            $"operationMaturity={request.OperationMaturity}",
         };
         if (!string.IsNullOrWhiteSpace(request.AdminPrincipalId))
         {

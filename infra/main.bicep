@@ -79,6 +79,10 @@ param softDeleteRetentionInDays int = 90
 @description('Gate public network access to backing services. Defaults to false (off). Enable only for dev environments lacking private endpoint connectivity.')
 param allowPublicNetworkAccess bool = false
 
+@description('Operation-phase autonomy dial (low/medium/high). At medium/high, the runtime auto-assigns the GitHub Coding Agent to incident issues the SRE Agent files, instead of requiring a human to notice and assign it.')
+@allowed(['low', 'medium', 'high'])
+param operationMaturity string = 'low'
+
 // ---------------------------------------------------------------------------
 // Variables
 // ---------------------------------------------------------------------------
@@ -446,6 +450,7 @@ resource orchestratorApp 'Microsoft.App/containerApps@2025-01-01' = {
             { name: 'GITHUB_INSTALLATION_ID', value: githubInstallationId }
             { name: 'GITHUB_REPOSITORY', value: githubRepository }
             { name: 'GITHUB_APP_PRIVATE_KEY_SECRET', value: 'github-app-private-key' }
+            { name: 'DSF_ASSIGN_CLOUD_AGENT', value: string(operationMaturity != 'low') }
             {
               name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
               value: appInsights.properties.ConnectionString

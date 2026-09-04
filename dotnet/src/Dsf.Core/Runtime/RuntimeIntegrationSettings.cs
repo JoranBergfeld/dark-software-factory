@@ -34,6 +34,15 @@ public static class RuntimeIntegrationSettings
     /// <summary>Overrides the GitHub REST API base URL (GitHub Enterprise).</summary>
     public const string GitHubApiUrl = "DSF_GITHUB_API_URL";
 
+    /// <summary>
+    /// Set to <c>true</c> at medium/high Operation maturity: the issue filer assigns the
+    /// GitHub Coding Agent to every issue it files (SRE-Agent-to-Cloud-Agent
+    /// auto-assignment), rather than leaving a freshly filed incident unassigned until a
+    /// human notices. Unset or any other value preserves today's behavior: file only, assign
+    /// nothing.
+    /// </summary>
+    public const string AssignCloudAgentToFiledIssues = "DSF_ASSIGN_CLOUD_AGENT";
+
     /// <summary>Cosmos database holding the run blackboard.</summary>
     public const string CosmosDatabase = "DSF_COSMOS_DATABASE";
 

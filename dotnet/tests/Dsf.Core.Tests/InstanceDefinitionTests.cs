@@ -125,6 +125,29 @@ public sealed class InstanceDefinitionTests
     }
 
     [Fact]
+    public void Operation_maturity_and_cloud_agent_credential_survive_serialization()
+    {
+        var definition = Sample() with
+        {
+            Product = Sample().Product with { OperationMaturity = "high" },
+            GitHub = Sample().GitHub with { CloudAgentCredentialSecretName = "DSF_CLOUD_AGENT_TOKEN_CUSTOM" },
+        };
+
+        var json = InstanceDefinitions.Serialize(definition);
+
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+
+        Assert.Equal("high", root.GetProperty("product").GetProperty("operationMaturity").GetString());
+        Assert.Equal(
+            "DSF_CLOUD_AGENT_TOKEN_CUSTOM",
+            root.GetProperty("github").GetProperty("cloudAgentCredentialSecretName").GetString());
+
+        var read = InstanceDefinitions.Parse(json, "demo.json");
+        Assert.Equal(definition, read);
+    }
+
+    [Fact]
     public void Round_trips_through_write_and_read()
     {
         var root = TempRoot();

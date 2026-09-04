@@ -161,7 +161,11 @@ internal sealed class EnvironmentConveyorComposer(
                 ? GitHubIssueFiler.Create(
                     Read(RuntimeIntegrationSettings.GitHubApiUrl),
                     BuildGitHubAppAuthProvider(appId, installationId, keyVaultUri, privateKeySecret),
-                    repository)
+                    repository,
+                    assignCloudAgent: string.Equals(
+                        Read(RuntimeIntegrationSettings.AssignCloudAgentToFiledIssues),
+                        "true",
+                        StringComparison.OrdinalIgnoreCase))
                 : null;
         }
 
