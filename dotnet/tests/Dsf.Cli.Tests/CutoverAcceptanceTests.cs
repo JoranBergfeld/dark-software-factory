@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using Xunit;
 
 namespace Dsf.Cli.Tests;
@@ -42,6 +43,7 @@ public sealed class CutoverAcceptanceTests
         Assert.False(File.Exists(Path.Combine(root, ".github/workflows/dotnet-ci.yml")));
         Assert.Contains("dotnet restore Dsf.sln --locked-mode", ci, StringComparison.Ordinal);
         Assert.Contains("dotnet test Dsf.sln --no-build", ci, StringComparison.Ordinal);
+        Assert.Contains("FullyQualifiedName~CutoverAcceptanceTests", ci, StringComparison.Ordinal);
 
         foreach (var workflow in new[] { ci, docs, images })
         {
@@ -61,6 +63,47 @@ public sealed class CutoverAcceptanceTests
         Assert.True(File.Exists(Path.Combine(root, "dotnet/src/Dsf.AgentHost/Dockerfile")));
         Assert.True(
             File.Exists(Path.Combine(root, "dotnet/eng/ReleaseMetadataGenerator/ReleaseMetadataGenerator.csproj")));
+    }
+
+    [Fact]
+    public void Dotnet_parity_gate_consumes_every_authoritative_matrix_surface()
+    {
+        var matrix = JsonNode.Parse(ReadRepoFile("parity/baseline/matrix.json"))
+            ?? throw new InvalidOperationException("Parity matrix is empty.");
+        var authoritativeSurfaces = matrix["surfaces"]!.AsArray()
+            .Where(surface => surface?["authority"]?.GetValue<string>() == "authoritative")
+            .Select(surface => surface!["surface"]!.GetValue<string>())
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        var coveredSurfaces = new[]
+        {
+            "blackboard contracts",
+            "control-center GET /api/state",
+            "control-center POST /set-value",
+            "control-center POST /toggle",
+            "dsf delete/deprovision",
+            "dsf list",
+            "dsf new",
+            "dsf offboard",
+            "dsf run",
+            "dsf serve-agent",
+            "dsf serve-orchestrator",
+            "dsf sweep",
+            "dsf-control-center",
+        }.Order(StringComparer.Ordinal).ToArray();
+
+        Assert.Equal(authoritativeSurfaces, coveredSurfaces);
+
+        foreach (var surface in matrix["surfaces"]!.AsArray()
+                     .Where(surface => surface?["authority"]?.GetValue<string>() == "authoritative"))
+        {
+            foreach (var evidencePath in surface!["evidence"]!.AsArray()
+                         .Select(path => path!.GetValue<string>()))
+            {
+                var evidence = ReadRepoFile($"parity/baseline/{evidencePath}");
+                Assert.NotEqual(string.Empty, evidence.Trim());
+            }
+        }
     }
 
     [Fact]
