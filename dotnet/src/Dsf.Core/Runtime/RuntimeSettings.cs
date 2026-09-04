@@ -1,10 +1,9 @@
 namespace Dsf.Core.Runtime;
 
 /// <summary>
-/// Per-product runtime configuration resolved from the environment. Mirrors
-/// <c>AzureRuntimeSettings</c> in the Python <c>core/src/dsf/container.py</c>: the
-/// same env var names are reused so a factory instance can be configured
-/// identically regardless of which runtime (Python or .NET) is deployed.
+/// Per-product runtime configuration resolved from the environment. Reuses the
+/// established DSF env var names so every .NET runtime process receives the same
+/// product-scoped Azure/GitHub endpoints and identities.
 /// </summary>
 public sealed record RuntimeSettings(
     string Product,

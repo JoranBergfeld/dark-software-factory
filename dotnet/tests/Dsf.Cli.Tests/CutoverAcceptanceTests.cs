@@ -110,6 +110,7 @@ public sealed class CutoverAcceptanceTests
     [Fact]
     public async Task Command_evidence_drives_executable_dotnet_parity_checks()
     {
+        AssertDsfParserSnapshotMatchesDotnetSurface();
         await AssertNewDryRunMatchesCommandEvidenceAsync();
         await AssertProcessMatchesCommandEvidenceAsync("dsf-new-invalid-prefix.json");
         await AssertProcessMatchesCommandEvidenceAsync("dsf-delete-missing-manifest.json");
@@ -135,6 +136,23 @@ public sealed class CutoverAcceptanceTests
             Assert.Equal(listEvidence.Stdout, terminal.Output);
             Assert.Equal(listEvidence.Stderr, terminal.Error);
         });
+    }
+
+    private static void AssertDsfParserSnapshotMatchesDotnetSurface()
+    {
+        var snapshot = JsonNode.Parse(ReadRepoFile(
+            "parity/baseline/evidence/commands/dsf-parser-surface-snapshot.json"))
+            ?? throw new InvalidOperationException("CLI parser snapshot is empty.");
+        var rootCommandNames = CliApplication.BuildRootCommand()
+            .Subcommands
+            .Select(command => command.Name)
+            .ToHashSet(StringComparer.Ordinal);
+
+        foreach (var @case in snapshot["cases"]!.AsArray())
+        {
+            var command = @case!["namespace"]!["command"]!.GetValue<string>();
+            Assert.Contains(command, rootCommandNames);
+        }
     }
 
     [Fact]

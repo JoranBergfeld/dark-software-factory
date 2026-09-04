@@ -87,8 +87,39 @@ internal sealed record ControlCenterSettings(
             secure);
     }
 
+    public static ControlCenterSettings FromEnvironment(
+        IReadOnlyDictionary<string, string?> env,
+        IReadOnlyList<string> args)
+    {
+        ArgumentNullException.ThrowIfNull(env);
+        ArgumentNullException.ThrowIfNull(args);
+
+        var overlay = new Dictionary<string, string?>(env, StringComparer.Ordinal);
+        for (var index = 0; index < args.Count; index++)
+        {
+            var name = args[index];
+            if (name is not ("--host" or "--port"))
+            {
+                throw new ControlCenterConfigurationException(
+                    $"unknown Control Center option '{name}'.",
+                    [name]);
+            }
+
+            if (index + 1 >= args.Count)
+            {
+                throw new ControlCenterConfigurationException(
+                    $"{name} requires a value.",
+                    [name]);
+            }
+
+            overlay[name == "--host" ? HostEnv : PortEnv] = args[++index];
+        }
+
+        return FromEnvironment(overlay);
+    }
+
     /// <summary>Resolves settings from the real process environment.</summary>
-    public static ControlCenterSettings FromEnvironment()
+    public static ControlCenterSettings FromEnvironment(IReadOnlyList<string> args)
     {
         var env = new Dictionary<string, string?>(StringComparer.Ordinal);
         foreach (System.Collections.DictionaryEntry entry in Environment.GetEnvironmentVariables())
@@ -96,6 +127,6 @@ internal sealed record ControlCenterSettings(
             env[(string)entry.Key] = entry.Value as string;
         }
 
-        return FromEnvironment(env);
+        return FromEnvironment(env, args);
     }
 }

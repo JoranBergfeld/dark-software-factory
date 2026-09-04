@@ -5,7 +5,7 @@ using Dsf.ControlCenter;
 // unset setting -- rather than serving a governance surface it cannot back.
 try
 {
-    var settings = ControlCenterSettings.FromEnvironment();
+    var settings = ControlCenterSettings.FromEnvironment(args);
     var authority = new AppConfigurationProductPolicyAuthority(
         new AzureConfigurationStoreGateway(),
         settings.OwnerAppConfigEndpoint);
