@@ -73,9 +73,8 @@ server-issued session cookie plus CSRF token; automation uses bearer-authenticat
 
 ## Watching it
 
-The runtime emits traces to Application Insights. The dashboard JSON in
-`core/src/dsf/observability/grafana/dashboard.json` imports into Grafana once App Insights is
-wired.
+The runtime emits traces to Application Insights. Import the dashboard JSON shipped in the
+release artifact bundle's `observability/` directory once App Insights is wired.
 
 ## Closed loop
 
