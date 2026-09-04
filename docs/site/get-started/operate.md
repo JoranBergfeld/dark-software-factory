@@ -35,7 +35,7 @@ export DSF_RUNTIME_HOST=/absolute/path/to/dsf-runtime
 With `DSF_RUNTIME_HOST` configured, manual operator checks use the `dsf` front door:
 
 ```bash
-dsf run --product <product> --signal tests/fixtures/sample_signal.json --dry-run
+dsf run --product <product> --signal /absolute/path/to/operator-signal.json --dry-run
 dsf sweep --product <product> --dry-run
 dsf serve-agent --kind sentry --host 127.0.0.1 --port 8082
 ```

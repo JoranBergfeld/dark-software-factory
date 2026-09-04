@@ -120,6 +120,19 @@ public sealed class LivingDocumentationTests
         Assert.Contains("source or service deployment", operate, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("DSF_RUNTIME_HOST", operate, StringComparison.Ordinal);
 
+        var operatorDocs = new[]
+        {
+            bootstrap,
+            quickstart,
+            operate,
+            provisioning,
+            releaseVerification,
+        };
+        foreach (var document in operatorDocs)
+        {
+            Assert.DoesNotContain("tests/fixtures", document, StringComparison.Ordinal);
+        }
+
         Assert.Contains("dsf-cli-linux-x64-tar-gz.spdx.json", releaseVerification, StringComparison.Ordinal);
         Assert.DoesNotContain("dsf-cli-linux-x64.tar.gz.spdx.json", releaseVerification, StringComparison.Ordinal);
     }
