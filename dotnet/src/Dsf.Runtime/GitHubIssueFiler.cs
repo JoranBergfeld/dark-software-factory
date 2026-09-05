@@ -23,6 +23,7 @@ internal sealed class GitHubIssueFiler : IIssueFiler
     private readonly HttpClient httpClient;
     private readonly IGitHubAuthProvider authProvider;
     private readonly string repository;
+    private readonly bool assignCloudAgent;
 
     public GitHubIssueFiler(HttpClient httpClient, string token, string repository)
         : this(httpClient, new StaticGitHubAuthProvider(token), repository)
@@ -30,10 +31,17 @@ internal sealed class GitHubIssueFiler : IIssueFiler
     }
 
     public GitHubIssueFiler(HttpClient httpClient, IGitHubAuthProvider authProvider, string repository)
+        : this(httpClient, authProvider, repository, assignCloudAgent: false)
+    {
+    }
+
+    public GitHubIssueFiler(
+        HttpClient httpClient, IGitHubAuthProvider authProvider, string repository, bool assignCloudAgent)
     {
         this.httpClient = httpClient;
         this.authProvider = authProvider;
         this.repository = repository.Trim();
+        this.assignCloudAgent = assignCloudAgent;
         this.httpClient.BaseAddress ??= new Uri(DefaultApiUrl);
         this.httpClient.DefaultRequestHeaders.Accept.Add(
             new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
@@ -46,7 +54,8 @@ internal sealed class GitHubIssueFiler : IIssueFiler
         Create(apiUrl, new StaticGitHubAuthProvider(token), repository);
 
     /// <summary>Builds a filer against the configured API base URL, authenticated through <paramref name="authProvider"/>.</summary>
-    public static GitHubIssueFiler Create(string apiUrl, IGitHubAuthProvider authProvider, string repository) =>
+    public static GitHubIssueFiler Create(
+        string apiUrl, IGitHubAuthProvider authProvider, string repository, bool assignCloudAgent = false) =>
         new(
             new HttpClient
             {
@@ -54,7 +63,8 @@ internal sealed class GitHubIssueFiler : IIssueFiler
                     string.IsNullOrWhiteSpace(apiUrl) ? DefaultApiUrl : apiUrl)),
             },
             authProvider,
-            repository);
+            repository,
+            assignCloudAgent);
 
     /// <summary>The marker an issue carries so its filing intent can be recognized.</summary>
     public static string IntentMarker(string intentKey) => $"<!-- dsf-intent: {intentKey} -->";
@@ -95,11 +105,128 @@ internal sealed class GitHubIssueFiler : IIssueFiler
         }
 
         using var document = JsonDocument.Parse(body);
-        return document.RootElement.TryGetProperty("html_url", out var url)
-            ? url.GetString() ?? string.Empty
-            : throw new InvalidOperationException(
+        if (!document.RootElement.TryGetProperty("html_url", out var url))
+        {
+            throw new InvalidOperationException(
                 $"GitHub accepted proposal '{proposal.Id}' but answered no issue URL: {body}");
+        }
+
+        if (assignCloudAgent
+            && document.RootElement.TryGetProperty("node_id", out var nodeId)
+            && nodeId.GetString() is { Length: > 0 } issueNodeId)
+        {
+            // Best effort: an issue that fails to auto-assign is still filed and still
+            // carries the handoff label, exactly like the existing "Copilot not enabled"
+            // fallback the Council's own filing documents -- a human can assign it instead.
+            await TryAssignCloudAgentAsync(issueNodeId, cancellationToken);
+        }
+
+        return url.GetString() ?? string.Empty;
     }
+
+    /// <summary>
+    /// Assigns the GitHub Coding Agent to an already-filed issue via GitHub's GraphQL
+    /// <c>suggestedActors</c>/<c>replaceActorsForAssignable</c> pair -- the mechanism GitHub's
+    /// own "Assign to Copilot" UI action uses. Any failure (Copilot not enabled on the repo,
+    /// no bot actor offered, a transient API error) is swallowed: filing already succeeded,
+    /// and an unassigned issue still carries the handoff label a human can act on.
+    ///
+    /// Authenticates with the same GitHub App installation token the filer already used to
+    /// create the issue, not the shared user-to-server credential from
+    /// <c>GitHubSettings.CloudAgentCredentialSecretName</c>. That credential is documented as a
+    /// GitHub Actions repository secret consumed inside a workflow run (the Creation-phase
+    /// retry workflow) -- a repo secret's value is never readable from outside an Actions run,
+    /// so this runtime process (an Azure Container App) has no path to it. Public precedent
+    /// confirms <c>replaceActorsForAssignable</c> accepts an installation token, so this stays
+    /// the one credential mechanism this seam actually has today. If a later ticket seeds the
+    /// shared credential's value somewhere this runtime can read it (e.g. mirrored into Key
+    /// Vault), swapping this call over is a contained follow-up, not a redesign.
+    /// </summary>
+    private async Task TryAssignCloudAgentAsync(string issueNodeId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await AuthorizeAsync(cancellationToken);
+            using var actorsResponse = await httpClient.PostAsJsonAsync(
+                "graphql",
+                new
+                {
+                    query = """
+                        query($id: ID!) {
+                          node(id: $id) {
+                            ... on Issue {
+                              suggestedActors(capabilities: [CAN_BE_ASSIGNED], first: 10) {
+                                nodes { login id }
+                              }
+                            }
+                          }
+                        }
+                        """,
+                    variables = new { id = issueNodeId },
+                },
+                cancellationToken);
+            if (!actorsResponse.IsSuccessStatusCode)
+            {
+                return;
+            }
+
+            using var actorsDocument = JsonDocument.Parse(
+                await actorsResponse.Content.ReadAsStringAsync(cancellationToken));
+            if (!actorsDocument.RootElement.TryGetProperty("data", out var data)
+                || data.ValueKind != JsonValueKind.Object
+                || !data.TryGetProperty("node", out var node)
+                || node.ValueKind != JsonValueKind.Object
+                || !node.TryGetProperty("suggestedActors", out var suggestedActors)
+                || !suggestedActors.TryGetProperty("nodes", out var actorNodes)
+                || actorNodes.ValueKind != JsonValueKind.Array)
+            {
+                return;
+            }
+
+            string? cloudAgentActorId = null;
+            foreach (var actor in actorNodes.EnumerateArray())
+            {
+                if (string.Equals(
+                        actor.TryGetProperty("login", out var login) ? login.GetString() : null,
+                        CloudAgentBotLogin,
+                        StringComparison.OrdinalIgnoreCase)
+                    && actor.TryGetProperty("id", out var actorId))
+                {
+                    cloudAgentActorId = actorId.GetString();
+                    break;
+                }
+            }
+
+            if (cloudAgentActorId is null)
+            {
+                return;
+            }
+
+            await AuthorizeAsync(cancellationToken);
+            using var ignored = await httpClient.PostAsJsonAsync(
+                "graphql",
+                new
+                {
+                    query = """
+                        mutation($assignableId: ID!, $actorIds: [ID!]!) {
+                          replaceActorsForAssignable(input: { assignableId: $assignableId, actorIds: $actorIds }) {
+                            clientMutationId
+                          }
+                        }
+                        """,
+                    variables = new { assignableId = issueNodeId, actorIds = new[] { cloudAgentActorId } },
+                },
+                cancellationToken);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            // Assignment is enrichment on top of a filing that already succeeded -- never
+            // fail the run over it.
+        }
+    }
+
+    /// <summary>The bot login GitHub's GraphQL API offers for the Coding Agent.</summary>
+    private const string CloudAgentBotLogin = "copilot-swe-agent";
 
     /// <summary>
     /// Resolves an intent key to the issue already filed for it, if any. A search

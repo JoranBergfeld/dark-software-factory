@@ -217,7 +217,8 @@ public static class CliApplication
         var namePrefix = StringOption("--name-prefix", "base Azure resource name prefix", string.Empty);
         var environment = StringOption("--environment", "Azure environment moniker", "dev");
         var location = StringOption("--location", "Azure region", "swedencentral");
-        var creationMaturity = StringOption("--creation-maturity", "creation-phase autonomy", "low", "low", "high");
+        var creationMaturity = StringOption("--creation-maturity", "creation-phase autonomy", "low", "low", "medium", "high");
+        var operationMaturity = StringOption("--operation-maturity", "operation-phase autonomy", "low", "low", "medium", "high");
         var dryRun = BoolOption("--dry-run", "preview only: print the what-if plan without running steps");
         var noCharter = BoolOption("--no-charter", "skip the post-provision charter prompt");
         var writePlan = BoolOption("--write-plan", "with --dry-run, still write the instance manifest");
@@ -243,6 +244,7 @@ public static class CliApplication
             environment,
             location,
             creationMaturity,
+            operationMaturity,
             dryRun,
             noCharter,
             writePlan,
@@ -264,6 +266,7 @@ public static class CliApplication
             environment,
             location,
             creationMaturity,
+            operationMaturity,
             dryRun,
             noCharter,
             writePlan,
@@ -347,6 +350,7 @@ public static class CliApplication
                     environmentValue,
                     locationValue,
                     parseResult.GetValue(creationMaturity) ?? "low",
+                    parseResult.GetValue(operationMaturity) ?? "low",
                     effectivePrefix,
                     parseResult.GetValue(ownerKeyVaultUri),
                     parseResult.GetValue(ownerAppConfigEndpoint),
@@ -373,6 +377,8 @@ public static class CliApplication
                     environmentValue,
                     effectivePrefix,
                     parseResult.GetValue(creationMaturity) ?? "low",
+                    parseResult.GetValue(operationMaturity) ?? "low",
+                    definition.GitHub.CloudAgentCredentialSecretName,
                     definition.GitHub.AppId,
                     definition.GitHub.InstallationId,
                     configRootValue);
@@ -573,6 +579,8 @@ public static class CliApplication
         string environment,
         string namePrefix,
         string creationMaturity,
+        string operationMaturity,
+        string cloudAgentCredentialSecretName,
         string? githubAppId,
         string? githubInstallationId,
         string? configRoot)
@@ -607,15 +615,27 @@ public static class CliApplication
         terminal.WriteLine($"[dsf]  5. create_resource_group [dry-run] Create dedicated Azure resource group rg-dsf-{product}");
         terminal.WriteLine($"[dsf]       $ az group create --name rg-dsf-{product} --location {location} --tags project=dark-software-factory managed-by=dsf product={product} component=backing-services");
         terminal.WriteLine("[dsf]  6. provision_azure [dry-run] Deploy backing services into rg-dsf-" + product + " from infra/main.bicep");
-        terminal.WriteLine($"[dsf]       $ az deployment group create -g rg-dsf-{product} -n dsf-{product} -f {bicepPath} -p namePrefix={namePrefix} environmentName={environment} location={location} product={product} runtimeImage=ghcr.io/joranbergfeld/dsf-runtime:latest githubAppId= githubInstallationId= githubRepository={repoFull} allowPublicNetworkAccess=true --no-wait");
+        terminal.WriteLine($"[dsf]       $ az deployment group create -g rg-dsf-{product} -n dsf-{product} -f {bicepPath} -p namePrefix={namePrefix} environmentName={environment} location={location} product={product} runtimeImage=ghcr.io/joranbergfeld/dsf-runtime:latest githubAppId= githubInstallationId= githubRepository={repoFull} operationMaturity={operationMaturity} allowPublicNetworkAccess=true --no-wait");
         terminal.WriteLine($"[dsf]  7. seed_appconfig [seeded (dry-run)] Seed the canonical config/defaults.json into App Configuration for {product} (critic/agent flags + thresholds)");
         terminal.WriteLine($"[dsf]  8. seed_app_key   [skipped (no owner App configured)] Seed the DSF App private key from the owner Key Vault into the product Key Vault for {product}");
         terminal.WriteLine($"[dsf]  9. seed_webiq_key [skipped (no owner App configured)] Seed the WebIQ API key from the owner Key Vault into the product Key Vault for {product}");
         terminal.WriteLine($"[dsf]  10. seed_product_record [seeded (dry-run)] Seed the {product} Product record (repo, taxonomy, source scopes, threshold) into its per-product App Configuration");
         terminal.WriteLine($"[dsf]  11. publish_runtime_index [skipped (no owner App Config configured)] Publish {product} runtime env (endpoints + pointers) to the owner App Configuration index");
         terminal.WriteLine($"[dsf]  12. deploy_council [rendered (dry-run)] Render + bring up the feature-council runtime scoped to {product}");
-        terminal.WriteLine($"[dsf]  13. branch_protection [ruleset planned (dry-run)] Apply the '{creationMaturity}' creation maturity dial to {repoFull} as a branch-protection ruleset (required reviews + green 'ci' check)");
-        terminal.WriteLine($"[dsf]  14. deploy_sre_agent [deployed (dry-run)] Provision the Azure SRE Agent for {product} (agent + RBAC on rg-dsf-{product} + Azure Monitor)");
+        terminal.WriteLine($"[dsf]  13. branch_protection [ruleset planned (dry-run)] Apply the '{creationMaturity}' creation maturity dial to {repoFull} as a branch-protection ruleset (required review + green 'ci' check; medium/high gate the review on a Copilot approval instead of a standing human requirement)");
+        if (creationMaturity is "medium" or "high")
+        {
+            terminal.WriteLine($"[dsf]  13a. copilot_review_automation [planned (dry-run)] Enable automatic Copilot code review + count Copilot approvals toward merge requirements for {repoFull}, and auto-merge once required checks/approval land");
+        }
+        if (creationMaturity == "high")
+        {
+            terminal.WriteLine($"[dsf]  13b. creation_retry_workflow [planned (dry-run)] Seed .github/workflows/creation-retry.yml in {repoFull}, re-invoking the Coding Agent on a failed review/check using the '{cloudAgentCredentialSecretName}' repository secret");
+        }
+        terminal.WriteLine($"[dsf]  14. deploy_sre_agent [deployed (dry-run)] Provision the Azure SRE Agent for {product} (agent + RBAC on rg-dsf-{product} + Azure Monitor) at '{operationMaturity}' operation maturity");
+        if (operationMaturity == "high")
+        {
+            terminal.WriteLine($"[dsf]  14a. sre_remediation_rbac [planned (dry-run)] Grant the SRE Agent identity a custom remediation role (all actions except delete) on the monitored resource group(s), instead of Reader-only");
+        }
         terminal.WriteLine($"[dsf]  15. write_config   [{manifestPath}] Write instance manifest to config/instances/{product}.json");
     }
 
@@ -653,6 +673,7 @@ public static class CliApplication
         string environment,
         string location,
         string creationMaturity,
+        string operationMaturity,
         string namePrefix,
         string? ownerKeyVaultUri,
         string? ownerAppConfigEndpoint,
@@ -672,6 +693,7 @@ public static class CliApplication
             environment,
             location,
             creationMaturity,
+            operationMaturity,
             namePrefix,
             ownerKeyVaultUri,
             ownerAppConfigEndpoint,

@@ -1,7 +1,7 @@
 # Operate the factory
 
 A provisioned factory runs itself. The council sweeps sources, files grounded
-`creation:ready` issues, the Creation phase builds them, and the SRE Agent watches production
+`creation:ready` issues, the Creation phase builds them, and the Operation phase watches production
 and feeds incidents back to the start. Operators govern from outside the line.
 
 ## Runtime
@@ -85,19 +85,22 @@ dashboard JSON ships with the release artifacts.
 
 ## Closed loop
 
-The council files issues with the `creation:ready` label. The GitHub Copilot Coding Agent
-picks them up, opens PRs, and branch protection applies the product's creation-maturity dial.
+The council files issues with the `creation:ready` label. The GitHub Cloud Agent
+picks them up, opens PRs, and branch protection applies the product's creation-maturity setting.
 Downstream approvals, edits, and rejections become lessons that inform future council runs.
 
 ```text
-council issue → Coding Agent PR → branch-protection gate → human outcome → lesson → next sweep
+council issue → GitHub Cloud Agent PR → branch-protection gate → human outcome → lesson → next sweep
 ```
 
-## SRE Agent
+## Operation phase
 
-`dsf new` provisions the managed Azure SRE Agent as a subscription-scoped deployment. It watches
-production telemetry, investigates incidents, and files issues or PRs carrying `creation:ready`
-and `incident`. Council sources then pull those incidents into later proposals.
+`dsf new` provisions the managed Azure SRE Agent as a subscription-scoped deployment, the
+Operation phase's implementation today. It watches production telemetry, investigates
+incidents, and files issues or PRs carrying `creation:ready` and `incident`. Council sources
+then pull those incidents into later proposals. See
+[Operation phase](../concept/sre-agent.md) and [Handoffs](../concept/handoffs.md) for the full
+mechanism.
 
 ## Guardrails
 

@@ -56,7 +56,8 @@ internal sealed record AzureProvisioningPlan(IReadOnlyList<AzureProvisioningRequ
                     definition.GitHub.InstallationId ?? string.Empty,
                     definition.GitHub.FullName(),
                     AllowPublicNetworkAccess: true,
-                    definition.Governance.AdminPrincipalId),
+                    definition.Governance.AdminPrincipalId,
+                    definition.Product.OperationMaturity),
                 new DeploySreAgentRequest(
                     azure.SreAgent.Location,
                     $"dsf-sre-{definition.Product.Key}",
@@ -67,7 +68,7 @@ internal sealed record AzureProvisioningPlan(IReadOnlyList<AzureProvisioningRequ
                     azure.SreAgent.MonitoredResourceGroups,
                     AppInsightsId: string.Empty,
                     LogAnalyticsId: string.Empty,
-                    PermissionLevel: "Reader",
+                    OperationMaturity: definition.Product.OperationMaturity,
                     definition.Governance.AdminPrincipalId),
             ]);
     }
@@ -140,7 +141,8 @@ internal sealed record DeployTopologyRequest(
     string GitHubInstallationId,
     string GitHubRepository,
     bool AllowPublicNetworkAccess,
-    string? AdminPrincipalId)
+    string? AdminPrincipalId,
+    string OperationMaturity = "low")
     : AzureProvisioningRequest("deploy_topology");
 
 internal sealed record DeploySreAgentRequest(
@@ -153,7 +155,7 @@ internal sealed record DeploySreAgentRequest(
     IReadOnlyList<string> TargetResourceGroups,
     string AppInsightsId,
     string LogAnalyticsId,
-    string PermissionLevel,
+    string OperationMaturity,
     string? AdminPrincipalId)
     : AzureProvisioningRequest("deploy_sre_agent");
 

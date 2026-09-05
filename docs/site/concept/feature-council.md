@@ -120,13 +120,14 @@ change, and the evidence behind it with citations.
 ## Handoffs
 
 Upstream, the Council consumes signals. Some come from outside the factory
-(market and operational telemetry), and over time the SRE Agent feeds production
+(market and operational telemetry), and over time the Operation phase feeds production
 lessons back in as new signals.
 
 Downstream, the Council hands to the Creation phase. The contract is one label:
-every filed issue carries `creation:ready`, and the Copilot Coding Agent picks up issues carrying exactly
-that label. The Council does not call the Coding Agent directly. It files an issue and
-the label does the wiring, which keeps the two phases independent.
+every filed issue carries `creation:ready`, and the GitHub Cloud Agent picks up issues carrying exactly
+that label. The Council does not call the executor directly. It files an issue and
+the label does the wiring, which keeps the two phases independent. See
+[Handoffs](handoffs.md) for the full mechanism.
 
 ## Harness and steering
 

@@ -9,7 +9,7 @@
 //   az deployment sub create -l <sreAgentLocation> -f infra/sre-agent.bicep -p ...
 //
 // Required params: product, agentName, sreAgentLocation, agentResourceGroup,
-// targetResourceGroups, appInsightsId, logAnalyticsId, permissionLevel.
+// targetResourceGroups, appInsightsId, logAnalyticsId, operationMaturity.
 // Optional: appInsightsAppId, appInsightsConnectionString (agent-side log config;
 // omit these if main.bicep does not yet output appInsightsAppId).
 targetScope = 'subscription'
@@ -48,12 +48,13 @@ param appInsightsAppId string = ''
 param appInsightsConnectionString string = ''
 
 @description('''
-Permission level granted to the SRE agent. "Reader" is the default and only wired level.
-"Privileged" is accepted by the deploy command but additional role wiring is future work
-(the RBAC assignments below only cover the Reader surface regardless of this value).
+Operation maturity granted to the SRE agent's RBAC. "low"/"medium" keep the existing
+Reader + Monitoring Reader + Log Analytics Reader cross-RG grant unchanged. "high"
+additionally grants a custom remediation role (all actions except delete) on each
+monitored resource group, via sre-rg-remediation-role.bicep.
 ''')
-@allowed(['Reader', 'Privileged'])
-param permissionLevel string = 'Reader'
+@allowed(['low', 'medium', 'high'])
+param operationMaturity string = 'low'
 
 @description('Object id of the human owner/governance principal granted Reader + SRE Agent Administrator on the SRE agent RG (so the deployer can open and operate the agent in portal/CLI after `dsf new`). Optional — leave empty in CI / service-principal runs to skip the human grant.')
 param ownerPrincipalId string = ''
@@ -99,7 +100,7 @@ module agentResources 'modules/sre-agent-resources.bicep' = {
     appInsightsAppId: appInsightsAppId
     appInsightsConnectionString: appInsightsConnectionString
     logAnalyticsId: logAnalyticsId
-    permissionLevel: permissionLevel
+    operationMaturity: operationMaturity
     tags: tags
   }
 }
@@ -112,6 +113,21 @@ module agentResources 'modules/sre-agent-resources.bicep' = {
 module rgRoles 'modules/sre-rg-roles.bicep' = [
   for rg in targetResourceGroups: {
     name: 'sre-roles-${rg}'
+    scope: resourceGroup(rg)
+    params: {
+      principalId: agentResources.outputs.principalId
+    }
+  }
+]
+
+// ---------------------------------------------------------------------------
+// "high" operation maturity: additional remediation-capable custom role
+// (all actions except delete) on every monitored resource group.
+// ---------------------------------------------------------------------------
+
+module rgRemediationRoles 'modules/sre-rg-remediation-role.bicep' = [
+  for rg in targetResourceGroups: if (operationMaturity == 'high') {
+    name: 'sre-remediation-role-${rg}'
     scope: resourceGroup(rg)
     params: {
       principalId: agentResources.outputs.principalId

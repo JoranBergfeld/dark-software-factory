@@ -66,7 +66,8 @@ public sealed class CliSurfaceTests
               --name-prefix <name-prefix>                            base Azure resource name prefix
               --environment <environment>                            Azure environment moniker [default: dev]
               --location <location>                                  Azure region [default: swedencentral]
-              --creation-maturity <high|low>                         creation-phase autonomy [default: low]
+              --creation-maturity <high|low|medium>                  creation-phase autonomy [default: low]
+              --operation-maturity <high|low|medium>                 operation-phase autonomy [default: low]
               --dry-run                                              preview only: print the what-if plan without running steps
               --no-charter                                           skip the post-provision charter prompt
               --write-plan                                           with --dry-run, still write the instance manifest

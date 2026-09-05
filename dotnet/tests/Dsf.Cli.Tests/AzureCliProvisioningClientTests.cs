@@ -89,6 +89,7 @@ public sealed class AzureCliProvisioningClientTests
                     "githubInstallationId=42",
                     "githubRepository=acme/paritydemo",
                     "allowPublicNetworkAccess=true",
+                    "operationMaturity=low",
                     "adminPrincipalId=11111111-2222-3333-4444-555555555555",
                     "--query", "properties.outputs", "-o", "json",
                 ],
@@ -228,7 +229,7 @@ public sealed class AzureCliProvisioningClientTests
                     """targetResourceGroups=["rg-dsf-paritydemo"]""",
                     "appInsightsId=/subscriptions/x/resourceGroups/rg/providers/Microsoft.Insights/components/appi-paritydemo",
                     "logAnalyticsId=/subscriptions/x/resourceGroups/rg/providers/Microsoft.OperationalInsights/workspaces/log-paritydemo",
-                    "permissionLevel=Reader",
+                    "operationMaturity=low",
                     "ownerPrincipalId=11111111-2222-3333-4444-555555555555",
                     "--query", "properties.outputs", "-o", "json",
                 ],
@@ -284,7 +285,7 @@ public sealed class AzureCliProvisioningClientTests
         ["rg-dsf-paritydemo"],
         "/subscriptions/x/resourceGroups/rg/providers/Microsoft.Insights/components/appi-paritydemo",
         "/subscriptions/x/resourceGroups/rg/providers/Microsoft.OperationalInsights/workspaces/log-paritydemo",
-        "Reader",
+        "low",
         "11111111-2222-3333-4444-555555555555");
 
     private static string TempBicepFile()

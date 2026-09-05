@@ -24,11 +24,11 @@ what happens in production comes back to the start.
 ```mermaid
 flowchart LR
     signals(["market and operational signals"]) --> FC["Feature Council<br/>decide what to build"]
-    FC -->|issues| CS["Creation<br/>build it"]
-    CS -->|PRs| SRE["SRE Agent<br/>operate and feed back"]
-    SRE --> prod(["production"])
-    SRE -->|fix-forward incidents| CS
-    SRE -->|signals and lessons| FC
+    FC -->|issues| CS["Creation phase<br/>build it"]
+    CS -->|PRs| OP["Operation phase<br/>operate and feed back"]
+    OP --> prod(["production"])
+    OP -->|fix-forward incidents| CS
+    OP -->|signals and lessons| FC
 ```
 
 Every product gets its own copy of this loop, fully isolated, stamped out by a single
@@ -43,4 +43,5 @@ command. This repository is the blueprint, not a factory that's already running.
   [operate it](get-started/operate.md).
 - **Each phase in depth:** [Feature Council](concept/feature-council.md),
   [Product Charter](concept/product-charter.md),
-  [Creation phase](concept/creation.md), [SRE Agent](concept/sre-agent.md).
+  [Creation phase](concept/creation.md), [Operation phase](concept/sre-agent.md),
+  [Handoffs](concept/handoffs.md).

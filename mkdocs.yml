@@ -56,7 +56,8 @@ nav:
       - Feature Council: concept/feature-council.md
       - Product Charter: concept/product-charter.md
       - Creation phase: concept/creation.md
-      - SRE Agent: concept/sre-agent.md
+      - Operation phase: concept/sre-agent.md
+      - Handoffs: concept/handoffs.md
       - The harness: concept/the-harness.md
   - Get started:
       - Quickstart: get-started/quickstart.md

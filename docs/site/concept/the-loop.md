@@ -6,11 +6,11 @@ what happens in production comes back to the start.
 ```mermaid
 flowchart LR
     signals(["market and operational signals"]) --> FC["Feature Council<br/>decide what to build"]
-    FC -->|issues| CS["Creation<br/>build it"]
-    CS -->|PRs| SRE["SRE Agent<br/>operate and feed back"]
-    SRE --> prod(["production"])
-    SRE -->|fix-forward incidents| CS
-    SRE -->|signals and lessons| FC
+    FC -->|issues| CS["Creation phase<br/>build it"]
+    CS -->|PRs| OP["Operation phase<br/>operate and feed back"]
+    OP --> prod(["production"])
+    OP -->|fix-forward incidents| CS
+    OP -->|signals and lessons| FC
 ```
 
 ## Feature Council: decide what to build
@@ -22,20 +22,28 @@ worth building.
 
 → [Feature Council](feature-council.md)
 
-## Creation: build it
+## Creation phase: build it
 
-It takes the Council's issues and assigns the GitHub Copilot Coding Agent. The agent opens
-pull requests, and the maturity ruleset decides how far the merge can run unattended.
+It takes the Council's issues and assigns an executor — the GitHub Cloud Agent today. The
+executor opens pull requests, and the maturity ruleset decides how far the merge can run
+unattended.
 
 → [Creation phase](creation.md)
 
-## SRE Agent: operate and feed back
+## Operation phase: operate and feed back
 
-It watches production, sends incidents straight back to the Creation phase as fixes, and passes what
-it learns to the Council as new signals and lessons. It keeps the product running and teaches
-the factory how that product actually behaves.
+It watches production, sends incidents straight back to the Creation phase as fixes, and passes
+what it learns to the Council as new signals and lessons. It keeps the product running and
+teaches the factory how that product actually behaves.
 
-→ [SRE Agent](sre-agent.md)
+→ [Operation phase](sre-agent.md)
+
+## How the phases hand off
+
+Creation and Operation trade work through GitHub issue labels alone, and assignment to an
+executor is either manual or maturity-automated.
+
+→ [Handoffs](handoffs.md)
 
 ## One factory per product
 

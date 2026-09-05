@@ -133,6 +133,89 @@ public sealed class GitHubIssueFilerTests
     }
 
     [Fact]
+    public async Task Assigns_the_cloud_agent_to_a_newly_filed_issue_when_enabled()
+    {
+        var recorded = new List<Recorded>();
+        var github = await StartGitHubWithAssignmentAsync(recorded);
+        await using var host = github;
+        try
+        {
+            using var http = new HttpClient { BaseAddress = new Uri($"{BaseAddress(github)}/") };
+            var filer = new GitHubIssueFiler(
+                http, new Dsf.Runtime.GitHubApp.StaticGitHubAuthProvider("ghp_test"), "acme/acme", assignCloudAgent: true);
+
+            var url = await filer.FileAsync(ProposalWithIntent("fingerprint-1:sentry"), CancellationToken.None);
+
+            Assert.Equal("https://github.com/acme/acme/issues/7", url);
+            var mutation = Assert.Single(recorded, entry => entry.Body.Contains("replaceActorsForAssignable", StringComparison.Ordinal));
+            Assert.Contains("\"cloud-agent-actor-id\"", mutation.Body);
+        }
+        finally
+        {
+            await github.StopAsync();
+        }
+    }
+
+    [Fact]
+    public async Task Does_not_query_graphql_when_cloud_agent_assignment_is_disabled()
+    {
+        var recorded = new List<Recorded>();
+        var github = await StartGitHubWithAssignmentAsync(recorded);
+        await using var host = github;
+        try
+        {
+            using var http = new HttpClient { BaseAddress = new Uri($"{BaseAddress(github)}/") };
+            var filer = new GitHubIssueFiler(http, "ghp_test", "acme/acme");
+
+            await filer.FileAsync(ProposalWithIntent("fingerprint-1:sentry"), CancellationToken.None);
+
+            Assert.DoesNotContain(recorded, entry => entry.Path == "/graphql");
+        }
+        finally
+        {
+            await github.StopAsync();
+        }
+    }
+
+    private static async Task<WebApplication> StartGitHubWithAssignmentAsync(List<Recorded> recorded)
+    {
+        var builder = WebApplication.CreateSlimBuilder();
+        builder.WebHost.UseUrls("http://127.0.0.1:0");
+        var app = builder.Build();
+        app.MapGet("/search/issues", (HttpRequest request) =>
+        {
+            recorded.Add(new Recorded("/search/issues", request.Query["q"].ToString()));
+            return Results.Text("""{"total_count": 0, "items": []}""", "application/json");
+        });
+        app.MapPost("/repos/{owner}/{repo}/issues", async (HttpRequest request, string owner, string repo) =>
+        {
+            using var reader = new StreamReader(request.Body);
+            recorded.Add(new Recorded($"/repos/{owner}/{repo}/issues", await reader.ReadToEndAsync()));
+            return Results.Json(new { html_url = "https://github.com/acme/acme/issues/7", number = 7, node_id = "issue-node-id" });
+        });
+        app.MapPost("/graphql", async (HttpRequest request) =>
+        {
+            using var reader = new StreamReader(request.Body);
+            var payload = await reader.ReadToEndAsync();
+            recorded.Add(new Recorded("/graphql", payload));
+            if (payload.Contains("suggestedActors", StringComparison.Ordinal))
+            {
+                return Results.Text(
+                    """
+                    {"data": {"node": {"suggestedActors": {"nodes": [
+                        {"login": "copilot-swe-agent", "id": "cloud-agent-actor-id"}
+                    ]}}}}
+                    """,
+                    "application/json");
+            }
+
+            return Results.Text("""{"data": {"replaceActorsForAssignable": {"clientMutationId": null}}}""", "application/json");
+        });
+        await app.StartAsync();
+        return app;
+    }
+
+    [Fact]
     public async Task Synthesis_gives_every_proposal_a_durable_intent_key()
     {
         var run = new ConveyorRun { ProductHints = ["acme"], SourceKinds = ["sentry"] };
