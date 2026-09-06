@@ -247,6 +247,35 @@ internal sealed class UnreachableAzureMonitorLogsGateway(string reason) : IAzure
         throw new InvalidOperationException(reason);
 }
 
+/// <summary>
+/// A FoundryIQ knowledge base gateway that answers a fixed, scripted set of
+/// results for any project/knowledge base/query, so <see cref="FoundryIqIntegration"/>
+/// can be tested at the <c>GatherAsync</c> seam without a live Foundry project.
+/// </summary>
+internal sealed class ScriptedFoundryIqKnowledgeGateway(params FoundryIqResult[] results) : IFoundryIqKnowledgeGateway
+{
+    public string? RequestedProjectEndpoint { get; private set; }
+    public string? RequestedKnowledgeBase { get; private set; }
+    public string? RequestedQuery { get; private set; }
+
+    public Task<IReadOnlyList<FoundryIqResult>> QueryAsync(
+        string projectEndpoint, string knowledgeBase, string query, CancellationToken cancellationToken)
+    {
+        RequestedProjectEndpoint = projectEndpoint;
+        RequestedKnowledgeBase = knowledgeBase;
+        RequestedQuery = query;
+        return Task.FromResult<IReadOnlyList<FoundryIqResult>>(results);
+    }
+}
+
+/// <summary>A FoundryIQ knowledge base gateway whose project cannot be reached.</summary>
+internal sealed class UnreachableFoundryIqKnowledgeGateway(string reason) : IFoundryIqKnowledgeGateway
+{
+    public Task<IReadOnlyList<FoundryIqResult>> QueryAsync(
+        string projectEndpoint, string knowledgeBase, string query, CancellationToken cancellationToken) =>
+        throw new InvalidOperationException(reason);
+}
+
 
 /// <summary>
 /// A sweep control store that keeps its state in memory instead of a real App

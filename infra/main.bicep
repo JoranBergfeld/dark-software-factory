@@ -92,6 +92,15 @@ param azureMonitorWorkspaceId string = ''
 @description('KQL query the typed azuremonitor source agent runs against azureMonitorWorkspaceId to read evidence rows. Required when "azuremonitor" is in enabledSourceAgentKinds.')
 param azureMonitorQuery string = ''
 
+@description('Azure AI Foundry project endpoint the typed foundryiq source agent queries. Required when "foundryiq" is in enabledSourceAgentKinds.')
+param foundryIqProjectEndpoint string = ''
+
+@description('FoundryIQ knowledge base the typed foundryiq source agent queries. Required when "foundryiq" is in enabledSourceAgentKinds.')
+param foundryIqKnowledgeBase string = ''
+
+@description('Query the typed foundryiq source agent runs against foundryIqKnowledgeBase to read evidence results. Required when "foundryiq" is in enabledSourceAgentKinds.')
+param foundryIqQuery string = ''
+
 // ---------------------------------------------------------------------------
 // Variables
 // ---------------------------------------------------------------------------
@@ -503,10 +512,21 @@ resource orchestratorApp 'Microsoft.App/containerApps@2025-01-01' = {
 // enabledSourceAgentKinds gets no Container App at all, not merely a disabled
 // one). Every kind shares the orchestrator's base runtime settings (needed to
 // compose RuntimeSettings like every other verb) plus whatever its own typed
-// integration needs; today only "azuremonitor" has a typed adapter, so it is
-// the only kind with extra envs -- "foundryiq"/"webiq" fall back to the generic
-// HTTP integration until their own typed adapters land.
+// integration needs; "webiq" has no typed adapter yet, so it falls back to the
+// generic HTTP integration until its own ticket lands.
 // ---------------------------------------------------------------------------
+
+var sourceAgentKindEnv = {
+  azuremonitor: [
+    { name: 'DSF_AZUREMONITOR_WORKSPACE_ID', value: azureMonitorWorkspaceId }
+    { name: 'DSF_AZUREMONITOR_QUERY', value: azureMonitorQuery }
+  ]
+  foundryiq: [
+    { name: 'DSF_FOUNDRYIQ_PROJECT_ENDPOINT', value: foundryIqProjectEndpoint }
+    { name: 'DSF_FOUNDRYIQ_KNOWLEDGE_BASE', value: foundryIqKnowledgeBase }
+    { name: 'DSF_FOUNDRYIQ_QUERY', value: foundryIqQuery }
+  ]
+}
 
 resource sourceAgentApps 'Microsoft.App/containerApps@2025-01-01' = [for kind in enabledSourceAgentKinds: {
   // Container App names are capped at 32 chars; namePrefix (<=12) + '-agent-' (7) + kind must stay within it.
@@ -556,12 +576,7 @@ resource sourceAgentApps 'Microsoft.App/containerApps@2025-01-01' = [for kind in
             cpu: json('0.25')
             memory: '0.5Gi'
           }
-          env: kind == 'azuremonitor'
-            ? union(runtimeBaseEnv, [
-                { name: 'DSF_AZUREMONITOR_WORKSPACE_ID', value: azureMonitorWorkspaceId }
-                { name: 'DSF_AZUREMONITOR_QUERY', value: azureMonitorQuery }
-              ])
-            : runtimeBaseEnv
+          env: union(runtimeBaseEnv, sourceAgentKindEnv[?kind] ?? [])
         }
       ]
       scale: {

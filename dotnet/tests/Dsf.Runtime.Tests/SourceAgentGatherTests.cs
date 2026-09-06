@@ -55,7 +55,7 @@ public sealed class SourceAgentGatherTests
     public async Task Gather_without_integration_configuration_names_the_unset_setting()
     {
         var dependencies = RuntimeDependencies.Production(new Dictionary<string, string?>());
-        var app = RuntimeVerbs.BuildSourceAgentHost(Settings, "foundryiq", dependencies, "127.0.0.1", 0);
+        var app = RuntimeVerbs.BuildSourceAgentHost(Settings, "webiq", dependencies, "127.0.0.1", 0);
         await using var host = app;
         await app.StartAsync();
         try
@@ -68,7 +68,7 @@ public sealed class SourceAgentGatherTests
             Assert.NotEqual(HttpStatusCode.NotImplemented, response.StatusCode);
             Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
             var body = await response.Content.ReadAsStringAsync();
-            Assert.Contains("DSF_SOURCE_FOUNDRYIQ_ENDPOINT", body);
+            Assert.Contains("DSF_SOURCE_WEBIQ_ENDPOINT", body);
         }
         finally
         {
@@ -81,16 +81,16 @@ public sealed class SourceAgentGatherTests
     {
         var authHeaders = new List<string>();
         var upstream = await StartUpstreamAsync(
-            """[{"id": "FOUNDRYIQ-1", "title": "checkout 500s spiked"}, {"id": "FOUNDRYIQ-2", "title": "same trace"}]""",
+            """[{"id": "WEBIQ-1", "title": "checkout 500s spiked"}, {"id": "WEBIQ-2", "title": "same trace"}]""",
             authHeaders);
         await using var upstreamHost = upstream;
         var env = new Dictionary<string, string?>
         {
-            ["DSF_SOURCE_FOUNDRYIQ_ENDPOINT"] = $"{BaseAddress(upstream)}/issues",
-            ["DSF_SOURCE_FOUNDRYIQ_TOKEN"] = "foundryiq-token",
+            ["DSF_SOURCE_WEBIQ_ENDPOINT"] = $"{BaseAddress(upstream)}/issues",
+            ["DSF_SOURCE_WEBIQ_TOKEN"] = "webiq-token",
         };
         var app = RuntimeVerbs.BuildSourceAgentHost(
-            Settings, "foundryiq", RuntimeDependencies.Production(env), "127.0.0.1", 0);
+            Settings, "webiq", RuntimeDependencies.Production(env), "127.0.0.1", 0);
         await using var host = app;
         await app.StartAsync();
         try
@@ -104,9 +104,9 @@ public sealed class SourceAgentGatherTests
             var payload = await response.Content.ReadFromJsonAsync<JsonElement>();
             var evidence = payload.GetProperty("evidence").EnumerateArray().ToList();
             Assert.Equal(2, evidence.Count);
-            Assert.Equal("FOUNDRYIQ-1", evidence[0].GetProperty("reference").GetString());
+            Assert.Equal("WEBIQ-1", evidence[0].GetProperty("reference").GetString());
             Assert.Equal("checkout 500s spiked", evidence[0].GetProperty("summary").GetString());
-            Assert.Contains("Bearer foundryiq-token", authHeaders);
+            Assert.Contains("Bearer webiq-token", authHeaders);
         }
         finally
         {
@@ -121,10 +121,10 @@ public sealed class SourceAgentGatherTests
         var env = new Dictionary<string, string?>
         {
             // A port nothing is listening on: the agent must report the failure.
-            ["DSF_SOURCE_FOUNDRYIQ_ENDPOINT"] = "http://127.0.0.1:1/api/search",
+            ["DSF_SOURCE_WEBIQ_ENDPOINT"] = "http://127.0.0.1:1/api/search",
         };
         var app = RuntimeVerbs.BuildSourceAgentHost(
-            Settings, "foundryiq", RuntimeDependencies.Production(env), "127.0.0.1", 0);
+            Settings, "webiq", RuntimeDependencies.Production(env), "127.0.0.1", 0);
         await using var host = app;
         await app.StartAsync();
         try

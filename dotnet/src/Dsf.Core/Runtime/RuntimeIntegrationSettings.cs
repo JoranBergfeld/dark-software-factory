@@ -41,6 +41,19 @@ public static class RuntimeIntegrationSettings
     /// </summary>
     public const string AzureMonitorQuery = "DSF_AZUREMONITOR_QUERY";
 
+    /// <summary>
+    /// The Azure AI Foundry project endpoint the typed FoundryIQ source
+    /// integration queries (e.g. <c>https://&lt;resource&gt;.services.ai.azure.com/api/projects/&lt;project&gt;</c>),
+    /// managed-identity authenticated.
+    /// </summary>
+    public const string FoundryIqProjectEndpoint = "DSF_FOUNDRYIQ_PROJECT_ENDPOINT";
+
+    /// <summary>The FoundryIQ knowledge base the typed integration queries.</summary>
+    public const string FoundryIqKnowledgeBase = "DSF_FOUNDRYIQ_KNOWLEDGE_BASE";
+
+    /// <summary>The natural-language query the typed FoundryIQ integration runs against its knowledge base.</summary>
+    public const string FoundryIqQuery = "DSF_FOUNDRYIQ_QUERY";
+
     /// <summary>The repository accepted proposals are filed into (<c>owner/name</c>).</summary>
     public const string GitHubRepository = "GITHUB_REPOSITORY";
 

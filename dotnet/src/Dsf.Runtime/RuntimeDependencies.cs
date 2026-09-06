@@ -50,6 +50,7 @@ public sealed record RuntimeDependencies(
             new Dictionary<string, ISourceIntegration>(StringComparer.Ordinal)
             {
                 ["azuremonitor"] = new AzureMonitorIntegration(env),
+                ["foundryiq"] = new FoundryIqIntegration(env),
             },
             new HttpSourceIntegration(env));
         return new(
