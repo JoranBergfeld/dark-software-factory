@@ -51,6 +51,7 @@ public sealed record RuntimeDependencies(
             {
                 ["azuremonitor"] = new AzureMonitorIntegration(env),
                 ["foundryiq"] = new FoundryIqIntegration(env),
+                ["webiq"] = new WebIqIntegration(env),
             },
             new HttpSourceIntegration(env));
         return new(

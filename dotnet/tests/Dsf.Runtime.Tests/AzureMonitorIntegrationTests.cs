@@ -126,6 +126,6 @@ public sealed class AzureMonitorIntegrationTests
 
         Assert.IsType<AzureMonitorIntegration>(registry.Resolve("azuremonitor"));
         Assert.IsType<AzureMonitorIntegration>(registry.Resolve("AZUREMONITOR"));
-        Assert.IsType<HttpSourceIntegration>(registry.Resolve("webiq"));
+        Assert.IsType<HttpSourceIntegration>(registry.Resolve("customsource"));
     }
 }

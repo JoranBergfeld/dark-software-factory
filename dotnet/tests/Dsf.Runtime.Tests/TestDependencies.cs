@@ -276,6 +276,57 @@ internal sealed class UnreachableFoundryIqKnowledgeGateway(string reason) : IFou
         throw new InvalidOperationException(reason);
 }
 
+/// <summary>
+/// A WebIQ search gateway that answers a fixed, scripted set of results for any
+/// API key/query, so <see cref="WebIqIntegration"/> can be tested at the
+/// <c>GatherAsync</c> seam without a live WebIQ call.
+/// </summary>
+internal sealed class ScriptedWebIqSearchGateway(params WebIqResult[] results) : IWebIqSearchGateway
+{
+    public string? RequestedApiKey { get; private set; }
+    public string? RequestedQuery { get; private set; }
+
+    public Task<IReadOnlyList<WebIqResult>> SearchAsync(
+        string apiKey, string query, CancellationToken cancellationToken)
+    {
+        RequestedApiKey = apiKey;
+        RequestedQuery = query;
+        return Task.FromResult<IReadOnlyList<WebIqResult>>(results);
+    }
+}
+
+/// <summary>A WebIQ search gateway that cannot be reached.</summary>
+internal sealed class UnreachableWebIqSearchGateway(string reason) : IWebIqSearchGateway
+{
+    public Task<IReadOnlyList<WebIqResult>> SearchAsync(
+        string apiKey, string query, CancellationToken cancellationToken) =>
+        throw new InvalidOperationException(reason);
+}
+
+/// <summary>
+/// A Key Vault secret reader that answers a fixed, scripted secret value for
+/// any vault/secret name, so callers reading a secret (e.g. <see
+/// cref="WebIqIntegration"/>'s API key) can be tested without a live Key Vault.
+/// </summary>
+internal sealed class ScriptedPrivateKeySecretReader(string secretValue) : Dsf.Runtime.GitHubApp.IPrivateKeySecretReader
+{
+    public Uri? RequestedVaultUri { get; private set; }
+    public string? RequestedSecretName { get; private set; }
+
+    public Task<string> GetSecretAsync(Uri vaultUri, string secretName, CancellationToken cancellationToken)
+    {
+        RequestedVaultUri = vaultUri;
+        RequestedSecretName = secretName;
+        return Task.FromResult(secretValue);
+    }
+}
+
+/// <summary>A Key Vault secret reader whose vault cannot be reached.</summary>
+internal sealed class UnreachablePrivateKeySecretReader(string reason) : Dsf.Runtime.GitHubApp.IPrivateKeySecretReader
+{
+    public Task<string> GetSecretAsync(Uri vaultUri, string secretName, CancellationToken cancellationToken) =>
+        throw new InvalidOperationException(reason);
+}
 
 /// <summary>
 /// A sweep control store that keeps its state in memory instead of a real App

@@ -54,6 +54,29 @@ public static class RuntimeIntegrationSettings
     /// <summary>The natural-language query the typed FoundryIQ integration runs against its knowledge base.</summary>
     public const string FoundryIqQuery = "DSF_FOUNDRYIQ_QUERY";
 
+    /// <summary>
+    /// The search query the typed WebIQ source integration runs against the
+    /// Microsoft WebIQ web-search API (ADR 0020).
+    /// </summary>
+    public const string WebIqQuery = "DSF_WEBIQ_QUERY";
+
+    /// <summary>
+    /// The WebIQ API key, read directly (local/dev override) before falling
+    /// back to <see cref="WebIqApiKeySecret"/> in Key Vault -- mirrors the
+    /// Python runtime's <c>WEBIQ_API_KEY</c> env override (ADR 0020). Not
+    /// <c>DSF_</c>-prefixed: this is the exact name the existing bicep/runtime
+    /// convention already uses.
+    /// </summary>
+    public const string WebIqApiKey = "WEBIQ_API_KEY";
+
+    /// <summary>
+    /// The Key Vault secret name holding the WebIQ API key, read via <see
+    /// cref="RuntimeSettingsComposer.AzureKeyVaultUri"/> and the runtime's
+    /// managed identity when <see cref="WebIqApiKey"/> is not set directly
+    /// (ADR 0020: seeded by <c>dsf new</c>'s <c>seed_webiq_key</c> step).
+    /// </summary>
+    public const string WebIqApiKeySecret = "WEBIQ_API_KEY_SECRET";
+
     /// <summary>The repository accepted proposals are filed into (<c>owner/name</c>).</summary>
     public const string GitHubRepository = "GITHUB_REPOSITORY";
 

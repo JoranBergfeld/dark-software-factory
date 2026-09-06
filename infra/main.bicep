@@ -101,6 +101,9 @@ param foundryIqKnowledgeBase string = ''
 @description('Query the typed foundryiq source agent runs against foundryIqKnowledgeBase to read evidence results. Required when "foundryiq" is in enabledSourceAgentKinds.')
 param foundryIqQuery string = ''
 
+@description('Search query the typed webiq source agent runs against Microsoft WebIQ (ADR 0020) to read evidence results. Required when "webiq" is in enabledSourceAgentKinds.')
+param webIqQuery string = ''
+
 // ---------------------------------------------------------------------------
 // Variables
 // ---------------------------------------------------------------------------
@@ -512,8 +515,7 @@ resource orchestratorApp 'Microsoft.App/containerApps@2025-01-01' = {
 // enabledSourceAgentKinds gets no Container App at all, not merely a disabled
 // one). Every kind shares the orchestrator's base runtime settings (needed to
 // compose RuntimeSettings like every other verb) plus whatever its own typed
-// integration needs; "webiq" has no typed adapter yet, so it falls back to the
-// generic HTTP integration until its own ticket lands.
+// integration needs.
 // ---------------------------------------------------------------------------
 
 var sourceAgentKindEnv = {
@@ -525,6 +527,9 @@ var sourceAgentKindEnv = {
     { name: 'DSF_FOUNDRYIQ_PROJECT_ENDPOINT', value: foundryIqProjectEndpoint }
     { name: 'DSF_FOUNDRYIQ_KNOWLEDGE_BASE', value: foundryIqKnowledgeBase }
     { name: 'DSF_FOUNDRYIQ_QUERY', value: foundryIqQuery }
+  ]
+  webiq: [
+    { name: 'DSF_WEBIQ_QUERY', value: webIqQuery }
   ]
 }
 

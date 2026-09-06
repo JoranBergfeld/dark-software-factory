@@ -105,6 +105,6 @@ public sealed class FoundryIqIntegrationTests
 
         Assert.IsType<FoundryIqIntegration>(registry.Resolve("foundryiq"));
         Assert.IsType<FoundryIqIntegration>(registry.Resolve("FOUNDRYIQ"));
-        Assert.IsType<HttpSourceIntegration>(registry.Resolve("webiq"));
+        Assert.IsType<HttpSourceIntegration>(registry.Resolve("customsource"));
     }
 }
