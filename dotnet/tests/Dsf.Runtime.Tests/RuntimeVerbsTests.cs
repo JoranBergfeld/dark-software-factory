@@ -392,8 +392,9 @@ public sealed class RuntimeVerbsTests
             var run = await RuntimeVerbs.RunAsync(Settings, path, dryRun: true, dependencies, CancellationToken.None);
 
             Assert.Equal(RunStatus.Previewed, run.Status);
-            // One synthesis completion and one council completion per proposal.
-            Assert.Equal(2, model.Prompts.Count);
+            // One synthesis completion, plus one council completion per lens per
+            // deliberation round (5 lenses x 2 rounds = 10) for the single proposal.
+            Assert.Equal(11, model.Prompts.Count);
             Assert.Contains(model.Prompts, prompt => prompt.Contains("azuremonitor", StringComparison.OrdinalIgnoreCase));
         }
         finally

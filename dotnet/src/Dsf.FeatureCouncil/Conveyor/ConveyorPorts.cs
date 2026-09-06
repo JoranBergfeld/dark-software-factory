@@ -106,7 +106,8 @@ public sealed record ConveyorServices(
     ITracer Tracer,
     IConfidenceThresholdReader ConfidenceThresholdReader,
     ILearningStore? LearningStore = null,
-    IEvidenceClusterer? EvidenceClusterer = null)
+    IEvidenceClusterer? EvidenceClusterer = null,
+    IReadOnlyList<IDeliberationLens>? DeliberationLenses = null)
 {
     public IRunStore RunStore { get; } = RunStore ?? throw new ArgumentNullException(nameof(RunStore));
 
@@ -126,6 +127,16 @@ public sealed record ConveyorServices(
     /// clusterer for free.
     /// </summary>
     public IEvidenceClusterer EvidenceClusterer { get; } = EvidenceClusterer ?? new LexicalSimilarityEvidenceClusterer();
+
+    /// <summary>
+    /// The lenses S5 council deliberates every proposal through. Defaults to the
+    /// five real, model-reasoning <see cref="ModelDeliberationLens"/> instances
+    /// (value, cost, feasibility, security, strategic fit) when a factory does
+    /// not wire others in explicitly -- like <see cref="EvidenceClusterer"/>,
+    /// every composition gets a real deliberation panel for free.
+    /// </summary>
+    public IReadOnlyList<IDeliberationLens> DeliberationLenses { get; } =
+        DeliberationLenses ?? ModelDeliberationLens.Default();
 
     public IEvidenceGatherer? GathererFor(string sourceKind) =>
         EvidenceGatherers.FirstOrDefault(

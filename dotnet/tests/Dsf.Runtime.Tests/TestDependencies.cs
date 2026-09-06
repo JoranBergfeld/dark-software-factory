@@ -125,7 +125,7 @@ internal sealed class ScriptedConveyorComposer(
 }
 
 /// <summary>A deterministic model client that answers a fixed, recorded completion for every prompt.</summary>
-internal sealed class RecordingModelClient(string response = "deterministic test completion") : IModelClient
+internal sealed class RecordingModelClient(string response = "GO: deterministic test completion") : IModelClient
 {
     public List<string> Prompts { get; } = [];
 

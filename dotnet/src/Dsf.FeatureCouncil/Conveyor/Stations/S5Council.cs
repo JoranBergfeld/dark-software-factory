@@ -1,13 +1,17 @@
 namespace Dsf.FeatureCouncil.Conveyor.Stations;
 
 /// <summary>
-/// S5 — council. Scores each grounded proposal on the weight of evidence behind
-/// it and accepts the ones that clear the confidence bar, then asks the model
-/// client to reason over the verdict it reached and records both the score and
-/// what the model answered for every proposal it saw. The accept/reject verdict
-/// itself is the deterministic evidence-weight calculation -- reproducible and
-/// auditable independent of the model -- the model's answer is recorded as the
-/// council's stated rationale, not substituted for the verdict.
+/// S5 — council. Weighs each grounded proposal through every configured
+/// deliberation lens (<see cref="ConveyorServices.DeliberationLenses"/>): an
+/// initial round where each lens judges the proposal independently, then a
+/// see-and-revise round where every lens judges again having seen where the
+/// others initially landed. The final round's verdicts are combined by <see
+/// cref="LensSynthesizer.Synthesize"/> -- a deterministic, pure function of the
+/// verdicts and the governed confidence threshold -- into the station's
+/// proceed/reject recommendation and confidence. This replaces the prior
+/// evidence-count ratio: <see cref="Proposal.Confidence"/> and <see
+/// cref="Proposal.Accepted"/> are now driven entirely by the lenses' weighted
+/// judgment, not by how much of the run's evidence a proposal happened to cite.
 /// </summary>
 public sealed class S5Council : IStation
 {
@@ -19,8 +23,9 @@ public sealed class S5Council : IStation
     /// matching the Python <c>DEFAULT_THRESHOLD</c> fallback in
     /// <c>dsf.config.flags</c> and Control Center's own documented default. The
     /// governed value -- read per run via <see cref="ConveyorServices.ConfidenceThresholdReader"/>
-    /// -- is what the council actually compares against; this constant is only
-    /// the fallback a reader falls back to when nothing is configured.
+    /// -- is what the council actually compares the lens synthesis's confidence
+    /// against; this constant is only the fallback a reader falls back to when
+    /// nothing is configured.
     /// </summary>
     public const double DefaultThreshold = 0.6;
 
@@ -29,26 +34,45 @@ public sealed class S5Council : IStation
     public async Task RunAsync(ConveyorRun run, ConveyorServices services, CancellationToken cancellationToken)
     {
         var threshold = await services.ConfidenceThresholdReader.ReadThresholdAsync(cancellationToken);
-        var total = run.Evidence.Count;
+        var lenses = services.DeliberationLenses;
+
         foreach (var proposal in run.Proposals)
         {
-            proposal.Confidence = total == 0 ? 0d : (double)proposal.EvidenceReferences.Count / total;
-            proposal.Accepted = proposal.Confidence >= threshold;
+            var initialVerdicts = new List<LensVerdict>(lenses.Count);
+            foreach (var lens in lenses)
+            {
+                initialVerdicts.Add(
+                    await lens.DeliberateAsync(proposal, run, [], services.ModelClient, cancellationToken));
+            }
+
+            var finalVerdicts = new List<LensVerdict>(lenses.Count);
+            foreach (var lens in lenses)
+            {
+                finalVerdicts.Add(
+                    await lens.DeliberateAsync(proposal, run, initialVerdicts, services.ModelClient, cancellationToken));
+            }
+
+            var synthesis = LensSynthesizer.Synthesize(finalVerdicts, threshold);
+            proposal.Confidence = synthesis.Confidence;
+            proposal.Accepted = synthesis.Proceed;
+
+            foreach (var verdict in finalVerdicts)
+            {
+                run.Record(
+                    StationName,
+                    $"proposal '{proposal.Id}' lens '{verdict.LensName}' position={verdict.Position} "
+                    + $"rationale: {verdict.Rationale}");
+            }
+
             run.Record(
                 StationName,
                 $"proposal '{proposal.Id}' confidence={proposal.Confidence:F2} "
-                + $"verdict={(proposal.Accepted ? "accept" : "reject")}.");
-
-            var rationale = await services.ModelClient.CompleteAsync(CouncilPrompt(proposal), cancellationToken);
-            run.Record(StationName, $"proposal '{proposal.Id}' rationale: {rationale}");
+                + $"verdict={(proposal.Accepted ? "accept" : "reject")}"
+                + (synthesis.Disagreement ? " (lenses disagreed)" : string.Empty) + ".");
         }
 
         run.Record(
             StationName,
             $"council complete: {run.Proposals.Count(p => p.Accepted)} of {run.Proposals.Count} proposal(s) accepted.");
     }
-
-    private static string CouncilPrompt(Proposal proposal) =>
-        $"Explain the council {(proposal.Accepted ? "acceptance" : "rejection")} of proposal '{proposal.Title}' "
-        + $"(confidence {proposal.Confidence:F2}) backed by evidence: {string.Join(", ", proposal.EvidenceReferences)}";
 }

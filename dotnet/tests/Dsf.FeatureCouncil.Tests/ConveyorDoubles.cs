@@ -19,7 +19,8 @@ internal static class ConveyorDoubles
         IModelClient? modelClient = null,
         ITracer? tracer = null,
         IConfidenceThresholdReader? confidenceThresholdReader = null,
-        ILearningStore? learningStore = null) =>
+        ILearningStore? learningStore = null,
+        IReadOnlyList<IDeliberationLens>? deliberationLenses = null) =>
         new(
             Product,
             gatherers ?? [],
@@ -28,7 +29,8 @@ internal static class ConveyorDoubles
             modelClient ?? new RecordingModelClient(),
             tracer ?? new RecordingTracer(),
             confidenceThresholdReader ?? new FixedConfidenceThresholdReader(S5Council.DefaultThreshold),
-            learningStore);
+            learningStore,
+            DeliberationLenses: deliberationLenses);
 }
 
 /// <summary>A confidence threshold reader that always answers a fixed value.</summary>
@@ -97,7 +99,7 @@ internal sealed class UnreachableTracer(string reason) : ITracer
 }
 
 /// <summary>A model client that answers a fixed completion and records its prompts.</summary>
-internal sealed class RecordingModelClient(string response = "deterministic test completion") : IModelClient
+internal sealed class RecordingModelClient(string response = "GO: deterministic test completion") : IModelClient
 {
     public List<string> Prompts { get; } = [];
 
@@ -105,6 +107,58 @@ internal sealed class RecordingModelClient(string response = "deterministic test
     {
         Prompts.Add(prompt);
         return Task.FromResult(response);
+    }
+}
+
+/// <summary>
+/// A deliberation lens that always answers the same fixed position and
+/// rationale, regardless of round -- never calls the model client -- so a
+/// station test can assemble a panel of lenses (unanimous, split, mixed
+/// weights) and assert exactly what the synthesizer does with their positions.
+/// </summary>
+internal sealed class FixedLens(string name, LensPosition position, double weight = 1d, string? rationale = null)
+    : IDeliberationLens
+{
+    public string Name { get; } = name;
+
+    public double Weight { get; } = weight;
+
+    public List<int> DeliberationCount { get; } = [];
+
+    public Task<LensVerdict> DeliberateAsync(
+        Proposal proposal,
+        ConveyorRun run,
+        IReadOnlyList<LensVerdict> priorRoundVerdicts,
+        IModelClient modelClient,
+        CancellationToken cancellationToken)
+    {
+        DeliberationCount.Add(priorRoundVerdicts.Count);
+        return Task.FromResult(new LensVerdict(Name, position, rationale ?? $"{Name} says {position}", Weight));
+    }
+}
+
+/// <summary>
+/// A lens whose position depends on whether the proposal's source kinds
+/// contain a given kind -- so a test can force one cluster's proposal to be
+/// rejected while another is accepted, without depending on model-answer
+/// parsing.
+/// </summary>
+internal sealed class KindSensitiveLens(string name, string rejectIfSourceKind, double weight = 1d)
+    : IDeliberationLens
+{
+    public string Name { get; } = name;
+
+    public double Weight { get; } = weight;
+
+    public Task<LensVerdict> DeliberateAsync(
+        Proposal proposal,
+        ConveyorRun run,
+        IReadOnlyList<LensVerdict> priorRoundVerdicts,
+        IModelClient modelClient,
+        CancellationToken cancellationToken)
+    {
+        var position = proposal.SourceKinds.Contains(rejectIfSourceKind) ? LensPosition.NoGo : LensPosition.Go;
+        return Task.FromResult(new LensVerdict(Name, position, $"{Name} says {position}", Weight));
     }
 }
 
