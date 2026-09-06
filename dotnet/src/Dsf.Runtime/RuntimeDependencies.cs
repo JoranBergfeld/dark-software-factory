@@ -47,7 +47,11 @@ public sealed record RuntimeDependencies(
     {
         ArgumentNullException.ThrowIfNull(env);
         var registry = new SourceIntegrationRegistry(
-            new Dictionary<string, ISourceIntegration>(StringComparer.Ordinal), new HttpSourceIntegration(env));
+            new Dictionary<string, ISourceIntegration>(StringComparer.Ordinal)
+            {
+                ["azuremonitor"] = new AzureMonitorIntegration(env),
+            },
+            new HttpSourceIntegration(env));
         return new(
             new AzureAppConfigurationOwnerRuntimeIndexReader(),
             new AzureAppConfigurationSourceAgentRosterReader(),

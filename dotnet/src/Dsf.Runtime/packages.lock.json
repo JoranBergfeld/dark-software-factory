@@ -20,6 +20,16 @@
           "Azure.Core": "1.53.0"
         }
       },
+      "Azure.Monitor.Query": {
+        "type": "Direct",
+        "requested": "[1.7.1, )",
+        "resolved": "1.7.1",
+        "contentHash": "HJnal+BIaBiuiba1p2X5lNyx6I+CnqcjEMNv19R1jtjas5hk9sdUcPmZOLaECFRExFBxLDc2xuLJkXmglFXQbg==",
+        "dependencies": {
+          "Azure.Core": "1.47.1",
+          "System.ClientModel": "1.6.0"
+        }
+      },
       "Azure.Security.KeyVault.Secrets": {
         "type": "Direct",
         "requested": "[4.11.1, )",
@@ -98,7 +108,7 @@
       "dsf.featurecouncil": {
         "type": "Project",
         "dependencies": {
-          "Dsf.Core": "[1.0.0, )"
+          "Dsf.Core": "[0.0.1, )"
         }
       }
     }

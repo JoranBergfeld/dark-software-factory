@@ -155,9 +155,10 @@
         "dependencies": {
           "Azure.Data.AppConfiguration": "[1.11.1, )",
           "Azure.Identity": "[1.21.0, )",
+          "Azure.Monitor.Query": "[1.7.1, )",
           "Azure.Security.KeyVault.Secrets": "[4.11.1, )",
-          "Dsf.Core": "[1.0.0, )",
-          "Dsf.FeatureCouncil": "[1.0.0, )",
+          "Dsf.Core": "[0.0.1, )",
+          "Dsf.FeatureCouncil": "[0.0.1, )",
           "System.CommandLine": "[2.0.11, )"
         }
       },
@@ -167,7 +168,7 @@
       "dsf.featurecouncil": {
         "type": "Project",
         "dependencies": {
-          "Dsf.Core": "[1.0.0, )"
+          "Dsf.Core": "[0.0.1, )"
         }
       },
       "Azure.Data.AppConfiguration": {
@@ -186,6 +187,16 @@
         "contentHash": "GeFv8sGwRKvDKwI2WFy8r0mhmlxEVZg24Sit2NogTjiSO8RVjllWM65OT6e1sKjOvG8V74y7hAbaELUUPjZQSw==",
         "dependencies": {
           "Azure.Core": "1.53.0"
+        }
+      },
+      "Azure.Monitor.Query": {
+        "type": "CentralTransitive",
+        "requested": "[1.7.1, )",
+        "resolved": "1.7.1",
+        "contentHash": "HJnal+BIaBiuiba1p2X5lNyx6I+CnqcjEMNv19R1jtjas5hk9sdUcPmZOLaECFRExFBxLDc2xuLJkXmglFXQbg==",
+        "dependencies": {
+          "Azure.Core": "1.47.1",
+          "System.ClientModel": "1.6.0"
         }
       },
       "Azure.Security.KeyVault.Secrets": {

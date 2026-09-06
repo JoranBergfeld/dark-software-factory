@@ -28,6 +28,19 @@ public static class RuntimeIntegrationSettings
     public static string SourceIntegrationToken(string kind) =>
         $"DSF_SOURCE_{Normalize(kind)}_TOKEN";
 
+    /// <summary>
+    /// The Log Analytics workspace ID the typed Azure Monitor source integration
+    /// queries (managed-identity authenticated; no ****** setting, unlike the
+    /// generic HTTP fallback).
+    /// </summary>
+    public const string AzureMonitorWorkspaceId = "DSF_AZUREMONITOR_WORKSPACE_ID";
+
+    /// <summary>
+    /// The KQL query the typed Azure Monitor source integration runs against
+    /// <see cref="AzureMonitorWorkspaceId"/> to read evidence rows.
+    /// </summary>
+    public const string AzureMonitorQuery = "DSF_AZUREMONITOR_QUERY";
+
     /// <summary>The repository accepted proposals are filed into (<c>owner/name</c>).</summary>
     public const string GitHubRepository = "GITHUB_REPOSITORY";
 

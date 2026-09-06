@@ -220,6 +220,35 @@ internal sealed class ScriptedSourceIntegration(params EvidenceItem[] evidence) 
 }
 
 /// <summary>
+/// An Azure Monitor logs gateway that answers a fixed, scripted set of rows for
+/// any workspace/query, so <see cref="AzureMonitorIntegration"/> can be tested at
+/// the <c>GatherAsync</c> seam without a live Log Analytics workspace.
+/// </summary>
+internal sealed class ScriptedAzureMonitorLogsGateway(
+    params IReadOnlyDictionary<string, string>[] rows) : IAzureMonitorLogsGateway
+{
+    public string? RequestedWorkspaceId { get; private set; }
+    public string? RequestedQuery { get; private set; }
+
+    public Task<IReadOnlyList<IReadOnlyDictionary<string, string>>> QueryAsync(
+        string workspaceId, string query, CancellationToken cancellationToken)
+    {
+        RequestedWorkspaceId = workspaceId;
+        RequestedQuery = query;
+        return Task.FromResult<IReadOnlyList<IReadOnlyDictionary<string, string>>>(rows);
+    }
+}
+
+/// <summary>An Azure Monitor logs gateway whose workspace cannot be reached.</summary>
+internal sealed class UnreachableAzureMonitorLogsGateway(string reason) : IAzureMonitorLogsGateway
+{
+    public Task<IReadOnlyList<IReadOnlyDictionary<string, string>>> QueryAsync(
+        string workspaceId, string query, CancellationToken cancellationToken) =>
+        throw new InvalidOperationException(reason);
+}
+
+
+/// <summary>
 /// A sweep control store that keeps its state in memory instead of a real App
 /// Configuration store, so the CLI's pause/resume/interval/status subcommands and
 /// the sweep loop's per-tick checks can be tested deterministically.

@@ -55,7 +55,7 @@ public sealed class SourceAgentGatherTests
     public async Task Gather_without_integration_configuration_names_the_unset_setting()
     {
         var dependencies = RuntimeDependencies.Production(new Dictionary<string, string?>());
-        var app = RuntimeVerbs.BuildSourceAgentHost(Settings, "azuremonitor", dependencies, "127.0.0.1", 0);
+        var app = RuntimeVerbs.BuildSourceAgentHost(Settings, "foundryiq", dependencies, "127.0.0.1", 0);
         await using var host = app;
         await app.StartAsync();
         try
@@ -68,7 +68,7 @@ public sealed class SourceAgentGatherTests
             Assert.NotEqual(HttpStatusCode.NotImplemented, response.StatusCode);
             Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
             var body = await response.Content.ReadAsStringAsync();
-            Assert.Contains("DSF_SOURCE_AZUREMONITOR_ENDPOINT", body);
+            Assert.Contains("DSF_SOURCE_FOUNDRYIQ_ENDPOINT", body);
         }
         finally
         {
@@ -81,16 +81,16 @@ public sealed class SourceAgentGatherTests
     {
         var authHeaders = new List<string>();
         var upstream = await StartUpstreamAsync(
-            """[{"id": "AZUREMONITOR-1", "title": "checkout 500s spiked"}, {"id": "AZUREMONITOR-2", "title": "same trace"}]""",
+            """[{"id": "FOUNDRYIQ-1", "title": "checkout 500s spiked"}, {"id": "FOUNDRYIQ-2", "title": "same trace"}]""",
             authHeaders);
         await using var upstreamHost = upstream;
         var env = new Dictionary<string, string?>
         {
-            ["DSF_SOURCE_AZUREMONITOR_ENDPOINT"] = $"{BaseAddress(upstream)}/issues",
-            ["DSF_SOURCE_AZUREMONITOR_TOKEN"] = "azuremonitor-token",
+            ["DSF_SOURCE_FOUNDRYIQ_ENDPOINT"] = $"{BaseAddress(upstream)}/issues",
+            ["DSF_SOURCE_FOUNDRYIQ_TOKEN"] = "foundryiq-token",
         };
         var app = RuntimeVerbs.BuildSourceAgentHost(
-            Settings, "azuremonitor", RuntimeDependencies.Production(env), "127.0.0.1", 0);
+            Settings, "foundryiq", RuntimeDependencies.Production(env), "127.0.0.1", 0);
         await using var host = app;
         await app.StartAsync();
         try
@@ -104,9 +104,9 @@ public sealed class SourceAgentGatherTests
             var payload = await response.Content.ReadFromJsonAsync<JsonElement>();
             var evidence = payload.GetProperty("evidence").EnumerateArray().ToList();
             Assert.Equal(2, evidence.Count);
-            Assert.Equal("AZUREMONITOR-1", evidence[0].GetProperty("reference").GetString());
+            Assert.Equal("FOUNDRYIQ-1", evidence[0].GetProperty("reference").GetString());
             Assert.Equal("checkout 500s spiked", evidence[0].GetProperty("summary").GetString());
-            Assert.Contains("Bearer azuremonitor-token", authHeaders);
+            Assert.Contains("Bearer foundryiq-token", authHeaders);
         }
         finally
         {
