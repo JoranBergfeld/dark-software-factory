@@ -20,7 +20,9 @@ internal static class ConveyorDoubles
         ITracer? tracer = null,
         IConfidenceThresholdReader? confidenceThresholdReader = null,
         ILearningStore? learningStore = null,
-        IReadOnlyList<IDeliberationLens>? deliberationLenses = null) =>
+        IReadOnlyList<IDeliberationLens>? deliberationLenses = null,
+        IReadOnlyList<IValidationJuror>? validationJurors = null,
+        string? productMaturity = null) =>
         new(
             Product,
             gatherers ?? [],
@@ -30,7 +32,9 @@ internal static class ConveyorDoubles
             tracer ?? new RecordingTracer(),
             confidenceThresholdReader ?? new FixedConfidenceThresholdReader(S5Council.DefaultThreshold),
             learningStore,
-            DeliberationLenses: deliberationLenses);
+            DeliberationLenses: deliberationLenses,
+            ValidationJurors: validationJurors,
+            ProductMaturity: productMaturity ?? "high");
 }
 
 /// <summary>A confidence threshold reader that always answers a fixed value.</summary>
@@ -160,6 +164,36 @@ internal sealed class KindSensitiveLens(string name, string rejectIfSourceKind, 
         var position = proposal.SourceKinds.Contains(rejectIfSourceKind) ? LensPosition.NoGo : LensPosition.Go;
         return Task.FromResult(new LensVerdict(Name, position, $"{Name} says {position}", Weight));
     }
+}
+
+/// <summary>
+/// A validation juror that always answers the same fixed position and
+/// rationale -- never calls the model client -- so a station test can assemble
+/// a jury panel (unanimous go, unanimous no-go, split) and assert exactly what
+/// the jury verdict rules do with their positions.
+/// </summary>
+internal sealed class FixedJuror(string name, JurorPosition position, string? rationale = null) : IValidationJuror
+{
+    public string Name { get; } = name;
+
+    public int CallCount { get; private set; }
+
+    public Task<JurorVerdict> ValidateAsync(
+        Proposal proposal, ConveyorRun run, LensSynthesis lensSynthesis, CancellationToken cancellationToken)
+    {
+        CallCount++;
+        return Task.FromResult(new JurorVerdict(Name, position, rationale ?? $"{Name} says {position}"));
+    }
+}
+
+/// <summary>A validation juror whose model call always returns an unparseable answer.</summary>
+internal sealed class MalformedJuror(string name) : IValidationJuror
+{
+    public string Name { get; } = name;
+
+    public Task<JurorVerdict> ValidateAsync(
+        Proposal proposal, ConveyorRun run, LensSynthesis lensSynthesis, CancellationToken cancellationToken) =>
+        throw new InvalidOperationException($"juror '{Name}' returned a malformed verdict (no leading GO/NO-GO token).");
 }
 
 /// <summary>

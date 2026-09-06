@@ -84,6 +84,18 @@ public static class RuntimeIntegrationSettings
     public const string GitHubApiUrl = "DSF_GITHUB_API_URL";
 
     /// <summary>
+    /// Creation-phase autonomy dial for this product's factory (<c>low</c>,
+    /// <c>medium</c>, or <c>high</c>), the same value <c>dsf new</c> captures as
+    /// <c>InstanceDefinition.Product.CreationMaturity</c>. S5 council's jury
+    /// verdict rules read this: at <c>low</c> maturity, every proposal the lens
+    /// synthesizer would otherwise proceed with is escalated to a human instead,
+    /// regardless of what the jury panel concludes. Unset resolves to <c>low</c>
+    /// -- the safe default, since a factory a human has not yet dialed up
+    /// autonomy for should never file without one in the loop.
+    /// </summary>
+    public const string CreationMaturity = "DSF_CREATION_MATURITY";
+
+    /// <summary>
     /// Set to <c>true</c> at medium/high Operation maturity: the issue filer assigns the
     /// GitHub Coding Agent to every issue it files (SRE-Agent-to-Cloud-Agent
     /// auto-assignment), rather than leaving a freshly filed incident unassigned until a

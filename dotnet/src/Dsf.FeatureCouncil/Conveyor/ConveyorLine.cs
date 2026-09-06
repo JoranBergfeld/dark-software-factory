@@ -6,7 +6,7 @@ namespace Dsf.FeatureCouncil.Conveyor;
 /// Drives stations S1..S7 in order over a run, mirroring the Python
 /// <c>orchestrator/conveyor.run_line</c>: the run is persisted through
 /// <see cref="IRunStore"/> and a checkpoint recorded after each station so a
-/// resumed run skips completed stations, a KILLED run stops the line early, and
+/// resumed run skips completed stations, a KILLED or ESCALATED run stops the line early, and
 /// any per-station exception -- including a failed persist -- becomes an audited
 /// terminal <see cref="RunStatus.Error"/>, with the failing station and its reason
 /// pinned on the run, rather than propagating to the caller.
@@ -33,7 +33,7 @@ public static class ConveyorLine
     public static IReadOnlyList<string> StationNames { get; } = Stations.Select(station => station.Name).ToArray();
 
     private static readonly RunStatus[] Terminal =
-        [RunStatus.Killed, RunStatus.Previewed, RunStatus.Filed, RunStatus.Error];
+        [RunStatus.Killed, RunStatus.Previewed, RunStatus.Filed, RunStatus.Error, RunStatus.Escalated];
 
     public static async Task<ConveyorRun> RunAsync(
         ConveyorRun run,
@@ -86,7 +86,7 @@ public static class ConveyorLine
 
             await TraceAsync(services, "station.complete", run, station.Name, cancellationToken);
 
-            if (run.Status == RunStatus.Killed)
+            if (run.Status == RunStatus.Killed || run.Status == RunStatus.Escalated)
             {
                 await TraceAsync(services, "run.complete", run, station: null, cancellationToken);
                 return run;

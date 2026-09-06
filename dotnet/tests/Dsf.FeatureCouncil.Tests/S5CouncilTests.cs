@@ -6,14 +6,20 @@ namespace Dsf.FeatureCouncil.Tests;
 
 /// <summary>
 /// S5 council weighs a proposal through every configured deliberation lens
-/// across an initial round and a see-and-revise round, then combines the final
-/// round's verdicts via the deterministic weighted synthesizer into
-/// <see cref="Proposal.Confidence"/>/<see cref="Proposal.Accepted"/> -- not the
-/// prior evidence-count ratio. It must also score against the governed,
-/// per-product confidence threshold -- read through
-/// <see cref="ConveyorServices.ConfidenceThresholdReader"/> -- so a Control
-/// Center write to a product's <c>threshold.&lt;product&gt;</c> App
-/// Configuration entry still changes which proposals the council accepts.
+/// across an initial round and a see-and-revise round, combines the final
+/// round's verdicts via the deterministic weighted synthesizer, and -- for a
+/// proposal the synthesizer recommends proceeding with -- hands that
+/// recommendation to a validation jury whose verdict rules (unanimous go,
+/// unanimous no-go, split, or low creation maturity) decide the proposal's
+/// final <see cref="ProposalVerdict"/> and the run's status. <see
+/// cref="Proposal.Confidence"/>/<see cref="Proposal.Verdict"/> (and the <see
+/// cref="Proposal.Accepted"/> convenience read over it) are driven entirely by
+/// this lens-then-jury pipeline, never the prior evidence-count ratio. It must
+/// also score against the governed, per-product confidence threshold -- read
+/// through <see cref="ConveyorServices.ConfidenceThresholdReader"/> -- so a
+/// Control Center write to a product's <c>threshold.&lt;product&gt;</c> App
+/// Configuration entry still changes which proposals the lens synthesizer
+/// recommends.
 /// </summary>
 public sealed class S5CouncilTests
 {
@@ -163,5 +169,129 @@ public sealed class S5CouncilTests
         var names = ModelDeliberationLens.Default().Select(lens => lens.Name).ToArray();
 
         Assert.Equal(["value", "cost", "feasibility", "security", "strategic-fit"], names);
+    }
+
+    [Fact]
+    public async Task Proceeds_when_the_jury_unanimously_votes_go_at_medium_or_higher_maturity()
+    {
+        var run = RunWithOneProposal();
+        var lenses = new IDeliberationLens[] { new FixedLens("value", LensPosition.Go) };
+        var jurors = new IValidationJuror[]
+        {
+            new FixedJuror("juror-a", JurorPosition.Go),
+            new FixedJuror("juror-b", JurorPosition.Go),
+            new FixedJuror("juror-c", JurorPosition.Go),
+        };
+        var services = ConveyorDoubles.Services(
+            deliberationLenses: lenses, validationJurors: jurors, productMaturity: "medium");
+
+        await new S5Council().RunAsync(run, services, CancellationToken.None);
+
+        Assert.Equal(ProposalVerdict.Proceed, run.Proposals.Single().Verdict);
+        Assert.Equal(RunStatus.Open, run.Status);
+        Assert.Contains(
+            run.Audit, record => record.Message.Contains("juror 'juror-a'", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Escalates_a_proposal_the_lenses_recommend_proceeding_with_when_maturity_is_low()
+    {
+        var run = RunWithOneProposal();
+        var lenses = new IDeliberationLens[] { new FixedLens("value", LensPosition.Go) };
+        var jurors = new IValidationJuror[]
+        {
+            new FixedJuror("juror-a", JurorPosition.Go),
+            new FixedJuror("juror-b", JurorPosition.Go),
+            new FixedJuror("juror-c", JurorPosition.Go),
+        };
+        var services = ConveyorDoubles.Services(
+            deliberationLenses: lenses, validationJurors: jurors, productMaturity: "low");
+
+        await new S5Council().RunAsync(run, services, CancellationToken.None);
+
+        // Low maturity escalates regardless of unanimous jury agreement, but the
+        // jurors are still consulted -- their verdicts are part of the review
+        // package the escalation persists.
+        Assert.Equal(ProposalVerdict.Escalate, run.Proposals.Single().Verdict);
+        Assert.Equal(RunStatus.Escalated, run.Status);
+        Assert.Contains(
+            run.Audit, record => record.Message.Contains("juror 'juror-a'", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Escalates_when_the_jury_splits_at_medium_or_higher_maturity()
+    {
+        var run = RunWithOneProposal();
+        var lenses = new IDeliberationLens[] { new FixedLens("value", LensPosition.Go) };
+        var jurors = new IValidationJuror[]
+        {
+            new FixedJuror("juror-a", JurorPosition.Go),
+            new FixedJuror("juror-b", JurorPosition.NoGo),
+            new FixedJuror("juror-c", JurorPosition.Go),
+        };
+        var services = ConveyorDoubles.Services(
+            deliberationLenses: lenses, validationJurors: jurors, productMaturity: "high");
+
+        await new S5Council().RunAsync(run, services, CancellationToken.None);
+
+        Assert.Equal(ProposalVerdict.Escalate, run.Proposals.Single().Verdict);
+        Assert.Equal(RunStatus.Escalated, run.Status);
+    }
+
+    [Fact]
+    public async Task Kills_the_run_when_the_jury_unanimously_votes_no_go_at_medium_or_higher_maturity()
+    {
+        var run = RunWithOneProposal();
+        var lenses = new IDeliberationLens[] { new FixedLens("value", LensPosition.Go) };
+        var jurors = new IValidationJuror[]
+        {
+            new FixedJuror("juror-a", JurorPosition.NoGo),
+            new FixedJuror("juror-b", JurorPosition.NoGo),
+            new FixedJuror("juror-c", JurorPosition.NoGo),
+        };
+        var services = ConveyorDoubles.Services(
+            deliberationLenses: lenses, validationJurors: jurors, productMaturity: "high");
+
+        await new S5Council().RunAsync(run, services, CancellationToken.None);
+
+        Assert.Equal(ProposalVerdict.Kill, run.Proposals.Single().Verdict);
+        Assert.Equal(RunStatus.Killed, run.Status);
+    }
+
+    [Fact]
+    public async Task Never_consults_the_jury_for_a_proposal_the_lenses_do_not_recommend_proceeding_with()
+    {
+        var run = RunWithOneProposal();
+        var lenses = new IDeliberationLens[] { new FixedLens("value", LensPosition.NoGo) };
+        var juror = new FixedJuror("juror-a", JurorPosition.Go);
+        var services = ConveyorDoubles.Services(
+            deliberationLenses: lenses, validationJurors: [juror], productMaturity: "high");
+
+        await new S5Council().RunAsync(run, services, CancellationToken.None);
+
+        Assert.Equal(ProposalVerdict.Rejected, run.Proposals.Single().Verdict);
+        Assert.Equal(RunStatus.Open, run.Status);
+        Assert.Equal(0, juror.CallCount);
+    }
+
+    [Fact]
+    public async Task A_malformed_juror_result_fails_the_run_loudly_instead_of_a_silent_pass_through()
+    {
+        var run = RunWithOneProposal();
+        var lenses = new IDeliberationLens[] { new FixedLens("value", LensPosition.Go) };
+        var jurors = new IValidationJuror[] { new MalformedJuror("juror-a") };
+        var services = ConveyorDoubles.Services(deliberationLenses: lenses, validationJurors: jurors);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => new S5Council().RunAsync(run, services, CancellationToken.None));
+    }
+
+    [Fact]
+    public void Default_validation_jury_has_three_jurors()
+    {
+        var names = ModelValidationJuror.Default(new RecordingModelClient()).Select(juror => juror.Name).ToArray();
+
+        Assert.Equal(3, names.Length);
+        Assert.Equal(names.Distinct(), names);
     }
 }

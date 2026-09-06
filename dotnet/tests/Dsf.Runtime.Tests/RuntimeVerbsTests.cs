@@ -393,8 +393,9 @@ public sealed class RuntimeVerbsTests
 
             Assert.Equal(RunStatus.Previewed, run.Status);
             // One synthesis completion, plus one council completion per lens per
-            // deliberation round (5 lenses x 2 rounds = 10) for the single proposal.
-            Assert.Equal(11, model.Prompts.Count);
+            // deliberation round (5 lenses x 2 rounds = 10), plus one jury
+            // completion per juror (3) for the single proposal.
+            Assert.Equal(14, model.Prompts.Count);
             Assert.Contains(model.Prompts, prompt => prompt.Contains("azuremonitor", StringComparison.OrdinalIgnoreCase));
         }
         finally

@@ -38,6 +38,7 @@ public static class RuntimeSettingsComposer
         GitHubInstallationId,
         GitHubAppPrivateKeySecret,
         GitHubRepository,
+        RuntimeIntegrationSettings.CreationMaturity,
     ];
 
     /// <summary>Required data-plane endpoints, paired with the env var that supplies each one.</summary>
@@ -102,7 +103,10 @@ public static class RuntimeSettingsComposer
             GitHubAppId: Read(GitHubAppId),
             GitHubInstallationId: Read(GitHubInstallationId),
             GitHubAppPrivateKeySecret: Read(GitHubAppPrivateKeySecret),
-            GitHubRepository: Read(GitHubRepository));
+            GitHubRepository: Read(GitHubRepository),
+            CreationMaturity: Read(RuntimeIntegrationSettings.CreationMaturity) is { Length: > 0 } maturity
+                ? maturity
+                : "low");
     }
 
     /// <summary>

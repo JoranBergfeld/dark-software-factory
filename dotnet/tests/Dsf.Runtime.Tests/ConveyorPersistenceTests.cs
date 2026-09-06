@@ -244,7 +244,7 @@ public sealed class ConveyorPersistenceTests
             priorRun.Checkpoints.AddRange(ConveyorLine.StationNames.Take(6));
             var proposal = new Proposal("p1", "Investigate checkout 500s", ["azuremonitor"], ["AZUREMONITOR-1"])
             {
-                Accepted = true,
+                Verdict = ProposalVerdict.Proceed,
                 IntentKey = "intent-1",
             };
             proposal.Labels.Add("bug");
@@ -295,7 +295,7 @@ public sealed class ConveyorPersistenceTests
             priorRun.Checkpoints.AddRange(ConveyorLine.StationNames.Take(6));
             var proposal = new Proposal("p1", "Investigate checkout 500s", ["azuremonitor"], ["AZUREMONITOR-1"])
             {
-                Accepted = true,
+                Verdict = ProposalVerdict.Proceed,
                 IntentKey = "intent-1",
             };
             proposal.Labels.Add("bug");

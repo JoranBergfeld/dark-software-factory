@@ -21,7 +21,7 @@ public sealed class GitHubIssueFilerTests
     {
         var proposal = new Proposal("run-1-sentry", "[sentry] checkout 500s spiked", ["sentry"], ["SENTRY-1"])
         {
-            Accepted = true,
+            Verdict = ProposalVerdict.Proceed,
             Confidence = 0.9,
             IntentKey = intentKey,
         };

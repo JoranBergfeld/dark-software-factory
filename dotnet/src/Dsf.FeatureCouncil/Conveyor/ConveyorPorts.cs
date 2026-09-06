@@ -107,7 +107,9 @@ public sealed record ConveyorServices(
     IConfidenceThresholdReader ConfidenceThresholdReader,
     ILearningStore? LearningStore = null,
     IEvidenceClusterer? EvidenceClusterer = null,
-    IReadOnlyList<IDeliberationLens>? DeliberationLenses = null)
+    IReadOnlyList<IDeliberationLens>? DeliberationLenses = null,
+    IReadOnlyList<IValidationJuror>? ValidationJurors = null,
+    string ProductMaturity = "high")
 {
     public IRunStore RunStore { get; } = RunStore ?? throw new ArgumentNullException(nameof(RunStore));
 
@@ -137,6 +139,17 @@ public sealed record ConveyorServices(
     /// </summary>
     public IReadOnlyList<IDeliberationLens> DeliberationLenses { get; } =
         DeliberationLenses ?? ModelDeliberationLens.Default();
+
+    /// <summary>
+    /// The jurors S5 council's validation jury consults over a proposal the
+    /// lens synthesizer recommends proceeding with. Defaults to the three real,
+    /// model-reasoning <see cref="ModelValidationJuror"/> instances (all
+    /// currently wired to this same <paramref name="ModelClient"/> -- see <see
+    /// cref="ModelValidationJuror.Default"/>) when a factory does not wire
+    /// others in explicitly.
+    /// </summary>
+    public IReadOnlyList<IValidationJuror> ValidationJurors { get; } =
+        ValidationJurors ?? ModelValidationJuror.Default(ModelClient);
 
     public IEvidenceGatherer? GathererFor(string sourceKind) =>
         EvidenceGatherers.FirstOrDefault(

@@ -17,6 +17,15 @@ public enum RunStatus
     Previewed,
     Filed,
     Error,
+    /// <summary>
+    /// S5 council's jury panel escalated at least one proposal to a human --
+    /// either because the product's creation maturity is <c>low</c>, or because
+    /// the three jurors split on whether to proceed. Terminal like <see
+    /// cref="Killed"/>: the run never reaches S6/S7, and its persisted state
+    /// (evidence, lens verdicts, jury verdicts, audit trail) is the review
+    /// package a human acts on before anything is filed.
+    /// </summary>
+    Escalated,
 }
 
 /// <summary>What started a run: a manual <c>--signal</c> or the scheduled sweep.</summary>
@@ -68,10 +77,47 @@ public sealed class Proposal(string id, string title, IReadOnlyList<string> sour
     /// <summary>Council confidence in [0, 1]; set by the council station.</summary>
     public double Confidence { get; set; }
 
-    /// <summary>Whether the council accepted the proposal for routing and filing.</summary>
-    public bool Accepted { get; set; }
+    /// <summary>
+    /// The council's typed verdict on this proposal, set by S5 council: <see
+    /// cref="ProposalVerdict.Rejected"/> when the lens synthesizer did not
+    /// recommend proceeding (the jury panel is never consulted in that case --
+    /// there is nothing to validate proceeding with), or one of <see
+    /// cref="ProposalVerdict.Proceed"/>/<see cref="ProposalVerdict.Escalate"/>/<see
+    /// cref="ProposalVerdict.Kill"/> from the jury panel's review of a lens
+    /// recommendation to proceed. This, not <see cref="Accepted"/>, is the
+    /// verdict authority S6 routing and S7 filing act on.
+    /// </summary>
+    public ProposalVerdict Verdict { get; set; } = ProposalVerdict.Pending;
+
+    /// <summary>
+    /// Whether the council's final verdict routes this proposal to filing.
+    /// Equivalent to <c><see cref="Verdict"/> == <see cref="ProposalVerdict.Proceed"/></c>
+    /// -- kept as a convenience read, not a second source of truth: setting
+    /// <see cref="Verdict"/> is the only way to change it.
+    /// </summary>
+    public bool Accepted => Verdict == ProposalVerdict.Proceed;
 
     public List<string> Labels { get; } = [];
+}
+
+/// <summary>
+/// S5 council's typed verdict on a proposal, replacing the earlier plain
+/// accept/reject boolean. <see cref="Pending"/> is the value every proposal
+/// carries before S5 runs -- nothing downstream of S3 synthesis reads it before
+/// then. <see cref="Rejected"/> means the lens synthesizer's own confidence
+/// vote did not clear the governed threshold; the jury panel is not consulted
+/// for a proposal in that state. <see cref="Proceed"/>/<see cref="Escalate"/>/<see
+/// cref="Kill"/> are the three outcomes the jury panel can reach over a
+/// proposal the lenses did recommend proceeding with (<see
+/// cref="Stations.S5Council"/> for the exact rules).
+/// </summary>
+public enum ProposalVerdict
+{
+    Pending,
+    Rejected,
+    Proceed,
+    Escalate,
+    Kill,
 }
 
 /// <summary>

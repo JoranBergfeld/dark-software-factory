@@ -71,7 +71,7 @@ internal sealed class EnvironmentConveyorComposer(
 
         return new ConveyorServices(
             settings.Product, gatherers, filer, runStore!, modelClient!, tracer!, confidenceThresholdReader,
-            learningStore);
+            learningStore, ProductMaturity: settings.CreationMaturity);
     }
 
     /// <summary>
