@@ -24,7 +24,8 @@ internal static class TestDependencies
         ISourceIntegration? sourceIntegration = null,
         IModelClient? modelClient = null,
         ITracer? tracer = null,
-        ILearningComposer? learningComposer = null) =>
+        ILearningComposer? learningComposer = null,
+        Func<RuntimeSettings, ISweepControlStore>? sweepControlStoreFactory = null) =>
         new(
             ownerRuntimeIndexReader ?? new RecordingOwnerRuntimeIndexReader(),
             sourceAgentRosterReader ?? new RosterReader([]),
@@ -36,7 +37,8 @@ internal static class TestDependencies
                 modelClient ?? new RecordingModelClient(),
                 tracer ?? new RecordingTracer()),
             sourceIntegration ?? new ScriptedSourceIntegration(),
-            learningComposer ?? new ScriptedLearningComposer(new RecordingOutcomeSource(), new RecordingLearningStore()));
+            learningComposer ?? new ScriptedLearningComposer(new RecordingOutcomeSource(), new RecordingLearningStore()),
+            sweepControlStoreFactory);
 }
 
 /// <summary>Composes learning services from collaborators the test supplied directly.</summary>
@@ -212,6 +214,56 @@ internal sealed class ScriptedSourceIntegration(params EvidenceItem[] evidence) 
     public Task<IReadOnlyList<EvidenceItem>> GatherAsync(
         string kind, string product, CancellationToken cancellationToken) =>
         Task.FromResult<IReadOnlyList<EvidenceItem>>(evidence);
+}
+
+/// <summary>
+/// A sweep control store that keeps its state in memory instead of a real App
+/// Configuration store, so the CLI's pause/resume/interval/status subcommands and
+/// the sweep loop's per-tick checks can be tested deterministically.
+/// </summary>
+internal sealed class ScriptedSweepControlStore(SweepControlState? initial = null) : ISweepControlStore
+{
+    public SweepControlState State { get; private set; } = initial ?? SweepControlState.Unset;
+
+    public Task<SweepControlState> ReadAsync(CancellationToken cancellationToken) => Task.FromResult(State);
+
+    public Task SetPausedAsync(bool paused, CancellationToken cancellationToken)
+    {
+        State = State with { Paused = paused };
+        return Task.CompletedTask;
+    }
+
+    public Task SetIntervalSecondsAsync(int seconds, CancellationToken cancellationToken)
+    {
+        State = State with { IntervalSeconds = seconds };
+        return Task.CompletedTask;
+    }
+}
+
+/// <summary>A sweep control store whose backing store cannot be reached.</summary>
+internal sealed class UnreachableSweepControlStore(string reason) : ISweepControlStore
+{
+    private RuntimeConfigurationException Failure() =>
+        new($"failed to reach the sweep control store: {reason}", [RuntimeSettingsComposer.AzureAppConfigEndpoint]);
+
+    public Task<SweepControlState> ReadAsync(CancellationToken cancellationToken) => throw Failure();
+
+    public Task SetPausedAsync(bool paused, CancellationToken cancellationToken) => throw Failure();
+
+    public Task SetIntervalSecondsAsync(int seconds, CancellationToken cancellationToken) => throw Failure();
+}
+
+/// <summary>A sweep lease that always answers a fixed, scripted acquisition result.</summary>
+internal sealed class ScriptedSweepLease(bool acquires = true) : ISweepLease
+{
+    public List<(string Product, DateTimeOffset Now, TimeSpan Interval)> Requests { get; } = [];
+
+    public Task<bool> TryAcquireAsync(
+        string product, DateTimeOffset now, TimeSpan interval, CancellationToken cancellationToken)
+    {
+        Requests.Add((product, now, interval));
+        return Task.FromResult(acquires);
+    }
 }
 
 /// <summary>An owner runtime index that is never expected to be consulted.</summary>

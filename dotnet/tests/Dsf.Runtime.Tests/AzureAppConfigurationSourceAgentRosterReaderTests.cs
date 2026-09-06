@@ -106,6 +106,9 @@ public sealed class AzureAppConfigurationSourceAgentRosterReaderTests
 
             await Task.CompletedTask;
         }
+
+        public Task SetAsync(string endpoint, string key, string value, string? label, CancellationToken cancellationToken) =>
+            throw new NotSupportedException("this test double is read-only.");
     }
 
     private sealed class FailingConfigurationSettingsGateway(Exception exception) : IConfigurationSettingsGateway
@@ -119,5 +122,8 @@ public sealed class AzureAppConfigurationSourceAgentRosterReaderTests
             yield break;
 #pragma warning restore CS0162
         }
+
+        public Task SetAsync(string endpoint, string key, string value, string? label, CancellationToken cancellationToken) =>
+            throw new NotSupportedException("this test double is read-only.");
     }
 }

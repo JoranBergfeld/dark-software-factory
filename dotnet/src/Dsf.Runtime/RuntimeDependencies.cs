@@ -35,7 +35,8 @@ public sealed record RuntimeDependencies(
     IWebHostRunner WebHostRunner,
     IConveyorComposer ConveyorComposer,
     ISourceIntegration SourceIntegration,
-    ILearningComposer LearningComposer)
+    ILearningComposer LearningComposer,
+    Func<RuntimeSettings, ISweepControlStore>? SweepControlStoreFactory = null)
 {
     /// <summary>Production dependencies resolved from the real process environment.</summary>
     public static RuntimeDependencies Production() => Production(CurrentEnvironment());
@@ -52,6 +53,17 @@ public sealed record RuntimeDependencies(
             new EnvironmentConveyorComposer(env, sourceIntegration: sourceIntegration),
             sourceIntegration,
             new EnvironmentLearningComposer(env));
+    }
+
+    /// <summary>
+    /// The sweep loop's operator controls for <paramref name="settings"/>'s
+    /// product: the real App Configuration-backed store unless a test supplied
+    /// <see cref="SweepControlStoreFactory"/>.
+    /// </summary>
+    public ISweepControlStore SweepControlStoreFor(RuntimeSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        return (SweepControlStoreFactory ?? (s => new AzureAppConfigurationSweepControlStore(s)))(settings);
     }
 
     /// <summary>The learning loop's collaborators for <paramref name="settings"/>'s product.</summary>

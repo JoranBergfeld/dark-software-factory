@@ -431,6 +431,19 @@ resource orchestratorApp 'Microsoft.App/containerApps@2025-01-01' = {
         {
           name: 'orchestrator'
           image: runtimeImage
+          // Wires the sweep loop that was otherwise never invoked: the image's
+          // ENTRYPOINT has no default verb, so without this command/args the
+          // container started and sat idle -- `serve-orchestrator --loop` runs
+          // PeriodicSweepService's in-process timer loop for as long as this
+          // always-on Container App is up.
+          command: [
+            'dotnet'
+            'dsf-runtime.dll'
+          ]
+          args: [
+            'serve-orchestrator'
+            '--loop'
+          ]
           resources: {
             cpu: json('0.5')
             memory: '1Gi'
@@ -451,6 +464,10 @@ resource orchestratorApp 'Microsoft.App/containerApps@2025-01-01' = {
             { name: 'GITHUB_REPOSITORY', value: githubRepository }
             { name: 'GITHUB_APP_PRIVATE_KEY_SECRET', value: 'github-app-private-key' }
             { name: 'DSF_ASSIGN_CLOUD_AGENT', value: string(operationMaturity != 'low') }
+            // The scheduled sweep always files live (never a dry run), so the
+            // manual live-filing gate is confirmed once here at provisioning
+            // time rather than failing the container at every startup.
+            { name: 'DSF_CONFIRM_LIVE_FILING', value: 'true' }
             {
               name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
               value: appInsights.properties.ConnectionString
