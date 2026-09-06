@@ -65,16 +65,16 @@ public sealed class ProductPolicyAuthorityTests
     public async Task Reads_effective_policy_with_product_labels_overriding_defaults()
     {
         var store = SeededStore();
-        store.Seed(ProductEndpoint, "agents.sentry.enabled", "true");
-        store.Seed(ProductEndpoint, "agents.grafana.enabled", "true");
-        store.Seed(ProductEndpoint, "agents.grafana.enabled", "false", "wayfinder");
+        store.Seed(ProductEndpoint, "agents.azuremonitor.enabled", "true");
+        store.Seed(ProductEndpoint, "agents.foundryiq.enabled", "true");
+        store.Seed(ProductEndpoint, "agents.foundryiq.enabled", "false", "wayfinder");
         store.Seed(ProductEndpoint, "threshold.wayfinder", "0.72");
 
         var policy = await Authority(store).ReadPolicyAsync("wayfinder", CancellationToken.None);
 
         Assert.Equal("acme/wayfinder", policy.GitHubRepository);
-        Assert.True(policy.AgentEnablement["sentry"]);
-        Assert.False(policy.AgentEnablement["grafana"]);
+        Assert.True(policy.AgentEnablement["azuremonitor"]);
+        Assert.False(policy.AgentEnablement["foundryiq"]);
         Assert.Equal(0.72d, policy.ConfidenceThreshold);
         Assert.Equal(SourceAgentKinds.Known.Order(StringComparer.Ordinal), policy.AgentEnablement.Keys.Order(StringComparer.Ordinal));
     }
@@ -102,10 +102,10 @@ public sealed class ProductPolicyAuthorityTests
     {
         var store = SeededStore();
 
-        await Authority(store).SetAgentEnabledAsync("wayfinder", "sentry", true, CancellationToken.None);
+        await Authority(store).SetAgentEnabledAsync("wayfinder", "azuremonitor", true, CancellationToken.None);
 
         var write = Assert.Single(store.Writes);
-        Assert.Equal((ProductEndpoint, "agents.sentry.enabled", "true", "wayfinder"), write);
+        Assert.Equal((ProductEndpoint, "agents.azuremonitor.enabled", "true", "wayfinder"), write);
     }
 
     [Fact]

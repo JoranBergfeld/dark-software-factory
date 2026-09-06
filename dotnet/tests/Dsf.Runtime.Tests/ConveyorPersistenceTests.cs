@@ -46,9 +46,9 @@ public sealed class ConveyorPersistenceTests
         var store = new RecordingRunStore();
         var dependencies = TestDependencies.Build(
             evidenceGatherers: [new ScriptedEvidenceGatherer(
-                "sentry", new EvidenceItem("sentry", "SENTRY-1", "checkout 500s spiked"))],
+                "azuremonitor", new EvidenceItem("azuremonitor", "AZUREMONITOR-1", "checkout 500s spiked"))],
             runStore: store);
-        var path = await WriteSignalAsync("""{"product_hints": "acme", "source_kinds": ["sentry"]}""");
+        var path = await WriteSignalAsync("""{"product_hints": "acme", "source_kinds": ["azuremonitor"]}""");
         try
         {
             var run = await RuntimeVerbs.RunAsync(Settings, path, dryRun: true, dependencies, CancellationToken.None);
@@ -67,9 +67,9 @@ public sealed class ConveyorPersistenceTests
     {
         var dependencies = TestDependencies.Build(
             evidenceGatherers: [new ScriptedEvidenceGatherer(
-                "sentry", new EvidenceItem("sentry", "SENTRY-1", "checkout 500s spiked"))],
+                "azuremonitor", new EvidenceItem("azuremonitor", "AZUREMONITOR-1", "checkout 500s spiked"))],
             runStore: new UnreachableRunStore("cosmos endpoint returned 403"));
-        var path = await WriteSignalAsync("""{"product_hints": "acme", "source_kinds": ["sentry"]}""");
+        var path = await WriteSignalAsync("""{"product_hints": "acme", "source_kinds": ["azuremonitor"]}""");
         try
         {
             var run = await RuntimeVerbs.RunAsync(Settings, path, dryRun: true, dependencies, CancellationToken.None);
@@ -86,15 +86,15 @@ public sealed class ConveyorPersistenceTests
     [Fact]
     public async Task A_requested_source_kind_with_no_gatherer_fails_the_run_by_name()
     {
-        var path = await WriteSignalAsync("""{"product_hints": "acme", "source_kinds": ["sentry"]}""");
+        var path = await WriteSignalAsync("""{"product_hints": "acme", "source_kinds": ["azuremonitor"]}""");
         try
         {
             var run = await RuntimeVerbs.RunAsync(
                 Settings, path, dryRun: true, TestDependencies.Empty, CancellationToken.None);
 
             Assert.Equal(RunStatus.Error, run.Status);
-            Assert.Contains("sentry", run.Audit[^1].Message);
-            Assert.Contains("DSF_SOURCE_AGENT_ENDPOINT_SENTRY", run.Audit[^1].Message);
+            Assert.Contains("azuremonitor", run.Audit[^1].Message);
+            Assert.Contains("DSF_SOURCE_AGENT_ENDPOINT_AZUREMONITOR", run.Audit[^1].Message);
             Assert.Empty(run.FiledIssues);
         }
         finally
@@ -106,7 +106,7 @@ public sealed class ConveyorPersistenceTests
     [Fact]
     public async Task A_sweep_over_kinds_with_no_gatherers_never_reports_a_filed_empty_run()
     {
-        var dependencies = TestDependencies.Build(sourceAgentRosterReader: new RosterReader(["sentry"]));
+        var dependencies = TestDependencies.Build(sourceAgentRosterReader: new RosterReader(["azuremonitor"]));
 
         var run = await RuntimeVerbs.SweepAsync(
             Settings, dryRun: false, dependencies, CancellationToken.None, ConfirmedLiveFiling);
@@ -121,11 +121,11 @@ public sealed class ConveyorPersistenceTests
     {
         var store = new RecordingRunStore();
         var gatherer = new ScriptedEvidenceGatherer(
-            "sentry", new EvidenceItem("sentry", "SENTRY-1", "checkout 500s spiked"));
+            "azuremonitor", new EvidenceItem("azuremonitor", "AZUREMONITOR-1", "checkout 500s spiked"));
         var dependencies = TestDependencies.Build(
             evidenceGatherers: [gatherer],
             runStore: store,
-            sourceAgentRosterReader: new RosterReader(["sentry"]));
+            sourceAgentRosterReader: new RosterReader(["azuremonitor"]));
 
         var first = await RuntimeVerbs.SweepAsync(Settings, dryRun: true, dependencies, CancellationToken.None);
         Assert.Equal(RunStatus.Previewed, first.Status);
@@ -147,22 +147,22 @@ public sealed class ConveyorPersistenceTests
     {
         var store = new RecordingRunStore();
         var gatherer = new ScriptedEvidenceGatherer(
-            "sentry", new EvidenceItem("sentry", "SENTRY-1", "checkout 500s spiked"));
+            "azuremonitor", new EvidenceItem("azuremonitor", "AZUREMONITOR-1", "checkout 500s spiked"));
         var dependencies = TestDependencies.Build(evidenceGatherers: [gatherer], runStore: store);
-        var path = await WriteSignalAsync("""{"product_hints": "acme", "source_kinds": ["sentry"]}""");
+        var path = await WriteSignalAsync("""{"product_hints": "acme", "source_kinds": ["azuremonitor"]}""");
         try
         {
-            var runId = RunIdentity.Compute(TriggerKind.Signal, ["acme"], ["sentry"]);
+            var runId = RunIdentity.Compute(TriggerKind.Signal, ["acme"], ["azuremonitor"]);
             var priorRun = new ConveyorRun
             {
                 Id = runId,
                 Trigger = TriggerKind.Signal,
                 ProductHints = ["acme"],
-                SourceKinds = ["sentry"],
+                SourceKinds = ["azuremonitor"],
                 DryRun = true,
             };
             priorRun.Checkpoints.AddRange(["s1_triage", "s2_investigation"]);
-            priorRun.Evidence.Add(new EvidenceItem("sentry", "SENTRY-1", "checkout 500s spiked"));
+            priorRun.Evidence.Add(new EvidenceItem("azuremonitor", "AZUREMONITOR-1", "checkout 500s spiked"));
             store.Seed(priorRun);
 
             var run = await RuntimeVerbs.RunAsync(Settings, path, dryRun: true, dependencies, CancellationToken.None);
@@ -186,18 +186,18 @@ public sealed class ConveyorPersistenceTests
     {
         var store = new RecordingRunStore();
         var gatherer = new ScriptedEvidenceGatherer(
-            "sentry", new EvidenceItem("sentry", "SENTRY-1", "checkout 500s spiked"));
+            "azuremonitor", new EvidenceItem("azuremonitor", "AZUREMONITOR-1", "checkout 500s spiked"));
         var dependencies = TestDependencies.Build(evidenceGatherers: [gatherer], runStore: store);
-        var path = await WriteSignalAsync("""{"product_hints": "acme", "source_kinds": ["sentry"]}""");
+        var path = await WriteSignalAsync("""{"product_hints": "acme", "source_kinds": ["azuremonitor"]}""");
         try
         {
-            var runId = RunIdentity.Compute(TriggerKind.Signal, ["acme"], ["sentry"]);
+            var runId = RunIdentity.Compute(TriggerKind.Signal, ["acme"], ["azuremonitor"]);
             var priorRun = new ConveyorRun
             {
                 Id = runId,
                 Trigger = TriggerKind.Signal,
                 ProductHints = ["acme"],
-                SourceKinds = ["sentry"],
+                SourceKinds = ["azuremonitor"],
                 DryRun = false,
             };
             priorRun.Checkpoints.AddRange(ConveyorLine.StationNames);
@@ -224,25 +224,25 @@ public sealed class ConveyorPersistenceTests
         var store = new RecordingRunStore();
         var filer = new RecordingIssueFiler();
         var gatherer = new ScriptedEvidenceGatherer(
-            "sentry", new EvidenceItem("sentry", "SENTRY-1", "checkout 500s spiked"));
+            "azuremonitor", new EvidenceItem("azuremonitor", "AZUREMONITOR-1", "checkout 500s spiked"));
         var dependencies = TestDependencies.Build(evidenceGatherers: [gatherer], runStore: store, issueFiler: filer);
-        var path = await WriteSignalAsync("""{"product_hints": "acme", "source_kinds": ["sentry"]}""");
+        var path = await WriteSignalAsync("""{"product_hints": "acme", "source_kinds": ["azuremonitor"]}""");
         try
         {
-            var runId = RunIdentity.Compute(TriggerKind.Signal, ["acme"], ["sentry"]);
+            var runId = RunIdentity.Compute(TriggerKind.Signal, ["acme"], ["azuremonitor"]);
             var priorRun = new ConveyorRun
             {
                 Id = runId,
                 Trigger = TriggerKind.Signal,
                 ProductHints = ["acme"],
-                SourceKinds = ["sentry"],
+                SourceKinds = ["azuremonitor"],
                 DryRun = false,
             };
             // Simulates a crashed non-dry-run process: S1..S6 checkpointed, one
             // accepted proposal routed and ready for S7, but the process died
             // before filing it.
             priorRun.Checkpoints.AddRange(ConveyorLine.StationNames.Take(6));
-            var proposal = new Proposal("p1", "Investigate checkout 500s", "sentry", ["SENTRY-1"])
+            var proposal = new Proposal("p1", "Investigate checkout 500s", "azuremonitor", ["AZUREMONITOR-1"])
             {
                 Accepted = true,
                 IntentKey = "intent-1",
@@ -272,18 +272,18 @@ public sealed class ConveyorPersistenceTests
         var store = new RecordingRunStore();
         var filer = new RecordingIssueFiler();
         var gatherer = new ScriptedEvidenceGatherer(
-            "sentry", new EvidenceItem("sentry", "SENTRY-1", "checkout 500s spiked"));
+            "azuremonitor", new EvidenceItem("azuremonitor", "AZUREMONITOR-1", "checkout 500s spiked"));
         var dependencies = TestDependencies.Build(evidenceGatherers: [gatherer], runStore: store, issueFiler: filer);
-        var path = await WriteSignalAsync("""{"product_hints": "acme", "source_kinds": ["sentry"]}""");
+        var path = await WriteSignalAsync("""{"product_hints": "acme", "source_kinds": ["azuremonitor"]}""");
         try
         {
-            var runId = RunIdentity.Compute(TriggerKind.Signal, ["acme"], ["sentry"]);
+            var runId = RunIdentity.Compute(TriggerKind.Signal, ["acme"], ["azuremonitor"]);
             var priorRun = new ConveyorRun
             {
                 Id = runId,
                 Trigger = TriggerKind.Signal,
                 ProductHints = ["acme"],
-                SourceKinds = ["sentry"],
+                SourceKinds = ["azuremonitor"],
                 DryRun = true,
             };
             // Simulates a crashed dry-run process: S1..S6 checkpointed, one
@@ -293,7 +293,7 @@ public sealed class ConveyorPersistenceTests
             // must clear the stale DryRun=true it inherited, not just ever
             // force DryRun=true.
             priorRun.Checkpoints.AddRange(ConveyorLine.StationNames.Take(6));
-            var proposal = new Proposal("p1", "Investigate checkout 500s", "sentry", ["SENTRY-1"])
+            var proposal = new Proposal("p1", "Investigate checkout 500s", "azuremonitor", ["AZUREMONITOR-1"])
             {
                 Accepted = true,
                 IntentKey = "intent-1",
@@ -323,18 +323,18 @@ public sealed class ConveyorPersistenceTests
         var store = new RecordingRunStore();
         var filer = new RecordingIssueFiler();
         var gatherer = new ScriptedEvidenceGatherer(
-            "sentry", new EvidenceItem("sentry", "SENTRY-1", "checkout 500s spiked"));
+            "azuremonitor", new EvidenceItem("azuremonitor", "AZUREMONITOR-1", "checkout 500s spiked"));
         var dependencies = TestDependencies.Build(evidenceGatherers: [gatherer], runStore: store, issueFiler: filer);
-        var path = await WriteSignalAsync("""{"product_hints": "acme", "source_kinds": ["sentry"]}""");
+        var path = await WriteSignalAsync("""{"product_hints": "acme", "source_kinds": ["azuremonitor"]}""");
         try
         {
-            var runId = RunIdentity.Compute(TriggerKind.Signal, ["acme"], ["sentry"]);
+            var runId = RunIdentity.Compute(TriggerKind.Signal, ["acme"], ["azuremonitor"]);
             var priorRun = new ConveyorRun
             {
                 Id = runId,
                 Trigger = TriggerKind.Signal,
                 ProductHints = ["acme"],
-                SourceKinds = ["sentry"],
+                SourceKinds = ["azuremonitor"],
                 DryRun = true,
             };
             priorRun.Checkpoints.AddRange(ConveyorLine.StationNames);

@@ -41,7 +41,7 @@ public sealed class ConveyorDryRunReportingTests
         GitHubRepository: "acme/acme");
 
     private static readonly EvidenceItem SentryEvidence =
-        new("sentry", "SENTRY-1", "checkout 500s spiked after release 4.2");
+        new("azuremonitor", "AZUREMONITOR-1", "checkout 500s spiked after release 4.2");
 
     private static async Task<string> WriteSignalAsync(string json)
     {
@@ -65,9 +65,9 @@ public sealed class ConveyorDryRunReportingTests
     {
         var filer = new RecordingIssueFiler();
         var dependencies = TestDependencies.Build(
-            evidenceGatherers: [new ScriptedEvidenceGatherer("sentry", SentryEvidence)],
+            evidenceGatherers: [new ScriptedEvidenceGatherer("azuremonitor", SentryEvidence)],
             issueFiler: filer);
-        var path = await WriteSignalAsync("""{"product_hints": "acme", "source_kinds": ["sentry"]}""");
+        var path = await WriteSignalAsync("""{"product_hints": "acme", "source_kinds": ["azuremonitor"]}""");
         try
         {
             var (exitCode, stdout, stderr) = await InvokeAsync(dependencies, "run", "--signal", path, "--dry-run");
@@ -76,7 +76,7 @@ public sealed class ConveyorDryRunReportingTests
             Assert.Equal(string.Empty, stderr);
             Assert.Contains("status=previewed", stdout, StringComparison.Ordinal);
             Assert.Contains("would file", stdout, StringComparison.Ordinal);
-            Assert.Contains("[sentry] checkout 500s spiked after release 4.2", stdout, StringComparison.Ordinal);
+            Assert.Contains("[azuremonitor] checkout 500s spiked after release 4.2", stdout, StringComparison.Ordinal);
             Assert.Empty(filer.Filed);
         }
         finally
@@ -89,10 +89,10 @@ public sealed class ConveyorDryRunReportingTests
     public async Task A_failed_station_is_reported_as_the_cause_and_exits_non_zero()
     {
         var dependencies = TestDependencies.Build(
-            evidenceGatherers: [new ScriptedEvidenceGatherer("sentry", SentryEvidence)],
+            evidenceGatherers: [new ScriptedEvidenceGatherer("azuremonitor", SentryEvidence)],
             modelClient: new ThrowingModelClient("azure openai returned 429"),
             tracer: new UnreachableTracer("app insights ingestion refused the connection"));
-        var path = await WriteSignalAsync("""{"product_hints": "acme", "source_kinds": ["sentry"]}""");
+        var path = await WriteSignalAsync("""{"product_hints": "acme", "source_kinds": ["azuremonitor"]}""");
         try
         {
             var (exitCode, _, stderr) = await InvokeAsync(dependencies, "run", "--signal", path, "--dry-run");
@@ -113,7 +113,7 @@ public sealed class ConveyorDryRunReportingTests
     {
         var filer = new RecordingIssueFiler();
         var dependencies = TestDependencies.Build(
-            evidenceGatherers: [new ScriptedEvidenceGatherer("sentry", SentryEvidence)],
+            evidenceGatherers: [new ScriptedEvidenceGatherer("azuremonitor", SentryEvidence)],
             issueFiler: filer);
         await using var app = RuntimeVerbs.BuildOrchestratorHost(Settings, dependencies, "127.0.0.1", 0);
         await app.StartAsync();
@@ -123,14 +123,14 @@ public sealed class ConveyorDryRunReportingTests
             using var response = await client.PostAsync(
                 "/run",
                 new StringContent(
-                    """{"product_hints": "acme", "source_kinds": ["sentry"]}""", Encoding.UTF8, "application/json"));
+                    """{"product_hints": "acme", "source_kinds": ["azuremonitor"]}""", Encoding.UTF8, "application/json"));
 
             response.EnsureSuccessStatusCode();
             var summary = await response.Content.ReadFromJsonAsync<JsonElement>();
             Assert.Equal("previewed", summary.GetProperty("status").GetString());
             var previews = summary.GetProperty("previewedIssues").EnumerateArray().ToList();
             var preview = Assert.Single(previews);
-            Assert.Equal("[sentry] checkout 500s spiked after release 4.2", preview.GetProperty("title").GetString());
+            Assert.Equal("[azuremonitor] checkout 500s spiked after release 4.2", preview.GetProperty("title").GetString());
             Assert.Contains(
                 "ready-for-agent",
                 preview.GetProperty("labels").EnumerateArray().Select(label => label.GetString()));
@@ -148,16 +148,16 @@ public sealed class ConveyorDryRunReportingTests
     {
         var gateway = new RecordingRunDocumentGateway();
         var store = new CosmosRunStore("https://cosmos.example", "dsf", "runs", "acme", gateway);
-        var run = new ConveyorRun { ProductHints = ["acme"], SourceKinds = ["sentry"], DryRun = true };
-        run.PreviewedIssues.Add(new IssuePreview("[sentry] checkout 500s", "abc123:sentry", ["ready-for-agent"]));
+        var run = new ConveyorRun { ProductHints = ["acme"], SourceKinds = ["azuremonitor"], DryRun = true };
+        run.PreviewedIssues.Add(new IssuePreview("[azuremonitor] checkout 500s", "abc123:azuremonitor", ["ready-for-agent"]));
         run.FailureReason = "station 's3_synthesis' failed (InvalidOperationException): azure openai returned 429";
 
         await store.SaveAsync(run, "s7_filing", CancellationToken.None);
 
         using var document = JsonDocument.Parse(gateway.Upserts[^1]);
         var preview = Assert.Single(document.RootElement.GetProperty("previewedIssues").EnumerateArray());
-        Assert.Equal("[sentry] checkout 500s", preview.GetProperty("title").GetString());
-        Assert.Equal("abc123:sentry", preview.GetProperty("intentKey").GetString());
+        Assert.Equal("[azuremonitor] checkout 500s", preview.GetProperty("title").GetString());
+        Assert.Equal("abc123:azuremonitor", preview.GetProperty("intentKey").GetString());
         Assert.Contains("azure openai returned 429", document.RootElement.GetProperty("failureReason").GetString()!);
     }
 

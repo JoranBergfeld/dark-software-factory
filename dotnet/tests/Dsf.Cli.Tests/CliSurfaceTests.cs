@@ -266,7 +266,7 @@ public sealed class CliSurfaceTests
         Assert.Equal(1, result.ExitCode);
         Assert.Equal(string.Empty, result.Stdout);
         Assert.Contains("unknown source agent kind 'bogus'", result.Stderr);
-        Assert.Contains("sentry", result.Stderr);
+        Assert.Contains("azuremonitor", result.Stderr);
     }
 
     [Fact]

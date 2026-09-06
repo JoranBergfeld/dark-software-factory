@@ -22,6 +22,7 @@ internal static class TestDependencies
         IIssueFiler? issueFiler = null,
         IRunStore? runStore = null,
         ISourceIntegration? sourceIntegration = null,
+        IReadOnlyDictionary<string, ISourceIntegration>? sourceIntegrationsByKind = null,
         IModelClient? modelClient = null,
         ITracer? tracer = null,
         ILearningComposer? learningComposer = null,
@@ -36,7 +37,9 @@ internal static class TestDependencies
                 runStore ?? new RecordingRunStore(),
                 modelClient ?? new RecordingModelClient(),
                 tracer ?? new RecordingTracer()),
-            sourceIntegration ?? new ScriptedSourceIntegration(),
+            new SourceIntegrationRegistry(
+                sourceIntegrationsByKind ?? new Dictionary<string, ISourceIntegration>(StringComparer.Ordinal),
+                sourceIntegration ?? new ScriptedSourceIntegration()),
             learningComposer ?? new ScriptedLearningComposer(new RecordingOutcomeSource(), new RecordingLearningStore()),
             sweepControlStoreFactory);
 }

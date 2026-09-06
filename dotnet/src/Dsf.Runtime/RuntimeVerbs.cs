@@ -466,7 +466,7 @@ public static class RuntimeVerbs
         ArgumentNullException.ThrowIfNull(dependencies);
 
         var card = SourceAgentCard.For(kind, settings.Product);
-        var integration = dependencies.SourceIntegration;
+        var integration = dependencies.SourceIntegrationRegistry.Resolve(card.Kind);
         var app = CreateBuilder(host, port).Build();
 
         app.MapGet("/healthz", () => Results.Ok(new

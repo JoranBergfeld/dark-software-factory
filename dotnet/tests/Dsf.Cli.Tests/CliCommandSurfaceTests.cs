@@ -186,7 +186,7 @@ command <root> desc="Dark Software Factory — factory CLI (create product insta
     option --port type=Int32? arity=1..1 default=8080 desc="bind port"
     option --product type=String arity=1..1 desc="resolve runtime env for this product"
   command serve-agent desc="serve a source agent over A2A (runtime)"
-    option --kind type=String arity=1..1 default="sentry" desc="source agent kind"
+    option --kind type=String arity=1..1 default="azuremonitor" desc="source agent kind"
     option --host type=String arity=1..1 default="0.0.0.0" desc="bind host"
     option --port type=Int32? arity=1..1 default=8080 desc="bind port"
     option --product type=String arity=1..1 desc="resolve runtime env for this product"

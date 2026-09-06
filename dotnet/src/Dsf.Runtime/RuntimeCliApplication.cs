@@ -268,7 +268,7 @@ public static class RuntimeCliApplication
         TextWriter stderr,
         RuntimeDependencies dependencies)
     {
-        var kind = StringOption("--kind", "source agent kind", "sentry");
+        var kind = StringOption("--kind", "source agent kind", "azuremonitor");
         var host = StringOption("--host", "bind host", RuntimeVerbs.DefaultHost);
         var port = IntOption("--port", "bind port", RuntimeVerbs.DefaultPort);
         var product = StringOption("--product", "resolve runtime env for this product");
@@ -284,7 +284,7 @@ public static class RuntimeCliApplication
             dependencies,
             (settings, token) => RuntimeVerbs.ServeAgentAsync(
                 settings,
-                parseResult.GetValue(kind) ?? "sentry",
+                parseResult.GetValue(kind) ?? "azuremonitor",
                 dependencies,
                 parseResult.GetValue(host) ?? RuntimeVerbs.DefaultHost,
                 parseResult.GetValue(port) ?? RuntimeVerbs.DefaultPort,

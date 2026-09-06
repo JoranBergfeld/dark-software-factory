@@ -34,12 +34,9 @@ public sealed class ControlCenterEndpointTests
             "acme/wayfinder",
             new Dictionary<string, bool>(StringComparer.Ordinal)
             {
-                ["sentry"] = true,
-                ["grafana"] = false,
+                ["azuremonitor"] = true,
                 ["foundryiq"] = false,
                 ["webiq"] = false,
-                ["incidents"] = false,
-                ["azuremonitor"] = false,
             },
             0.72d);
         return authority;
@@ -146,8 +143,8 @@ public sealed class ControlCenterEndpointTests
         var html = await harness.Client.GetStringAsync("/products/wayfinder", CancellationToken.None);
 
         Assert.Contains("0.72", html, StringComparison.Ordinal);
-        Assert.Contains("sentry", html, StringComparison.Ordinal);
-        Assert.Contains("grafana", html, StringComparison.Ordinal);
+        Assert.Contains("azuremonitor", html, StringComparison.Ordinal);
+        Assert.Contains("foundryiq", html, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -303,11 +300,11 @@ public sealed class ControlCenterEndpointTests
 
         var response = await harness.Client.PostAsync(
             "/products/wayfinder/agents",
-            Form(("kind", "grafana"), ("enabled", "true"), ("csrf_token", csrf)),
+            Form(("kind", "foundryiq"), ("enabled", "true"), ("csrf_token", csrf)),
             CancellationToken.None);
 
         Assert.Equal(HttpStatusCode.SeeOther, response.StatusCode);
-        Assert.Equal(("wayfinder", "grafana", true), Assert.Single(authority.AgentWrites));
+        Assert.Equal(("wayfinder", "foundryiq", true), Assert.Single(authority.AgentWrites));
     }
 
     [Fact]
@@ -381,7 +378,7 @@ public sealed class ControlCenterEndpointTests
         Assert.Contains(products!, p => p.Key == "wayfinder" && p.GitHubRepository == "acme/wayfinder");
         Assert.NotNull(policy);
         Assert.Equal(0.72d, policy!.ConfidenceThreshold);
-        Assert.True(policy.AgentEnablement["sentry"]);
+        Assert.True(policy.AgentEnablement["azuremonitor"]);
     }
 
     [Fact]

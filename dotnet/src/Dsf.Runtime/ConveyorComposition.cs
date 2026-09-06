@@ -34,14 +34,12 @@ internal sealed class EnvironmentConveyorComposer(
     IPrivateKeySecretReader? privateKeySecretReader = null,
     IModelCompletionGateway? modelGateway = null,
     ITelemetryGateway? telemetryGateway = null,
-    ISourceIntegration? sourceIntegration = null,
     IConfigurationSettingsGateway? configurationSettingsGateway = null) : IConveyorComposer
 {
     private const string KindPlaceholder = "{kind}";
     private const string DefaultGitHubApiUrl = "https://api.github.com/";
 
     private readonly HttpClient httpClient = httpClient ?? new HttpClient();
-    private readonly ISourceIntegration sourceIntegration = sourceIntegration ?? new HttpSourceIntegration(env);
     private readonly IConfigurationSettingsGateway configurationSettingsGateway =
         configurationSettingsGateway ?? new AzureConfigurationSettingsGateway();
 
@@ -95,15 +93,16 @@ internal sealed class EnvironmentConveyorComposer(
     }
 
     /// <summary>
-    /// One gatherer per known source kind: in-process by default, gathering
-    /// directly from the kind's configured upstream integration in this same
-    /// process; a remote, served source agent is used instead only for a kind
-    /// whose agent endpoint is explicitly configured (a per-kind
-    /// <see cref="RuntimeIntegrationSettings.SourceAgentEndpoint"/>, or the
-    /// <see cref="RuntimeIntegrationSettings.SourceAgentEndpointTemplate"/>). A
-    /// kind with neither configured still composes here -- it fails at gather
-    /// time, naming its unset upstream integration setting, exactly as a served
-    /// agent's own <c>/gather</c> endpoint would.
+    /// One served-agent gatherer per known source kind whose endpoint resolves
+    /// (a per-kind <see cref="RuntimeIntegrationSettings.SourceAgentEndpoint"/>,
+    /// or the <see cref="RuntimeIntegrationSettings.SourceAgentEndpointTemplate"/>
+    /// with <c>{kind}</c> substituted). S2 investigation always calls out to a
+    /// served source agent over A2A (<c>/gather</c>) -- there is no in-process
+    /// gathering path. A kind whose endpoint cannot be resolved is left
+    /// uncomposed here rather than defaulting to anything in-process: a run
+    /// scoped to that kind fails at S2 with the kind and setting named, exactly
+    /// as a served agent's own <c>/gather</c> endpoint would if it were
+    /// unreachable.
     /// </summary>
     private IReadOnlyList<IEvidenceGatherer> ComposeGatherers(RuntimeSettings settings)
     {
@@ -117,9 +116,10 @@ internal sealed class EnvironmentConveyorComposer(
                 endpoint = template.Replace(KindPlaceholder, kind, StringComparison.OrdinalIgnoreCase);
             }
 
-            gatherers.Add(endpoint.Length > 0
-                ? new SourceAgentEvidenceGatherer(kind, new Uri(EnsureTrailingSlash(endpoint)), httpClient)
-                : new InProcessEvidenceGatherer(kind, settings.Product, sourceIntegration));
+            if (endpoint.Length > 0)
+            {
+                gatherers.Add(new SourceAgentEvidenceGatherer(kind, new Uri(EnsureTrailingSlash(endpoint)), httpClient));
+            }
         }
 
         return gatherers;

@@ -72,13 +72,22 @@ public sealed class ProductionCompositionTests
             new EnvironmentConveyorComposer(
                 env ?? FullyConfigured,
                 privateKeySecretReader: privateKeySecretReader ?? new StubPrivateKeySecretReader()),
-            new HttpSourceIntegration(env ?? FullyConfigured),
+            new SourceIntegrationRegistry(
+                new Dictionary<string, ISourceIntegration>(StringComparer.Ordinal),
+                new HttpSourceIntegration(env ?? FullyConfigured)),
             new EnvironmentLearningComposer(
                 env ?? FullyConfigured,
                 privateKeySecretReader: privateKeySecretReader ?? new StubPrivateKeySecretReader()));
 
+    /// <summary>
+    /// S2 investigation always calls out to a served source agent over A2A --
+    /// there is no in-process gathering path. A factory with no
+    /// <c>DSF_SOURCE_AGENT_ENDPOINT*</c> setting at all composes no gatherer for
+    /// any kind: a run scoped to any of them fails at S2, naming the unset
+    /// setting, rather than silently gathering nothing in-process.
+    /// </summary>
     [Fact]
-    public void Production_composition_without_any_source_agent_endpoint_still_wires_in_process_gatherers_for_every_known_kind()
+    public void Production_composition_without_any_source_agent_endpoint_composes_no_gatherer_for_any_kind()
     {
         var dependencies = ProductionDependencies(new Dictionary<string, string?>());
 
@@ -86,61 +95,8 @@ public sealed class ProductionCompositionTests
 
         foreach (var kind in SourceAgentKinds.Known)
         {
-            Assert.IsType<InProcessEvidenceGatherer>(services.GathererFor(kind));
+            Assert.Null(services.GathererFor(kind));
         }
-    }
-
-    /// <summary>
-    /// In-process is the default evidence path (ADR: source agents run in-process
-    /// unless a served agent endpoint is explicitly configured for that kind): a
-    /// factory with no <c>DSF_SOURCE_AGENT_ENDPOINT*</c> setting at all must still
-    /// compose, gathering directly from each kind's upstream integration rather
-    /// than requiring a separately served A2A agent.
-    /// </summary>
-    [Fact]
-    public async Task An_in_process_gatherer_reads_evidence_directly_from_the_kinds_configured_integration()
-    {
-        var env = new Dictionary<string, string?>
-        {
-            ["DSF_SOURCE_SENTRY_ENDPOINT"] = "unused-by-the-scripted-integration",
-        };
-        var dependencies = new RuntimeDependencies(
-            new AzureAppConfigurationOwnerRuntimeIndexReader(),
-            new AzureAppConfigurationSourceAgentRosterReader(),
-            new WebApplicationHostRunner(),
-            new EnvironmentConveyorComposer(
-                env,
-                privateKeySecretReader: new StubPrivateKeySecretReader(),
-                sourceIntegration: new ScriptedSourceIntegration(new EvidenceItem("sentry", "SENTRY-9", "queue backed up"))),
-            new ScriptedSourceIntegration(),
-            new EnvironmentLearningComposer(env, privateKeySecretReader: new StubPrivateKeySecretReader()));
-
-        var services = dependencies.ConveyorServicesFor(SettingsWithGitHubApp());
-        var gatherer = services.GathererFor("sentry")!;
-        var evidence = await gatherer.GatherAsync(
-            new ConveyorRun { SourceKinds = ["sentry"], ProductHints = ["acme"] }, CancellationToken.None);
-
-        var item = Assert.Single(evidence);
-        Assert.Equal("SENTRY-9", item.Reference);
-    }
-
-    /// <summary>
-    /// An in-process gatherer for a kind whose upstream integration is
-    /// unconfigured must fail at gather time naming the unset setting -- exactly
-    /// like the served agent's own <c>/gather</c> endpoint does -- rather than
-    /// composing successfully and then reporting an empty investigation.
-    /// </summary>
-    [Fact]
-    public async Task An_in_process_gatherer_names_the_unset_integration_setting_when_asked_to_gather()
-    {
-        var dependencies = ProductionDependencies(new Dictionary<string, string?>());
-        var services = dependencies.ConveyorServicesFor(SettingsWithGitHubApp());
-        var gatherer = services.GathererFor("grafana")!;
-
-        var exception = await Assert.ThrowsAsync<RuntimeConfigurationException>(
-            () => gatherer.GatherAsync(new ConveyorRun { SourceKinds = ["grafana"] }, CancellationToken.None));
-
-        Assert.Contains("DSF_SOURCE_GRAFANA_ENDPOINT", exception.Message);
     }
 
     [Fact]
@@ -276,13 +232,13 @@ public sealed class ProductionCompositionTests
     {
         var env = new Dictionary<string, string?>
         {
-            ["DSF_SOURCE_AGENT_ENDPOINT_SENTRY"] = "https://sentry-agent.internal",
+            ["DSF_SOURCE_AGENT_ENDPOINT_AZUREMONITOR"] = "https://azuremonitor-agent.internal",
         };
 
         var services = ProductionDependencies(env).ConveyorServicesFor(SettingsWithGitHubApp());
 
-        Assert.IsType<SourceAgentEvidenceGatherer>(services.GathererFor("sentry"));
-        Assert.IsType<InProcessEvidenceGatherer>(services.GathererFor("grafana"));
+        Assert.IsType<SourceAgentEvidenceGatherer>(services.GathererFor("azuremonitor"));
+        Assert.Null(services.GathererFor("foundryiq"));
     }
 
     [Fact]

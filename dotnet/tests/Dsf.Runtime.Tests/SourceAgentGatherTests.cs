@@ -55,7 +55,7 @@ public sealed class SourceAgentGatherTests
     public async Task Gather_without_integration_configuration_names_the_unset_setting()
     {
         var dependencies = RuntimeDependencies.Production(new Dictionary<string, string?>());
-        var app = RuntimeVerbs.BuildSourceAgentHost(Settings, "sentry", dependencies, "127.0.0.1", 0);
+        var app = RuntimeVerbs.BuildSourceAgentHost(Settings, "azuremonitor", dependencies, "127.0.0.1", 0);
         await using var host = app;
         await app.StartAsync();
         try
@@ -68,7 +68,7 @@ public sealed class SourceAgentGatherTests
             Assert.NotEqual(HttpStatusCode.NotImplemented, response.StatusCode);
             Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
             var body = await response.Content.ReadAsStringAsync();
-            Assert.Contains("DSF_SOURCE_SENTRY_ENDPOINT", body);
+            Assert.Contains("DSF_SOURCE_AZUREMONITOR_ENDPOINT", body);
         }
         finally
         {
@@ -81,16 +81,16 @@ public sealed class SourceAgentGatherTests
     {
         var authHeaders = new List<string>();
         var upstream = await StartUpstreamAsync(
-            """[{"id": "SENTRY-1", "title": "checkout 500s spiked"}, {"id": "SENTRY-2", "title": "same trace"}]""",
+            """[{"id": "AZUREMONITOR-1", "title": "checkout 500s spiked"}, {"id": "AZUREMONITOR-2", "title": "same trace"}]""",
             authHeaders);
         await using var upstreamHost = upstream;
         var env = new Dictionary<string, string?>
         {
-            ["DSF_SOURCE_SENTRY_ENDPOINT"] = $"{BaseAddress(upstream)}/issues",
-            ["DSF_SOURCE_SENTRY_TOKEN"] = "sentry-token",
+            ["DSF_SOURCE_AZUREMONITOR_ENDPOINT"] = $"{BaseAddress(upstream)}/issues",
+            ["DSF_SOURCE_AZUREMONITOR_TOKEN"] = "azuremonitor-token",
         };
         var app = RuntimeVerbs.BuildSourceAgentHost(
-            Settings, "sentry", RuntimeDependencies.Production(env), "127.0.0.1", 0);
+            Settings, "azuremonitor", RuntimeDependencies.Production(env), "127.0.0.1", 0);
         await using var host = app;
         await app.StartAsync();
         try
@@ -104,9 +104,9 @@ public sealed class SourceAgentGatherTests
             var payload = await response.Content.ReadFromJsonAsync<JsonElement>();
             var evidence = payload.GetProperty("evidence").EnumerateArray().ToList();
             Assert.Equal(2, evidence.Count);
-            Assert.Equal("SENTRY-1", evidence[0].GetProperty("reference").GetString());
+            Assert.Equal("AZUREMONITOR-1", evidence[0].GetProperty("reference").GetString());
             Assert.Equal("checkout 500s spiked", evidence[0].GetProperty("summary").GetString());
-            Assert.Contains("Bearer sentry-token", authHeaders);
+            Assert.Contains("Bearer azuremonitor-token", authHeaders);
         }
         finally
         {
@@ -121,10 +121,10 @@ public sealed class SourceAgentGatherTests
         var env = new Dictionary<string, string?>
         {
             // A port nothing is listening on: the agent must report the failure.
-            ["DSF_SOURCE_GRAFANA_ENDPOINT"] = "http://127.0.0.1:1/api/search",
+            ["DSF_SOURCE_FOUNDRYIQ_ENDPOINT"] = "http://127.0.0.1:1/api/search",
         };
         var app = RuntimeVerbs.BuildSourceAgentHost(
-            Settings, "grafana", RuntimeDependencies.Production(env), "127.0.0.1", 0);
+            Settings, "foundryiq", RuntimeDependencies.Production(env), "127.0.0.1", 0);
         await using var host = app;
         await app.StartAsync();
         try
@@ -147,24 +147,24 @@ public sealed class SourceAgentGatherTests
     {
         var agent = RuntimeVerbs.BuildSourceAgentHost(
             Settings,
-            "sentry",
+            "azuremonitor",
             TestDependencies.Build(sourceIntegration: new ScriptedSourceIntegration(
-                new EvidenceItem("sentry", "SENTRY-9", "queue backed up"))),
+                new EvidenceItem("azuremonitor", "AZUREMONITOR-9", "queue backed up"))),
             "127.0.0.1",
             0);
         await using var agentHost = agent;
         await agent.StartAsync();
         try
         {
-            var gatherer = new SourceAgentEvidenceGatherer("sentry", new Uri(BaseAddress(agent)), new HttpClient());
+            var gatherer = new SourceAgentEvidenceGatherer("azuremonitor", new Uri(BaseAddress(agent)), new HttpClient());
 
             var evidence = await gatherer.GatherAsync(
-                new ConveyorRun { SourceKinds = ["sentry"], ProductHints = ["acme"] }, CancellationToken.None);
+                new ConveyorRun { SourceKinds = ["azuremonitor"], ProductHints = ["acme"] }, CancellationToken.None);
 
             var item = Assert.Single(evidence);
-            Assert.Equal("SENTRY-9", item.Reference);
+            Assert.Equal("AZUREMONITOR-9", item.Reference);
             Assert.Equal("queue backed up", item.Summary);
-            Assert.Equal("sentry", item.SourceKind);
+            Assert.Equal("azuremonitor", item.SourceKind);
         }
         finally
         {
@@ -176,11 +176,11 @@ public sealed class SourceAgentGatherTests
     public async Task The_orchestrator_side_gatherer_reports_an_unreachable_source_agent()
     {
         var gatherer = new SourceAgentEvidenceGatherer(
-            "sentry", new Uri("http://127.0.0.1:1"), new HttpClient());
+            "azuremonitor", new Uri("http://127.0.0.1:1"), new HttpClient());
 
         var exception = await Assert.ThrowsAnyAsync<Exception>(
-            () => gatherer.GatherAsync(new ConveyorRun { SourceKinds = ["sentry"] }, CancellationToken.None));
+            () => gatherer.GatherAsync(new ConveyorRun { SourceKinds = ["azuremonitor"] }, CancellationToken.None));
 
-        Assert.Contains("sentry", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("azuremonitor", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
 }

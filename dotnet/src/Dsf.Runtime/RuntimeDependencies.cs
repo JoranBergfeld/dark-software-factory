@@ -24,17 +24,18 @@ internal sealed class WebApplicationHostRunner : IWebHostRunner
 /// The collaborators the runtime verbs need, resolved once per process.
 /// <see cref="Production(IReadOnlyDictionary{string, string})"/> wires the real
 /// adapters only (ADR 0014): the managed-identity Azure readers, the real web host
-/// runner, the environment-driven conveyor composition (in-process gatherers by default, GitHub
-/// filer, Cosmos-backed run store) and the served agent's upstream integration.
-/// None of them is optional or empty -- an unconfigured dependency is reported by
-/// the setting that is unset, at composition time.
+/// runner, the environment-driven conveyor composition (served-agent gatherers,
+/// GitHub filer, Cosmos-backed run store), and the per-kind registry a served
+/// agent uses to resolve its own upstream integration. None of them is optional
+/// or empty -- an unconfigured dependency is reported by the setting that is
+/// unset, at composition time.
 /// </summary>
 public sealed record RuntimeDependencies(
     IOwnerRuntimeIndexReader OwnerRuntimeIndexReader,
     ISourceAgentRosterReader SourceAgentRosterReader,
     IWebHostRunner WebHostRunner,
     IConveyorComposer ConveyorComposer,
-    ISourceIntegration SourceIntegration,
+    SourceIntegrationRegistry SourceIntegrationRegistry,
     ILearningComposer LearningComposer,
     Func<RuntimeSettings, ISweepControlStore>? SweepControlStoreFactory = null)
 {
@@ -45,13 +46,14 @@ public sealed record RuntimeDependencies(
     public static RuntimeDependencies Production(IReadOnlyDictionary<string, string?> env)
     {
         ArgumentNullException.ThrowIfNull(env);
-        var sourceIntegration = new HttpSourceIntegration(env);
+        var registry = new SourceIntegrationRegistry(
+            new Dictionary<string, ISourceIntegration>(StringComparer.Ordinal), new HttpSourceIntegration(env));
         return new(
             new AzureAppConfigurationOwnerRuntimeIndexReader(),
             new AzureAppConfigurationSourceAgentRosterReader(),
             new WebApplicationHostRunner(),
-            new EnvironmentConveyorComposer(env, sourceIntegration: sourceIntegration),
-            sourceIntegration,
+            new EnvironmentConveyorComposer(env),
+            registry,
             new EnvironmentLearningComposer(env));
     }
 

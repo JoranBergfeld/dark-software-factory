@@ -900,7 +900,7 @@ public static class CliApplication
 
     private static Command BuildServeAgentCommand()
     {
-        var kind = StringOption("--kind", "source agent kind", "sentry");
+        var kind = StringOption("--kind", "source agent kind", "azuremonitor");
         var host = StringOption("--host", "bind host", "0.0.0.0");
         var port = IntOption("--port", "bind port", 8080);
         var product = StringOption("--product", "resolve runtime env for this product");
