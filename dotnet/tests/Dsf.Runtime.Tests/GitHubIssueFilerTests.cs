@@ -19,7 +19,7 @@ public sealed class GitHubIssueFilerTests
 
     private static Proposal ProposalWithIntent(string intentKey)
     {
-        var proposal = new Proposal("run-1-sentry", "[sentry] checkout 500s spiked", "sentry", ["SENTRY-1"])
+        var proposal = new Proposal("run-1-sentry", "[sentry] checkout 500s spiked", ["sentry"], ["SENTRY-1"])
         {
             Accepted = true,
             Confidence = 0.9,

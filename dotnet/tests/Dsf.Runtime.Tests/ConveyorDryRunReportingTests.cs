@@ -85,6 +85,58 @@ public sealed class ConveyorDryRunReportingTests
         }
     }
 
+    /// <summary>
+    /// Acceptance for #177: evidence from two different kinds describing the
+    /// same underlying problem clusters into one proposal, so a dry run against
+    /// it previews one issue, not two.
+    /// </summary>
+    [Fact]
+    public async Task A_dry_run_against_two_kinds_describing_the_same_problem_previews_one_issue_not_two()
+    {
+        var filer = new RecordingIssueFiler();
+        var dependencies = TestDependencies.Build(
+            evidenceGatherers:
+            [
+                new ScriptedEvidenceGatherer(
+                    "azuremonitor",
+                    new EvidenceItem("azuremonitor", "AM-1", "checkout 500s spiked after release 4.2")),
+                new ScriptedEvidenceGatherer(
+                    "foundryiq",
+                    new EvidenceItem("foundryiq", "FIQ-1", "checkout 500s spiked, same release 4.2")),
+            ],
+            issueFiler: filer);
+        var path = await WriteSignalAsync(
+            """{"product_hints": "acme", "source_kinds": ["azuremonitor", "foundryiq"]}""");
+        try
+        {
+            var (exitCode, stdout, stderr) = await InvokeAsync(dependencies, "run", "--signal", path, "--dry-run");
+
+            Assert.Equal(0, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Contains("status=previewed", stdout, StringComparison.Ordinal);
+            Assert.Contains("proposals=1 accepted=1", stdout, StringComparison.Ordinal);
+            Assert.Equal(1, CountOccurrences(stdout, "[dsf]   would file"));
+            Assert.Empty(filer.Filed);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    private static int CountOccurrences(string text, string value)
+    {
+        var count = 0;
+        var index = 0;
+        while ((index = text.IndexOf(value, index, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            index += value.Length;
+        }
+
+        return count;
+    }
+
     [Fact]
     public async Task A_failed_station_is_reported_as_the_cause_and_exits_non_zero()
     {

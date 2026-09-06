@@ -100,8 +100,8 @@ public sealed class RuntimeVerbsTests
         [
             new ScriptedEvidenceGatherer(
                 "azuremonitor",
-                new EvidenceItem("azuremonitor", "AZUREMONITOR-1", "checkout 500s spiked"),
-                new EvidenceItem("azuremonitor", "AZUREMONITOR-2", "same trace, second event")),
+                new EvidenceItem("azuremonitor", "AZUREMONITOR-1", "checkout 500s spiked after release"),
+                new EvidenceItem("azuremonitor", "AZUREMONITOR-2", "checkout 500s spiked again, same trace")),
         ]);
         try
         {

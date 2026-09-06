@@ -236,7 +236,7 @@ internal sealed class CosmosRunStore(
                 {
                     proposal.Id,
                     proposal.Title,
-                    proposal.SourceKind,
+                    proposal.SourceKinds,
                     proposal.IntentKey,
                     proposal.Confidence,
                     proposal.Accepted,
@@ -342,7 +342,7 @@ internal sealed class CosmosRunStore(
                 var proposal = new Proposal(
                     item.GetProperty("id").GetString()!,
                     item.GetProperty("title").GetString()!,
-                    item.GetProperty("sourceKind").GetString()!,
+                    ReadStrings(item, "sourceKinds"),
                     ReadStrings(item, "evidenceReferences"))
                 {
                     IntentKey = item.GetProperty("intentKey").GetString() ?? string.Empty,

@@ -105,7 +105,8 @@ public sealed record ConveyorServices(
     IModelClient ModelClient,
     ITracer Tracer,
     IConfidenceThresholdReader ConfidenceThresholdReader,
-    ILearningStore? LearningStore = null)
+    ILearningStore? LearningStore = null,
+    IEvidenceClusterer? EvidenceClusterer = null)
 {
     public IRunStore RunStore { get; } = RunStore ?? throw new ArgumentNullException(nameof(RunStore));
 
@@ -115,6 +116,16 @@ public sealed record ConveyorServices(
 
     public IConfidenceThresholdReader ConfidenceThresholdReader { get; } =
         ConfidenceThresholdReader ?? throw new ArgumentNullException(nameof(ConfidenceThresholdReader));
+
+    /// <summary>
+    /// The clustering seam S3 synthesis groups evidence through. Defaults to the
+    /// real, deterministic <see cref="LexicalSimilarityEvidenceClusterer"/> when
+    /// a factory does not wire one explicitly -- this is a pure in-memory
+    /// algorithm, not an external dependency, so unlike the other required ports
+    /// there is no "unconfigured" state to report; every composition gets a real
+    /// clusterer for free.
+    /// </summary>
+    public IEvidenceClusterer EvidenceClusterer { get; } = EvidenceClusterer ?? new LexicalSimilarityEvidenceClusterer();
 
     public IEvidenceGatherer? GathererFor(string sourceKind) =>
         EvidenceGatherers.FirstOrDefault(

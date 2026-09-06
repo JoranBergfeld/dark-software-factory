@@ -24,7 +24,7 @@ public sealed class S5CouncilTests
         }
 
         var references = Enumerable.Range(0, referencedCount).Select(i => $"SENTRY-{i}").ToArray();
-        run.Proposals.Add(new Proposal("p1", "checkout errors spiking", "sentry", references));
+        run.Proposals.Add(new Proposal("p1", "checkout errors spiking", ["sentry"], references));
         return run;
     }
 

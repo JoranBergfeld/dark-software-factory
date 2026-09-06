@@ -39,15 +39,21 @@ public sealed record EvidenceItem(string SourceKind, string Reference, string Su
 /// <summary>
 /// A candidate unit of work synthesized from evidence. Mutable across the later
 /// stations: grounding may drop it, the council scores and accepts or rejects it,
-/// and routing labels it.
+/// and routing labels it. May carry evidence gathered from more than one source
+/// kind (<see cref="SourceKinds"/>) -- clustering is not scoped to a single kind.
 /// </summary>
-public sealed class Proposal(string id, string title, string sourceKind, IReadOnlyList<string> evidenceReferences)
+public sealed class Proposal(string id, string title, IReadOnlyList<string> sourceKinds, IReadOnlyList<string> evidenceReferences)
 {
     public string Id { get; } = id;
 
     public string Title { get; } = title;
 
-    public string SourceKind { get; } = sourceKind;
+    /// <summary>
+    /// Every source kind that contributed evidence to this proposal, lower-case
+    /// and de-duplicated. A single-kind cluster carries exactly one entry here,
+    /// unchanged from before clustering could span kinds.
+    /// </summary>
+    public IReadOnlyList<string> SourceKinds { get; } = sourceKinds;
 
     public IReadOnlyList<string> EvidenceReferences { get; } = evidenceReferences;
 

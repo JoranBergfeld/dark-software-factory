@@ -242,7 +242,7 @@ public sealed class ConveyorPersistenceTests
             // accepted proposal routed and ready for S7, but the process died
             // before filing it.
             priorRun.Checkpoints.AddRange(ConveyorLine.StationNames.Take(6));
-            var proposal = new Proposal("p1", "Investigate checkout 500s", "azuremonitor", ["AZUREMONITOR-1"])
+            var proposal = new Proposal("p1", "Investigate checkout 500s", ["azuremonitor"], ["AZUREMONITOR-1"])
             {
                 Accepted = true,
                 IntentKey = "intent-1",
@@ -293,7 +293,7 @@ public sealed class ConveyorPersistenceTests
             // must clear the stale DryRun=true it inherited, not just ever
             // force DryRun=true.
             priorRun.Checkpoints.AddRange(ConveyorLine.StationNames.Take(6));
-            var proposal = new Proposal("p1", "Investigate checkout 500s", "azuremonitor", ["AZUREMONITOR-1"])
+            var proposal = new Proposal("p1", "Investigate checkout 500s", ["azuremonitor"], ["AZUREMONITOR-1"])
             {
                 Accepted = true,
                 IntentKey = "intent-1",

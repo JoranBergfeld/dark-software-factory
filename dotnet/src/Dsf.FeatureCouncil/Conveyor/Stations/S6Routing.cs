@@ -19,7 +19,11 @@ public sealed class S6Routing : IStation
         foreach (var proposal in run.Proposals.Where(p => p.Accepted))
         {
             proposal.Labels.Add(ReadyForAgentLabel);
-            proposal.Labels.Add($"source:{proposal.SourceKind}");
+            foreach (var kind in proposal.SourceKinds)
+            {
+                proposal.Labels.Add($"source:{kind}");
+            }
+
             run.Record(StationName, $"routed proposal '{proposal.Id}' -> [{string.Join(", ", proposal.Labels)}].");
         }
 
