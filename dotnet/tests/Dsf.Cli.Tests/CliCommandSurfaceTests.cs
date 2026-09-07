@@ -158,6 +158,8 @@ command <root> desc="Dark Software Factory — factory CLI (create product insta
     option --appconfig-name type=String arity=1..1 required desc="owner App Configuration store name"
     option --resource-group type=String arity=1..1 default="rg-dsf-app" desc="resource group for the owner Key Vault"
     option --location type=String arity=1..1 default="swedencentral" desc="Azure region for the owner Key Vault"
+    option --dry-run type=Boolean arity=0..1 default=False choices=[False, True] desc="preview the owner bootstrap plan without side effects"
+    option --yes type=Boolean arity=0..1 default=False choices=[False, True] desc="approve owner Azure and GitHub App creation without prompts"
   command delete desc="permanently destroy a product factory instance"
     argument product type=String arity=1..1 desc="product key to destroy"
     option --yes type=Boolean arity=0..1 default=False choices=[False, True] desc="skip the interactive confirmation prompt"

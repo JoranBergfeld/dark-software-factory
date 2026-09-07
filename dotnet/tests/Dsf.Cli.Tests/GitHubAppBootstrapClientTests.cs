@@ -6,6 +6,33 @@ namespace Dsf.Cli.Tests;
 public sealed class GitHubAppBootstrapClientTests
 {
     [Fact]
+    public async Task Get_or_create_exchanges_manifest_code_for_owner_credentials()
+    {
+        var handler = new StubHttpMessageHandler(
+            new HttpResponseMessage(System.Net.HttpStatusCode.Created)
+            {
+                Content = new StringContent("""
+                    {"id":7,"pem":"-----BEGIN PRIVATE KEY-----\nsecret\n-----END PRIVATE KEY-----"}
+                    """),
+            });
+        var client = new GitHubAppBootstrapClient(
+            new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") },
+            _ => "temporary-code",
+            (_, _) => Task.FromResult("42"));
+
+        var credentials = await client.GetOrCreateAsync(
+            new OwnerBootstrapRequest(
+                "dsf-sbx-20260907", "rg-dsf-app", "kvdsfsbx20260907",
+                "appcsdsfsbx20260907", "swedencentral"),
+            CancellationToken.None);
+
+        Assert.Equal("7", credentials.AppId);
+        Assert.Equal("42", credentials.InstallationId);
+        Assert.Contains("/app-manifests/temporary-code/conversions", handler.Request!.RequestUri!.AbsolutePath);
+        Assert.Equal(HttpMethod.Post, handler.Request.Method);
+    }
+
+    [Fact]
     public void Manifest_has_only_required_permissions_and_no_webhook()
     {
         var manifest = GitHubAppManifest.Create(
@@ -27,5 +54,18 @@ public sealed class GitHubAppBootstrapClientTests
     public void Callback_code_parser_accepts_interactive_and_headless_forms(string raw, string expected)
     {
         Assert.Equal(expected, GitHubAppManifest.ParseCode(raw));
+    }
+
+    private sealed class StubHttpMessageHandler(HttpResponseMessage response) : HttpMessageHandler
+    {
+        public HttpRequestMessage? Request { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            Request = request;
+            return Task.FromResult(response);
+        }
     }
 }

@@ -4,8 +4,55 @@ using Dsf.Core.Runtime;
 namespace Dsf.Cli;
 
 internal sealed class AzureCliOwnerBootstrapClient(IAzureCliRunner runner)
-    : IOwnerInfrastructure, IOwnerBootstrapStatusStore
+    : IOwnerInfrastructure, IOwnerBootstrapStatusStore, IOwnerCredentialStore
 {
+    public async Task WriteAsync(
+        string keyVaultUri,
+        OwnerGitHubCredentials credentials,
+        CancellationToken cancellationToken)
+    {
+        var vaultName = new Uri(keyVaultUri).Host.Split('.', 2)[0];
+        var privateKeyPath = Path.Combine(
+            Path.GetTempPath(),
+            $"dsf-owner-app-{Guid.NewGuid():N}.pem");
+        try
+        {
+            await File.WriteAllTextAsync(privateKeyPath, credentials.PrivateKey, cancellationToken);
+            if (!OperatingSystem.IsWindows())
+            {
+                File.SetUnixFileMode(
+                    privateKeyPath,
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            }
+
+            await RunAsync(
+                [
+                    "keyvault", "secret", "set", "--vault-name", vaultName,
+                    "--name", "github-app-id", "--value", credentials.AppId,
+                    "-o", "none",
+                ],
+                cancellationToken);
+            await RunAsync(
+                [
+                    "keyvault", "secret", "set", "--vault-name", vaultName,
+                    "--name", "github-app-installation-id", "--value", credentials.InstallationId,
+                    "-o", "none",
+                ],
+                cancellationToken);
+            await RunAsync(
+                [
+                    "keyvault", "secret", "set", "--vault-name", vaultName,
+                    "--name", "github-app-private-key", "--file", privateKeyPath,
+                    "-o", "none",
+                ],
+                cancellationToken);
+        }
+        finally
+        {
+            File.Delete(privateKeyPath);
+        }
+    }
+
     public async Task WriteAsync(
         OwnerAuthority authority,
         OwnerBootstrapRequest request,

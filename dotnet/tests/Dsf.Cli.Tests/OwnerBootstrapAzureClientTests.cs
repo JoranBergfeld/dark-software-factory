@@ -6,6 +6,29 @@ namespace Dsf.Cli.Tests;
 public sealed class OwnerBootstrapAzureClientTests
 {
     [Fact]
+    public async Task Write_credentials_uses_private_file_and_suppresses_secret_output()
+    {
+        var runner = new RecordingAzureCliRunner();
+        var client = new AzureCliOwnerBootstrapClient(runner);
+
+        await client.WriteAsync(
+            "https://kvdsfsbx20260907.vault.azure.net/",
+            new OwnerGitHubCredentials(
+                "7",
+                "42",
+                "-----BEGIN PRIVATE KEY-----\nsecret\n-----END PRIVATE KEY-----"),
+            CancellationToken.None);
+
+        Assert.Equal(3, runner.Invocations.Count);
+        Assert.All(runner.Invocations, invocation => Assert.Contains("-o", invocation));
+        Assert.All(runner.Invocations, invocation => Assert.Contains("none", invocation));
+        Assert.DoesNotContain(
+            runner.Invocations.SelectMany(invocation => invocation),
+            argument => argument.Contains("PRIVATE KEY", StringComparison.Ordinal));
+        Assert.Contains("--file", runner.Invocations[2]);
+    }
+
+    [Fact]
     public async Task Write_status_persists_a_non_secret_document_in_owner_app_configuration()
     {
         var runner = new RecordingAzureCliRunner();

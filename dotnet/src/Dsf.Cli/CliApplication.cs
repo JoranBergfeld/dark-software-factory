@@ -189,7 +189,7 @@ public static class CliApplication
         root.Subcommands.Add(BuildNewCommand(terminal, providedOptions, github, azure, appConfig));
         root.Subcommands.Add(BuildListCommand(terminal, appConfig));
         root.Subcommands.Add(BuildOffboardCommand());
-        root.Subcommands.Add(BuildBootstrapCommand());
+        root.Subcommands.Add(BuildBootstrapCommand(terminal));
         root.Subcommands.Add(BuildDeleteCommand("delete"));
         root.Subcommands.Add(BuildDeleteCommand("deprovision"));
         root.Subcommands.Add(BuildRunCommand());
@@ -807,21 +807,74 @@ public static class CliApplication
         return command;
     }
 
-    private static Command BuildBootstrapCommand()
+    private static Command BuildBootstrapCommand(ICliTerminal terminal)
     {
         var appName = RequiredStringOption("--app-name", "GitHub App name");
         var keyVaultName = RequiredStringOption("--keyvault-name", "owner Key Vault name for App credentials");
         var appConfigName = RequiredStringOption("--appconfig-name", "owner App Configuration store name");
         var resourceGroup = StringOption("--resource-group", "resource group for the owner Key Vault", "rg-dsf-app");
         var location = StringOption("--location", "Azure region for the owner Key Vault", "swedencentral");
+        var dryRun = BoolOption("--dry-run", "preview the owner bootstrap plan without side effects");
+        var yes = BoolOption("--yes", "approve owner Azure and GitHub App creation without prompts");
         var command = new Command("bootstrap", "one-time: create the DSF GitHub App and store it in the owner Key Vault");
-        AddOptions(command, appName, keyVaultName, appConfigName, resourceGroup, location);
-        command.SetAction(_ =>
+        AddOptions(command, appName, keyVaultName, appConfigName, resourceGroup, location, dryRun, yes);
+        command.SetAction(async (parseResult, cancellationToken) =>
         {
-            Console.Out.WriteLine("[dsf] bootstrap is not implemented in the .NET migration shell.");
+            var request = new OwnerBootstrapRequest(
+                parseResult.GetRequiredValue(appName),
+                parseResult.GetValue(resourceGroup) ?? "rg-dsf-app",
+                parseResult.GetRequiredValue(keyVaultName),
+                parseResult.GetRequiredValue(appConfigName),
+                parseResult.GetValue(location) ?? "swedencentral");
+            if (parseResult.GetValue(dryRun))
+            {
+                terminal.WriteLine($"[dsf] owner bootstrap plan for {request.AppName} (DRY-RUN)");
+                terminal.WriteLine($"[dsf]  1. Create resource group {request.ResourceGroup}.");
+                terminal.WriteLine($"[dsf]  2. Create owner App Configuration {request.AppConfigName} and status record.");
+                terminal.WriteLine($"[dsf]  3. Create owner Key Vault {request.KeyVaultName} and operator RBAC.");
+                terminal.WriteLine("[dsf]  4. Create and install a selected-repositories GitHub App.");
+                terminal.WriteLine("[dsf]  5. Store GitHub App credentials in Key Vault.");
+                return Success;
+            }
+
+            if (!parseResult.GetValue(yes))
+            {
+                if (!terminal.Capabilities.IsInteractive)
+                {
+                    terminal.WriteErrorLine("[dsf] error: live bootstrap requires an interactive terminal or --yes.");
+                    return Failure;
+                }
+
+                if (!Confirm(terminal, "[dsf] This creates owner Azure services. Continue? [y/N] "))
+                {
+                    return Failure;
+                }
+                if (!Confirm(terminal, "[dsf] This creates a private GitHub App. Continue? [y/N] "))
+                {
+                    return Failure;
+                }
+            }
+
+            var azure = new AzureCliOwnerBootstrapClient(new SystemAzureCliRunner());
+            var bootstrapper = new OwnerBootstrapper(
+                azure,
+                azure,
+                GitHubAppBootstrapClient.Create(terminal),
+                azure);
+            await bootstrapper.ExecuteAsync(request, cancellationToken);
+            terminal.WriteLine($"[dsf] owner bootstrap complete for {request.AppName}.");
+            terminal.WriteLine($"[dsf] export DSF_OWNER_KEYVAULT_URI=https://{request.KeyVaultName}.vault.azure.net/");
+            terminal.WriteLine($"[dsf] export DSF_OWNER_APPCONFIG_ENDPOINT=https://{request.AppConfigName}.azconfig.io");
             return Success;
         });
         return command;
+    }
+
+    private static bool Confirm(ICliTerminal terminal, string prompt)
+    {
+        var answer = terminal.Prompt(prompt)?.Trim();
+        return string.Equals(answer, "y", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(answer, "yes", StringComparison.OrdinalIgnoreCase);
     }
 
     private static Command BuildDeleteCommand(string name)

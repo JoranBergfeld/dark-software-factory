@@ -6,6 +6,31 @@ namespace Dsf.Cli.Tests;
 public sealed class CliInteractionTests
 {
     [Fact]
+    public async Task Bootstrap_dry_run_prints_plan_without_prompts()
+    {
+        var terminal = new ScriptedTerminal(
+            new TerminalCapabilities(IsInteractive: false, SupportsAnsi: false, SupportsEmoji: false),
+            []);
+
+        var exitCode = await CliApplication.InvokeAsync(
+            [
+                "bootstrap",
+                "--app-name", "dsf-sbx-20260907",
+                "--keyvault-name", "kvdsfsbx20260907",
+                "--appconfig-name", "appcsdsfsbx20260907",
+                "--dry-run",
+            ],
+            CancellationToken.None,
+            terminal);
+
+        Assert.Equal(0, exitCode);
+        Assert.Empty(terminal.Prompts);
+        Assert.Contains("owner bootstrap plan", terminal.Output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("App Configuration", terminal.Output, StringComparison.Ordinal);
+        Assert.Contains("Key Vault", terminal.Output, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task New_interactive_flow_asks_one_question_at_a_time_and_shows_equivalent_command()
     {
         var terminal = new ScriptedTerminal(
