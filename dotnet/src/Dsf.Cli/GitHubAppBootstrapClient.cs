@@ -26,7 +26,23 @@ internal sealed record GitHubAppManifest(
             ["contents"] = "write",
             ["administration"] = "write",
         },
-        []);
+        []        );
+
+        public string CreateDataUrl()
+        {
+            var manifest = JsonSerializer.Serialize(new
+            {
+                name = Name,
+                url = Url,
+                redirect_url = RedirectUrl,
+                @public = Public,
+                default_permissions = DefaultPermissions,
+            });
+            var html = $"<form action=\"https://github.com/settings/apps/new\" method=\"post\">"
+                + $"<input type=\"hidden\" name=\"manifest\" value=\"{WebUtility.HtmlEncode(manifest)}\"></form>"
+                + "<script>document.forms[0].submit()</script>";
+            return "data:text/html;base64," + Convert.ToBase64String(Encoding.UTF8.GetBytes(html));
+        }
 
     public static string ParseCode(string raw)
     {
@@ -247,55 +263,34 @@ internal sealed class GitHubAppBootstrapClient(
         CancellationToken cancellationToken)
     {
         var manifest = GitHubAppManifest.Create(appName, CallbackUri);
-        var path = Path.Combine(Path.GetTempPath(), $"dsf-app-manifest-{Guid.NewGuid():N}.html");
         using var listener = new GitHubAppLoopbackListener(CallbackUri);
-        try
+        var manifestUrl = manifest.CreateDataUrl();
+        listener.Start();
+        TryOpenBrowser(manifestUrl);
+        terminal.WriteLine("[dsf] Open this GitHub App manifest URL in a browser:");
+        terminal.WriteLine(manifestUrl);
+        terminal.WriteLine(
+            "[dsf] Complete GitHub App creation and selected-repositories installation. "
+            + "The browser callback completes automatically; paste it here if needed.");
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(120));
+        var callback = listener.WaitForCodeAsync(timeout.Token);
+        if (!terminal.Capabilities.IsInteractive)
         {
-            var encodedManifest = WebUtility.HtmlEncode(JsonSerializer.Serialize(new
-            {
-                name = manifest.Name,
-                url = manifest.Url,
-                redirect_url = manifest.RedirectUrl,
-                @public = manifest.Public,
-                default_permissions = manifest.DefaultPermissions,
-            }));
-            File.WriteAllText(
-                path,
-                $"<form action=\"https://github.com/settings/apps/new\" method=\"post\"><input type=\"hidden\" name=\"manifest\" value=\"{encodedManifest}\"></form><script>document.forms[0].submit()</script>");
-            if (!OperatingSystem.IsWindows())
-            {
-                File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
-            }
-
-            listener.Start();
-            TryOpenBrowser(path);
-            terminal.WriteLine(
-                "[dsf] Complete GitHub App creation and selected-repositories installation. "
-                + "The browser callback completes automatically; paste it here if needed.");
-            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            timeout.CancelAfter(TimeSpan.FromSeconds(120));
-            var callback = listener.WaitForCodeAsync(timeout.Token);
-            if (!terminal.Capabilities.IsInteractive)
-            {
-                return await callback;
-            }
-
-            var pasted = Task.Run<string?>(
-                () => terminal.Prompt("[dsf] GitHub callback: "),
-                cancellationToken);
-            var completed = await Task.WhenAny((Task)callback, pasted);
-            if (completed == callback)
-            {
-                return await callback;
-            }
-
-            var raw = await pasted;
-            return string.IsNullOrWhiteSpace(raw) ? await callback : raw;
+            return await callback;
         }
-        finally
+
+        var pasted = Task.Run<string?>(
+            () => terminal.Prompt("[dsf] GitHub callback: "),
+            cancellationToken);
+        var completed = await Task.WhenAny((Task)callback, pasted);
+        if (completed == callback)
         {
-            File.Delete(path);
+            return await callback;
         }
+
+        var raw = await pasted;
+        return string.IsNullOrWhiteSpace(raw) ? await callback : raw;
     }
 
     private static void TryOpenBrowser(string path)

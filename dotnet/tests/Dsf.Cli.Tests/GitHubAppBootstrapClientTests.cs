@@ -90,6 +90,23 @@ public sealed class GitHubAppBootstrapClientTests
         Assert.Equal("gio", opener);
     }
 
+    [Fact]
+    public void Manifest_data_url_submits_the_app_manifest_to_github()
+    {
+        var manifest = GitHubAppManifest.Create(
+            "dsf-sbx-20260907",
+            new Uri("http://127.0.0.1:8765/callback"));
+
+        var url = manifest.CreateDataUrl();
+        var html = System.Text.Encoding.UTF8.GetString(
+            Convert.FromBase64String(url["data:text/html;base64,".Length..]));
+
+        var decodedHtml = WebUtility.HtmlDecode(html);
+        Assert.Contains("https://github.com/settings/apps/new", decodedHtml);
+        Assert.Contains("name=\"manifest\"", decodedHtml);
+        Assert.Contains("\"name\":\"dsf-sbx-20260907\"", decodedHtml);
+    }
+
     private sealed class StubHttpMessageHandler(HttpResponseMessage response) : HttpMessageHandler
     {
         public HttpRequestMessage? Request { get; private set; }
