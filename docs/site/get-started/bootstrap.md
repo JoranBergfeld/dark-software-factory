@@ -36,12 +36,17 @@ purge protection, grants the operator required data-plane roles, creates a priva
 GitHub App with selected-repositories scope, and stores its App ID, installation ID,
 and private key in Key Vault. Secrets are never stored in App Configuration.
 
-Bootstrap prints a self-contained GitHub App Manifest URL. Open that URL in any
-browser, create and install the App for **selected repositories**, then paste the
-resulting callback URL (or its `code` parameter) into the terminal. For noninteractive
-or remote operators, rerun the same command with
-`--github-callback '<callback-url-or-code>'`. This works with headless hosts because
-the browser does not need access to the host running `dsf`.
+Bootstrap prints a temporary localhost URL that serves GitHub's required App Manifest
+form. Open the URL in a browser, create and install the App for **selected repositories**,
+then GitHub redirects back to the same listener. On a remote or headless host, forward
+the printed port before opening the URL:
+
+```bash
+ssh -L <port>:127.0.0.1:<port> <host>
+```
+
+If a callback must be completed separately, rerun the same command with
+`--github-callback '<callback-url-or-code>'`.
 
 On success, export the printed endpoints:
 

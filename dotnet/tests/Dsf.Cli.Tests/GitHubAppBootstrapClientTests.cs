@@ -87,24 +87,29 @@ public sealed class GitHubAppBootstrapClientTests
     {
         var opener = GitHubAppBrowserOpener.ResolveLinux(path => path == "/usr/bin/gio");
 
-        Assert.Equal("gio", opener);
+        Assert.Equal(new GitHubAppBrowserLaunch("gio", "open"), opener);
     }
 
     [Fact]
-    public void Manifest_data_url_submits_the_app_manifest_to_github()
+    public async Task Loopback_listener_serves_manifest_form_before_receiving_callback()
     {
         var manifest = GitHubAppManifest.Create(
             "dsf-sbx-20260907",
-            new Uri("http://127.0.0.1:8765/callback"));
+            new Uri("http://127.0.0.1:0/callback"));
+        using var listener = new GitHubAppLoopbackListener(new Uri(manifest.RedirectUrl));
+        listener.Start();
+        manifest = manifest with { Url = listener.ManifestUri.AbsoluteUri, RedirectUrl = listener.CallbackUri.AbsoluteUri };
 
-        var url = manifest.CreateDataUrl();
-        var html = System.Text.Encoding.UTF8.GetString(
-            Convert.FromBase64String(url["data:text/html;base64,".Length..]));
+        var callback = listener.WaitForCodeAsync(manifest, CancellationToken.None);
+        using var client = new HttpClient();
+        var manifestPage = await client.GetStringAsync(listener.ManifestUri);
 
-        var decodedHtml = WebUtility.HtmlDecode(html);
-        Assert.Contains("https://github.com/settings/apps/new", decodedHtml);
-        Assert.Contains("name=\"manifest\"", decodedHtml);
-        Assert.Contains("\"name\":\"dsf-sbx-20260907\"", decodedHtml);
+        Assert.Contains("https://github.com/settings/apps/new", manifestPage);
+        Assert.Contains("name=\"manifest\"", manifestPage);
+        Assert.Contains("\"name\":\"dsf-sbx-20260907\"", WebUtility.HtmlDecode(manifestPage));
+
+        await client.GetAsync($"{listener.CallbackUri}?code=manifest-code");
+        Assert.Equal("manifest-code", await callback);
     }
 
     private sealed class StubHttpMessageHandler(HttpResponseMessage response) : HttpMessageHandler

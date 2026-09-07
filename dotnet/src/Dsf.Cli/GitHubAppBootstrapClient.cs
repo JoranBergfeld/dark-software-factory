@@ -26,23 +26,22 @@ internal sealed record GitHubAppManifest(
             ["contents"] = "write",
             ["administration"] = "write",
         },
-        []        );
+        []);
 
-        public string CreateDataUrl()
+    public string CreateHtml()
+    {
+        var manifest = JsonSerializer.Serialize(new
         {
-            var manifest = JsonSerializer.Serialize(new
-            {
-                name = Name,
-                url = Url,
-                redirect_url = RedirectUrl,
-                @public = Public,
-                default_permissions = DefaultPermissions,
-            });
-            var html = $"<form action=\"https://github.com/settings/apps/new\" method=\"post\">"
-                + $"<input type=\"hidden\" name=\"manifest\" value=\"{WebUtility.HtmlEncode(manifest)}\"></form>"
-                + "<script>document.forms[0].submit()</script>";
-            return "data:text/html;base64," + Convert.ToBase64String(Encoding.UTF8.GetBytes(html));
-        }
+            name = Name,
+            url = Url,
+            redirect_url = RedirectUrl,
+            @public = Public,
+            default_permissions = DefaultPermissions,
+        });
+        return $"<form action=\"https://github.com/settings/apps/new\" method=\"post\">"
+            + $"<input type=\"hidden\" name=\"manifest\" value=\"{WebUtility.HtmlEncode(manifest)}\"></form>"
+            + "<script>document.forms[0].submit()</script>";
+    }
 
     public static string ParseCode(string raw)
     {
@@ -76,6 +75,8 @@ internal sealed class GitHubAppLoopbackListener(Uri callbackUri) : IDisposable
 
     public Uri CallbackUri { get; private set; } = callbackUri;
 
+    public Uri ManifestUri => new(CallbackUri.GetLeftPart(UriPartial.Authority) + "/");
+
     public void Start()
     {
         if (CallbackUri.Port == 0)
@@ -89,33 +90,61 @@ internal sealed class GitHubAppLoopbackListener(Uri callbackUri) : IDisposable
         listener.Start();
     }
 
-    public async Task<string> WaitForCodeAsync(CancellationToken cancellationToken)
+    public Task<string> WaitForCodeAsync(CancellationToken cancellationToken) =>
+        WaitForCodeAsync(null, cancellationToken);
+
+    public async Task<string> WaitForCodeAsync(
+        GitHubAppManifest? manifest,
+        CancellationToken cancellationToken)
     {
         using var registration = cancellationToken.Register(listener.Abort);
-        HttpListenerContext context;
-        try
+        while (true)
         {
-            context = await listener.GetContextAsync();
-        }
-        catch (ObjectDisposedException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw new OperationCanceledException(cancellationToken);
-        }
+            HttpListenerContext context;
+            try
+            {
+                context = await listener.GetContextAsync();
+            }
+            catch (ObjectDisposedException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw new OperationCanceledException(cancellationToken);
+            }
 
-        if (!string.Equals(context.Request.Url?.AbsolutePath, CallbackUri.AbsolutePath, StringComparison.Ordinal))
-        {
-            context.Response.StatusCode = (int)HttpStatusCode.NotFound;
-            context.Response.Close();
-            throw new InvalidOperationException("GitHub App manifest callback used an unexpected path.");
-        }
+            if (manifest is not null
+                && string.Equals(context.Request.Url?.AbsolutePath, ManifestUri.AbsolutePath, StringComparison.Ordinal))
+            {
+                await WriteResponseAsync(context, manifest.CreateHtml(), "text/html; charset=utf-8", cancellationToken);
+                continue;
+            }
 
-        var code = GitHubAppManifest.ParseCode(context.Request.Url?.ToString() ?? string.Empty);
-        var response = Encoding.UTF8.GetBytes("GitHub App setup received. You may close this window.");
-        context.Response.ContentType = "text/plain; charset=utf-8";
-        context.Response.ContentLength64 = response.Length;
-        await context.Response.OutputStream.WriteAsync(response, cancellationToken);
+            if (!string.Equals(context.Request.Url?.AbsolutePath, CallbackUri.AbsolutePath, StringComparison.Ordinal))
+            {
+                context.Response.StatusCode = (int)HttpStatusCode.NotFound;
+                context.Response.Close();
+                continue;
+            }
+
+            var code = GitHubAppManifest.ParseCode(context.Request.Url?.ToString() ?? string.Empty);
+            await WriteResponseAsync(
+                context,
+                "GitHub App setup received. You may close this window.",
+                "text/plain; charset=utf-8",
+                cancellationToken);
+            return code;
+        }
+    }
+
+    private static async Task WriteResponseAsync(
+        HttpListenerContext context,
+        string content,
+        string contentType,
+        CancellationToken cancellationToken)
+    {
+        var bytes = Encoding.UTF8.GetBytes(content);
+        context.Response.ContentType = contentType;
+        context.Response.ContentLength64 = bytes.Length;
+        await context.Response.OutputStream.WriteAsync(bytes, cancellationToken);
         context.Response.Close();
-        return code;
     }
 
     public void Dispose()
@@ -124,16 +153,18 @@ internal sealed class GitHubAppLoopbackListener(Uri callbackUri) : IDisposable
     }
 }
 
+internal sealed record GitHubAppBrowserLaunch(string FileName, string? Subcommand = null);
+
 internal static class GitHubAppBrowserOpener
 {
-    public static string? ResolveLinux(Func<string, bool> fileExists) =>
-        fileExists("/usr/bin/xdg-open") ? "xdg-open"
-        : fileExists("/usr/bin/gio") ? "gio"
+    public static GitHubAppBrowserLaunch? ResolveLinux(Func<string, bool> fileExists) =>
+        fileExists("/usr/bin/xdg-open") ? new("xdg-open")
+        : fileExists("/usr/bin/gio") ? new("gio", "open")
         : null;
 
-    public static string? Resolve() =>
-        OperatingSystem.IsMacOS() ? "open"
-        : OperatingSystem.IsWindows() ? "cmd"
+    public static GitHubAppBrowserLaunch? Resolve() =>
+        OperatingSystem.IsMacOS() ? new("open")
+        : OperatingSystem.IsWindows() ? new("cmd", "/c start \"\"")
         : ResolveLinux(File.Exists);
 }
 
@@ -264,19 +295,21 @@ internal sealed class GitHubAppBootstrapClient(
         string appName,
         CancellationToken cancellationToken)
     {
-        var manifest = GitHubAppManifest.Create(appName, CallbackUri);
         using var listener = new GitHubAppLoopbackListener(CallbackUri);
-        var manifestUrl = manifest.CreateDataUrl();
         listener.Start();
-        TryOpenBrowser(manifestUrl);
+        var manifest = GitHubAppManifest.Create(appName, listener.CallbackUri) with
+        {
+            Url = listener.ManifestUri.AbsoluteUri,
+        };
+        TryOpenBrowser(listener.ManifestUri.AbsoluteUri);
         terminal.WriteLine("[dsf] Open this GitHub App manifest URL in a browser:");
-        terminal.WriteLine(manifestUrl);
+        terminal.WriteLine(listener.ManifestUri.AbsoluteUri);
         terminal.WriteLine(
             "[dsf] Complete GitHub App creation and selected-repositories installation. "
             + "The browser callback completes automatically; paste it here if needed.");
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromSeconds(120));
-        var callback = listener.WaitForCodeAsync(timeout.Token);
+        var callback = listener.WaitForCodeAsync(manifest, timeout.Token);
         if (!terminal.Capabilities.IsInteractive)
         {
             return await callback;
@@ -295,18 +328,24 @@ internal sealed class GitHubAppBootstrapClient(
         return string.IsNullOrWhiteSpace(raw) ? await callback : raw;
     }
 
-    private static void TryOpenBrowser(string path)
+    private static void TryOpenBrowser(string url)
     {
         try
         {
-            var opener = GitHubAppBrowserOpener.Resolve();
-            if (opener is null)
+            var launch = GitHubAppBrowserOpener.Resolve();
+            if (launch is null)
             {
                 return;
             }
 
-            var arguments = OperatingSystem.IsWindows() ? $"/c start \"\" \"{path}\"" : path;
-            Process.Start(new ProcessStartInfo(opener, arguments) { UseShellExecute = false });
+            var startInfo = new ProcessStartInfo(launch.FileName) { UseShellExecute = false };
+            if (launch.Subcommand is not null)
+            {
+                startInfo.ArgumentList.Add(launch.Subcommand);
+            }
+
+            startInfo.ArgumentList.Add(url);
+            Process.Start(startInfo);
         }
         catch (Exception exception) when (exception is System.ComponentModel.Win32Exception or InvalidOperationException)
         {
