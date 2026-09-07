@@ -71,6 +71,17 @@ public sealed class GitHubAppBootstrapClientTests
         Assert.Equal("manifest-code", await code);
     }
 
+    [Fact]
+    public async Task Loopback_listener_preserves_cancellation_when_no_callback_arrives()
+    {
+        using var listener = new GitHubAppLoopbackListener(new Uri("http://127.0.0.1:0/callback"));
+        listener.Start();
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(10));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => listener.WaitForCodeAsync(cancellation.Token));
+    }
+
     private sealed class StubHttpMessageHandler(HttpResponseMessage response) : HttpMessageHandler
     {
         public HttpRequestMessage? Request { get; private set; }

@@ -76,7 +76,16 @@ internal sealed class GitHubAppLoopbackListener(Uri callbackUri) : IDisposable
     public async Task<string> WaitForCodeAsync(CancellationToken cancellationToken)
     {
         using var registration = cancellationToken.Register(listener.Abort);
-        var context = await listener.GetContextAsync();
+        HttpListenerContext context;
+        try
+        {
+            context = await listener.GetContextAsync();
+        }
+        catch (ObjectDisposedException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw new OperationCanceledException(cancellationToken);
+        }
+
         if (!string.Equals(context.Request.Url?.AbsolutePath, CallbackUri.AbsolutePath, StringComparison.Ordinal))
         {
             context.Response.StatusCode = (int)HttpStatusCode.NotFound;
