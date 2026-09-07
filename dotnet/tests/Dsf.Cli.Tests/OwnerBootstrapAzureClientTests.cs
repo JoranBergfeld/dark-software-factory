@@ -6,6 +6,33 @@ namespace Dsf.Cli.Tests;
 public sealed class OwnerBootstrapAzureClientTests
 {
     [Fact]
+    public async Task Write_status_persists_a_non_secret_document_in_owner_app_configuration()
+    {
+        var runner = new RecordingAzureCliRunner();
+        var client = new AzureCliOwnerBootstrapClient(runner);
+        var authority = new OwnerAuthority(
+            "https://kvdsfsbx20260907.vault.azure.net/",
+            "https://appcsdsfsbx20260907.azconfig.io");
+
+        await client.WriteAsync(
+            authority,
+            new OwnerBootstrapRequest(
+                "dsf-sbx-20260907", "rg-dsf-app", "kvdsfsbx20260907",
+                "appcsdsfsbx20260907", "swedencentral"),
+            new OwnerBootstrapStatus(
+                OwnerBootstrapStage.AppConfigurationReady,
+                DateTimeOffset.UnixEpoch,
+                [OwnerBootstrapStage.AppConfigurationReady],
+                AppConfigEndpoint: authority.AppConfigEndpoint),
+            CancellationToken.None);
+
+        var invocation = Assert.Single(runner.Invocations);
+        Assert.Equal("appconfig", invocation[0]);
+        Assert.Contains("dsf/owner/bootstrap/dsf-sbx-20260907/status", invocation);
+        Assert.DoesNotContain(invocation, argument => argument.Contains("PRIVATE KEY", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task Ensure_creates_app_configuration_before_key_vault_and_grants_operator_roles()
     {
         var runner = new RecordingAzureCliRunner(

@@ -1,7 +1,32 @@
+using System.Text.Json;
+using Dsf.Core.Runtime;
+
 namespace Dsf.Cli;
 
-internal sealed class AzureCliOwnerBootstrapClient(IAzureCliRunner runner) : IOwnerInfrastructure
+internal sealed class AzureCliOwnerBootstrapClient(IAzureCliRunner runner)
+    : IOwnerInfrastructure, IOwnerBootstrapStatusStore
 {
+    public async Task WriteAsync(
+        OwnerAuthority authority,
+        OwnerBootstrapRequest request,
+        OwnerBootstrapStatus status,
+        CancellationToken cancellationToken)
+    {
+        var value = JsonSerializer.Serialize(status);
+        if (value.Contains("PRIVATE KEY", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Bootstrap status must not contain private-key material.");
+        }
+
+        await RunAsync(
+            [
+                "appconfig", "kv", "set", "--endpoint", authority.AppConfigEndpoint,
+                "--auth-mode", "login", "--key", ProductConfigurationKeys.OwnerBootstrapStatus(request.AppName),
+                "--value", value, "--yes",
+            ],
+            cancellationToken);
+    }
+
     public async Task<OwnerAuthority> EnsureAsync(
         OwnerBootstrapRequest request,
         CancellationToken cancellationToken)
