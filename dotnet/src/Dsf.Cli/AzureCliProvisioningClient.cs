@@ -281,6 +281,46 @@ internal sealed class AzureCliProvisioningClient : IAzureProvisioningClient
             outputs.GetValueOrDefault("agentPrincipalId"));
     }
 
+    public async Task CopyOwnerAppPrivateKeyAsync(
+        CopyOwnerAppPrivateKeyRequest request,
+        CancellationToken cancellationToken)
+    {
+        var ownerVaultName = new Uri(request.OwnerKeyVaultUri).Host.Split('.', 2)[0];
+        var productVaultName = new Uri(request.ProductKeyVaultUri).Host.Split('.', 2)[0];
+        var privateKey = await RunAsync(
+            [
+                "keyvault", "secret", "show", "--vault-name", ownerVaultName,
+                "--name", "github-app-private-key", "--query", "value", "-o", "tsv",
+            ],
+            cancellationToken);
+        if (string.IsNullOrWhiteSpace(privateKey.StandardOutput))
+        {
+            throw new InvalidOperationException(
+                $"Owner Key Vault '{ownerVaultName}' has no github-app-private-key secret.");
+        }
+
+        var path = Path.Combine(Path.GetTempPath(), $"dsf-product-app-{Guid.NewGuid():N}.pem");
+        try
+        {
+            await File.WriteAllTextAsync(path, privateKey.StandardOutput, cancellationToken);
+            if (!OperatingSystem.IsWindows())
+            {
+                File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            }
+
+            await RunAsync(
+                [
+                    "keyvault", "secret", "set", "--vault-name", productVaultName,
+                    "--name", "github-app-private-key", "--file", path, "-o", "none",
+                ],
+                cancellationToken);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
     private async Task<AzureCliInvocationResult> RunAsync(
         IReadOnlyList<string> arguments,
         CancellationToken cancellationToken)

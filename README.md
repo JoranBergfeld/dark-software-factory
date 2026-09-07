@@ -61,8 +61,10 @@ dsf new --product <product> --dry-run
 dsf charter status --product <product>
 ```
 
-`dsf bootstrap` is **not implemented** in the current .NET CLI: it exits successfully without
-provisioning anything. See [Bootstrap](docs/site/get-started/bootstrap.md).
+`dsf bootstrap` creates the reusable owner App Configuration store, Key Vault, and
+GitHub App required before live product provisioning. Preview first with
+`dsf bootstrap --app-name <app> --keyvault-name <vault> --appconfig-name <config> --dry-run`.
+See [Bootstrap](docs/site/get-started/bootstrap.md).
 
 ### Runtime verbs need a runtime host
 

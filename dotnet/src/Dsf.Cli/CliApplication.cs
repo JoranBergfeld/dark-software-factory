@@ -316,6 +316,22 @@ public static class CliApplication
             var githubInstallationIdValue = FirstConfiguredValue(
                 parseResult.GetValue(githubInstallationId),
                 "DSF_GITHUB_INSTALLATION_ID");
+            var ownerKeyVaultUriValue = FirstConfiguredValue(
+                parseResult.GetValue(ownerKeyVaultUri),
+                "DSF_OWNER_KEYVAULT_URI");
+            if (!parseResult.GetValue(dryRun)
+                && string.IsNullOrWhiteSpace(githubAppIdValue)
+                && string.IsNullOrWhiteSpace(githubInstallationIdValue)
+                && !string.IsNullOrWhiteSpace(ownerKeyVaultUriValue))
+            {
+                var ownerCredentials = new OwnerCredentialResolver(
+                    new AzureCliOwnerBootstrapClient(new SystemAzureCliRunner()));
+                var identity = await ownerCredentials.ResolveIdentityAsync(
+                    ownerKeyVaultUriValue,
+                    cancellationToken);
+                githubAppIdValue = identity.AppId;
+                githubInstallationIdValue = identity.InstallationId;
+            }
             if (!ValidateGitHubIdentifier(
                     terminal,
                     "--github-app-id",
@@ -352,7 +368,7 @@ public static class CliApplication
                     parseResult.GetValue(creationMaturity) ?? "low",
                     parseResult.GetValue(operationMaturity) ?? "low",
                     effectivePrefix,
-                    parseResult.GetValue(ownerKeyVaultUri),
+                    ownerKeyVaultUriValue,
                     parseResult.GetValue(ownerAppConfigEndpoint),
                     parseResult.GetValue(adminPrincipalId),
                     githubAppIdValue,

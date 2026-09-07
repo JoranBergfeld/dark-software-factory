@@ -4,8 +4,25 @@ using Dsf.Core.Runtime;
 namespace Dsf.Cli;
 
 internal sealed class AzureCliOwnerBootstrapClient(IAzureCliRunner runner)
-    : IOwnerInfrastructure, IOwnerBootstrapStatusStore, IOwnerCredentialStore
+    : IOwnerInfrastructure, IOwnerBootstrapStatusStore, IOwnerCredentialStore, IOwnerCredentialReader
 {
+    public async Task<OwnerGitHubCredentials> ReadAsync(
+        string keyVaultUri,
+        bool includePrivateKey,
+        CancellationToken cancellationToken)
+    {
+        var vaultName = new Uri(keyVaultUri).Host.Split('.', 2)[0];
+        var appId = await ReadSecretAsync(vaultName, "github-app-id", cancellationToken);
+        var installationId = await ReadSecretAsync(
+            vaultName,
+            "github-app-installation-id",
+            cancellationToken);
+        var privateKey = includePrivateKey
+            ? await ReadSecretAsync(vaultName, "github-app-private-key", cancellationToken)
+            : string.Empty;
+        return new OwnerGitHubCredentials(appId, installationId, privateKey);
+    }
+
     public async Task WriteAsync(
         string keyVaultUri,
         OwnerGitHubCredentials credentials,
@@ -133,6 +150,26 @@ internal sealed class AzureCliOwnerBootstrapClient(IAzureCliRunner runner)
                 "--scope", scope,
             ],
             cancellationToken);
+
+    private async Task<string> ReadSecretAsync(
+        string vaultName,
+        string secretName,
+        CancellationToken cancellationToken)
+    {
+        var result = await RunAsync(
+            [
+                "keyvault", "secret", "show", "--vault-name", vaultName,
+                "--name", secretName, "--query", "value", "-o", "tsv",
+            ],
+            cancellationToken);
+        if (string.IsNullOrWhiteSpace(result.StandardOutput))
+        {
+            throw new InvalidOperationException(
+                $"Owner Key Vault '{vaultName}' secret '{secretName}' is empty.");
+        }
+
+        return result.StandardOutput.Trim();
+    }
 
     private async Task<string> RequiredOutputAsync(
         IReadOnlyList<string> arguments,
