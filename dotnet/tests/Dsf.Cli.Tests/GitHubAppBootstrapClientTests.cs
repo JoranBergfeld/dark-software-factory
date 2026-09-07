@@ -1,4 +1,5 @@
 using Dsf.Cli;
+using System.Net;
 using Xunit;
 
 namespace Dsf.Cli.Tests;
@@ -17,7 +18,7 @@ public sealed class GitHubAppBootstrapClientTests
             });
         var client = new GitHubAppBootstrapClient(
             new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") },
-            _ => "temporary-code",
+            (_, _) => Task.FromResult("temporary-code"),
             (_, _) => Task.FromResult("42"));
 
         var credentials = await client.GetOrCreateAsync(
@@ -54,6 +55,20 @@ public sealed class GitHubAppBootstrapClientTests
     public void Callback_code_parser_accepts_interactive_and_headless_forms(string raw, string expected)
     {
         Assert.Equal(expected, GitHubAppManifest.ParseCode(raw));
+    }
+
+    [Fact]
+    public async Task Loopback_listener_returns_the_callback_code()
+    {
+        using var listener = new GitHubAppLoopbackListener(new Uri("http://127.0.0.1:0/callback"));
+        listener.Start();
+
+        using var client = new HttpClient();
+        var code = listener.WaitForCodeAsync(CancellationToken.None);
+        var response = await client.GetAsync($"{listener.CallbackUri}?code=manifest-code");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("manifest-code", await code);
     }
 
     private sealed class StubHttpMessageHandler(HttpResponseMessage response) : HttpMessageHandler
