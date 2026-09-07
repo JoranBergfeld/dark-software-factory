@@ -82,6 +82,14 @@ public sealed class GitHubAppBootstrapClientTests
             () => listener.WaitForCodeAsync(cancellation.Token));
     }
 
+    [Fact]
+    public void Linux_browser_opener_falls_back_to_gio()
+    {
+        var opener = GitHubAppBrowserOpener.ResolveLinux(path => path == "/usr/bin/gio");
+
+        Assert.Equal("gio", opener);
+    }
+
     private sealed class StubHttpMessageHandler(HttpResponseMessage response) : HttpMessageHandler
     {
         public HttpRequestMessage? Request { get; private set; }

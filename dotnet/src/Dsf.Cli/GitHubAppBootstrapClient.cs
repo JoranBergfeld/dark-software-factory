@@ -108,6 +108,19 @@ internal sealed class GitHubAppLoopbackListener(Uri callbackUri) : IDisposable
     }
 }
 
+internal static class GitHubAppBrowserOpener
+{
+    public static string? ResolveLinux(Func<string, bool> fileExists) =>
+        fileExists("/usr/bin/xdg-open") ? "xdg-open"
+        : fileExists("/usr/bin/gio") ? "gio"
+        : null;
+
+    public static string? Resolve() =>
+        OperatingSystem.IsMacOS() ? "open"
+        : OperatingSystem.IsWindows() ? "cmd"
+        : ResolveLinux(File.Exists);
+}
+
 internal sealed class GitHubAppBootstrapClient(
     HttpClient httpClient,
     Func<OwnerBootstrapRequest, CancellationToken, Task<string>> captureCode,
@@ -289,7 +302,12 @@ internal sealed class GitHubAppBootstrapClient(
     {
         try
         {
-            var opener = OperatingSystem.IsMacOS() ? "open" : OperatingSystem.IsWindows() ? "cmd" : "xdg-open";
+            var opener = GitHubAppBrowserOpener.Resolve();
+            if (opener is null)
+            {
+                return;
+            }
+
             var arguments = OperatingSystem.IsWindows() ? $"/c start \"\" \"{path}\"" : path;
             Process.Start(new ProcessStartInfo(opener, arguments) { UseShellExecute = false });
         }
