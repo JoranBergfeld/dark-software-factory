@@ -6,6 +6,15 @@ namespace Dsf.Cli.Tests;
 public sealed class OwnerBootstrapAzureClientTests
 {
     [Fact]
+    public void Owner_vault_explicitly_allows_operator_data_plane_access()
+    {
+        var template = File.ReadAllText(Path.Combine(FindRepoRoot(), "infra", "owner-keyvault.bicep"));
+
+        Assert.Contains("publicNetworkAccess: 'Enabled'", template);
+        Assert.Contains("defaultAction: 'Allow'", template);
+    }
+
+    [Fact]
     public async Task Write_credentials_uses_private_file_and_suppresses_secret_output()
     {
         var runner = new RecordingAzureCliRunner();
