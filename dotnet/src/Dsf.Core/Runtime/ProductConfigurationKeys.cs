@@ -11,6 +11,9 @@ public static class ProductConfigurationKeys
     public const string OwnerIndexGitHubRepository = "GITHUB_REPOSITORY";
     public const string OwnerIndexAppConfigEndpoint = "AZURE_APPCONFIG_ENDPOINT";
 
+    public static string OwnerBootstrapStatus(string appName) =>
+        $"dsf/owner/bootstrap/{(appName ?? string.Empty).Trim().ToLowerInvariant()}/status";
+
     public const string GitHubRepository = "product.github_repo";
     public const string LabelTaxonomy = "product.label_taxonomy";
     public const string FoundryIqScope = "product.foundryiq_scope";
