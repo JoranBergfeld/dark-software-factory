@@ -163,7 +163,7 @@ public sealed class GitHubProvisioningPlaneTests
     }
 
     [Fact]
-    public void Plan_adds_retry_workflow_at_high_maturity_using_the_shared_credential()
+    public void Plan_marks_retry_workflow_experimental_at_high_maturity_using_the_shared_credential()
     {
         var definition = SampleDefinition() with
         {
@@ -180,6 +180,7 @@ public sealed class GitHubProvisioningPlaneTests
         var retryWorkflow = Assert.IsType<EnsureCreationRetryWorkflowRequest>(plan.Requests[5]);
         Assert.Equal("acme/paritydemo", retryWorkflow.RepositoryFullName);
         Assert.Equal(definition.GitHub.CloudAgentCredentialSecretName, retryWorkflow.CredentialSecretName);
+        Assert.Equal(CreationRetryWorkflowStatus.Experimental, retryWorkflow.Status);
     }
 
     [Fact]

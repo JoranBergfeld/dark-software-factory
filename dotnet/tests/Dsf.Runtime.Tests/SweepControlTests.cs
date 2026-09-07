@@ -35,6 +35,7 @@ public sealed class SweepControlTests
         var state = await new AzureAppConfigurationSweepControlStore(gateway, Settings)
             .ReadAsync(CancellationToken.None);
 
+        Assert.Equal(ProductConfigurationKeys.NoLabel, gateway.ReadLabel);
         Assert.Equal(SweepControlState.Unset, state);
     }
 
@@ -43,8 +44,8 @@ public sealed class SweepControlTests
     {
         var gateway = new RecordingConfigurationSettingsGateway(
         [
-            ("sweep-paused", "true"),
-            ("sweep-interval-seconds", "120"),
+            (ProductConfigurationKeys.SweepPaused, "true"),
+            (ProductConfigurationKeys.SweepIntervalSeconds, "120"),
         ]);
 
         var state = await new AzureAppConfigurationSweepControlStore(gateway, Settings)
@@ -62,7 +63,7 @@ public sealed class SweepControlTests
         await new AzureAppConfigurationSweepControlStore(gateway, Settings)
             .SetPausedAsync(true, CancellationToken.None);
 
-        Assert.Equal(("sweep-paused", "true", null), gateway.Written);
+        Assert.Equal((ProductConfigurationKeys.SweepPaused, "true", null), gateway.Written);
     }
 
     [Fact]
@@ -73,7 +74,7 @@ public sealed class SweepControlTests
         await new AzureAppConfigurationSweepControlStore(gateway, Settings)
             .SetIntervalSecondsAsync(45, CancellationToken.None);
 
-        Assert.Equal(("sweep-interval-seconds", "45", null), gateway.Written);
+        Assert.Equal((ProductConfigurationKeys.SweepIntervalSeconds, "45", null), gateway.Written);
     }
 
     [Fact]
@@ -102,10 +103,12 @@ public sealed class SweepControlTests
         IReadOnlyList<(string Key, string Value)> settings) : IConfigurationSettingsGateway
     {
         public (string Key, string Value, string? Label)? Written { get; private set; }
+        public string? ReadLabel { get; private set; }
 
         public async IAsyncEnumerable<(string Key, string Value)> ListAsync(
             string endpoint, string label, [EnumeratorCancellation] CancellationToken cancellationToken)
         {
+            ReadLabel = label;
             foreach (var setting in settings)
             {
                 cancellationToken.ThrowIfCancellationRequested();

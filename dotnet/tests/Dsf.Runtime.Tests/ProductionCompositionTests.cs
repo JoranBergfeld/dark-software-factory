@@ -73,8 +73,10 @@ public sealed class ProductionCompositionTests
                 env ?? FullyConfigured,
                 privateKeySecretReader: privateKeySecretReader ?? new StubPrivateKeySecretReader()),
             new SourceIntegrationRegistry(
-                new Dictionary<string, ISourceIntegration>(StringComparer.Ordinal),
-                new HttpSourceIntegration(env ?? FullyConfigured)),
+                SourceAgentKinds.Known.ToDictionary(
+                    kind => kind,
+                    _ => (ISourceIntegration)new HttpSourceIntegration(env ?? FullyConfigured),
+                    StringComparer.Ordinal)),
             new EnvironmentLearningComposer(
                 env ?? FullyConfigured,
                 privateKeySecretReader: privateKeySecretReader ?? new StubPrivateKeySecretReader()));

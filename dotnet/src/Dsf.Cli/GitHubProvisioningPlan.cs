@@ -231,18 +231,22 @@ internal sealed record EnsureBranchProtectionRulesetRequest(
     : GitHubProvisioningRequest("ensure_branch_protection_ruleset");
 
 /// <summary>
-/// Seeds the Creation-phase retry workflow (<c>high</c> creation maturity only): re-invokes
-/// the Coding Agent when a Copilot review requests changes or a required check fails, using
-/// the repository secret named by <see cref="CredentialSecretName"/> — the DSF user-to-server
-/// GitHub credential, since GitHub does not accept a server-to-server installation token for
-/// re-invoking the agent.
+/// Seeds the experimental Creation-phase retry-detection workflow (<c>high</c> creation
+/// maturity only): records failed-review/check signals without calling an unconfirmed
+/// GitHub Cloud Agent retry interface.
 /// </summary>
 internal sealed record EnsureCreationRetryWorkflowRequest(
     string RepositoryFullName,
     string DefaultBranch,
     string CredentialSecretName,
+    CreationRetryWorkflowStatus Status = CreationRetryWorkflowStatus.Experimental,
     string WorkflowPath = ".github/workflows/creation-retry.yml")
     : GitHubProvisioningRequest("ensure_creation_retry_workflow");
+
+internal enum CreationRetryWorkflowStatus
+{
+    Experimental,
+}
 
 internal sealed record GitHubLabelDefinition(
     string Name,

@@ -23,9 +23,6 @@ internal sealed class AzureAppConfigurationConfidenceThresholdReader(
     IConfigurationSettingsGateway gateway,
     RuntimeSettings settings) : IConfidenceThresholdReader
 {
-    /// <summary>App Configuration's "no label" filter token.</summary>
-    private const string NoLabel = "\0";
-
     public AzureAppConfigurationConfidenceThresholdReader(RuntimeSettings settings)
         : this(new AzureConfigurationSettingsGateway(), settings)
     {
@@ -38,7 +35,10 @@ internal sealed class AzureAppConfigurationConfidenceThresholdReader(
         try
         {
             var read = new List<(string Key, string Value)>();
-            await foreach (var entry in gateway.ListAsync(settings.AppConfigEndpoint, NoLabel, cancellationToken))
+            await foreach (var entry in gateway.ListAsync(
+                               settings.AppConfigEndpoint,
+                               ProductConfigurationKeys.NoLabel,
+                               cancellationToken))
             {
                 read.Add(entry);
             }
@@ -66,5 +66,5 @@ internal sealed class AzureAppConfigurationConfidenceThresholdReader(
         return S5Council.DefaultThreshold;
     }
 
-    private static string ThresholdKey(string product) => $"threshold.{product}";
+    private static string ThresholdKey(string product) => ProductConfigurationKeys.Threshold(product);
 }

@@ -162,6 +162,8 @@ public sealed class WebIqIntegrationTests
 
         Assert.IsType<WebIqIntegration>(registry.Resolve("webiq"));
         Assert.IsType<WebIqIntegration>(registry.Resolve("WEBIQ"));
-        Assert.IsType<HttpSourceIntegration>(registry.Resolve("customsource"));
+        var exception = Assert.Throws<RuntimeConfigurationException>(() => registry.Resolve("customsource"));
+        Assert.Contains("customsource", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("registered source agent kind", exception.Message, StringComparison.Ordinal);
     }
 }

@@ -12,6 +12,13 @@ namespace Dsf.Core.Tests;
 /// </summary>
 public sealed class RuntimeSettingsComposerTests
 {
+    [Fact]
+    public void Product_configuration_key_parser_ignores_malformed_agent_keys()
+    {
+        Assert.False(ProductConfigurationKeys.TryReadAgentKind("agents.enabled", out var kind));
+        Assert.Equal(string.Empty, kind);
+    }
+
     private static readonly IReadOnlyDictionary<string, string?> FullEnvironment = new Dictionary<string, string?>
     {
         ["DSF_PRODUCT"] = "acme",

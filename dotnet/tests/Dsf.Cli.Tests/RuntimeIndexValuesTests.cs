@@ -1,5 +1,6 @@
 using Dsf.Cli;
 using Dsf.Core.Instances;
+using Dsf.Core.Runtime;
 using Xunit;
 
 namespace Dsf.Cli.Tests;
@@ -22,8 +23,8 @@ public sealed class RuntimeIndexValuesTests
         var values = CliApplication.RuntimeIndexValues(definition, "https://product-appconfig.example");
 
         Assert.Equal("paritydemo", values["DSF_PRODUCT"]);
-        Assert.Equal("acme/paritydemo", values["GITHUB_REPOSITORY"]);
-        Assert.Equal("https://product-appconfig.example", values["AZURE_APPCONFIG_ENDPOINT"]);
+        Assert.Equal("acme/paritydemo", values[ProductConfigurationKeys.OwnerIndexGitHubRepository]);
+        Assert.Equal("https://product-appconfig.example", values[ProductConfigurationKeys.OwnerIndexAppConfigEndpoint]);
         Assert.Equal("https://cosmos.example", values["AZURE_COSMOS_ENDPOINT"]);
         Assert.Equal("https://openai.example", values["AZURE_OPENAI_ENDPOINT"]);
         Assert.Equal("gpt-deploy", values["AZURE_OPENAI_DEPLOYMENT"]);
@@ -37,7 +38,7 @@ public sealed class RuntimeIndexValuesTests
     private static InstanceDefinition SampleDefinition() => new()
     {
         Product = new ProductSettings { Key = "paritydemo" },
-        Runtime = new RuntimeSettings(),
+        Runtime = new Dsf.Core.Instances.RuntimeSettings(),
         Governance = new GovernanceSettings(),
         GitHub = new GitHubSettings
         {

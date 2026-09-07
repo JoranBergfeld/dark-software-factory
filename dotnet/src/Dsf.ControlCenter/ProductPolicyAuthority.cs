@@ -1,6 +1,5 @@
 using System.Globalization;
 using System.Runtime.CompilerServices;
-using System.Text.Json;
 using Azure.Data.AppConfiguration;
 using Azure.Identity;
 using Dsf.Core.Runtime;
@@ -104,15 +103,13 @@ internal sealed class AppConfigurationProductPolicyAuthority(
     string ownerEndpoint) : IProductPolicyAuthority
 {
     /// <summary>App Configuration's "no label" filter token.</summary>
-    private const string NoLabel = "\0";
+    private const string NoLabel = ProductConfigurationKeys.NoLabel;
 
     /// <summary>App Configuration's "any label" filter token.</summary>
-    private const string AnyLabel = "*";
+    private const string AnyLabel = ProductConfigurationKeys.AnyLabel;
 
-    private const string RepositoryKey = "GITHUB_REPOSITORY";
-    private const string EndpointKey = "AZURE_APPCONFIG_ENDPOINT";
-    private const string AgentKeyPrefix = "agents.";
-    private const string AgentKeySuffix = ".enabled";
+    private const string RepositoryKey = ProductConfigurationKeys.OwnerIndexGitHubRepository;
+    private const string EndpointKey = ProductConfigurationKeys.OwnerIndexAppConfigEndpoint;
 
     /// <summary>
     /// The confidence bar a product falls back to when its record carries no
@@ -136,6 +133,7 @@ internal sealed class AppConfigurationProductPolicyAuthority(
         var location = await ResolveAsync(product, cancellationToken);
 
         var enablement = SourceAgentKinds.Known.ToDictionary(kind => kind, _ => false, StringComparer.Ordinal);
+        var unknownEnablement = new Dictionary<string, (bool Value, string Key)>(StringComparer.Ordinal);
         var threshold = DefaultConfidenceThreshold;
         var thresholdKey = ThresholdKey(product);
 
@@ -145,9 +143,13 @@ internal sealed class AppConfigurationProductPolicyAuthority(
         {
             foreach (var (key, value, _) in await ReadAsync(location.AppConfigEndpoint, label, cancellationToken))
             {
-                if (TryReadAgentKind(key, out var kind) && enablement.ContainsKey(kind))
+                if (ProductConfigurationKeys.TryReadAgentKind(key, out var kind) && enablement.ContainsKey(kind))
                 {
-                    enablement[kind] = IsTrue(value);
+                    enablement[kind] = ProductConfigurationKeys.IsJsonTrue(value);
+                }
+                else if (ProductConfigurationKeys.TryReadAgentKind(key, out kind))
+                {
+                    unknownEnablement[kind] = (ProductConfigurationKeys.IsJsonTrue(value), key);
                 }
                 else if (string.Equals(key, thresholdKey, StringComparison.Ordinal)
                     && double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed)
@@ -156,6 +158,13 @@ internal sealed class AppConfigurationProductPolicyAuthority(
                     threshold = parsed;
                 }
             }
+        }
+
+        foreach (var (kind, state) in unknownEnablement.Where(entry => entry.Value.Value))
+        {
+            throw new ConfigurationAuthorityUnavailableException(
+                $"product '{product}' enables unknown source agent kind '{kind}' via key '{state.Key}'; "
+                + $"registered source agent kinds are {string.Join(", ", SourceAgentKinds.Known)}.");
         }
 
         return new ProductPolicy(product, location.GitHubRepository, enablement, threshold);
@@ -178,7 +187,7 @@ internal sealed class AppConfigurationProductPolicyAuthority(
         var location = await ResolveAsync(product, cancellationToken);
         await WriteAsync(
             location.AppConfigEndpoint,
-            $"{AgentKeyPrefix}{normalized}{AgentKeySuffix}",
+            ProductConfigurationKeys.AgentEnabled(normalized),
             enabled ? "true" : "false",
             label: product,
             cancellationToken);
@@ -271,30 +280,5 @@ internal sealed class AppConfigurationProductPolicyAuthority(
         }
     }
 
-    private static string ThresholdKey(string product) => $"threshold.{product}";
-
-    private static bool TryReadAgentKind(string key, out string kind)
-    {
-        kind = string.Empty;
-        if (!key.StartsWith(AgentKeyPrefix, StringComparison.Ordinal)
-            || !key.EndsWith(AgentKeySuffix, StringComparison.Ordinal))
-        {
-            return false;
-        }
-
-        kind = key[AgentKeyPrefix.Length..^AgentKeySuffix.Length].Trim().ToLowerInvariant();
-        return kind.Length > 0;
-    }
-
-    private static bool IsTrue(string value)
-    {
-        try
-        {
-            return JsonSerializer.Deserialize<bool?>(value) ?? false;
-        }
-        catch (JsonException)
-        {
-            return false;
-        }
-    }
+    private static string ThresholdKey(string product) => ProductConfigurationKeys.Threshold(product);
 }

@@ -1,4 +1,3 @@
-using System.Text.Json;
 using Dsf.Core.Runtime;
 
 namespace Dsf.Runtime;
@@ -15,12 +14,6 @@ namespace Dsf.Runtime;
 internal sealed class AzureAppConfigurationSourceAgentRosterReader(IConfigurationSettingsGateway gateway)
     : ISourceAgentRosterReader
 {
-    /// <summary>App Configuration's "no label" filter token.</summary>
-    private const string NoLabel = "\0";
-
-    private const string KeyPrefix = "agents.";
-    private const string KeySuffix = ".enabled";
-
     public AzureAppConfigurationSourceAgentRosterReader()
         : this(new AzureConfigurationSettingsGateway())
     {
@@ -32,22 +25,33 @@ internal sealed class AzureAppConfigurationSourceAgentRosterReader(IConfiguratio
     {
         ArgumentNullException.ThrowIfNull(settings);
 
-        var enabled = new Dictionary<string, bool>(StringComparer.Ordinal);
+        var enabled = new Dictionary<string, (bool Value, string Key)>(StringComparer.Ordinal);
         // Unlabelled defaults first, then the product's labelled overrides on top.
-        foreach (var label in new[] { NoLabel, settings.Product })
+        foreach (var label in new[] { ProductConfigurationKeys.NoLabel, settings.Product })
         {
             foreach (var (key, value) in await ReadAsync(settings, label, cancellationToken))
             {
-                if (TryReadAgentKind(key, out var kind))
+                if (ProductConfigurationKeys.TryReadAgentKind(key, out var kind))
                 {
-                    enabled[kind] = IsTrue(value);
+                    enabled[kind] = (ProductConfigurationKeys.IsJsonTrue(value), key);
                 }
             }
         }
 
-        return enabled.Where(entry => entry.Value)
+        foreach (var (kind, value) in enabled.Where(entry => entry.Value.Value))
+        {
+            if (!SourceAgentKinds.IsKnown(kind))
+            {
+                throw new RuntimeConfigurationException(
+                    $"source agent roster for product '{settings.Product}' enables unknown kind "
+                    + $"'{kind}' via key '{value.Key}'; registered source agent kinds are "
+                    + $"{string.Join(", ", SourceAgentKinds.Known)}.",
+                    [RuntimeSettingsComposer.AzureAppConfigEndpoint]);
+            }
+        }
+
+        return enabled.Where(entry => entry.Value.Value)
             .Select(entry => entry.Key)
-            .Where(SourceAgentKinds.IsKnown)
             .Order(StringComparer.Ordinal)
             .ToArray();
     }
@@ -80,28 +84,4 @@ internal sealed class AzureAppConfigurationSourceAgentRosterReader(IConfiguratio
         return settingsRead;
     }
 
-    private static bool TryReadAgentKind(string key, out string kind)
-    {
-        kind = string.Empty;
-        if (!key.StartsWith(KeyPrefix, StringComparison.Ordinal)
-            || !key.EndsWith(KeySuffix, StringComparison.Ordinal))
-        {
-            return false;
-        }
-
-        kind = key[KeyPrefix.Length..^KeySuffix.Length].Trim().ToLowerInvariant();
-        return kind.Length > 0;
-    }
-
-    private static bool IsTrue(string value)
-    {
-        try
-        {
-            return JsonSerializer.Deserialize<bool?>(value) ?? false;
-        }
-        catch (JsonException)
-        {
-            return false;
-        }
-    }
 }

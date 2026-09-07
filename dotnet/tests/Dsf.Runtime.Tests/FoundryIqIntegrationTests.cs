@@ -105,6 +105,8 @@ public sealed class FoundryIqIntegrationTests
 
         Assert.IsType<FoundryIqIntegration>(registry.Resolve("foundryiq"));
         Assert.IsType<FoundryIqIntegration>(registry.Resolve("FOUNDRYIQ"));
-        Assert.IsType<HttpSourceIntegration>(registry.Resolve("customsource"));
+        var exception = Assert.Throws<RuntimeConfigurationException>(() => registry.Resolve("customsource"));
+        Assert.Contains("customsource", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("registered source agent kind", exception.Message, StringComparison.Ordinal);
     }
 }

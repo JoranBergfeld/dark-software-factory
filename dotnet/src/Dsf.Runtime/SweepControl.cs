@@ -42,11 +42,8 @@ internal sealed class AzureAppConfigurationSweepControlStore(
     IConfigurationSettingsGateway gateway,
     RuntimeSettings settings) : ISweepControlStore
 {
-    /// <summary>App Configuration's "no label" filter token.</summary>
-    private const string NoLabel = "\0";
-
-    private const string PausedKey = "sweep-paused";
-    private const string IntervalKey = "sweep-interval-seconds";
+    private const string PausedKey = ProductConfigurationKeys.SweepPaused;
+    private const string IntervalKey = ProductConfigurationKeys.SweepIntervalSeconds;
 
     public AzureAppConfigurationSweepControlStore(RuntimeSettings settings)
         : this(new AzureConfigurationSettingsGateway(), settings)
@@ -59,7 +56,10 @@ internal sealed class AzureAppConfigurationSweepControlStore(
         var intervalSeconds = 0;
         try
         {
-            await foreach (var (key, value) in gateway.ListAsync(settings.AppConfigEndpoint, NoLabel, cancellationToken))
+            await foreach (var (key, value) in gateway.ListAsync(
+                               settings.AppConfigEndpoint,
+                               ProductConfigurationKeys.NoLabel,
+                               cancellationToken))
             {
                 if (string.Equals(key, PausedKey, StringComparison.Ordinal))
                 {

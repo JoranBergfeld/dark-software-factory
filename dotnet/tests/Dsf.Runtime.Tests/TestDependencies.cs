@@ -37,11 +37,16 @@ internal static class TestDependencies
                 runStore ?? new RecordingRunStore(),
                 modelClient ?? new RecordingModelClient(),
                 tracer ?? new RecordingTracer()),
-            new SourceIntegrationRegistry(
-                sourceIntegrationsByKind ?? new Dictionary<string, ISourceIntegration>(StringComparer.Ordinal),
-                sourceIntegration ?? new ScriptedSourceIntegration()),
+            new SourceIntegrationRegistry(sourceIntegrationsByKind ?? SourceIntegrationsFor(
+                sourceIntegration ?? new ScriptedSourceIntegration())),
             learningComposer ?? new ScriptedLearningComposer(new RecordingOutcomeSource(), new RecordingLearningStore()),
             sweepControlStoreFactory);
+
+    private static IReadOnlyDictionary<string, ISourceIntegration> SourceIntegrationsFor(
+        ISourceIntegration sourceIntegration)
+    {
+        return SourceAgentKinds.Known.ToDictionary(kind => kind, _ => sourceIntegration, StringComparer.Ordinal);
+    }
 }
 
 /// <summary>Composes learning services from collaborators the test supplied directly.</summary>

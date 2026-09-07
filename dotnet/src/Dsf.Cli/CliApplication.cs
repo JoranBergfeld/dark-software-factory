@@ -629,7 +629,7 @@ public static class CliApplication
         }
         if (creationMaturity == "high")
         {
-            terminal.WriteLine($"[dsf]  13b. creation_retry_workflow [planned (dry-run)] Seed .github/workflows/creation-retry.yml in {repoFull}, re-invoking the Coding Agent on a failed review/check using the '{cloudAgentCredentialSecretName}' repository secret");
+            terminal.WriteLine($"[dsf]  13b. creation_retry_workflow [experimental (dry-run)] Seed .github/workflows/creation-retry.yml in {repoFull}; record failed review/check signals without attempting GitHub Cloud Agent re-invocation until the experimental seam is confirmed, using the '{cloudAgentCredentialSecretName}' repository secret");
         }
         terminal.WriteLine($"[dsf]  14. deploy_sre_agent [deployed (dry-run)] Provision the Azure SRE Agent for {product} (agent + RBAC on rg-dsf-{product} + Azure Monitor) at '{operationMaturity}' operation maturity");
         if (operationMaturity == "high")
@@ -1952,8 +1952,8 @@ public static class CliApplication
         var values = new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["DSF_PRODUCT"] = definition.Product.Key,
-            ["GITHUB_REPOSITORY"] = definition.GitHub.FullName(),
-            ["AZURE_APPCONFIG_ENDPOINT"] = productEndpoint,
+            [ProductConfigurationKeys.OwnerIndexGitHubRepository] = definition.GitHub.FullName(),
+            [ProductConfigurationKeys.OwnerIndexAppConfigEndpoint] = productEndpoint,
         };
         foreach (var (key, value) in definition.Azure.Outputs)
         {

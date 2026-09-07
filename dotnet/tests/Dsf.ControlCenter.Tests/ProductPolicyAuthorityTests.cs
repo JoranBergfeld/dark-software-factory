@@ -80,6 +80,32 @@ public sealed class ProductPolicyAuthorityTests
     }
 
     [Fact]
+    public async Task Enabled_unknown_agent_policy_fails_loudly()
+    {
+        var store = SeededStore();
+        store.Seed(ProductEndpoint, "agents.notakind.enabled", "true");
+
+        var exception = await Assert.ThrowsAsync<ConfigurationAuthorityUnavailableException>(
+            () => Authority(store).ReadPolicyAsync("wayfinder", CancellationToken.None));
+
+        Assert.Contains("agents.notakind.enabled", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("notakind", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("azuremonitor", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Product_labelled_false_override_disables_unknown_default_before_validation()
+    {
+        var store = SeededStore();
+        store.Seed(ProductEndpoint, "agents.notakind.enabled", "true");
+        store.Seed(ProductEndpoint, "agents.notakind.enabled", "false", "wayfinder");
+
+        var policy = await Authority(store).ReadPolicyAsync("wayfinder", CancellationToken.None);
+
+        Assert.DoesNotContain("notakind", policy.AgentEnablement.Keys);
+    }
+
+    [Fact]
     public async Task Unset_agents_and_threshold_read_as_the_documented_defaults()
     {
         var policy = await Authority(SeededStore()).ReadPolicyAsync("wayfinder", CancellationToken.None);

@@ -486,6 +486,65 @@ public sealed class GitHubRestProvisioningClientTests
         Assert.Equal("/repos/acme/demo/rulesets/456", handler.Requests[2].Path);
     }
 
+    [Fact]
+    public async Task Creation_retry_workflow_records_experimental_status_without_claiming_reinvocation()
+    {
+        var handler = new RecordingHttpMessageHandler(
+            Response(HttpStatusCode.NotFound),
+            Response(HttpStatusCode.Created, """{"content":{"sha":"def456"}}"""));
+        var client = new GitHubRestProvisioningClient(new HttpClient(handler), "test-token");
+
+        await client.EnsureCreationRetryWorkflowAsync(
+            new EnsureCreationRetryWorkflowRequest(
+                "acme/demo",
+                "main",
+                "DSF_CLOUD_AGENT_TOKEN",
+                CreationRetryWorkflowStatus.Experimental),
+            CancellationToken.None);
+
+        var request = handler.Requests[1];
+        using var payload = JsonDocument.Parse(request.Body!);
+        var decoded = System.Text.Encoding.UTF8.GetString(
+            Convert.FromBase64String(payload.RootElement.GetProperty("content").GetString()!));
+        Assert.Contains("name: creation-retry-experimental", decoded, StringComparison.Ordinal);
+        Assert.Contains("DSF_CREATION_RETRY_STATUS: experimental", decoded, StringComparison.Ordinal);
+        Assert.Contains("Record experimental Creation retry signal", decoded, StringComparison.Ordinal);
+        Assert.DoesNotContain("Re-invoke the GitHub Coding Agent", decoded, StringComparison.Ordinal);
+        Assert.DoesNotContain("TODO(confirm)", decoded, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Existing_legacy_creation_retry_workflow_is_replaced_with_experimental_workflow()
+    {
+        var legacy = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(
+            "name: creation-retry\nsteps:\n  - name: Re-invoke the GitHub Coding Agent\n"));
+        var handler = new RecordingHttpMessageHandler(
+            Response(HttpStatusCode.OK, $$"""{"sha":"abc123","content":"{{legacy}}"}"""),
+            Response(HttpStatusCode.OK, """{"content":{"sha":"def456"}}"""));
+        var client = new GitHubRestProvisioningClient(new HttpClient(handler), "test-token");
+
+        await client.EnsureCreationRetryWorkflowAsync(
+            new EnsureCreationRetryWorkflowRequest(
+                "acme/demo",
+                "main",
+                "DSF_CLOUD_AGENT_TOKEN",
+                CreationRetryWorkflowStatus.Experimental),
+            CancellationToken.None);
+
+        Assert.Collection(
+            handler.Requests,
+            request => Assert.Equal(HttpMethod.Get, request.Method),
+            request =>
+            {
+                Assert.Equal(HttpMethod.Put, request.Method);
+                using var payload = JsonDocument.Parse(request.Body!);
+                Assert.Equal("abc123", payload.RootElement.GetProperty("sha").GetString());
+                var decoded = System.Text.Encoding.UTF8.GetString(
+                    Convert.FromBase64String(payload.RootElement.GetProperty("content").GetString()!));
+                Assert.Contains("name: creation-retry-experimental", decoded, StringComparison.Ordinal);
+            });
+    }
+
     private static HttpResponseMessage Response(HttpStatusCode status, string? json = null) =>
         new(status)
         {

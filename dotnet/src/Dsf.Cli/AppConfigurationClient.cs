@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Dsf.Core.Products;
+using Dsf.Core.Runtime;
 
 namespace Dsf.Cli;
 
@@ -48,13 +49,14 @@ internal sealed class AzureCliAppConfigurationClient(IAzureCliRunner runner) : I
             .Select(group =>
             {
                 var index = group.ToDictionary(entry => entry.Key, entry => entry.Value, StringComparer.Ordinal);
-                var repository = index.GetValueOrDefault("GITHUB_REPOSITORY");
-                var endpoint = index.GetValueOrDefault("AZURE_APPCONFIG_ENDPOINT");
+                var repository = index.GetValueOrDefault(ProductConfigurationKeys.OwnerIndexGitHubRepository);
+                var endpoint = index.GetValueOrDefault(ProductConfigurationKeys.OwnerIndexAppConfigEndpoint);
                 if (string.IsNullOrWhiteSpace(repository) || string.IsNullOrWhiteSpace(endpoint))
                 {
                     throw new InvalidOperationException(
                         $"Product '{group.Key}' is incomplete in the owner App Configuration index at '{ownerEndpoint}'; "
-                        + "GITHUB_REPOSITORY and AZURE_APPCONFIG_ENDPOINT are required.");
+                        + $"{ProductConfigurationKeys.OwnerIndexGitHubRepository} and "
+                        + $"{ProductConfigurationKeys.OwnerIndexAppConfigEndpoint} are required.");
                 }
 
                 return new ProductLocation(group.Key, repository, endpoint);
@@ -71,13 +73,14 @@ internal sealed class AzureCliAppConfigurationClient(IAzureCliRunner runner) : I
         RequireEndpoint(ownerEndpoint, "DSF_OWNER_APPCONFIG_ENDPOINT");
         var values = (await ListEntriesAsync(ownerEndpoint, ["--label", product], cancellationToken))
             .ToDictionary(entry => entry.Key, entry => entry.Value, StringComparer.Ordinal);
-        var repository = values.GetValueOrDefault("GITHUB_REPOSITORY");
-        var productEndpoint = values.GetValueOrDefault("AZURE_APPCONFIG_ENDPOINT");
+        var repository = values.GetValueOrDefault(ProductConfigurationKeys.OwnerIndexGitHubRepository);
+        var productEndpoint = values.GetValueOrDefault(ProductConfigurationKeys.OwnerIndexAppConfigEndpoint);
         if (string.IsNullOrWhiteSpace(repository) || string.IsNullOrWhiteSpace(productEndpoint))
         {
             throw new InvalidOperationException(
                 $"Product '{product}' is absent or incomplete in the owner App Configuration index at '{ownerEndpoint}'; "
-                + "GITHUB_REPOSITORY and AZURE_APPCONFIG_ENDPOINT are required.");
+                + $"{ProductConfigurationKeys.OwnerIndexGitHubRepository} and "
+                + $"{ProductConfigurationKeys.OwnerIndexAppConfigEndpoint} are required.");
         }
 
         return new ProductLocation(product, repository, productEndpoint);
@@ -89,15 +92,15 @@ internal sealed class AzureCliAppConfigurationClient(IAzureCliRunner runner) : I
         CancellationToken cancellationToken)
     {
         RequireEndpoint(productEndpoint, "AZURE_APPCONFIG_ENDPOINT");
-        var values = (await ListEntriesAsync(productEndpoint, ["--key", "product.*", "--label", "\0"], cancellationToken))
+        var values = (await ListEntriesAsync(productEndpoint, ["--key", "product.*", "--label", ProductConfigurationKeys.NoLabel], cancellationToken))
             .ToDictionary(entry => entry.Key, entry => entry.Value, StringComparer.Ordinal);
         var threshold = (await ListEntriesAsync(
             productEndpoint,
-            ["--key", $"threshold.{product}", "--label", "\0"],
+            ["--key", ProductConfigurationKeys.Threshold(product), "--label", ProductConfigurationKeys.NoLabel],
             cancellationToken))
             .ToDictionary(entry => entry.Key, entry => entry.Value, StringComparer.Ordinal);
-        var repository = ReadJson<string>(values, "product.github_repo");
-        if (string.IsNullOrWhiteSpace(repository) || !threshold.TryGetValue($"threshold.{product}", out var thresholdValue)
+        var repository = ReadJson<string>(values, ProductConfigurationKeys.GitHubRepository);
+        if (string.IsNullOrWhiteSpace(repository) || !threshold.TryGetValue(ProductConfigurationKeys.Threshold(product), out var thresholdValue)
             || !double.TryParse(thresholdValue, System.Globalization.CultureInfo.InvariantCulture, out var confidence))
         {
             throw new InvalidOperationException(
@@ -107,11 +110,11 @@ internal sealed class AzureCliAppConfigurationClient(IAzureCliRunner runner) : I
         return new ProductRecord(
             product,
             repository,
-            ReadJson<Dictionary<string, IReadOnlyList<string>>>(values, "product.label_taxonomy") ?? [],
-            ReadJson<string>(values, "product.foundryiq_scope") ?? string.Empty,
-            ReadJson<List<string>>(values, "product.sentry_projects") ?? [],
-            ReadJson<List<string>>(values, "product.grafana_dashboards") ?? [],
-            ReadJson<string>(values, "product.azure_monitor_scope") ?? string.Empty,
+            ReadJson<Dictionary<string, IReadOnlyList<string>>>(values, ProductConfigurationKeys.LabelTaxonomy) ?? [],
+            ReadJson<string>(values, ProductConfigurationKeys.FoundryIqScope) ?? string.Empty,
+            ReadJson<List<string>>(values, ProductConfigurationKeys.SentryProjects) ?? [],
+            ReadJson<List<string>>(values, ProductConfigurationKeys.GrafanaDashboards) ?? [],
+            ReadJson<string>(values, ProductConfigurationKeys.AzureMonitorScope) ?? string.Empty,
             confidence);
     }
 
@@ -205,13 +208,13 @@ internal sealed class AzureCliAppConfigurationClient(IAzureCliRunner runner) : I
 
     private static IEnumerable<(string Key, string Value)> ProductValues(ProductRecord record)
     {
-        yield return ("product.github_repo", JsonSerializer.Serialize(record.GitHubRepository));
-        yield return ("product.label_taxonomy", JsonSerializer.Serialize(record.LabelTaxonomy));
-        yield return ("product.foundryiq_scope", JsonSerializer.Serialize(record.FoundryIqScope));
-        yield return ("product.sentry_projects", JsonSerializer.Serialize(record.SentryProjects));
-        yield return ("product.grafana_dashboards", JsonSerializer.Serialize(record.GrafanaDashboards));
-        yield return ("product.azure_monitor_scope", JsonSerializer.Serialize(record.AzureMonitorScope));
-        yield return ($"threshold.{record.Key}", record.ConfidenceThreshold.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        yield return (ProductConfigurationKeys.GitHubRepository, JsonSerializer.Serialize(record.GitHubRepository));
+        yield return (ProductConfigurationKeys.LabelTaxonomy, JsonSerializer.Serialize(record.LabelTaxonomy));
+        yield return (ProductConfigurationKeys.FoundryIqScope, JsonSerializer.Serialize(record.FoundryIqScope));
+        yield return (ProductConfigurationKeys.SentryProjects, JsonSerializer.Serialize(record.SentryProjects));
+        yield return (ProductConfigurationKeys.GrafanaDashboards, JsonSerializer.Serialize(record.GrafanaDashboards));
+        yield return (ProductConfigurationKeys.AzureMonitorScope, JsonSerializer.Serialize(record.AzureMonitorScope));
+        yield return (ProductConfigurationKeys.Threshold(record.Key), record.ConfidenceThreshold.ToString(System.Globalization.CultureInfo.InvariantCulture));
     }
 
     private static void RequireEndpoint(string endpoint, string setting)

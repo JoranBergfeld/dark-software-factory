@@ -88,9 +88,11 @@ charter to the executor through a Cosmos-backed MCP server in the ACA runtime;
 that server is designed, not running.
 
 Autonomy is the `creation_maturity` setting. Low keeps a person on every merge.
-Medium and high let a Copilot approval satisfy the required-review gate, and
-high additionally adds an automated retry workflow. The code-writing identity
-remains GitHub-managed at every level.
+Medium and high let a Copilot approval satisfy the required-review gate. High
+also seeds an experimental retry-detection workflow that records failed
+review/check signals; it does not re-invoke the GitHub Cloud Agent until a
+confirmed GitHub interface exists. The code-writing identity remains
+GitHub-managed at every level.
 
 ## See also
 

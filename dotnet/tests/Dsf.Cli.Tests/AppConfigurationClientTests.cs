@@ -1,5 +1,6 @@
 using Dsf.Cli;
 using Dsf.Core.Products;
+using Dsf.Core.Runtime;
 using Xunit;
 
 namespace Dsf.Cli.Tests;
@@ -67,11 +68,22 @@ public sealed class AppConfigurationClientTests
             runner.Invocations,
             invocation => invocation.SequenceEqual(
                 ["appconfig", "kv", "set", "--endpoint", "https://demo.azconfig.io", "--auth-mode", "login", "--key",
-                    "product.github_repo", "--value", "\"acme/demo\"", "--yes"]));
+                    ProductConfigurationKeys.GitHubRepository, "--value", "\"acme/demo\"", "--yes"]));
         Assert.Contains(
             runner.Invocations,
             invocation => invocation.SequenceEqual(
                 ["appconfig", "kv", "set", "--endpoint", "https://demo.azconfig.io", "--auth-mode", "login", "--key",
-                    "threshold.demo", "--value", "0.7", "--yes"]));
+                    ProductConfigurationKeys.Threshold("demo"), "--value", "0.7", "--yes"]));
+    }
+
+    [Fact]
+    public void Product_configuration_key_semantics_are_owned_by_core()
+    {
+        Assert.Equal("product.github_repo", ProductConfigurationKeys.GitHubRepository);
+        Assert.Equal("product.label_taxonomy", ProductConfigurationKeys.LabelTaxonomy);
+        Assert.Equal("agents.webiq.enabled", ProductConfigurationKeys.AgentEnabled(" WEBIQ "));
+        Assert.Equal("threshold.demo", ProductConfigurationKeys.Threshold("demo"));
+        Assert.Equal("\0", ProductConfigurationKeys.NoLabel);
+        Assert.Equal("*", ProductConfigurationKeys.AnyLabel);
     }
 }

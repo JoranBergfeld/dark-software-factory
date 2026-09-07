@@ -28,7 +28,7 @@ public sealed class AzureAppConfigurationSourceAgentRosterReaderTests
         GitHubRepository: "");
 
     [Fact]
-    public async Task Returns_only_the_known_kinds_whose_flag_is_true()
+    public async Task Returns_the_known_kinds_whose_flag_is_true()
     {
         var gateway = new LabelledConfigurationSettingsGateway(new Dictionary<string, (string, string)[]>
         {
@@ -36,7 +36,6 @@ public sealed class AzureAppConfigurationSourceAgentRosterReaderTests
             [
                 ("agents.AZUREMONITOR.enabled", "true"),
                 ("agents.FOUNDRYIQ.enabled", "false"),
-                ("agents.NOTAKIND.enabled", "true"),
                 ("critics.value.enabled", "true"),
             ],
             ["acme"] = [],
@@ -46,6 +45,39 @@ public sealed class AzureAppConfigurationSourceAgentRosterReaderTests
             .ReadEnabledKindsAsync(Settings, CancellationToken.None);
 
         Assert.Equal(["azuremonitor"], kinds);
+    }
+
+    [Fact]
+    public async Task Enabled_unknown_kinds_fail_loudly()
+    {
+        var gateway = new LabelledConfigurationSettingsGateway(new Dictionary<string, (string, string)[]>
+        {
+            ["\0"] = [("agents.NOTAKIND.enabled", "true")],
+            ["acme"] = [],
+        });
+
+        var exception = await Assert.ThrowsAsync<RuntimeConfigurationException>(
+            () => new AzureAppConfigurationSourceAgentRosterReader(gateway)
+                .ReadEnabledKindsAsync(Settings, CancellationToken.None));
+
+        Assert.Contains("agents.NOTAKIND.enabled", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("notakind", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("azuremonitor", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Product_labelled_false_override_disables_unknown_default_before_validation()
+    {
+        var gateway = new LabelledConfigurationSettingsGateway(new Dictionary<string, (string, string)[]>
+        {
+            ["\0"] = [("agents.NOTAKIND.enabled", "true")],
+            ["acme"] = [("agents.NOTAKIND.enabled", "false")],
+        });
+
+        var kinds = await new AzureAppConfigurationSourceAgentRosterReader(gateway)
+            .ReadEnabledKindsAsync(Settings, CancellationToken.None);
+
+        Assert.Empty(kinds);
     }
 
     [Fact]

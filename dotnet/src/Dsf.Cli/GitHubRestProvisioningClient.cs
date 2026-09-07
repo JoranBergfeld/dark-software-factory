@@ -280,16 +280,17 @@ internal sealed class GitHubRestProvisioningClient : IGitHubProvisioningClient
     }
 
     /// <summary>
-    /// Seeds (idempotently) the Creation-phase retry workflow at <c>high</c> creation maturity.
-    /// The workflow reads a repository secret (<see
-    /// cref="EnsureCreationRetryWorkflowRequest.CredentialSecretName"/>) carrying the DSF
-    /// user-to-server GitHub credential — the retry step re-invokes the Coding Agent, and
-    /// GitHub does not accept a server-to-server installation token for that call.
+    /// Seeds (idempotently) the experimental Creation-phase retry-detection workflow at
+    /// <c>high</c> creation maturity. The workflow records failed-review/check signals and
+    /// carries the repository secret name reserved for a future confirmed GitHub Cloud Agent
+    /// retry seam.
     /// </summary>
     public async Task EnsureCreationRetryWorkflowAsync(
         EnsureCreationRetryWorkflowRequest request,
         CancellationToken cancellationToken)
     {
+        var workflow = CreationRetryWorkflow(request.CredentialSecretName, request.Status);
+        string? existingSha = null;
         using var existing = await SendAsync(
             HttpMethod.Get,
             $"repos/{request.RepositoryFullName}/contents/{request.WorkflowPath}",
@@ -298,33 +299,43 @@ internal sealed class GitHubRestProvisioningClient : IGitHubProvisioningClient
             allowNotFound: true);
         if (existing.StatusCode != HttpStatusCode.NotFound)
         {
-            return;
+            var existingWorkflow = await ReadContentFileAsync(existing, cancellationToken);
+            existingSha = existingWorkflow.Sha;
+            if (string.Equals(existingWorkflow.Content, workflow, StringComparison.Ordinal))
+            {
+                return;
+            }
         }
 
-        var contentBytes = System.Text.Encoding.UTF8.GetBytes(CreationRetryWorkflow(request.CredentialSecretName));
+        var contentBytes = System.Text.Encoding.UTF8.GetBytes(workflow);
         var base64Content = Convert.ToBase64String(contentBytes);
+        var payload = new Dictionary<string, object?>
+        {
+            ["message"] = "chore: seed creation-phase retry workflow",
+            ["content"] = base64Content,
+            ["branch"] = request.DefaultBranch,
+        };
+        if (existingSha is not null)
+        {
+            payload["sha"] = existingSha;
+        }
+
         using var created = await SendAsync(
             HttpMethod.Put,
             $"repos/{request.RepositoryFullName}/contents/{request.WorkflowPath}",
-            new Dictionary<string, object?>
-            {
-                ["message"] = "chore: seed creation-phase retry workflow",
-                ["content"] = base64Content,
-                ["branch"] = request.DefaultBranch,
-            },
+            payload,
             cancellationToken);
     }
 
     /// <summary>
-    /// Re-invokes the Coding Agent whenever a review requests changes or a required check
-    /// fails, so a high-maturity Creation phase does not stall waiting for a human to notice.
-    /// TODO(confirm): the exact re-invocation call — <c>POST
-    /// /agents/repos/{owner}/{repo}/tasks</c> vs. the GraphQL <c>agentAssignment</c> mutation —
-    /// against a live repo; see docs/research/github-cloud-agent-review-automation.md.
+    /// Publishes the Creation-phase retry workflow at its explicit status. The
+    /// experimental status is intentionally honest: it records the failed-review
+    /// signal without pretending to call an unconfirmed GitHub Cloud Agent
+    /// re-invocation interface.
     /// </summary>
-    private static string CreationRetryWorkflow(string credentialSecretName) =>
+    private static string CreationRetryWorkflow(string credentialSecretName, CreationRetryWorkflowStatus status) =>
         """
-        name: creation-retry
+        name: creation-retry-experimental
         on:
           pull_request_review:
             types: [submitted]
@@ -337,13 +348,16 @@ internal sealed class GitHubRestProvisioningClient : IGitHubProvisioningClient
               (github.event_name == 'check_suite' && github.event.check_suite.conclusion == 'failure')
             runs-on: ubuntu-latest
             steps:
-              - name: Re-invoke the GitHub Coding Agent
+              - name: Record experimental Creation retry signal
                 env:
                   DSF_CLOUD_AGENT_TOKEN: ${{ secrets.__CREDENTIAL_SECRET_NAME__ }}
+                  DSF_CREATION_RETRY_STATUS: __STATUS__
                 run: |
-                  echo "TODO(confirm): call the Coding Agent re-invocation API using DSF_CLOUD_AGENT_TOKEN (a user-to-server credential; a server-to-server token is not accepted here)."
+                  echo "::notice title=DSF creation retry::status=${DSF_CREATION_RETRY_STATUS}; automatic GitHub Cloud Agent re-invocation is not attempted until the experimental seam is confirmed."
 
-        """.Replace("__CREDENTIAL_SECRET_NAME__", credentialSecretName, StringComparison.Ordinal);
+        """
+        .Replace("__CREDENTIAL_SECRET_NAME__", credentialSecretName, StringComparison.Ordinal)
+        .Replace("__STATUS__", status.ToString().ToLowerInvariant(), StringComparison.Ordinal);
 
     private async Task<long?> FindRulesetIdAsync(
         EnsureBranchProtectionRulesetRequest request,
@@ -469,6 +483,28 @@ internal sealed class GitHubRestProvisioningClient : IGitHubProvisioningClient
     {
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         return await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+    }
+
+    private static async Task<(string? Sha, string Content)> ReadContentFileAsync(
+        HttpResponseMessage response,
+        CancellationToken cancellationToken)
+    {
+        using var document = await ReadJsonAsync(response, cancellationToken);
+        var root = document.RootElement;
+        var sha = root.TryGetProperty("sha", out var shaElement)
+            ? shaElement.GetString()
+            : null;
+        if (!root.TryGetProperty("content", out var contentElement))
+        {
+            return (sha, string.Empty);
+        }
+
+        var base64 = (contentElement.GetString() ?? string.Empty)
+            .Replace("\n", string.Empty, StringComparison.Ordinal)
+            .Replace("\r", string.Empty, StringComparison.Ordinal);
+        return string.IsNullOrWhiteSpace(base64)
+            ? (sha, string.Empty)
+            : (sha, System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(base64)));
     }
 
     private static Dictionary<string, object?> RulesetPayload(

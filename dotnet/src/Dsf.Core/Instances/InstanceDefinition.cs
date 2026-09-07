@@ -107,13 +107,12 @@ public sealed record GitHubSettings
     public string PrivateKeySecretName { get; init; } = "github-app-private-key";
 
     /// <summary>
-    /// GitHub Actions repository secret <em>name</em> (not the value) that carries the DSF
-    /// user-to-server GitHub credential (PAT/OAuth/App user token) — the only kind of token
-    /// GitHub accepts for re-invoking the Cloud Agent (a server-to-server installation token
-    /// cannot). Consumed by the Creation-phase retry workflow (high <see
-    /// cref="ProductSettings.CreationMaturity"/>) and, where wired, by SRE-Agent-to-Cloud-Agent
-    /// auto-assignment. Provisioning this ticket only makes the name referenceable; seeding the
-    /// secret's actual value is a separate, later concern.
+    /// GitHub Actions repository secret <em>name</em> (not the value) reserved for a future
+    /// confirmed GitHub Cloud Agent retry seam. The high-<see
+    /// cref="ProductSettings.CreationMaturity"/> Creation-phase workflow records experimental
+    /// failed-review/check signals only; it does not re-invoke the GitHub Cloud Agent today.
+    /// Provisioning this ticket only makes the name referenceable; seeding the secret's actual
+    /// value is a separate, later concern.
     /// </summary>
     public string CloudAgentCredentialSecretName { get; init; } = "DSF_CLOUD_AGENT_TOKEN";
 }

@@ -19,6 +19,7 @@ public sealed class LivingDocumentationTests
         "README.md",
         "AGENTS.md",
         "CLAUDE.md",
+        ".env.example",
         "infra/README.md",
         "dotnet/README.md",
     ];
@@ -175,6 +176,16 @@ public sealed class LivingDocumentationTests
         Assert.Contains("not synchronized by runtime sweeps", content, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("runtime syncs it on every sweep", content, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("sweeps may propose charter amendments", content, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Creation_doc_describes_high_maturity_retry_as_experimental_signal_detection()
+    {
+        var content = ReadRepoFile("docs/site/concept/creation.md");
+
+        Assert.Contains("experimental retry-detection workflow", content, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("does not re-invoke the GitHub Cloud Agent", content, StringComparison.Ordinal);
+        Assert.DoesNotContain("automated retry workflow", content, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
