@@ -832,8 +832,11 @@ public static class CliApplication
         var location = StringOption("--location", "Azure region for the owner Key Vault", "swedencentral");
         var dryRun = BoolOption("--dry-run", "preview the owner bootstrap plan without side effects");
         var yes = BoolOption("--yes", "approve owner Azure and GitHub App creation without prompts");
+        var githubCallback = StringOption(
+            "--github-callback",
+            "GitHub App manifest callback URL or code for headless setup");
         var command = new Command("bootstrap", "one-time: create the DSF GitHub App and store it in the owner Key Vault");
-        AddOptions(command, appName, keyVaultName, appConfigName, resourceGroup, location, dryRun, yes);
+        AddOptions(command, appName, keyVaultName, appConfigName, resourceGroup, location, dryRun, yes, githubCallback);
         command.SetAction(async (parseResult, cancellationToken) =>
         {
             var request = new OwnerBootstrapRequest(
@@ -875,7 +878,7 @@ public static class CliApplication
             var bootstrapper = new OwnerBootstrapper(
                 azure,
                 azure,
-                GitHubAppBootstrapClient.Create(terminal),
+                GitHubAppBootstrapClient.Create(terminal, parseResult.GetValue(githubCallback)),
                 azure);
             await bootstrapper.ExecuteAsync(request, cancellationToken);
             terminal.WriteLine($"[dsf] owner bootstrap complete for {request.AppName}.");

@@ -145,14 +145,16 @@ internal sealed class GitHubAppBootstrapClient(
 {
     private static readonly Uri CallbackUri = new("http://127.0.0.1:8765/callback");
 
-    public static GitHubAppBootstrapClient Create(ICliTerminal terminal)
+    public static GitHubAppBootstrapClient Create(ICliTerminal terminal, string? callbackCode = null)
     {
         var httpClient = new HttpClient { BaseAddress = new Uri("https://api.github.com/") };
         httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("dsf-cli");
         httpClient.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
         return new GitHubAppBootstrapClient(
             httpClient,
-            (request, cancellationToken) => CaptureCodeAsync(terminal, request.AppName, cancellationToken),
+            (request, cancellationToken) => string.IsNullOrWhiteSpace(callbackCode)
+                ? CaptureCodeAsync(terminal, request.AppName, cancellationToken)
+                : Task.FromResult(callbackCode),
             (credentials, cancellationToken) => DiscoverInstallationAsync(httpClient, credentials, cancellationToken));
     }
 

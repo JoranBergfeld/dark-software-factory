@@ -160,6 +160,7 @@ command <root> desc="Dark Software Factory — factory CLI (create product insta
     option --location type=String arity=1..1 default="swedencentral" desc="Azure region for the owner Key Vault"
     option --dry-run type=Boolean arity=0..1 default=False choices=[False, True] desc="preview the owner bootstrap plan without side effects"
     option --yes type=Boolean arity=0..1 default=False choices=[False, True] desc="approve owner Azure and GitHub App creation without prompts"
+    option --github-callback type=String arity=1..1 desc="GitHub App manifest callback URL or code for headless setup"
   command delete desc="permanently destroy a product factory instance"
     argument product type=String arity=1..1 desc="product key to destroy"
     option --yes type=Boolean arity=0..1 default=False choices=[False, True] desc="skip the interactive confirmation prompt"
