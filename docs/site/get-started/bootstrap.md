@@ -45,6 +45,8 @@ the printed port before opening the URL:
 ssh -L <port>:127.0.0.1:<port> <host>
 ```
 
+The callback listener remains available for 15 minutes.
+
 If a callback must be completed separately, rerun the same command with
 `--github-callback '<callback-url-or-code>'`.
 

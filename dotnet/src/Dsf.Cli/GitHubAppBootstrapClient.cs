@@ -157,6 +157,8 @@ internal sealed record GitHubAppBrowserLaunch(string FileName, string? Subcomman
 
 internal static class GitHubAppBrowserOpener
 {
+    public static bool ShouldLaunch(TerminalCapabilities capabilities) => capabilities.IsInteractive;
+
     public static GitHubAppBrowserLaunch? ResolveLinux(Func<string, bool> fileExists) =>
         fileExists("/usr/bin/xdg-open") ? new("xdg-open")
         : fileExists("/usr/bin/gio") ? new("gio", "open")
@@ -301,14 +303,17 @@ internal sealed class GitHubAppBootstrapClient(
         {
             Url = listener.ManifestUri.AbsoluteUri,
         };
-        TryOpenBrowser(listener.ManifestUri.AbsoluteUri);
+        if (GitHubAppBrowserOpener.ShouldLaunch(terminal.Capabilities))
+        {
+            TryOpenBrowser(listener.ManifestUri.AbsoluteUri);
+        }
         terminal.WriteLine("[dsf] Open this GitHub App manifest URL in a browser:");
         terminal.WriteLine(listener.ManifestUri.AbsoluteUri);
         terminal.WriteLine(
             "[dsf] Complete GitHub App creation and selected-repositories installation. "
             + "The browser callback completes automatically; paste it here if needed.");
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(TimeSpan.FromSeconds(120));
+        timeout.CancelAfter(TimeSpan.FromMinutes(15));
         var callback = listener.WaitForCodeAsync(manifest, timeout.Token);
         if (!terminal.Capabilities.IsInteractive)
         {

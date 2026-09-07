@@ -91,6 +91,15 @@ public sealed class GitHubAppBootstrapClientTests
     }
 
     [Fact]
+    public void Headless_browser_opening_is_disabled()
+    {
+        Assert.False(GitHubAppBrowserOpener.ShouldLaunch(new TerminalCapabilities(
+            IsInteractive: false,
+            SupportsAnsi: false,
+            SupportsEmoji: false)));
+    }
+
+    [Fact]
     public async Task Loopback_listener_serves_manifest_form_before_receiving_callback()
     {
         var manifest = GitHubAppManifest.Create(
