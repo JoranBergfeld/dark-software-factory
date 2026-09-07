@@ -167,10 +167,14 @@ public sealed class EndToEndAcceptanceGateTests
                 NullLogger<PeriodicSweepService>.Instance);
 
             // No manual `dsf sweep` invocation here: the loop is the only thing
-            // driving RuntimeVerbs.SweepAsync -- it must tick on its own.
+            // driving RuntimeVerbs.SweepAsync -- it must tick on its own. Wait
+            // for a *terminal* checkpoint rather than just any checkpoint: the
+            // line saves once per station (s1_triage first), so stopping as
+            // soon as the very first checkpoint appears would race ahead of
+            // filing and fail intermittently.
             await loop.StartAsync(CancellationToken.None);
-            var deadline = DateTime.UtcNow.AddSeconds(5);
-            while (runStore.Saved.Count == 0 && DateTime.UtcNow < deadline)
+            var deadline = DateTime.UtcNow.AddSeconds(10);
+            while (!runStore.Saved.Any(saved => saved.Status == RunStatus.Filed) && DateTime.UtcNow < deadline)
             {
                 await Task.Delay(20);
             }
