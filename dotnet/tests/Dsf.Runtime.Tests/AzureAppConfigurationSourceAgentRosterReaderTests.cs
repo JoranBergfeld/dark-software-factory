@@ -34,8 +34,8 @@ public sealed class AzureAppConfigurationSourceAgentRosterReaderTests
         {
             ["\0"] =
             [
-                ("agents.SENTRY.enabled", "true"),
-                ("agents.GRAFANA.enabled", "false"),
+                ("agents.AZUREMONITOR.enabled", "true"),
+                ("agents.FOUNDRYIQ.enabled", "false"),
                 ("agents.NOTAKIND.enabled", "true"),
                 ("critics.value.enabled", "true"),
             ],
@@ -45,7 +45,7 @@ public sealed class AzureAppConfigurationSourceAgentRosterReaderTests
         var kinds = await new AzureAppConfigurationSourceAgentRosterReader(gateway)
             .ReadEnabledKindsAsync(Settings, CancellationToken.None);
 
-        Assert.Equal(["sentry"], kinds);
+        Assert.Equal(["azuremonitor"], kinds);
     }
 
     [Fact]
@@ -53,14 +53,14 @@ public sealed class AzureAppConfigurationSourceAgentRosterReaderTests
     {
         var gateway = new LabelledConfigurationSettingsGateway(new Dictionary<string, (string, string)[]>
         {
-            ["\0"] = [("agents.SENTRY.enabled", "true"), ("agents.GRAFANA.enabled", "false")],
-            ["acme"] = [("agents.SENTRY.enabled", "false"), ("agents.GRAFANA.enabled", "true")],
+            ["\0"] = [("agents.AZUREMONITOR.enabled", "true"), ("agents.FOUNDRYIQ.enabled", "false")],
+            ["acme"] = [("agents.AZUREMONITOR.enabled", "false"), ("agents.FOUNDRYIQ.enabled", "true")],
         });
 
         var kinds = await new AzureAppConfigurationSourceAgentRosterReader(gateway)
             .ReadEnabledKindsAsync(Settings, CancellationToken.None);
 
-        Assert.Equal(["grafana"], kinds);
+        Assert.Equal(["foundryiq"], kinds);
     }
 
     [Fact]
@@ -106,6 +106,9 @@ public sealed class AzureAppConfigurationSourceAgentRosterReaderTests
 
             await Task.CompletedTask;
         }
+
+        public Task SetAsync(string endpoint, string key, string value, string? label, CancellationToken cancellationToken) =>
+            throw new NotSupportedException("this test double is read-only.");
     }
 
     private sealed class FailingConfigurationSettingsGateway(Exception exception) : IConfigurationSettingsGateway
@@ -119,5 +122,8 @@ public sealed class AzureAppConfigurationSourceAgentRosterReaderTests
             yield break;
 #pragma warning restore CS0162
         }
+
+        public Task SetAsync(string endpoint, string key, string value, string? label, CancellationToken cancellationToken) =>
+            throw new NotSupportedException("this test double is read-only.");
     }
 }

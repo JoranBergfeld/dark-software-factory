@@ -15,6 +15,15 @@ internal interface IConfigurationSettingsGateway
 {
     IAsyncEnumerable<(string Key, string Value)> ListAsync(
         string endpoint, string label, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Writes one key/value, labeled or unlabeled (<paramref name="label"/>
+    /// <c>null</c>), so a runtime-side writer (e.g. the sweep control store) can
+    /// use the same managed-identity-capable gateway the readers already do,
+    /// rather than requiring the CLI's own <c>az</c>-backed client.
+    /// </summary>
+    Task SetAsync(
+        string endpoint, string key, string value, string? label, CancellationToken cancellationToken);
 }
 
 /// <summary>
@@ -40,6 +49,18 @@ internal sealed class AzureConfigurationSettingsGateway : IConfigurationSettings
         {
             yield return (setting.Key, setting.Value);
         }
+    }
+
+    public async Task SetAsync(
+        string endpoint,
+        string key,
+        string value,
+        string? label,
+        CancellationToken cancellationToken)
+    {
+        var client = new ConfigurationClient(new Uri(endpoint), new DefaultAzureCredential());
+        await client.SetConfigurationSettingAsync(
+            new ConfigurationSetting(key, value, label), onlyIfUnchanged: false, cancellationToken);
     }
 }
 

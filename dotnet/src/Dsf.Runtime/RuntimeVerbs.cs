@@ -406,6 +406,8 @@ public static class RuntimeVerbs
                 dependencies,
                 sweepInterval.Value,
                 env,
+                dependencies.SweepControlStoreFor(settings),
+                BuildSweepLease(settings, env),
                 provider.GetRequiredService<ILogger<PeriodicSweepService>>()));
         }
 
@@ -464,7 +466,7 @@ public static class RuntimeVerbs
         ArgumentNullException.ThrowIfNull(dependencies);
 
         var card = SourceAgentCard.For(kind, settings.Product);
-        var integration = dependencies.SourceIntegration;
+        var integration = dependencies.SourceIntegrationRegistry.Resolve(card.Kind);
         var app = CreateBuilder(host, port).Build();
 
         app.MapGet("/healthz", () => Results.Ok(new
@@ -541,6 +543,28 @@ public static class RuntimeVerbs
         ArgumentNullException.ThrowIfNull(dependencies);
         var app = BuildSourceAgentHost(settings, kind, dependencies, host, port);
         return dependencies.WebHostRunner.RunAsync(app, cancellationToken);
+    }
+
+    /// <summary>
+    /// Wires the sweep loop's distributed lease to the same Cosmos endpoint,
+    /// database and container the run store already uses (<see
+    /// cref="RuntimeIntegrationSettings.CosmosDatabase"/>/<see
+    /// cref="RuntimeIntegrationSettings.CosmosContainer"/>, falling back to the
+    /// same defaults), so no separate Cosmos container needs provisioning just
+    /// for the lease.
+    /// </summary>
+    private static ISweepLease BuildSweepLease(RuntimeSettings settings, IReadOnlyDictionary<string, string?>? env)
+    {
+        string Read(string key) => (env is not null && env.TryGetValue(key, out var value) ? value : null)?.Trim()
+            ?? string.Empty;
+
+        var database = Read(RuntimeIntegrationSettings.CosmosDatabase);
+        var container = Read(RuntimeIntegrationSettings.CosmosContainer);
+        return new CosmosSweepLease(
+            settings.CosmosEndpoint.Trim(),
+            database.Length > 0 ? database : RuntimeIntegrationSettings.DefaultCosmosDatabase,
+            container.Length > 0 ? container : RuntimeIntegrationSettings.DefaultCosmosContainer,
+            new AzureCosmosDocumentGateway());
     }
 
     private static WebApplicationBuilder CreateBuilder(string host, int port)

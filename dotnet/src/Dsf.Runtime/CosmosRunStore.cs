@@ -236,10 +236,10 @@ internal sealed class CosmosRunStore(
                 {
                     proposal.Id,
                     proposal.Title,
-                    proposal.SourceKind,
+                    proposal.SourceKinds,
                     proposal.IntentKey,
                     proposal.Confidence,
-                    proposal.Accepted,
+                    verdict = proposal.Verdict.ToString().ToLowerInvariant(),
                     proposal.Labels,
                     proposal.EvidenceReferences,
                 }),
@@ -342,12 +342,12 @@ internal sealed class CosmosRunStore(
                 var proposal = new Proposal(
                     item.GetProperty("id").GetString()!,
                     item.GetProperty("title").GetString()!,
-                    item.GetProperty("sourceKind").GetString()!,
+                    ReadStrings(item, "sourceKinds"),
                     ReadStrings(item, "evidenceReferences"))
                 {
                     IntentKey = item.GetProperty("intentKey").GetString() ?? string.Empty,
                     Confidence = item.GetProperty("confidence").GetDouble(),
-                    Accepted = item.GetProperty("accepted").GetBoolean(),
+                    Verdict = ReadVerdict(item),
                 };
                 proposal.Labels.AddRange(ReadStrings(item, "labels"));
                 run.Proposals.Add(proposal);
@@ -388,4 +388,24 @@ internal sealed class CosmosRunStore(
 
     private static IReadOnlyList<string> ReadStrings(JsonElement array) =>
         array.EnumerateArray().Select(element => element.GetString()!).ToArray();
+
+    /// <summary>
+    /// Reads a proposal's council verdict, preferring the current <c>verdict</c>
+    /// field and falling back to the pre-jury <c>accepted</c> boolean a run
+    /// persisted before this station gained typed verdicts -- mapped
+    /// <c>true</c> to <see cref="ProposalVerdict.Proceed"/> and <c>false</c> to
+    /// <see cref="ProposalVerdict.Rejected"/>, the closest equivalent under the
+    /// old accept/reject semantics.
+    /// </summary>
+    private static ProposalVerdict ReadVerdict(JsonElement item)
+    {
+        if (item.TryGetProperty("verdict", out var verdict) && verdict.ValueKind == JsonValueKind.String)
+        {
+            return Enum.Parse<ProposalVerdict>(verdict.GetString()!, ignoreCase: true);
+        }
+
+        return item.TryGetProperty("accepted", out var accepted) && accepted.GetBoolean()
+            ? ProposalVerdict.Proceed
+            : ProposalVerdict.Rejected;
+    }
 }

@@ -104,7 +104,7 @@ public sealed class RuntimeCliApplicationTests
     public async Task Poll_outcomes_dry_run_reports_every_outcome_it_polled_without_recording()
     {
         var outcomeSource = new RecordingOutcomeSource(
-            new OutcomeSignal("fingerprint-1:sentry", OutcomeLabels.Approved, "https://github.com/acme/acme/issues/9", "checkout 500s spiked"));
+            new OutcomeSignal("fingerprint-1:azuremonitor", OutcomeLabels.Approved, "https://github.com/acme/acme/issues/9", "checkout 500s spiked"));
         var learningStore = new RecordingLearningStore();
         var dependencies = TestDependencies.Build(
             learningComposer: new ScriptedLearningComposer(outcomeSource, learningStore));
@@ -113,7 +113,7 @@ public sealed class RuntimeCliApplicationTests
 
         Assert.Equal(0, exitCode);
         Assert.Equal(string.Empty, stderr);
-        Assert.Contains("fingerprint-1:sentry", stdout);
+        Assert.Contains("fingerprint-1:azuremonitor", stdout);
         Assert.Contains("previewed 1 outcome(s)", stdout);
         Assert.Empty(learningStore.Recorded);
     }
@@ -122,7 +122,7 @@ public sealed class RuntimeCliApplicationTests
     public async Task Poll_outcomes_live_without_the_manual_gate_is_refused_and_records_nothing()
     {
         var outcomeSource = new RecordingOutcomeSource(
-            new OutcomeSignal("fingerprint-1:sentry", OutcomeLabels.Approved, "https://github.com/acme/acme/issues/9", "checkout 500s spiked"));
+            new OutcomeSignal("fingerprint-1:azuremonitor", OutcomeLabels.Approved, "https://github.com/acme/acme/issues/9", "checkout 500s spiked"));
         var learningStore = new RecordingLearningStore();
         var dependencies = TestDependencies.Build(
             learningComposer: new ScriptedLearningComposer(outcomeSource, learningStore));
@@ -139,7 +139,7 @@ public sealed class RuntimeCliApplicationTests
     public async Task Poll_outcomes_live_with_the_manual_gate_records_and_reports_success()
     {
         var outcomeSource = new RecordingOutcomeSource(
-            new OutcomeSignal("fingerprint-1:sentry", OutcomeLabels.Approved, "https://github.com/acme/acme/issues/9", "checkout 500s spiked"));
+            new OutcomeSignal("fingerprint-1:azuremonitor", OutcomeLabels.Approved, "https://github.com/acme/acme/issues/9", "checkout 500s spiked"));
         var learningStore = new RecordingLearningStore();
         var dependencies = TestDependencies.Build(
             learningComposer: new ScriptedLearningComposer(outcomeSource, learningStore));
@@ -198,13 +198,13 @@ public sealed class RuntimeCliApplicationTests
     [Fact]
     public async Task Fully_configured_sweep_reports_the_roster_it_actually_read()
     {
-        var roster = new RosterReader(["grafana", "sentry"]);
+        var roster = new RosterReader(["foundryiq", "azuremonitor"]);
         var dependencies = TestDependencies.Build(
             sourceAgentRosterReader: roster,
             evidenceGatherers:
             [
-                new ScriptedEvidenceGatherer("grafana"),
-                new ScriptedEvidenceGatherer("sentry"),
+                new ScriptedEvidenceGatherer("foundryiq"),
+                new ScriptedEvidenceGatherer("azuremonitor"),
             ]);
 
         var (exitCode, stdout, stderr) = await InvokeAsync(FullEnvironment, dependencies, "sweep");
@@ -212,7 +212,7 @@ public sealed class RuntimeCliApplicationTests
         Assert.Equal(0, exitCode);
         Assert.Equal(string.Empty, stderr);
         Assert.Equal("acme", roster.RequestedSettings?.Product);
-        Assert.Contains("sources=[grafana, sentry]", stdout);
+        Assert.Contains("sources=[foundryiq, azuremonitor]", stdout);
         Assert.Contains("checkpoints=[s1_triage", stdout);
     }
 
@@ -251,7 +251,7 @@ public sealed class RuntimeCliApplicationTests
         var path = Path.GetTempFileName();
         try
         {
-            await File.WriteAllTextAsync(path, """{"product_hints": "acme", "source_kinds": ["sentry"]}""");
+            await File.WriteAllTextAsync(path, """{"product_hints": "acme", "source_kinds": ["azuremonitor"]}""");
             var envWithoutGate = FullEnvironment
                 .Where(pair => pair.Key != RuntimeIntegrationSettings.ConfirmLiveFiling)
                 .ToDictionary(pair => pair.Key, pair => pair.Value);
@@ -342,11 +342,11 @@ public sealed class RuntimeCliApplicationTests
         try
         {
             await File.WriteAllTextAsync(
-                path, """{"product_hints": "acme", "source_kinds": ["sentry", "bogus"]}""");
+                path, """{"product_hints": "acme", "source_kinds": ["azuremonitor", "bogus"]}""");
 
             var dependencies = TestDependencies.Build(evidenceGatherers:
             [
-                new ScriptedEvidenceGatherer("sentry"),
+                new ScriptedEvidenceGatherer("azuremonitor"),
             ]);
             var (exitCode, stdout, stderr) = await InvokeAsync(
                 FullEnvironment, dependencies, "run", "--dry-run", "--signal", path);
@@ -356,7 +356,7 @@ public sealed class RuntimeCliApplicationTests
             Assert.Contains("status=previewed", stdout);
             // "bogus" is not a recognized source kind and must be dropped, mirroring
             // the Python signal_to_run's unknown-kind handling.
-            Assert.Contains("sources=[sentry]", stdout);
+            Assert.Contains("sources=[azuremonitor]", stdout);
             Assert.Contains("checkpoints=[s1_triage, s2_investigation, s3_synthesis, s4_grounding, "
                 + "s5_council, s6_routing, s7_filing]", stdout);
         }
@@ -369,7 +369,7 @@ public sealed class RuntimeCliApplicationTests
     [Fact]
     public async Task Serve_agent_validates_runtime_settings_before_validating_kind()
     {
-        var (exitCode, stdout, stderr) = await InvokeAsync(EmptyEnvironment, "serve-agent", "--kind", "sentry");
+        var (exitCode, stdout, stderr) = await InvokeAsync(EmptyEnvironment, "serve-agent", "--kind", "azuremonitor");
 
         Assert.Equal(1, exitCode);
         Assert.Equal(string.Empty, stdout);
@@ -387,7 +387,7 @@ public sealed class RuntimeCliApplicationTests
         Assert.Equal(1, exitCode);
         Assert.Equal(string.Empty, stdout);
         Assert.Contains("unknown source agent kind 'bogus'", stderr);
-        Assert.Contains("sentry", stderr);
+        Assert.Contains("azuremonitor", stderr);
     }
 
     [Fact]
@@ -397,7 +397,7 @@ public sealed class RuntimeCliApplicationTests
         var dependencies = TestDependencies.Build(webHostRunner: runner);
 
         var (exitCode, _, stderr) = await InvokeAsync(
-            FullEnvironment, dependencies, "serve-agent", "--kind", "sentry");
+            FullEnvironment, dependencies, "serve-agent", "--kind", "azuremonitor");
 
         Assert.Equal(0, exitCode);
         Assert.Equal(string.Empty, stderr);

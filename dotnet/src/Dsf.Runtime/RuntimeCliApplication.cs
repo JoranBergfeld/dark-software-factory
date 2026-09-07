@@ -110,6 +110,123 @@ public static class RuntimeCliApplication
             (settings, token) => RuntimeVerbs.SweepAsync(
                 settings, parseResult.GetValue(dryRun), dependencies, token, env),
             cancellationToken));
+        command.Subcommands.Add(BuildSweepPauseCommand(env, stdout, stderr, dependencies));
+        command.Subcommands.Add(BuildSweepResumeCommand(env, stdout, stderr, dependencies));
+        command.Subcommands.Add(BuildSweepIntervalCommand(env, stdout, stderr, dependencies));
+        command.Subcommands.Add(BuildSweepStatusCommand(env, stdout, stderr, dependencies));
+        return command;
+    }
+
+    /// <summary>Sets the paused flag the running sweep loop reads on its very next tick.</summary>
+    private static Command BuildSweepPauseCommand(
+        IReadOnlyDictionary<string, string?> env,
+        TextWriter stdout,
+        TextWriter stderr,
+        RuntimeDependencies dependencies)
+    {
+        var product = StringOption("--product", "resolve runtime env for this product");
+        var command = new Command("pause", "pause the in-process sweep loop (runtime)");
+        AddOptions(command, product);
+        command.SetAction((parseResult, cancellationToken) => SweepControlVerb(
+            env,
+            stdout,
+            stderr,
+            parseResult.GetValue(product),
+            dependencies,
+            async (settings, store, token) =>
+            {
+                await store.SetPausedAsync(true, token);
+                return $"[dsf] sweep paused for product '{settings.Product}'.";
+            },
+            cancellationToken));
+        return command;
+    }
+
+    /// <summary>Clears the paused flag the running sweep loop reads on its very next tick.</summary>
+    private static Command BuildSweepResumeCommand(
+        IReadOnlyDictionary<string, string?> env,
+        TextWriter stdout,
+        TextWriter stderr,
+        RuntimeDependencies dependencies)
+    {
+        var product = StringOption("--product", "resolve runtime env for this product");
+        var command = new Command("resume", "resume the in-process sweep loop (runtime)");
+        AddOptions(command, product);
+        command.SetAction((parseResult, cancellationToken) => SweepControlVerb(
+            env,
+            stdout,
+            stderr,
+            parseResult.GetValue(product),
+            dependencies,
+            async (settings, store, token) =>
+            {
+                await store.SetPausedAsync(false, token);
+                return $"[dsf] sweep resumed for product '{settings.Product}'.";
+            },
+            cancellationToken));
+        return command;
+    }
+
+    /// <summary>Changes the effective tick cadence the running sweep loop reads.</summary>
+    private static Command BuildSweepIntervalCommand(
+        IReadOnlyDictionary<string, string?> env,
+        TextWriter stdout,
+        TextWriter stderr,
+        RuntimeDependencies dependencies)
+    {
+        var seconds = new Argument<int>("seconds") { Description = "seconds between sweeps" };
+        var product = StringOption("--product", "resolve runtime env for this product");
+        var command = new Command("interval", "change the in-process sweep loop's cadence (runtime)");
+        command.Arguments.Add(seconds);
+        AddOptions(command, product);
+        command.SetAction((parseResult, cancellationToken) => SweepControlVerb(
+            env,
+            stdout,
+            stderr,
+            parseResult.GetValue(product),
+            dependencies,
+            async (settings, store, token) =>
+            {
+                var value = parseResult.GetValue(seconds);
+                if (value < 1)
+                {
+                    throw new ArgumentOutOfRangeException(
+                        nameof(value), value, "sweep interval must be at least 1 second.");
+                }
+
+                await store.SetIntervalSecondsAsync(value, token);
+                return $"[dsf] sweep interval set to {value}s for product '{settings.Product}'.";
+            },
+            cancellationToken));
+        return command;
+    }
+
+    /// <summary>Reports the current paused/interval state the sweep loop reads.</summary>
+    private static Command BuildSweepStatusCommand(
+        IReadOnlyDictionary<string, string?> env,
+        TextWriter stdout,
+        TextWriter stderr,
+        RuntimeDependencies dependencies)
+    {
+        var product = StringOption("--product", "resolve runtime env for this product");
+        var command = new Command("status", "report the in-process sweep loop's paused/interval state (runtime)");
+        AddOptions(command, product);
+        command.SetAction((parseResult, cancellationToken) => SweepControlVerb(
+            env,
+            stdout,
+            stderr,
+            parseResult.GetValue(product),
+            dependencies,
+            async (settings, store, token) =>
+            {
+                var state = await store.ReadAsync(token);
+                var interval = state.IntervalSeconds > 0
+                    ? $"{state.IntervalSeconds}s"
+                    : $"{PeriodicSweepService.DefaultIntervalSeconds}s (default)";
+                return $"[dsf] sweep for product '{settings.Product}': "
+                    + $"{(state.Paused ? "paused" : "running")}, interval={interval}.";
+            },
+            cancellationToken));
         return command;
     }
 
@@ -151,7 +268,7 @@ public static class RuntimeCliApplication
         TextWriter stderr,
         RuntimeDependencies dependencies)
     {
-        var kind = StringOption("--kind", "source agent kind", "sentry");
+        var kind = StringOption("--kind", "source agent kind", "azuremonitor");
         var host = StringOption("--host", "bind host", RuntimeVerbs.DefaultHost);
         var port = IntOption("--port", "bind port", RuntimeVerbs.DefaultPort);
         var product = StringOption("--product", "resolve runtime env for this product");
@@ -167,7 +284,7 @@ public static class RuntimeCliApplication
             dependencies,
             (settings, token) => RuntimeVerbs.ServeAgentAsync(
                 settings,
-                parseResult.GetValue(kind) ?? "sentry",
+                parseResult.GetValue(kind) ?? "azuremonitor",
                 dependencies,
                 parseResult.GetValue(host) ?? RuntimeVerbs.DefaultHost,
                 parseResult.GetValue(port) ?? RuntimeVerbs.DefaultPort,
@@ -319,6 +436,47 @@ public static class RuntimeCliApplication
             return Failure;
         }
 
+        return Success;
+    }
+
+    /// <summary>
+    /// Composes settings and, once they validate, runs an operator sweep control
+    /// operation (pause/resume/interval/status) against the product's
+    /// <see cref="ISweepControlStore"/>, printing the confirmation or report the
+    /// operation returns.
+    /// </summary>
+    private static async Task<int> SweepControlVerb(
+        IReadOnlyDictionary<string, string?> env,
+        TextWriter stdout,
+        TextWriter stderr,
+        string? productOption,
+        RuntimeDependencies dependencies,
+        Func<RuntimeSettings, ISweepControlStore, CancellationToken, Task<string>> operation,
+        CancellationToken cancellationToken)
+    {
+        var settings = await ComposeSettings(env, stderr, productOption, dependencies, cancellationToken);
+        if (settings is null)
+        {
+            return Failure;
+        }
+
+        string message;
+        try
+        {
+            message = await operation(settings, dependencies.SweepControlStoreFor(settings), cancellationToken);
+        }
+        catch (RuntimeConfigurationException exception)
+        {
+            stderr.WriteLine($"[dsf] error: {exception.Message}");
+            return Failure;
+        }
+        catch (ArgumentOutOfRangeException exception)
+        {
+            stderr.WriteLine($"[dsf] error: {exception.Message}");
+            return Failure;
+        }
+
+        stdout.WriteLine(message);
         return Success;
     }
 

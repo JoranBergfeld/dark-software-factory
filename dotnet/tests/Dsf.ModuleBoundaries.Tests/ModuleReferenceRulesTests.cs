@@ -23,7 +23,7 @@ public sealed class ModuleReferenceRulesTests
         ["Dsf.Cli"] = ["Dsf.Core"],
         ["Dsf.Runtime"] = ["Dsf.Core", "Dsf.FeatureCouncil"],
         ["Dsf.ControlCenter"] = ["Dsf.Core"],
-        ["Dsf.AgentHost"] = ["Dsf.Core", "Dsf.FeatureCouncil"],
+        ["Dsf.AgentHost"] = ["Dsf.Core", "Dsf.FeatureCouncil", "Dsf.Runtime"],
         ["Dsf.Testing"] = ["Dsf.Core"],
     };
 

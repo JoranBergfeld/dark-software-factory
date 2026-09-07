@@ -21,7 +21,7 @@ public sealed class S7Filing : IStation
 
     public async Task RunAsync(ConveyorRun run, ConveyorServices services, CancellationToken cancellationToken)
     {
-        var accepted = run.Proposals.Where(proposal => proposal.Accepted).ToList();
+        var accepted = run.Proposals.Where(proposal => proposal.Verdict == ProposalVerdict.Proceed).ToList();
         if (run.DryRun)
         {
             foreach (var proposal in accepted)

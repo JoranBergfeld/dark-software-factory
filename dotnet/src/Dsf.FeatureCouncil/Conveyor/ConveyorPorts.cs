@@ -105,7 +105,11 @@ public sealed record ConveyorServices(
     IModelClient ModelClient,
     ITracer Tracer,
     IConfidenceThresholdReader ConfidenceThresholdReader,
-    ILearningStore? LearningStore = null)
+    ILearningStore? LearningStore = null,
+    IEvidenceClusterer? EvidenceClusterer = null,
+    IReadOnlyList<IDeliberationLens>? DeliberationLenses = null,
+    IReadOnlyList<IValidationJuror>? ValidationJurors = null,
+    string ProductMaturity = "high")
 {
     public IRunStore RunStore { get; } = RunStore ?? throw new ArgumentNullException(nameof(RunStore));
 
@@ -115,6 +119,37 @@ public sealed record ConveyorServices(
 
     public IConfidenceThresholdReader ConfidenceThresholdReader { get; } =
         ConfidenceThresholdReader ?? throw new ArgumentNullException(nameof(ConfidenceThresholdReader));
+
+    /// <summary>
+    /// The clustering seam S3 synthesis groups evidence through. Defaults to the
+    /// real, deterministic <see cref="LexicalSimilarityEvidenceClusterer"/> when
+    /// a factory does not wire one explicitly -- this is a pure in-memory
+    /// algorithm, not an external dependency, so unlike the other required ports
+    /// there is no "unconfigured" state to report; every composition gets a real
+    /// clusterer for free.
+    /// </summary>
+    public IEvidenceClusterer EvidenceClusterer { get; } = EvidenceClusterer ?? new LexicalSimilarityEvidenceClusterer();
+
+    /// <summary>
+    /// The lenses S5 council deliberates every proposal through. Defaults to the
+    /// five real, model-reasoning <see cref="ModelDeliberationLens"/> instances
+    /// (value, cost, feasibility, security, strategic fit) when a factory does
+    /// not wire others in explicitly -- like <see cref="EvidenceClusterer"/>,
+    /// every composition gets a real deliberation panel for free.
+    /// </summary>
+    public IReadOnlyList<IDeliberationLens> DeliberationLenses { get; } =
+        DeliberationLenses ?? ModelDeliberationLens.Default();
+
+    /// <summary>
+    /// The jurors S5 council's validation jury consults over a proposal the
+    /// lens synthesizer recommends proceeding with. Defaults to the three real,
+    /// model-reasoning <see cref="ModelValidationJuror"/> instances (all
+    /// currently wired to this same <paramref name="ModelClient"/> -- see <see
+    /// cref="ModelValidationJuror.Default"/>) when a factory does not wire
+    /// others in explicitly.
+    /// </summary>
+    public IReadOnlyList<IValidationJuror> ValidationJurors { get; } =
+        ValidationJurors ?? ModelValidationJuror.Default(ModelClient);
 
     public IEvidenceGatherer? GathererFor(string sourceKind) =>
         EvidenceGatherers.FirstOrDefault(

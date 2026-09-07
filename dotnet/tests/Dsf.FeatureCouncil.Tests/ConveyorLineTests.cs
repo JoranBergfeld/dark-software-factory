@@ -207,14 +207,16 @@ public sealed class ConveyorLineTests
     [Fact]
     public async Task A_dry_run_previews_nothing_for_a_proposal_the_council_rejected()
     {
-        var services = ConveyorDoubles.Services(gatherers:
-        [
-            new CountingEvidenceGatherer("sentry", SentryEvidence),
-            new CountingEvidenceGatherer(
-                "grafana",
-                new EvidenceItem("grafana", "GRAF-1", "p95 latency doubled"),
-                new EvidenceItem("grafana", "GRAF-2", "error budget burn")),
-        ]);
+        var services = ConveyorDoubles.Services(
+            gatherers:
+            [
+                new CountingEvidenceGatherer("sentry", SentryEvidence),
+                new CountingEvidenceGatherer(
+                    "grafana",
+                    new EvidenceItem("grafana", "GRAF-1", "p95 latency doubled"),
+                    new EvidenceItem("grafana", "GRAF-2", "error budget burn")),
+            ],
+            deliberationLenses: [new KindSensitiveLens("value", rejectIfSourceKind: "grafana")]);
         var run = new ConveyorRun { ProductHints = ["acme"], SourceKinds = ["sentry", "grafana"], DryRun = true };
 
         var finished = await ConveyorLine.RunAsync(run, services, CancellationToken.None);

@@ -28,11 +28,72 @@ public static class RuntimeIntegrationSettings
     public static string SourceIntegrationToken(string kind) =>
         $"DSF_SOURCE_{Normalize(kind)}_TOKEN";
 
+    /// <summary>
+    /// The Log Analytics workspace ID the typed Azure Monitor source integration
+    /// queries (managed-identity authenticated; no ****** setting, unlike the
+    /// generic HTTP fallback).
+    /// </summary>
+    public const string AzureMonitorWorkspaceId = "DSF_AZUREMONITOR_WORKSPACE_ID";
+
+    /// <summary>
+    /// The KQL query the typed Azure Monitor source integration runs against
+    /// <see cref="AzureMonitorWorkspaceId"/> to read evidence rows.
+    /// </summary>
+    public const string AzureMonitorQuery = "DSF_AZUREMONITOR_QUERY";
+
+    /// <summary>
+    /// The Azure AI Foundry project endpoint the typed FoundryIQ source
+    /// integration queries (e.g. <c>https://&lt;resource&gt;.services.ai.azure.com/api/projects/&lt;project&gt;</c>),
+    /// managed-identity authenticated.
+    /// </summary>
+    public const string FoundryIqProjectEndpoint = "DSF_FOUNDRYIQ_PROJECT_ENDPOINT";
+
+    /// <summary>The FoundryIQ knowledge base the typed integration queries.</summary>
+    public const string FoundryIqKnowledgeBase = "DSF_FOUNDRYIQ_KNOWLEDGE_BASE";
+
+    /// <summary>The natural-language query the typed FoundryIQ integration runs against its knowledge base.</summary>
+    public const string FoundryIqQuery = "DSF_FOUNDRYIQ_QUERY";
+
+    /// <summary>
+    /// The search query the typed WebIQ source integration runs against the
+    /// Microsoft WebIQ web-search API (ADR 0020).
+    /// </summary>
+    public const string WebIqQuery = "DSF_WEBIQ_QUERY";
+
+    /// <summary>
+    /// The WebIQ API key, read directly (local/dev override) before falling
+    /// back to <see cref="WebIqApiKeySecret"/> in Key Vault -- mirrors the
+    /// Python runtime's <c>WEBIQ_API_KEY</c> env override (ADR 0020). Not
+    /// <c>DSF_</c>-prefixed: this is the exact name the existing bicep/runtime
+    /// convention already uses.
+    /// </summary>
+    public const string WebIqApiKey = "WEBIQ_API_KEY";
+
+    /// <summary>
+    /// The Key Vault secret name holding the WebIQ API key, read via <see
+    /// cref="RuntimeSettingsComposer.AzureKeyVaultUri"/> and the runtime's
+    /// managed identity when <see cref="WebIqApiKey"/> is not set directly
+    /// (ADR 0020: seeded by <c>dsf new</c>'s <c>seed_webiq_key</c> step).
+    /// </summary>
+    public const string WebIqApiKeySecret = "WEBIQ_API_KEY_SECRET";
+
     /// <summary>The repository accepted proposals are filed into (<c>owner/name</c>).</summary>
     public const string GitHubRepository = "GITHUB_REPOSITORY";
 
     /// <summary>Overrides the GitHub REST API base URL (GitHub Enterprise).</summary>
     public const string GitHubApiUrl = "DSF_GITHUB_API_URL";
+
+    /// <summary>
+    /// Creation-phase autonomy dial for this product's factory (<c>low</c>,
+    /// <c>medium</c>, or <c>high</c>), the same value <c>dsf new</c> captures as
+    /// <c>InstanceDefinition.Product.CreationMaturity</c>. S5 council's jury
+    /// verdict rules read this: at <c>low</c> maturity, every proposal the lens
+    /// synthesizer would otherwise proceed with is escalated to a human instead,
+    /// regardless of what the jury panel concludes. Unset resolves to <c>low</c>
+    /// -- the safe default, since a factory a human has not yet dialed up
+    /// autonomy for should never file without one in the loop.
+    /// </summary>
+    public const string CreationMaturity = "DSF_CREATION_MATURITY";
 
     /// <summary>
     /// Set to <c>true</c> at medium/high Operation maturity: the issue filer assigns the

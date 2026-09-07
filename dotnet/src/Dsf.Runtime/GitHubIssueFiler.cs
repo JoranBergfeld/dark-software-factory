@@ -282,7 +282,7 @@ internal sealed class GitHubIssueFiler : IIssueFiler
             "\n",
             IntentMarker(proposal.IntentKey),
             "",
-            $"Filed by the Dark Software Factory Feature Council from '{proposal.SourceKind}' evidence.",
+            $"Filed by the Dark Software Factory Feature Council from '{string.Join(", ", proposal.SourceKinds)}' evidence.",
             "",
             $"- council confidence: {proposal.Confidence:F2}",
             $"- evidence: {string.Join(", ", proposal.EvidenceReferences)}");

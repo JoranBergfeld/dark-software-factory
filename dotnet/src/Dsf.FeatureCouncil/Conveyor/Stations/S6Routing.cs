@@ -16,14 +16,18 @@ public sealed class S6Routing : IStation
 
     public Task RunAsync(ConveyorRun run, ConveyorServices services, CancellationToken cancellationToken)
     {
-        foreach (var proposal in run.Proposals.Where(p => p.Accepted))
+        foreach (var proposal in run.Proposals.Where(p => p.Verdict == ProposalVerdict.Proceed))
         {
             proposal.Labels.Add(ReadyForAgentLabel);
-            proposal.Labels.Add($"source:{proposal.SourceKind}");
+            foreach (var kind in proposal.SourceKinds)
+            {
+                proposal.Labels.Add($"source:{kind}");
+            }
+
             run.Record(StationName, $"routed proposal '{proposal.Id}' -> [{string.Join(", ", proposal.Labels)}].");
         }
 
-        run.Record(StationName, $"routing complete: {run.Proposals.Count(p => p.Accepted)} routed proposal(s).");
+        run.Record(StationName, $"routing complete: {run.Proposals.Count(p => p.Verdict == ProposalVerdict.Proceed)} routed proposal(s).");
         return Task.CompletedTask;
     }
 }

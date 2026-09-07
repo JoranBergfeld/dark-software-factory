@@ -22,9 +22,11 @@ internal static class TestDependencies
         IIssueFiler? issueFiler = null,
         IRunStore? runStore = null,
         ISourceIntegration? sourceIntegration = null,
+        IReadOnlyDictionary<string, ISourceIntegration>? sourceIntegrationsByKind = null,
         IModelClient? modelClient = null,
         ITracer? tracer = null,
-        ILearningComposer? learningComposer = null) =>
+        ILearningComposer? learningComposer = null,
+        Func<RuntimeSettings, ISweepControlStore>? sweepControlStoreFactory = null) =>
         new(
             ownerRuntimeIndexReader ?? new RecordingOwnerRuntimeIndexReader(),
             sourceAgentRosterReader ?? new RosterReader([]),
@@ -35,8 +37,11 @@ internal static class TestDependencies
                 runStore ?? new RecordingRunStore(),
                 modelClient ?? new RecordingModelClient(),
                 tracer ?? new RecordingTracer()),
-            sourceIntegration ?? new ScriptedSourceIntegration(),
-            learningComposer ?? new ScriptedLearningComposer(new RecordingOutcomeSource(), new RecordingLearningStore()));
+            new SourceIntegrationRegistry(
+                sourceIntegrationsByKind ?? new Dictionary<string, ISourceIntegration>(StringComparer.Ordinal),
+                sourceIntegration ?? new ScriptedSourceIntegration()),
+            learningComposer ?? new ScriptedLearningComposer(new RecordingOutcomeSource(), new RecordingLearningStore()),
+            sweepControlStoreFactory);
 }
 
 /// <summary>Composes learning services from collaborators the test supplied directly.</summary>
@@ -120,7 +125,7 @@ internal sealed class ScriptedConveyorComposer(
 }
 
 /// <summary>A deterministic model client that answers a fixed, recorded completion for every prompt.</summary>
-internal sealed class RecordingModelClient(string response = "deterministic test completion") : IModelClient
+internal sealed class RecordingModelClient(string response = "GO: deterministic test completion") : IModelClient
 {
     public List<string> Prompts { get; } = [];
 
@@ -212,6 +217,165 @@ internal sealed class ScriptedSourceIntegration(params EvidenceItem[] evidence) 
     public Task<IReadOnlyList<EvidenceItem>> GatherAsync(
         string kind, string product, CancellationToken cancellationToken) =>
         Task.FromResult<IReadOnlyList<EvidenceItem>>(evidence);
+}
+
+/// <summary>
+/// An Azure Monitor logs gateway that answers a fixed, scripted set of rows for
+/// any workspace/query, so <see cref="AzureMonitorIntegration"/> can be tested at
+/// the <c>GatherAsync</c> seam without a live Log Analytics workspace.
+/// </summary>
+internal sealed class ScriptedAzureMonitorLogsGateway(
+    params IReadOnlyDictionary<string, string>[] rows) : IAzureMonitorLogsGateway
+{
+    public string? RequestedWorkspaceId { get; private set; }
+    public string? RequestedQuery { get; private set; }
+
+    public Task<IReadOnlyList<IReadOnlyDictionary<string, string>>> QueryAsync(
+        string workspaceId, string query, CancellationToken cancellationToken)
+    {
+        RequestedWorkspaceId = workspaceId;
+        RequestedQuery = query;
+        return Task.FromResult<IReadOnlyList<IReadOnlyDictionary<string, string>>>(rows);
+    }
+}
+
+/// <summary>An Azure Monitor logs gateway whose workspace cannot be reached.</summary>
+internal sealed class UnreachableAzureMonitorLogsGateway(string reason) : IAzureMonitorLogsGateway
+{
+    public Task<IReadOnlyList<IReadOnlyDictionary<string, string>>> QueryAsync(
+        string workspaceId, string query, CancellationToken cancellationToken) =>
+        throw new InvalidOperationException(reason);
+}
+
+/// <summary>
+/// A FoundryIQ knowledge base gateway that answers a fixed, scripted set of
+/// results for any project/knowledge base/query, so <see cref="FoundryIqIntegration"/>
+/// can be tested at the <c>GatherAsync</c> seam without a live Foundry project.
+/// </summary>
+internal sealed class ScriptedFoundryIqKnowledgeGateway(params FoundryIqResult[] results) : IFoundryIqKnowledgeGateway
+{
+    public string? RequestedProjectEndpoint { get; private set; }
+    public string? RequestedKnowledgeBase { get; private set; }
+    public string? RequestedQuery { get; private set; }
+
+    public Task<IReadOnlyList<FoundryIqResult>> QueryAsync(
+        string projectEndpoint, string knowledgeBase, string query, CancellationToken cancellationToken)
+    {
+        RequestedProjectEndpoint = projectEndpoint;
+        RequestedKnowledgeBase = knowledgeBase;
+        RequestedQuery = query;
+        return Task.FromResult<IReadOnlyList<FoundryIqResult>>(results);
+    }
+}
+
+/// <summary>A FoundryIQ knowledge base gateway whose project cannot be reached.</summary>
+internal sealed class UnreachableFoundryIqKnowledgeGateway(string reason) : IFoundryIqKnowledgeGateway
+{
+    public Task<IReadOnlyList<FoundryIqResult>> QueryAsync(
+        string projectEndpoint, string knowledgeBase, string query, CancellationToken cancellationToken) =>
+        throw new InvalidOperationException(reason);
+}
+
+/// <summary>
+/// A WebIQ search gateway that answers a fixed, scripted set of results for any
+/// API key/query, so <see cref="WebIqIntegration"/> can be tested at the
+/// <c>GatherAsync</c> seam without a live WebIQ call.
+/// </summary>
+internal sealed class ScriptedWebIqSearchGateway(params WebIqResult[] results) : IWebIqSearchGateway
+{
+    public string? RequestedApiKey { get; private set; }
+    public string? RequestedQuery { get; private set; }
+
+    public Task<IReadOnlyList<WebIqResult>> SearchAsync(
+        string apiKey, string query, CancellationToken cancellationToken)
+    {
+        RequestedApiKey = apiKey;
+        RequestedQuery = query;
+        return Task.FromResult<IReadOnlyList<WebIqResult>>(results);
+    }
+}
+
+/// <summary>A WebIQ search gateway that cannot be reached.</summary>
+internal sealed class UnreachableWebIqSearchGateway(string reason) : IWebIqSearchGateway
+{
+    public Task<IReadOnlyList<WebIqResult>> SearchAsync(
+        string apiKey, string query, CancellationToken cancellationToken) =>
+        throw new InvalidOperationException(reason);
+}
+
+/// <summary>
+/// A Key Vault secret reader that answers a fixed, scripted secret value for
+/// any vault/secret name, so callers reading a secret (e.g. <see
+/// cref="WebIqIntegration"/>'s API key) can be tested without a live Key Vault.
+/// </summary>
+internal sealed class ScriptedPrivateKeySecretReader(string secretValue) : Dsf.Runtime.GitHubApp.IPrivateKeySecretReader
+{
+    public Uri? RequestedVaultUri { get; private set; }
+    public string? RequestedSecretName { get; private set; }
+
+    public Task<string> GetSecretAsync(Uri vaultUri, string secretName, CancellationToken cancellationToken)
+    {
+        RequestedVaultUri = vaultUri;
+        RequestedSecretName = secretName;
+        return Task.FromResult(secretValue);
+    }
+}
+
+/// <summary>A Key Vault secret reader whose vault cannot be reached.</summary>
+internal sealed class UnreachablePrivateKeySecretReader(string reason) : Dsf.Runtime.GitHubApp.IPrivateKeySecretReader
+{
+    public Task<string> GetSecretAsync(Uri vaultUri, string secretName, CancellationToken cancellationToken) =>
+        throw new InvalidOperationException(reason);
+}
+
+/// <summary>
+/// A sweep control store that keeps its state in memory instead of a real App
+/// Configuration store, so the CLI's pause/resume/interval/status subcommands and
+/// the sweep loop's per-tick checks can be tested deterministically.
+/// </summary>
+internal sealed class ScriptedSweepControlStore(SweepControlState? initial = null) : ISweepControlStore
+{
+    public SweepControlState State { get; private set; } = initial ?? SweepControlState.Unset;
+
+    public Task<SweepControlState> ReadAsync(CancellationToken cancellationToken) => Task.FromResult(State);
+
+    public Task SetPausedAsync(bool paused, CancellationToken cancellationToken)
+    {
+        State = State with { Paused = paused };
+        return Task.CompletedTask;
+    }
+
+    public Task SetIntervalSecondsAsync(int seconds, CancellationToken cancellationToken)
+    {
+        State = State with { IntervalSeconds = seconds };
+        return Task.CompletedTask;
+    }
+}
+
+/// <summary>A sweep control store whose backing store cannot be reached.</summary>
+internal sealed class UnreachableSweepControlStore(string reason) : ISweepControlStore
+{
+    private RuntimeConfigurationException Failure() =>
+        new($"failed to reach the sweep control store: {reason}", [RuntimeSettingsComposer.AzureAppConfigEndpoint]);
+
+    public Task<SweepControlState> ReadAsync(CancellationToken cancellationToken) => throw Failure();
+
+    public Task SetPausedAsync(bool paused, CancellationToken cancellationToken) => throw Failure();
+
+    public Task SetIntervalSecondsAsync(int seconds, CancellationToken cancellationToken) => throw Failure();
+}
+
+/// <summary>A sweep lease that always answers a fixed, scripted acquisition result.</summary>
+internal sealed class ScriptedSweepLease(bool acquires = true) : ISweepLease
+{
+    public List<(string Product, DateTimeOffset Now, TimeSpan Interval)> Requests { get; } = [];
+
+    public Task<bool> TryAcquireAsync(
+        string product, DateTimeOffset now, TimeSpan interval, CancellationToken cancellationToken)
+    {
+        Requests.Add((product, now, interval));
+        return Task.FromResult(acquires);
+    }
 }
 
 /// <summary>An owner runtime index that is never expected to be consulted.</summary>

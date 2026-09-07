@@ -8,6 +8,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Dsf.Core\Dsf.Core.csproj" />
     <ProjectReference Include="..\Dsf.FeatureCouncil\Dsf.FeatureCouncil.csproj" />
+    <ProjectReference Include="..\Dsf.Runtime\Dsf.Runtime.csproj" />
   </ItemGroup>
 
 </Project>

@@ -47,10 +47,10 @@ public sealed class RuntimeVerbsTests
     [Fact]
     public async Task Run_dry_run_drives_every_station_and_records_checkpoints()
     {
-        var path = await WriteSignalAsync("""{"product_hints": "acme", "source_kinds": ["sentry"]}""");
+        var path = await WriteSignalAsync("""{"product_hints": "acme", "source_kinds": ["azuremonitor"]}""");
         var dependencies = TestDependencies.Build(evidenceGatherers:
         [
-            new ScriptedEvidenceGatherer("sentry", new EvidenceItem("sentry", "SENTRY-1", "checkout 500s spiked")),
+            new ScriptedEvidenceGatherer("azuremonitor", new EvidenceItem("azuremonitor", "AZUREMONITOR-1", "checkout 500s spiked")),
         ]);
         try
         {
@@ -64,8 +64,8 @@ public sealed class RuntimeVerbsTests
             Assert.Equal(RunStatus.Previewed, run.Status);
             Assert.Equal(ConveyorLine.StationNames, run.Checkpoints);
             Assert.True(run.DryRun);
-            Assert.Equal(["sentry"], run.SourceKinds);
-            Assert.Contains(run.Audit, a => a.Station == "s2_investigation" && a.Message.Contains("sentry"));
+            Assert.Equal(["azuremonitor"], run.SourceKinds);
+            Assert.Contains(run.Audit, a => a.Station == "s2_investigation" && a.Message.Contains("azuremonitor"));
             Assert.Single(run.Evidence);
         }
         finally
@@ -95,13 +95,13 @@ public sealed class RuntimeVerbsTests
     [Fact]
     public async Task Run_without_dry_run_fails_at_the_filing_boundary_only_after_the_line_has_run()
     {
-        var path = await WriteSignalAsync("""{"product_hints": "acme", "source_kinds": ["sentry"]}""");
+        var path = await WriteSignalAsync("""{"product_hints": "acme", "source_kinds": ["azuremonitor"]}""");
         var dependencies = TestDependencies.Build(evidenceGatherers:
         [
             new ScriptedEvidenceGatherer(
-                "sentry",
-                new EvidenceItem("sentry", "SENTRY-1", "checkout 500s spiked"),
-                new EvidenceItem("sentry", "SENTRY-2", "same trace, second event")),
+                "azuremonitor",
+                new EvidenceItem("azuremonitor", "AZUREMONITOR-1", "checkout 500s spiked after release"),
+                new EvidenceItem("azuremonitor", "AZUREMONITOR-2", "checkout 500s spiked again, same trace")),
         ]);
         try
         {
@@ -126,11 +126,11 @@ public sealed class RuntimeVerbsTests
     [Fact]
     public async Task Run_without_dry_run_files_accepted_proposals_when_a_filer_is_wired()
     {
-        var path = await WriteSignalAsync("""{"product_hints": "acme", "source_kinds": ["sentry"]}""");
+        var path = await WriteSignalAsync("""{"product_hints": "acme", "source_kinds": ["azuremonitor"]}""");
         var filer = new RecordingIssueFiler();
         var dependencies = TestDependencies.Build(
             evidenceGatherers: [new ScriptedEvidenceGatherer(
-                "sentry", new EvidenceItem("sentry", "SENTRY-1", "checkout 500s spiked"))],
+                "azuremonitor", new EvidenceItem("azuremonitor", "AZUREMONITOR-1", "checkout 500s spiked"))],
             issueFiler: filer);
         try
         {
@@ -152,10 +152,10 @@ public sealed class RuntimeVerbsTests
     [Fact]
     public async Task Run_without_dry_run_and_without_the_manual_live_filing_gate_is_refused_before_the_line_runs()
     {
-        var path = await WriteSignalAsync("""{"product_hints": "acme", "source_kinds": ["sentry"]}""");
+        var path = await WriteSignalAsync("""{"product_hints": "acme", "source_kinds": ["azuremonitor"]}""");
         var dependencies = TestDependencies.Build(evidenceGatherers:
         [
-            new ScriptedEvidenceGatherer("sentry", new EvidenceItem("sentry", "SENTRY-1", "checkout 500s spiked")),
+            new ScriptedEvidenceGatherer("azuremonitor", new EvidenceItem("azuremonitor", "AZUREMONITOR-1", "checkout 500s spiked")),
         ]);
         try
         {
@@ -173,7 +173,7 @@ public sealed class RuntimeVerbsTests
     [Fact]
     public async Task Sweep_without_dry_run_and_without_the_manual_live_filing_gate_is_refused_before_the_line_runs()
     {
-        var dependencies = TestDependencies.Build(sourceAgentRosterReader: new RosterReader(["sentry"]));
+        var dependencies = TestDependencies.Build(sourceAgentRosterReader: new RosterReader(["azuremonitor"]));
 
         var exception = await Assert.ThrowsAsync<RuntimeVerbException>(
             () => RuntimeVerbs.SweepAsync(Settings, dryRun: false, dependencies, CancellationToken.None));
@@ -193,7 +193,7 @@ public sealed class RuntimeVerbsTests
     [Fact]
     public async Task Sweep_scopes_the_run_to_the_roster_it_read_for_the_product()
     {
-        var roster = new RosterReader(["grafana", "sentry"]);
+        var roster = new RosterReader(["foundryiq", "azuremonitor"]);
 
         var run = await RuntimeVerbs.SweepAsync(
             Settings,
@@ -202,13 +202,13 @@ public sealed class RuntimeVerbsTests
                 sourceAgentRosterReader: roster,
                 evidenceGatherers:
                 [
-                    new ScriptedEvidenceGatherer("grafana"),
-                    new ScriptedEvidenceGatherer("sentry"),
+                    new ScriptedEvidenceGatherer("foundryiq"),
+                    new ScriptedEvidenceGatherer("azuremonitor"),
                 ]),
             CancellationToken.None);
 
         Assert.Equal("acme", roster.RequestedSettings?.Product);
-        Assert.Equal(["grafana", "sentry"], run.SourceKinds);
+        Assert.Equal(["foundryiq", "azuremonitor"], run.SourceKinds);
         Assert.Equal(TriggerKind.Scheduled, run.Trigger);
         Assert.Equal(RunStatus.Previewed, run.Status);
         Assert.Equal(ConveyorLine.StationNames, run.Checkpoints);
@@ -231,7 +231,7 @@ public sealed class RuntimeVerbsTests
     {
         var dependencies = TestDependencies.Build(evidenceGatherers:
         [
-            new ScriptedEvidenceGatherer("sentry", new EvidenceItem("sentry", "SENTRY-1", "checkout 500s spiked")),
+            new ScriptedEvidenceGatherer("azuremonitor", new EvidenceItem("azuremonitor", "AZUREMONITOR-1", "checkout 500s spiked")),
         ]);
         var app = RuntimeVerbs.BuildOrchestratorHost(Settings, dependencies, "127.0.0.1", 0);
         await using var host = app;
@@ -247,7 +247,7 @@ public sealed class RuntimeVerbsTests
             var response = await client.PostAsync(
                 "/run",
                 new StringContent(
-                    """{"product_hints": "acme", "source_kinds": ["sentry"]}""", Encoding.UTF8, "application/json"));
+                    """{"product_hints": "acme", "source_kinds": ["azuremonitor"]}""", Encoding.UTF8, "application/json"));
 
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
             var summary = await response.Content.ReadFromJsonAsync<JsonElement>();
@@ -268,7 +268,7 @@ public sealed class RuntimeVerbsTests
     {
         var dependencies = TestDependencies.Build(
             evidenceGatherers: [new ScriptedEvidenceGatherer(
-                "sentry", new EvidenceItem("sentry", "SENTRY-1", "checkout 500s spiked"))],
+                "azuremonitor", new EvidenceItem("azuremonitor", "AZUREMONITOR-1", "checkout 500s spiked"))],
             modelClient: new ThrowingModelClient("model deployment unreachable"));
         var app = RuntimeVerbs.BuildOrchestratorHost(Settings, dependencies, "127.0.0.1", 0);
         await using var host = app;
@@ -280,7 +280,7 @@ public sealed class RuntimeVerbsTests
             var response = await client.PostAsync(
                 "/run",
                 new StringContent(
-                    """{"product_hints": "acme", "source_kinds": ["sentry"]}""", Encoding.UTF8, "application/json"));
+                    """{"product_hints": "acme", "source_kinds": ["azuremonitor"]}""", Encoding.UTF8, "application/json"));
 
             Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
             var summary = await response.Content.ReadFromJsonAsync<JsonElement>();
@@ -318,8 +318,8 @@ public sealed class RuntimeVerbsTests
     public async Task Agent_host_publishes_its_card_and_gathers_from_its_integration()
     {
         var dependencies = TestDependencies.Build(sourceIntegration: new ScriptedSourceIntegration(
-            new EvidenceItem("sentry", "SENTRY-1", "checkout 500s spiked")));
-        var app = RuntimeVerbs.BuildSourceAgentHost(Settings, "SENTRY", dependencies, "127.0.0.1", 0);
+            new EvidenceItem("azuremonitor", "AZUREMONITOR-1", "checkout 500s spiked")));
+        var app = RuntimeVerbs.BuildSourceAgentHost(Settings, "AZUREMONITOR", dependencies, "127.0.0.1", 0);
         await using var host = app;
         await app.StartAsync();
         try
@@ -327,15 +327,15 @@ public sealed class RuntimeVerbsTests
             using var client = new HttpClient { BaseAddress = new Uri(BaseAddress(app)) };
 
             var card = await client.GetFromJsonAsync<JsonElement>("/.well-known/agent-card.json");
-            Assert.Equal("sentry", card.GetProperty("kind").GetString());
-            Assert.Equal("dsf-sentry-agent", card.GetProperty("name").GetString());
+            Assert.Equal("azuremonitor", card.GetProperty("kind").GetString());
+            Assert.Equal("dsf-azuremonitor-agent", card.GetProperty("name").GetString());
             Assert.Equal("acme", card.GetProperty("product").GetString());
 
             var gather = await client.PostAsync("/gather", new StringContent("{}", Encoding.UTF8, "application/json"));
             Assert.Equal(HttpStatusCode.OK, gather.StatusCode);
             var payload = await gather.Content.ReadFromJsonAsync<JsonElement>();
             Assert.Equal(
-                "SENTRY-1",
+                "AZUREMONITOR-1",
                 payload.GetProperty("evidence").EnumerateArray().Single().GetProperty("reference").GetString());
         }
         finally
@@ -351,16 +351,13 @@ public sealed class RuntimeVerbsTests
             () => RuntimeVerbs.BuildSourceAgentHost(Settings, "bogus", TestDependencies.Empty));
 
         Assert.Contains("unknown source agent kind 'bogus'", exception.Message);
-        Assert.Contains("sentry", exception.Message);
+        Assert.Contains("azuremonitor", exception.Message);
     }
 
     [Theory]
-    [InlineData("sentry")]
-    [InlineData("grafana")]
+    [InlineData("azuremonitor")]
     [InlineData("foundryiq")]
     [InlineData("webiq")]
-    [InlineData("incidents")]
-    [InlineData("azuremonitor")]
     public void Agent_host_builds_for_every_known_source_kind(string kind)
     {
         var app = RuntimeVerbs.BuildSourceAgentHost(Settings, kind, TestDependencies.Empty, "127.0.0.1", 0);
@@ -384,20 +381,22 @@ public sealed class RuntimeVerbsTests
     [Fact]
     public async Task Run_calls_the_model_client_during_synthesis_and_council_for_every_proposal()
     {
-        var path = await WriteSignalAsync("""{"product_hints": "acme", "source_kinds": ["sentry"]}""");
+        var path = await WriteSignalAsync("""{"product_hints": "acme", "source_kinds": ["azuremonitor"]}""");
         var model = new RecordingModelClient();
         var dependencies = TestDependencies.Build(
             evidenceGatherers: [new ScriptedEvidenceGatherer(
-                "sentry", new EvidenceItem("sentry", "SENTRY-1", "checkout 500s spiked"))],
+                "azuremonitor", new EvidenceItem("azuremonitor", "AZUREMONITOR-1", "checkout 500s spiked"))],
             modelClient: model);
         try
         {
             var run = await RuntimeVerbs.RunAsync(Settings, path, dryRun: true, dependencies, CancellationToken.None);
 
             Assert.Equal(RunStatus.Previewed, run.Status);
-            // One synthesis completion and one council completion per proposal.
-            Assert.Equal(2, model.Prompts.Count);
-            Assert.Contains(model.Prompts, prompt => prompt.Contains("sentry", StringComparison.OrdinalIgnoreCase));
+            // One synthesis completion, plus one council completion per lens per
+            // deliberation round (5 lenses x 2 rounds = 10), plus one jury
+            // completion per juror (3) for the single proposal.
+            Assert.Equal(14, model.Prompts.Count);
+            Assert.Contains(model.Prompts, prompt => prompt.Contains("azuremonitor", StringComparison.OrdinalIgnoreCase));
         }
         finally
         {
@@ -408,10 +407,10 @@ public sealed class RuntimeVerbsTests
     [Fact]
     public async Task Run_fails_with_an_audited_error_when_the_model_client_call_fails()
     {
-        var path = await WriteSignalAsync("""{"product_hints": "acme", "source_kinds": ["sentry"]}""");
+        var path = await WriteSignalAsync("""{"product_hints": "acme", "source_kinds": ["azuremonitor"]}""");
         var dependencies = TestDependencies.Build(
             evidenceGatherers: [new ScriptedEvidenceGatherer(
-                "sentry", new EvidenceItem("sentry", "SENTRY-1", "checkout 500s spiked"))],
+                "azuremonitor", new EvidenceItem("azuremonitor", "AZUREMONITOR-1", "checkout 500s spiked"))],
             modelClient: new ThrowingModelClient("model deployment unreachable"));
         try
         {
@@ -431,11 +430,11 @@ public sealed class RuntimeVerbsTests
     [Fact]
     public async Task Run_traces_every_station_boundary_plus_the_run_start_and_completion()
     {
-        var path = await WriteSignalAsync("""{"product_hints": "acme", "source_kinds": ["sentry"]}""");
+        var path = await WriteSignalAsync("""{"product_hints": "acme", "source_kinds": ["azuremonitor"]}""");
         var tracer = new RecordingTracer();
         var dependencies = TestDependencies.Build(
             evidenceGatherers: [new ScriptedEvidenceGatherer(
-                "sentry", new EvidenceItem("sentry", "SENTRY-1", "checkout 500s spiked"))],
+                "azuremonitor", new EvidenceItem("azuremonitor", "AZUREMONITOR-1", "checkout 500s spiked"))],
             tracer: tracer);
         try
         {
@@ -463,10 +462,10 @@ public sealed class RuntimeVerbsTests
     [Fact]
     public async Task Run_survives_an_unreachable_tracer_and_still_completes_the_line()
     {
-        var path = await WriteSignalAsync("""{"product_hints": "acme", "source_kinds": ["sentry"]}""");
+        var path = await WriteSignalAsync("""{"product_hints": "acme", "source_kinds": ["azuremonitor"]}""");
         var dependencies = TestDependencies.Build(
             evidenceGatherers: [new ScriptedEvidenceGatherer(
-                "sentry", new EvidenceItem("sentry", "SENTRY-1", "checkout 500s spiked"))],
+                "azuremonitor", new EvidenceItem("azuremonitor", "AZUREMONITOR-1", "checkout 500s spiked"))],
             tracer: new UnreachableTracer("telemetry ingestion refused the event"));
         try
         {
@@ -509,7 +508,7 @@ public sealed class PollOutcomesVerbTests
         GitHubRepository: "acme/acme");
 
     private static readonly OutcomeSignal Signal =
-        new("fingerprint-1:sentry", OutcomeLabels.Approved, "https://github.com/acme/acme/issues/9", "[sentry] checkout 500s spiked");
+        new("fingerprint-1:azuremonitor", OutcomeLabels.Approved, "https://github.com/acme/acme/issues/9", "[azuremonitor] checkout 500s spiked");
 
     private static readonly Dictionary<string, string?> NoConfirmEnv = [];
 
@@ -557,7 +556,7 @@ public sealed class PollOutcomesVerbTests
         Assert.True(result.DryRun);
         Assert.Equal(1, result.Polled);
         var outcome = Assert.Single(result.Outcomes);
-        Assert.Equal("fingerprint-1:sentry", outcome.IntentKey);
+        Assert.Equal("fingerprint-1:azuremonitor", outcome.IntentKey);
         Assert.False(outcome.Recorded);
     }
 
@@ -589,7 +588,7 @@ public sealed class PollOutcomesVerbTests
 
         Assert.False(result.DryRun);
         var recorded = Assert.Single(learningStore.Recorded);
-        Assert.Equal("fingerprint-1:sentry", recorded.IntentKey);
+        Assert.Equal("fingerprint-1:azuremonitor", recorded.IntentKey);
         var outcome = Assert.Single(result.Outcomes);
         Assert.True(outcome.Recorded);
     }
@@ -651,7 +650,7 @@ public sealed class PollOutcomesVerbTests
         var exception = await Assert.ThrowsAsync<RuntimeVerbException>(() => RuntimeVerbs.PollOutcomesAsync(
             Settings, dryRun: false, live: true, ConfirmedEnv, dependencies, CancellationToken.None));
 
-        Assert.Contains("fingerprint-1:sentry", exception.Message);
+        Assert.Contains("fingerprint-1:azuremonitor", exception.Message);
         Assert.Contains("write refused", exception.Message);
     }
 }

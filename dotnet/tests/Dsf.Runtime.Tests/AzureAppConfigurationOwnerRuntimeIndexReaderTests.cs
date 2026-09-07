@@ -88,6 +88,9 @@ public sealed class AzureAppConfigurationOwnerRuntimeIndexReaderTests
 
             await Task.CompletedTask;
         }
+
+        public Task SetAsync(string endpoint, string key, string value, string? label, CancellationToken cancellationToken) =>
+            throw new NotSupportedException("this test double is read-only.");
     }
 
     private sealed class ThrowingConfigurationSettingsGateway(Exception exception) : IConfigurationSettingsGateway
@@ -101,5 +104,8 @@ public sealed class AzureAppConfigurationOwnerRuntimeIndexReaderTests
             yield break;
 #pragma warning restore CS0162
         }
+
+        public Task SetAsync(string endpoint, string key, string value, string? label, CancellationToken cancellationToken) =>
+            throw new NotSupportedException("this test double is read-only.");
     }
 }

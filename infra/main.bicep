@@ -83,6 +83,27 @@ param allowPublicNetworkAccess bool = false
 @allowed(['low', 'medium', 'high'])
 param operationMaturity string = 'low'
 
+@description('Microsoft-native source agent kinds enabled for this product (a served Container App is provisioned per kind, running `serve-agent --kind <kind>`). Every kind not listed here has no Container App at all -- not merely a disabled one.')
+param enabledSourceAgentKinds array = []
+
+@description('Log Analytics workspace ID the typed azuremonitor source agent queries. Required when "azuremonitor" is in enabledSourceAgentKinds.')
+param azureMonitorWorkspaceId string = ''
+
+@description('KQL query the typed azuremonitor source agent runs against azureMonitorWorkspaceId to read evidence rows. Required when "azuremonitor" is in enabledSourceAgentKinds.')
+param azureMonitorQuery string = ''
+
+@description('Azure AI Foundry project endpoint the typed foundryiq source agent queries. Required when "foundryiq" is in enabledSourceAgentKinds.')
+param foundryIqProjectEndpoint string = ''
+
+@description('FoundryIQ knowledge base the typed foundryiq source agent queries. Required when "foundryiq" is in enabledSourceAgentKinds.')
+param foundryIqKnowledgeBase string = ''
+
+@description('Query the typed foundryiq source agent runs against foundryIqKnowledgeBase to read evidence results. Required when "foundryiq" is in enabledSourceAgentKinds.')
+param foundryIqQuery string = ''
+
+@description('Search query the typed webiq source agent runs against Microsoft WebIQ (ADR 0020) to read evidence results. Required when "webiq" is in enabledSourceAgentKinds.')
+param webIqQuery string = ''
+
 // ---------------------------------------------------------------------------
 // Variables
 // ---------------------------------------------------------------------------
@@ -405,6 +426,29 @@ resource containerEnv 'Microsoft.App/managedEnvironments@2025-01-01' = {
   }
 }
 
+// Every verb (serve-orchestrator, serve-agent, ...) composes the same
+// RuntimeSettings from the same env vars; both the orchestrator and every
+// served source agent Container App share this base, only differing in the
+// command/args they run and any adapter-specific envs a kind's typed
+// integration needs.
+var runtimeBaseEnv = [
+  { name: 'DSF_PRODUCT', value: product }
+  { name: 'AZURE_CLIENT_ID', value: runtimeIdentity.properties.clientId }
+  { name: 'AZURE_APPCONFIG_ENDPOINT', value: appConfig.properties.endpoint }
+  { name: 'AZURE_KEYVAULT_URI', value: keyVault.properties.vaultUri }
+  { name: 'AZURE_COSMOS_ENDPOINT', value: cosmos.outputs.endpoint }
+  { name: 'AZURE_OPENAI_ENDPOINT', value: foundry.properties.endpoint }
+  { name: 'AZURE_OPENAI_DEPLOYMENT', value: chatModel }
+  { name: 'AZURE_OPENAI_EMBEDDING_DEPLOYMENT', value: embeddingModel }
+  { name: 'WEBIQ_PROVIDER', value: 'webiq' }
+  { name: 'WEBIQ_API_KEY_SECRET', value: 'webiq-api-key' }
+  { name: 'GITHUB_APP_ID', value: githubAppId }
+  { name: 'GITHUB_INSTALLATION_ID', value: githubInstallationId }
+  { name: 'GITHUB_REPOSITORY', value: githubRepository }
+  { name: 'GITHUB_APP_PRIVATE_KEY_SECRET', value: 'github-app-private-key' }
+  { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: appInsights.properties.ConnectionString }
+]
+
 resource orchestratorApp 'Microsoft.App/containerApps@2025-01-01' = {
   // Lead with the bounded namePrefix (<=12 chars) so the name stays under Azure's 32-char Container App limit for long product names (raw product overflowed).
   name: '${namePrefix}-orchestrator'
@@ -431,31 +475,30 @@ resource orchestratorApp 'Microsoft.App/containerApps@2025-01-01' = {
         {
           name: 'orchestrator'
           image: runtimeImage
+          // Wires the sweep loop that was otherwise never invoked: the image's
+          // ENTRYPOINT has no default verb, so without this command/args the
+          // container started and sat idle -- `serve-orchestrator --loop` runs
+          // PeriodicSweepService's in-process timer loop for as long as this
+          // always-on Container App is up.
+          command: [
+            'dotnet'
+            'dsf-runtime.dll'
+          ]
+          args: [
+            'serve-orchestrator'
+            '--loop'
+          ]
           resources: {
             cpu: json('0.5')
             memory: '1Gi'
           }
-          env: [
-            { name: 'DSF_PRODUCT', value: product }
-            { name: 'AZURE_CLIENT_ID', value: runtimeIdentity.properties.clientId }
-            { name: 'AZURE_APPCONFIG_ENDPOINT', value: appConfig.properties.endpoint }
-            { name: 'AZURE_KEYVAULT_URI', value: keyVault.properties.vaultUri }
-            { name: 'AZURE_COSMOS_ENDPOINT', value: cosmos.outputs.endpoint }
-            { name: 'AZURE_OPENAI_ENDPOINT', value: foundry.properties.endpoint }
-            { name: 'AZURE_OPENAI_DEPLOYMENT', value: chatModel }
-            { name: 'AZURE_OPENAI_EMBEDDING_DEPLOYMENT', value: embeddingModel }
-            { name: 'WEBIQ_PROVIDER', value: 'webiq' }
-            { name: 'WEBIQ_API_KEY_SECRET', value: 'webiq-api-key' }
-            { name: 'GITHUB_APP_ID', value: githubAppId }
-            { name: 'GITHUB_INSTALLATION_ID', value: githubInstallationId }
-            { name: 'GITHUB_REPOSITORY', value: githubRepository }
-            { name: 'GITHUB_APP_PRIVATE_KEY_SECRET', value: 'github-app-private-key' }
+          env: union(runtimeBaseEnv, [
             { name: 'DSF_ASSIGN_CLOUD_AGENT', value: string(operationMaturity != 'low') }
-            {
-              name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
-              value: appInsights.properties.ConnectionString
-            }
-          ]
+            // The scheduled sweep always files live (never a dry run), so the
+            // manual live-filing gate is confirmed once here at provisioning
+            // time rather than failing the container at every startup.
+            { name: 'DSF_CONFIRM_LIVE_FILING', value: 'true' }
+          ])
         }
       ]
       scale: {
@@ -465,6 +508,90 @@ resource orchestratorApp 'Microsoft.App/containerApps@2025-01-01' = {
     }
   }
 }
+
+// ---------------------------------------------------------------------------
+// Runtime compute: served source agents (ADR 0014 pull-only; one Container App
+// per Microsoft-native kind enabled for this product -- a kind not listed in
+// enabledSourceAgentKinds gets no Container App at all, not merely a disabled
+// one). Every kind shares the orchestrator's base runtime settings (needed to
+// compose RuntimeSettings like every other verb) plus whatever its own typed
+// integration needs.
+// ---------------------------------------------------------------------------
+
+var sourceAgentKindEnv = {
+  azuremonitor: [
+    { name: 'DSF_AZUREMONITOR_WORKSPACE_ID', value: azureMonitorWorkspaceId }
+    { name: 'DSF_AZUREMONITOR_QUERY', value: azureMonitorQuery }
+  ]
+  foundryiq: [
+    { name: 'DSF_FOUNDRYIQ_PROJECT_ENDPOINT', value: foundryIqProjectEndpoint }
+    { name: 'DSF_FOUNDRYIQ_KNOWLEDGE_BASE', value: foundryIqKnowledgeBase }
+    { name: 'DSF_FOUNDRYIQ_QUERY', value: foundryIqQuery }
+  ]
+  webiq: [
+    { name: 'DSF_WEBIQ_QUERY', value: webIqQuery }
+  ]
+}
+
+resource sourceAgentApps 'Microsoft.App/containerApps@2025-01-01' = [for kind in enabledSourceAgentKinds: {
+  // Container App names are capped at 32 chars; namePrefix (<=12) + '-agent-' (7) + kind must stay within it.
+  name: take('${namePrefix}-agent-${kind}', 32)
+  location: location
+  tags: union(tags, { 'source-agent-kind': kind })
+  dependsOn: [
+    chatDeployment
+    embeddingDeployment
+    foundryOpenAIUserAssignment
+  ]
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${runtimeIdentity.id}': {}
+    }
+  }
+  properties: {
+    managedEnvironmentId: containerEnv.id
+    configuration: {
+      activeRevisionsMode: 'Single'
+      ingress: {
+        external: false
+        targetPort: 8080
+        transport: 'http'
+      }
+    }
+    template: {
+      containers: [
+        {
+          name: 'agent'
+          image: runtimeImage
+          command: [
+            'dotnet'
+            'dsf-runtime.dll'
+          ]
+          args: [
+            'serve-agent'
+            '--kind'
+            kind
+            '--host'
+            '0.0.0.0'
+            '--port'
+            '8080'
+          ]
+          resources: {
+            cpu: json('0.25')
+            memory: '0.5Gi'
+          }
+          env: union(runtimeBaseEnv, sourceAgentKindEnv[?kind] ?? [])
+        }
+      ]
+      scale: {
+        minReplicas: 1
+        maxReplicas: 1
+      }
+    }
+  }
+}]
+
 
 // ---------------------------------------------------------------------------
 // Outputs (consumed by the ACA runtime's azure-mode configuration)

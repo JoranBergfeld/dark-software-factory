@@ -17,4 +17,5 @@ public sealed record RuntimeSettings(
     string GitHubAppId,
     string GitHubInstallationId,
     string GitHubAppPrivateKeySecret,
-    string GitHubRepository);
+    string GitHubRepository,
+    string CreationMaturity = "low");
