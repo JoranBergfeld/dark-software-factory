@@ -104,7 +104,7 @@ public sealed class OwnerBootstrapAzureClientTests
     private static string FindRepoRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "README.md")))
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, ".git")))
         {
             directory = directory.Parent;
         }

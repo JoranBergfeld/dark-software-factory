@@ -202,7 +202,7 @@ internal sealed class AzureCliOwnerBootstrapClient(IAzureCliRunner runner)
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
         while (directory is not null
-               && !File.Exists(Path.Combine(directory.FullName, "README.md")))
+               && !File.Exists(Path.Combine(directory.FullName, "infra", "owner-keyvault.bicep")))
         {
             directory = directory.Parent;
         }
