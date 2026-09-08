@@ -317,7 +317,7 @@ internal sealed class GitHubAppBootstrapClient(
     public Task CompleteAsync(OwnerBootstrapRequest request, CancellationToken cancellationToken) =>
         recoveryStore.DeleteAsync(request.AppName, cancellationToken);
 
-    private static async Task<string> DiscoverInstallationAsync(
+    internal static async Task<string> DiscoverInstallationAsync(
         HttpClient httpClient,
         OwnerGitHubCredentials credentials,
         CancellationToken cancellationToken)
@@ -340,7 +340,7 @@ internal sealed class GitHubAppBootstrapClient(
             var installations = payload.RootElement.EnumerateArray()
                 .Where(installation =>
                     installation.TryGetProperty("repository_selection", out var selection)
-                    && selection.GetString() == "selected")
+                    && selection.GetString() is "selected" or "all")
                 .Select(installation => installation.GetProperty("id").GetInt64().ToString())
                 .ToArray();
             if (installations.Length == 1)

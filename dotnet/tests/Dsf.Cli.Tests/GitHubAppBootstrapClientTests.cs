@@ -38,7 +38,7 @@ public sealed class GitHubAppBootstrapClientTests
     public async Task Get_or_create_recovers_converted_app_when_installation_discovery_failed()
     {
         var recovery = new RecordingGitHubAppRecoveryStore();
-        var converted = new OwnerGitHubCredentials("7", string.Empty, SamplePem);
+        var converted = new OwnerGitHubCredentials("7", string.Empty, CreatePrivateKeyPem());
         await recovery.SaveAsync("dsf-sbx-20260907", converted, CancellationToken.None);
         var client = new GitHubAppBootstrapClient(
             new HttpClient(new StubHttpMessageHandler(new HttpResponseMessage(HttpStatusCode.InternalServerError)))
@@ -54,6 +54,22 @@ public sealed class GitHubAppBootstrapClientTests
         Assert.Equal("7", credentials.AppId);
         Assert.Equal("42", credentials.InstallationId);
         Assert.False(recovery.Deleted);
+    }
+
+    [Fact]
+    public async Task Installation_discovery_accepts_a_single_all_repositories_installation()
+    {
+        var handler = new StubHttpMessageHandler(() => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("""[{"id":42,"repository_selection":"all"}]"""),
+        });
+
+        var installationId = await GitHubAppBootstrapClient.DiscoverInstallationAsync(
+            new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") },
+            new OwnerGitHubCredentials("7", string.Empty, CreatePrivateKeyPem()),
+            CancellationToken.None);
+
+        Assert.Equal("42", installationId);
     }
 
     [Fact]
@@ -144,8 +160,20 @@ public sealed class GitHubAppBootstrapClientTests
         Assert.Equal("manifest-code", await callback);
     }
 
-    private sealed class StubHttpMessageHandler(HttpResponseMessage response) : HttpMessageHandler
+    private sealed class StubHttpMessageHandler : HttpMessageHandler
     {
+        private readonly Func<HttpResponseMessage> responseFactory;
+
+        public StubHttpMessageHandler(HttpResponseMessage response)
+            : this(() => response)
+        {
+        }
+
+        public StubHttpMessageHandler(Func<HttpResponseMessage> responseFactory)
+        {
+            this.responseFactory = responseFactory;
+        }
+
         public HttpRequestMessage? Request { get; private set; }
 
         protected override Task<HttpResponseMessage> SendAsync(
@@ -153,7 +181,7 @@ public sealed class GitHubAppBootstrapClientTests
             CancellationToken cancellationToken)
         {
             Request = request;
-            return Task.FromResult(response);
+            return Task.FromResult(responseFactory());
         }
     }
 
@@ -165,17 +193,11 @@ public sealed class GitHubAppBootstrapClientTests
             "appcsdsfsbx20260907",
             "swedencentral");
 
-    private const string SamplePem = """
-        -----BEGIN RSA PRIVATE KEY-----
-        MIIBOgIBAAJBALs+zZz5p+8QYq+R2I+uZgqD7Njfom7UFYkB+z5eN8nJ5T5P
-        1qZ3Q2s3V3TQDjM71L24f0Rt7zG1u7u8dxMCAwEAAQJAYwE3v+L4i8Ue9dQH
-        1eV7xZx2Zp1ZJ1Uu4bM/7n7RGh9U/FXxVC4wpT8OyXHJ3VhHxdpxtn8iMwxm
-        bY/1AQIhAPrJx0jhDaQRvqE1W4/eXrS+VJC8zRzZ5jzqvx6AVTqZAiEAv8Q9
-        yTGLtd1h3osnWBUnuO4JrV+uXl3c0O8qZn54sUCIQDHVLjWlCnmfBzFaAX3m
-        pO9dUhjOdR0i8v0epNQlzsyAQIgT++05zzYjAzYsS1NQxkrfCE07INcJY2f
-        FYU4AiYXAAECIQCkkWJwksUf/7bqtbYVLDl2d8dMjdgux0hHV50qR0Q3Wg==
-        -----END RSA PRIVATE KEY-----
-        """;
+    private static string CreatePrivateKeyPem()
+    {
+        using var rsa = System.Security.Cryptography.RSA.Create(2048);
+        return rsa.ExportRSAPrivateKeyPem();
+    }
 
     internal sealed class RecordingGitHubAppRecoveryStore : IGitHubAppRecoveryStore
     {
