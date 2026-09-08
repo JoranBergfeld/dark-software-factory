@@ -23,6 +23,41 @@ internal sealed class AzureCliOwnerBootstrapClient(IAzureCliRunner runner)
         return new OwnerGitHubCredentials(appId, installationId, privateKey);
     }
 
+    public async Task<OwnerGitHubIdentity?> ReadIdentityFromStatusAsync(
+        string ownerAppConfigEndpoint,
+        CancellationToken cancellationToken)
+    {
+        var result = await RunAsync(
+            [
+                "appconfig", "kv", "list", "--endpoint", ownerAppConfigEndpoint,
+                "--auth-mode", "login", "--key", "dsf/owner/bootstrap/*",
+                "-o", "json",
+            ],
+            cancellationToken);
+        using var document = JsonDocument.Parse(result.StandardOutput);
+        var identities = document.RootElement.EnumerateArray()
+            .Where(entry => entry.TryGetProperty("key", out var key)
+                            && (key.GetString()?.EndsWith("/status", StringComparison.Ordinal) ?? false))
+            .Select(entry => entry.TryGetProperty("value", out var value) ? value.GetString() : null)
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Select(value => JsonSerializer.Deserialize<OwnerBootstrapStatus>(value!))
+            .Where(status => status?.Stage is OwnerBootstrapStage.Completed
+                             && !string.IsNullOrWhiteSpace(status.AppId)
+                             && !string.IsNullOrWhiteSpace(status.InstallationId))
+            .Select(status => new OwnerGitHubIdentity(
+                status!.AppId!,
+                status.InstallationId!,
+                status.InstallationSelection))
+            .ToArray();
+        return identities.Length switch
+        {
+            0 => null,
+            1 => identities[0],
+            _ => throw new InvalidOperationException(
+                $"Owner App Configuration '{ownerAppConfigEndpoint}' contains more than one completed bootstrap status."),
+        };
+    }
+
     public async Task WriteAsync(
         string keyVaultUri,
         OwnerGitHubCredentials credentials,

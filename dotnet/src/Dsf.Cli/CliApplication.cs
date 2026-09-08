@@ -231,6 +231,12 @@ public static class CliApplication
             "--github-installation-id",
             "owner DSF GitHub App installation id",
             string.Empty);
+        var githubInstallationSelection = StringOption(
+            "--github-installation-selection",
+            "owner DSF GitHub App installation selection",
+            string.Empty,
+            "all",
+            "selected");
 
         var command = new Command("new", "create a new isolated product factory instance");
         AddOptions(
@@ -253,7 +259,8 @@ public static class CliApplication
             ownerAppConfigEndpoint,
             adminPrincipalId,
             githubAppId,
-            githubInstallationId);
+            githubInstallationId,
+            githubInstallationSelection);
 
         var newOptions = new Option[]
         {
@@ -276,6 +283,7 @@ public static class CliApplication
             adminPrincipalId,
             githubAppId,
             githubInstallationId,
+            githubInstallationSelection,
         };
 
         command.SetAction(async (parseResult, cancellationToken) =>
@@ -319,7 +327,14 @@ public static class CliApplication
             var ownerKeyVaultUriValue = FirstConfiguredValue(
                 parseResult.GetValue(ownerKeyVaultUri),
                 "DSF_OWNER_KEYVAULT_URI");
-            if (!parseResult.GetValue(dryRun)
+            var ownerAppConfigEndpointValue = FirstConfiguredValue(
+                parseResult.GetValue(ownerAppConfigEndpoint),
+                "DSF_OWNER_APPCONFIG_ENDPOINT");
+            var githubInstallationSelectionValue = FirstConfiguredValue(
+                parseResult.GetValue(githubInstallationSelection),
+                "DSF_GITHUB_INSTALLATION_SELECTION");
+            var isDryRun = parseResult.GetValue(dryRun);
+            if (!isDryRun
                 && string.IsNullOrWhiteSpace(githubAppIdValue)
                 && string.IsNullOrWhiteSpace(githubInstallationIdValue)
                 && !string.IsNullOrWhiteSpace(ownerKeyVaultUriValue))
@@ -328,9 +343,13 @@ public static class CliApplication
                     new AzureCliOwnerBootstrapClient(new SystemAzureCliRunner()));
                 var identity = await ownerCredentials.ResolveIdentityAsync(
                     ownerKeyVaultUriValue,
+                    ownerAppConfigEndpointValue,
                     cancellationToken);
                 githubAppIdValue = identity.AppId;
                 githubInstallationIdValue = identity.InstallationId;
+                githubInstallationSelectionValue = string.IsNullOrWhiteSpace(githubInstallationSelectionValue)
+                    ? identity.InstallationSelection
+                    : githubInstallationSelectionValue;
             }
             if (!ValidateGitHubIdentifier(
                     terminal,
@@ -368,11 +387,12 @@ public static class CliApplication
                     parseResult.GetValue(creationMaturity) ?? "low",
                     parseResult.GetValue(operationMaturity) ?? "low",
                     effectivePrefix,
-                    ownerKeyVaultUriValue,
-                    parseResult.GetValue(ownerAppConfigEndpoint),
+                    isDryRun ? parseResult.GetValue(ownerKeyVaultUri) : ownerKeyVaultUriValue,
+                    isDryRun ? parseResult.GetValue(ownerAppConfigEndpoint) : ownerAppConfigEndpointValue,
                     parseResult.GetValue(adminPrincipalId),
                     githubAppIdValue,
                     githubInstallationIdValue,
+                    githubInstallationSelectionValue,
                     configRootValue);
             }
             catch (InstanceDefinitionException exception)
@@ -696,6 +716,7 @@ public static class CliApplication
         string? adminPrincipalId,
         string? githubAppId,
         string? githubInstallationId,
+        string? githubInstallationSelection,
         string? configRoot)
     {
         var root = configRoot ?? Directory.GetCurrentDirectory();
@@ -716,6 +737,7 @@ public static class CliApplication
             adminPrincipalId,
             githubAppId,
             githubInstallationId,
+            githubInstallationSelection,
             DateTimeOffset.UtcNow,
             existing);
     }

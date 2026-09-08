@@ -77,6 +77,7 @@ public sealed class CliSurfaceTests
               --admin-principal-id <admin-principal-id>              human owner/governance principal object id
               --github-app-id <github-app-id>                        owner DSF GitHub App id
               --github-installation-id <github-installation-id>      owner DSF GitHub App installation id
+              --github-installation-selection <all|selected>         owner DSF GitHub App installation selection
               -h, --help                                             Show help and usage information
 
 

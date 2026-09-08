@@ -97,6 +97,8 @@ public sealed record GitHubSettings
 
     public string? InstallationId { get; init; }
 
+    public string? InstallationSelection { get; init; }
+
     public long? RepositoryId { get; init; }
 
     public string DefaultBranch { get; init; } = "main";

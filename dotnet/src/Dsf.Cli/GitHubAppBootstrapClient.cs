@@ -251,10 +251,12 @@ internal static class GitHubAppBrowserOpener
         : ResolveLinux(File.Exists);
 }
 
+internal sealed record GitHubInstallationDiscovery(string Id, string Selection);
+
 internal sealed class GitHubAppBootstrapClient(
     HttpClient httpClient,
     Func<OwnerBootstrapRequest, CancellationToken, Task<string>> captureCode,
-    Func<OwnerGitHubCredentials, CancellationToken, Task<string>> discoverInstallation,
+    Func<OwnerGitHubCredentials, CancellationToken, Task<GitHubInstallationDiscovery>> discoverInstallation,
     IGitHubAppRecoveryStore? recoveryStore = null)
     : IGitHubAppBootstrapper
 {
@@ -271,7 +273,7 @@ internal sealed class GitHubAppBootstrapClient(
             (request, cancellationToken) => string.IsNullOrWhiteSpace(callbackCode)
                 ? CaptureCodeAsync(terminal, request.AppName, cancellationToken)
                 : Task.FromResult(callbackCode),
-            (credentials, cancellationToken) => DiscoverInstallationAsync(httpClient, credentials, cancellationToken));
+            (credentials, cancellationToken) => DiscoverInstallationDetailsAsync(httpClient, credentials, cancellationToken));
     }
 
     public async Task<OwnerGitHubCredentials> GetOrCreateAsync(
@@ -305,19 +307,29 @@ internal sealed class GitHubAppBootstrapClient(
             await recoveryStore.SaveAsync(request.AppName, uninstalled, cancellationToken);
         }
 
-        var installationId = await discoverInstallation(uninstalled, cancellationToken);
-        if (string.IsNullOrWhiteSpace(installationId))
+        var installation = await discoverInstallation(uninstalled, cancellationToken);
+        if (string.IsNullOrWhiteSpace(installation.Id))
         {
             throw new InvalidOperationException("GitHub App installation discovery returned no installation id.");
         }
 
-        return uninstalled with { InstallationId = installationId };
+        return uninstalled with
+        {
+            InstallationId = installation.Id,
+            InstallationSelection = installation.Selection,
+        };
     }
 
     public Task CompleteAsync(OwnerBootstrapRequest request, CancellationToken cancellationToken) =>
         recoveryStore.DeleteAsync(request.AppName, cancellationToken);
 
     internal static async Task<string> DiscoverInstallationAsync(
+        HttpClient httpClient,
+        OwnerGitHubCredentials credentials,
+        CancellationToken cancellationToken) =>
+        (await DiscoverInstallationDetailsAsync(httpClient, credentials, cancellationToken)).Id;
+
+    internal static async Task<GitHubInstallationDiscovery> DiscoverInstallationDetailsAsync(
         HttpClient httpClient,
         OwnerGitHubCredentials credentials,
         CancellationToken cancellationToken)
@@ -341,7 +353,9 @@ internal sealed class GitHubAppBootstrapClient(
                 .Where(installation =>
                     installation.TryGetProperty("repository_selection", out var selection)
                     && selection.GetString() is "selected" or "all")
-                .Select(installation => installation.GetProperty("id").GetInt64().ToString())
+                .Select(installation => new GitHubInstallationDiscovery(
+                    installation.GetProperty("id").GetInt64().ToString(),
+                    installation.GetProperty("repository_selection").GetString()!))
                 .ToArray();
             if (installations.Length == 1)
             {

@@ -26,6 +26,7 @@ internal static class PlannedInstanceDefinition
         string? adminPrincipalId,
         string? githubAppId,
         string? githubInstallationId,
+        string? githubInstallationSelection,
         DateTimeOffset generatedAt,
         InstanceDefinition? existing = null)
     {
@@ -62,6 +63,8 @@ internal static class PlannedInstanceDefinition
                 AppId = Trimmed(githubAppId) ?? reusableGitHubIdentity?.AppId,
                 InstallationId = Trimmed(githubInstallationId)
                     ?? reusableGitHubIdentity?.InstallationId,
+                InstallationSelection = Trimmed(githubInstallationSelection)
+                    ?? reusableGitHubIdentity?.InstallationSelection,
                 RepositoryId = reusableGitHubIdentity?.RepositoryId,
                 DefaultBranch = reusableGitHubIdentity?.DefaultBranch ?? "main",
                 BranchProtectionRulesetId = reusableGitHubIdentity?.BranchProtectionRulesetId,

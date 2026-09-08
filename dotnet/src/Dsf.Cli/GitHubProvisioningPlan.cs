@@ -50,7 +50,8 @@ internal sealed record GitHubProvisioningPlan(IReadOnlyList<GitHubProvisioningRe
             new EnsureAppBindingRequest(
                 repoFullName,
                 definition.GitHub.AppId,
-                definition.GitHub.InstallationId),
+                definition.GitHub.InstallationId,
+                definition.GitHub.InstallationSelection),
             new EnsureBranchProtectionRulesetRequest(
                 repoFullName,
                 defaultBranch,
@@ -216,7 +217,8 @@ internal sealed record EnsureLabelsRequest(
 internal sealed record EnsureAppBindingRequest(
     string RepositoryFullName,
     string? AppId,
-    string? InstallationId)
+    string? InstallationId,
+    string? InstallationSelection = null)
     : GitHubProvisioningRequest("ensure_app_binding");
 
 internal sealed record EnsureBranchProtectionRulesetRequest(

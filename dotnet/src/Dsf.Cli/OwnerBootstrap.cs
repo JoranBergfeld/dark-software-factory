@@ -23,7 +23,8 @@ internal sealed record OwnerAuthority(string KeyVaultUri, string AppConfigEndpoi
 internal sealed record OwnerGitHubCredentials(
     string AppId,
     string InstallationId,
-    string PrivateKey);
+    string PrivateKey,
+    string? InstallationSelection = null);
 
 internal sealed record OwnerBootstrapStatus(
     OwnerBootstrapStage Stage,
@@ -33,6 +34,7 @@ internal sealed record OwnerBootstrapStatus(
     string? AppConfigEndpoint = null,
     string? AppId = null,
     string? InstallationId = null,
+    string? InstallationSelection = null,
     string? Error = null);
 
 internal interface IOwnerInfrastructure
@@ -92,20 +94,27 @@ internal sealed class OwnerBootstrapper(
         await WriteAsync(
             OwnerBootstrapStage.GitHubAppCreated,
             appCredentials.AppId,
-            appCredentials.InstallationId);
+            appCredentials.InstallationId,
+            appCredentials.InstallationSelection);
 
         await credentials.WriteAsync(authority.KeyVaultUri, appCredentials, cancellationToken);
         await github.CompleteAsync(request, cancellationToken);
         await WriteAsync(
             OwnerBootstrapStage.CredentialsStored,
             appCredentials.AppId,
-            appCredentials.InstallationId);
+            appCredentials.InstallationId,
+            appCredentials.InstallationSelection);
         await WriteAsync(
             OwnerBootstrapStage.Completed,
             appCredentials.AppId,
-            appCredentials.InstallationId);
+            appCredentials.InstallationId,
+            appCredentials.InstallationSelection);
 
-        async Task WriteAsync(OwnerBootstrapStage stage, string? appId = null, string? installationId = null)
+        async Task WriteAsync(
+            OwnerBootstrapStage stage,
+            string? appId = null,
+            string? installationId = null,
+            string? installationSelection = null)
         {
             if (stage is not OwnerBootstrapStage.Planned)
             {
@@ -122,7 +131,8 @@ internal sealed class OwnerBootstrapper(
                     authority.KeyVaultUri,
                     authority.AppConfigEndpoint,
                     appId,
-                    installationId),
+                    installationId,
+                    installationSelection),
                 cancellationToken);
         }
     }

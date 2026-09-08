@@ -8,6 +8,7 @@ namespace Dsf.Cli;
 internal sealed class GitHubRestProvisioningClient : IGitHubProvisioningClient
 {
     private const string DefaultApiUrl = "https://api.github.com/";
+    private const string DefaultLabelColor = "ededed";
     private readonly HttpClient httpClient;
     private readonly string? token;
 
@@ -75,7 +76,13 @@ internal sealed class GitHubRestProvisioningClient : IGitHubProvisioningClient
             allowNotFound: true);
         if (existing.StatusCode != HttpStatusCode.NotFound)
         {
-            return await ReadRepositoryAsync(existing, request.DefaultBranch, owner, cancellationToken);
+            return await EnsureRepositoryVisibilityAsync(
+                existing,
+                owner,
+                request.Repository,
+                request.Visibility,
+                request.DefaultBranch,
+                cancellationToken);
         }
 
         if (!isUser)
@@ -94,13 +101,52 @@ internal sealed class GitHubRestProvisioningClient : IGitHubProvisioningClient
         using var created = await SendAsync(
             HttpMethod.Post,
             path,
-            new Dictionary<string, object?>
-            {
-                ["name"] = request.Repository,
-                ["visibility"] = request.Visibility,
-            },
+            RepositoryCreateBody(request.Repository, request.Visibility, isUser),
             cancellationToken);
         return await ReadRepositoryAsync(created, request.DefaultBranch, owner, cancellationToken);
+    }
+
+    private async Task<GitHubRepositoryProvisioningResult> EnsureRepositoryVisibilityAsync(
+        HttpResponseMessage existing,
+        string owner,
+        string repository,
+        string requestedVisibility,
+        string defaultBranch,
+        CancellationToken cancellationToken)
+    {
+        using var document = await ReadJsonAsync(existing, cancellationToken);
+        var root = document.RootElement;
+        var isPrivate = root.TryGetProperty("private", out var privateProperty)
+                        && privateProperty.GetBoolean();
+        if (requestedVisibility is "private" && !isPrivate)
+        {
+            using var updated = await SendAsync(
+                HttpMethod.Patch,
+                $"repos/{owner}/{repository}",
+                new Dictionary<string, object?> { ["private"] = true },
+                cancellationToken);
+            return await ReadRepositoryAsync(updated, defaultBranch, owner, cancellationToken);
+        }
+
+        return ReadRepository(root, defaultBranch, owner);
+    }
+
+    private static Dictionary<string, object?> RepositoryCreateBody(
+        string repository,
+        string visibility,
+        bool isUser)
+    {
+        var body = new Dictionary<string, object?> { ["name"] = repository };
+        if (isUser && visibility is "private")
+        {
+            body["private"] = true;
+        }
+        else
+        {
+            body["visibility"] = visibility;
+        }
+
+        return body;
     }
 
     public async Task EnsureSeedRepoAsync(
@@ -159,15 +205,20 @@ internal sealed class GitHubRestProvisioningClient : IGitHubProvisioningClient
 
         foreach (var label in request.Labels.Where(label => !existing.Contains(label.Name)))
         {
+            var body = new Dictionary<string, object?>
+            {
+                ["name"] = label.Name,
+                ["color"] = label.Color ?? DefaultLabelColor,
+            };
+            if (!string.IsNullOrWhiteSpace(label.Description))
+            {
+                body["description"] = label.Description;
+            }
+
             using var ignored = await SendAsync(
                 HttpMethod.Post,
                 $"repos/{request.RepositoryFullName}/labels",
-                new Dictionary<string, object?>
-                {
-                    ["name"] = label.Name,
-                    ["color"] = label.Color,
-                    ["description"] = label.Description,
-                },
+                body,
                 cancellationToken);
         }
     }
@@ -188,6 +239,11 @@ internal sealed class GitHubRestProvisioningClient : IGitHubProvisioningClient
             cancellationToken);
         using var repository = await ReadJsonAsync(repositoryResponse, cancellationToken);
         var repositoryId = repository.RootElement.GetProperty("id").GetInt64();
+        if (string.Equals(request.InstallationSelection, "all", StringComparison.OrdinalIgnoreCase))
+        {
+            return new GitHubAppBindingProvisioningResult(request.AppId, request.InstallationId);
+        }
+
         if (!await InstallationCoversRepositoryAsync(
                 request.InstallationId, repositoryId, cancellationToken))
         {
@@ -463,7 +519,14 @@ internal sealed class GitHubRestProvisioningClient : IGitHubProvisioningClient
         CancellationToken cancellationToken)
     {
         using var repository = await ReadJsonAsync(response, cancellationToken);
-        var root = repository.RootElement;
+        return ReadRepository(repository.RootElement, fallbackDefaultBranch, fallbackOwner);
+    }
+
+    private static GitHubRepositoryProvisioningResult ReadRepository(
+        JsonElement root,
+        string fallbackDefaultBranch,
+        string fallbackOwner)
+    {
         var defaultBranch = root.TryGetProperty("default_branch", out var branch)
             ? branch.GetString()
             : null;

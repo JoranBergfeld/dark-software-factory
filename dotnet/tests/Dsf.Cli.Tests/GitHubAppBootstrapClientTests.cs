@@ -19,7 +19,7 @@ public sealed class GitHubAppBootstrapClientTests
         var client = new GitHubAppBootstrapClient(
             new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") },
             (_, _) => Task.FromResult("temporary-code"),
-            (_, _) => Task.FromResult("42"),
+            (_, _) => Task.FromResult(new GitHubInstallationDiscovery("42", "selected")),
             NoopGitHubAppRecoveryStore.Instance);
 
         var credentials = await client.GetOrCreateAsync(
@@ -30,6 +30,7 @@ public sealed class GitHubAppBootstrapClientTests
 
         Assert.Equal("7", credentials.AppId);
         Assert.Equal("42", credentials.InstallationId);
+        Assert.Equal("selected", credentials.InstallationSelection);
         Assert.Contains("/app-manifests/temporary-code/conversions", handler.Request!.RequestUri!.AbsolutePath);
         Assert.Equal(HttpMethod.Post, handler.Request.Method);
     }
@@ -46,13 +47,14 @@ public sealed class GitHubAppBootstrapClientTests
                 BaseAddress = new Uri("https://api.github.com/"),
             },
             (_, _) => throw new InvalidOperationException("manifest should not be captured"),
-            (_, _) => Task.FromResult("42"),
+            (_, _) => Task.FromResult(new GitHubInstallationDiscovery("42", "all")),
             recovery);
 
         var credentials = await client.GetOrCreateAsync(SampleRequest(), CancellationToken.None);
 
         Assert.Equal("7", credentials.AppId);
         Assert.Equal("42", credentials.InstallationId);
+        Assert.Equal("all", credentials.InstallationSelection);
         Assert.False(recovery.Deleted);
     }
 

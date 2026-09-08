@@ -61,9 +61,10 @@ resource agentIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11
 // instance for agent-side telemetry (appId = the GUID "Application ID",
 // connectionString = the instrumentation connection string; both sensitive).
 //
-// actionConfiguration controls how autonomously the agent acts; 'ReadOnly'
-// mode with 'Low' access is the DSF default — override with 'Review' to
-// require human approval before any write action.
+var actionMode = operationMaturity == 'high' ? 'Autonomous' : 'Review'
+
+// actionConfiguration controls how autonomously the agent acts; Review + Low is
+// the DSF default and keeps write actions human-approved.
 // ---------------------------------------------------------------------------
 
 resource sreAgent 'Microsoft.App/agents@2026-01-01' = {
@@ -80,11 +81,8 @@ resource sreAgent 'Microsoft.App/agents@2026-01-01' = {
     upgradeChannel: 'Stable'
 
     actionConfiguration: {
-      // ReadOnly + Low lets the agent read and surface findings without writing
-      // tickets or firing alerts automatically. Raise to 'Review' or
-      // 'Autonomous' after validating the agent's behaviour in your environment.
       accessLevel: 'Low'
-      mode: 'ReadOnly'
+      mode: actionMode
       // The UAMI resource id — agent uses this identity for data-plane actions.
       identity: agentIdentity.id
     }
