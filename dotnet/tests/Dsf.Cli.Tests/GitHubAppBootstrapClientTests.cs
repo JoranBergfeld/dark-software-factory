@@ -19,7 +19,8 @@ public sealed class GitHubAppBootstrapClientTests
         var client = new GitHubAppBootstrapClient(
             new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") },
             (_, _) => Task.FromResult("temporary-code"),
-            (_, _) => Task.FromResult("42"));
+            (_, _) => Task.FromResult("42"),
+            NoopGitHubAppRecoveryStore.Instance);
 
         var credentials = await client.GetOrCreateAsync(
             new OwnerBootstrapRequest(
@@ -31,6 +32,28 @@ public sealed class GitHubAppBootstrapClientTests
         Assert.Equal("42", credentials.InstallationId);
         Assert.Contains("/app-manifests/temporary-code/conversions", handler.Request!.RequestUri!.AbsolutePath);
         Assert.Equal(HttpMethod.Post, handler.Request.Method);
+    }
+
+    [Fact]
+    public async Task Get_or_create_recovers_converted_app_when_installation_discovery_failed()
+    {
+        var recovery = new RecordingGitHubAppRecoveryStore();
+        var converted = new OwnerGitHubCredentials("7", string.Empty, SamplePem);
+        await recovery.SaveAsync("dsf-sbx-20260907", converted, CancellationToken.None);
+        var client = new GitHubAppBootstrapClient(
+            new HttpClient(new StubHttpMessageHandler(new HttpResponseMessage(HttpStatusCode.InternalServerError)))
+            {
+                BaseAddress = new Uri("https://api.github.com/"),
+            },
+            (_, _) => throw new InvalidOperationException("manifest should not be captured"),
+            (_, _) => Task.FromResult("42"),
+            recovery);
+
+        var credentials = await client.GetOrCreateAsync(SampleRequest(), CancellationToken.None);
+
+        Assert.Equal("7", credentials.AppId);
+        Assert.Equal("42", credentials.InstallationId);
+        Assert.True(recovery.Deleted);
     }
 
     [Fact]
@@ -131,6 +154,52 @@ public sealed class GitHubAppBootstrapClientTests
         {
             Request = request;
             return Task.FromResult(response);
+        }
+    }
+
+    private static OwnerBootstrapRequest SampleRequest() =>
+        new(
+            "dsf-sbx-20260907",
+            "rg-dsf-app",
+            "kvdsfsbx20260907",
+            "appcsdsfsbx20260907",
+            "swedencentral");
+
+    private const string SamplePem = """
+        -----BEGIN RSA PRIVATE KEY-----
+        MIIBOgIBAAJBALs+zZz5p+8QYq+R2I+uZgqD7Njfom7UFYkB+z5eN8nJ5T5P
+        1qZ3Q2s3V3TQDjM71L24f0Rt7zG1u7u8dxMCAwEAAQJAYwE3v+L4i8Ue9dQH
+        1eV7xZx2Zp1ZJ1Uu4bM/7n7RGh9U/FXxVC4wpT8OyXHJ3VhHxdpxtn8iMwxm
+        bY/1AQIhAPrJx0jhDaQRvqE1W4/eXrS+VJC8zRzZ5jzqvx6AVTqZAiEAv8Q9
+        yTGLtd1h3osnWBUnuO4JrV+uXl3c0O8qZn54sUCIQDHVLjWlCnmfBzFaAX3m
+        pO9dUhjOdR0i8v0epNQlzsyAQIgT++05zzYjAzYsS1NQxkrfCE07INcJY2f
+        FYU4AiYXAAECIQCkkWJwksUf/7bqtbYVLDl2d8dMjdgux0hHV50qR0Q3Wg==
+        -----END RSA PRIVATE KEY-----
+        """;
+
+    internal sealed class RecordingGitHubAppRecoveryStore : IGitHubAppRecoveryStore
+    {
+        private OwnerGitHubCredentials? credentials;
+
+        public bool Deleted { get; private set; }
+
+        public Task<OwnerGitHubCredentials?> LoadAsync(string appName, CancellationToken cancellationToken) =>
+            Task.FromResult(credentials);
+
+        public Task SaveAsync(
+            string appName,
+            OwnerGitHubCredentials credentials,
+            CancellationToken cancellationToken)
+        {
+            this.credentials = credentials;
+            return Task.CompletedTask;
+        }
+
+        public Task DeleteAsync(string appName, CancellationToken cancellationToken)
+        {
+            Deleted = true;
+            credentials = null;
+            return Task.CompletedTask;
         }
     }
 }

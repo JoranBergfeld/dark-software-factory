@@ -69,6 +69,87 @@ internal sealed record GitHubAppManifest(
     }
 }
 
+internal interface IGitHubAppRecoveryStore
+{
+    Task<OwnerGitHubCredentials?> LoadAsync(string appName, CancellationToken cancellationToken);
+
+    Task SaveAsync(
+        string appName,
+        OwnerGitHubCredentials credentials,
+        CancellationToken cancellationToken);
+
+    Task DeleteAsync(string appName, CancellationToken cancellationToken);
+}
+
+internal sealed class NoopGitHubAppRecoveryStore : IGitHubAppRecoveryStore
+{
+    public static NoopGitHubAppRecoveryStore Instance { get; } = new();
+
+    public Task<OwnerGitHubCredentials?> LoadAsync(string appName, CancellationToken cancellationToken) =>
+        Task.FromResult<OwnerGitHubCredentials?>(null);
+
+    public Task SaveAsync(
+        string appName,
+        OwnerGitHubCredentials credentials,
+        CancellationToken cancellationToken) =>
+        Task.CompletedTask;
+
+    public Task DeleteAsync(string appName, CancellationToken cancellationToken) => Task.CompletedTask;
+}
+
+internal sealed class FileGitHubAppRecoveryStore : IGitHubAppRecoveryStore
+{
+    public static FileGitHubAppRecoveryStore Instance { get; } = new();
+
+    public async Task<OwnerGitHubCredentials?> LoadAsync(
+        string appName,
+        CancellationToken cancellationToken)
+    {
+        var path = RecoveryPath(appName);
+        if (!File.Exists(path))
+        {
+            return null;
+        }
+
+        await using var stream = File.OpenRead(path);
+        return await JsonSerializer.DeserializeAsync<OwnerGitHubCredentials>(
+            stream,
+            cancellationToken: cancellationToken);
+    }
+
+    public async Task SaveAsync(
+        string appName,
+        OwnerGitHubCredentials credentials,
+        CancellationToken cancellationToken)
+    {
+        var path = RecoveryPath(appName);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        await using var stream = File.Open(path, FileMode.Create, FileAccess.Write, FileShare.None);
+        if (!OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+
+        await JsonSerializer.SerializeAsync(stream, credentials, cancellationToken: cancellationToken);
+    }
+
+    public Task DeleteAsync(string appName, CancellationToken cancellationToken)
+    {
+        File.Delete(RecoveryPath(appName));
+        return Task.CompletedTask;
+    }
+
+    private static string RecoveryPath(string appName)
+    {
+        var safeName = new string(appName.Select(character =>
+            char.IsLetterOrDigit(character) || character == '-' ? character : '-').ToArray());
+        return Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            ".dsf",
+            $"bootstrap-{safeName}.recovery.json");
+    }
+}
+
 internal sealed class GitHubAppLoopbackListener(Uri callbackUri) : IDisposable
 {
     private readonly HttpListener listener = new();
@@ -173,10 +254,12 @@ internal static class GitHubAppBrowserOpener
 internal sealed class GitHubAppBootstrapClient(
     HttpClient httpClient,
     Func<OwnerBootstrapRequest, CancellationToken, Task<string>> captureCode,
-    Func<OwnerGitHubCredentials, CancellationToken, Task<string>> discoverInstallation)
+    Func<OwnerGitHubCredentials, CancellationToken, Task<string>> discoverInstallation,
+    IGitHubAppRecoveryStore? recoveryStore = null)
     : IGitHubAppBootstrapper
 {
     private static readonly Uri CallbackUri = new("http://127.0.0.1:8765/callback");
+    private readonly IGitHubAppRecoveryStore recoveryStore = recoveryStore ?? FileGitHubAppRecoveryStore.Instance;
 
     public static GitHubAppBootstrapClient Create(ICliTerminal terminal, string? callbackCode = null)
     {
@@ -195,34 +278,42 @@ internal sealed class GitHubAppBootstrapClient(
         OwnerBootstrapRequest request,
         CancellationToken cancellationToken)
     {
-        var code = GitHubAppManifest.ParseCode(await captureCode(request, cancellationToken));
-        using var response = await httpClient.PostAsync(
-            $"app-manifests/{Uri.EscapeDataString(code)}/conversions",
-            content: null,
-            cancellationToken);
-        if (!response.IsSuccessStatusCode)
+        var uninstalled = await recoveryStore.LoadAsync(request.AppName, cancellationToken);
+        if (uninstalled is null)
         {
-            throw new InvalidOperationException(
-                $"GitHub App manifest conversion failed with {(int)response.StatusCode} {response.ReasonPhrase}.");
+            var code = GitHubAppManifest.ParseCode(await captureCode(request, cancellationToken));
+            using var response = await httpClient.PostAsync(
+                $"app-manifests/{Uri.EscapeDataString(code)}/conversions",
+                content: null,
+                cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                throw new InvalidOperationException(
+                    $"GitHub App manifest conversion failed with {(int)response.StatusCode} {response.ReasonPhrase}.");
+            }
+
+            await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+            using var payload = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+            var appId = payload.RootElement.GetProperty("id").GetInt64().ToString();
+            var privateKey = payload.RootElement.GetProperty("pem").GetString();
+            if (string.IsNullOrWhiteSpace(privateKey))
+            {
+                throw new InvalidOperationException("GitHub App manifest conversion returned no private key.");
+            }
+
+            uninstalled = new OwnerGitHubCredentials(appId, string.Empty, privateKey);
+            await recoveryStore.SaveAsync(request.AppName, uninstalled, cancellationToken);
         }
 
-        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-        using var payload = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
-        var appId = payload.RootElement.GetProperty("id").GetInt64().ToString();
-        var privateKey = payload.RootElement.GetProperty("pem").GetString();
-        if (string.IsNullOrWhiteSpace(privateKey))
-        {
-            throw new InvalidOperationException("GitHub App manifest conversion returned no private key.");
-        }
-
-        var uninstalled = new OwnerGitHubCredentials(appId, string.Empty, privateKey);
         var installationId = await discoverInstallation(uninstalled, cancellationToken);
         if (string.IsNullOrWhiteSpace(installationId))
         {
             throw new InvalidOperationException("GitHub App installation discovery returned no installation id.");
         }
 
-        return uninstalled with { InstallationId = installationId };
+        var installed = uninstalled with { InstallationId = installationId };
+        await recoveryStore.DeleteAsync(request.AppName, cancellationToken);
+        return installed;
     }
 
     private static async Task<string> DiscoverInstallationAsync(
