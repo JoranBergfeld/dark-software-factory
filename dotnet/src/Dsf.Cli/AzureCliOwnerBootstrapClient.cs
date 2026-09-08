@@ -29,44 +29,49 @@ internal sealed class AzureCliOwnerBootstrapClient(IAzureCliRunner runner)
         CancellationToken cancellationToken)
     {
         var vaultName = new Uri(keyVaultUri).Host.Split('.', 2)[0];
-        var privateKeyPath = Path.Combine(
+        var resourceGroup = await RequiredOutputAsync(
+            ["keyvault", "show", "--name", vaultName, "--query", "resourceGroup", "-o", "tsv"],
+            cancellationToken);
+        var parametersPath = Path.Combine(
             Path.GetTempPath(),
-            $"dsf-owner-app-{Guid.NewGuid():N}.pem");
+            $"dsf-owner-secrets-{Guid.NewGuid():N}.json");
         try
         {
-            await File.WriteAllTextAsync(privateKeyPath, credentials.PrivateKey, cancellationToken);
+            await File.WriteAllTextAsync(
+                parametersPath,
+                JsonSerializer.Serialize(new Dictionary<string, object>
+                {
+                    ["$schema"] = "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+                    ["contentVersion"] = "1.0.0.0",
+                    ["parameters"] = new Dictionary<string, object>
+                    {
+                        ["vaultName"] = new { value = vaultName },
+                        ["githubAppId"] = new { value = credentials.AppId },
+                        ["githubInstallationId"] = new { value = credentials.InstallationId },
+                        ["githubAppPrivateKey"] = new { value = credentials.PrivateKey },
+                    },
+                }),
+                cancellationToken);
             if (!OperatingSystem.IsWindows())
             {
                 File.SetUnixFileMode(
-                    privateKeyPath,
+                    parametersPath,
                     UnixFileMode.UserRead | UnixFileMode.UserWrite);
             }
 
             await RunAsync(
                 [
-                    "keyvault", "secret", "set", "--vault-name", vaultName,
-                    "--name", "github-app-id", "--value", credentials.AppId,
-                    "-o", "none",
-                ],
-                cancellationToken);
-            await RunAsync(
-                [
-                    "keyvault", "secret", "set", "--vault-name", vaultName,
-                    "--name", "github-app-installation-id", "--value", credentials.InstallationId,
-                    "-o", "none",
-                ],
-                cancellationToken);
-            await RunAsync(
-                [
-                    "keyvault", "secret", "set", "--vault-name", vaultName,
-                    "--name", "github-app-private-key", "--file", privateKeyPath,
+                    "deployment", "group", "create", "--resource-group", resourceGroup,
+                    "--name", $"dsf-owner-secrets-{vaultName}",
+                    "--template-file", Path.Combine(FindRepoRoot(), "infra", "owner-secrets.bicep"),
+                    "--parameters", $"@{parametersPath}",
                     "-o", "none",
                 ],
                 cancellationToken);
         }
         finally
         {
-            File.Delete(privateKeyPath);
+            File.Delete(parametersPath);
         }
     }
 

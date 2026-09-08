@@ -19,10 +19,9 @@ resource keyVault 'Microsoft.KeyVault/vaults@2024-11-01' = {
     enablePurgeProtection: true
     softDeleteRetentionInDays: 90
     accessPolicies: []
-    // Bootstrap operators require data-plane access before a private network exists.
-    publicNetworkAccess: 'Enabled'
+    publicNetworkAccess: 'Disabled'
     networkAcls: {
-      defaultAction: 'Allow'
+      defaultAction: 'Deny'
       bypass: 'AzureServices'
       ipRules: []
       virtualNetworkRules: []

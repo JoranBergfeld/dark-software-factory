@@ -6,18 +6,28 @@ namespace Dsf.Cli.Tests;
 public sealed class OwnerBootstrapAzureClientTests
 {
     [Fact]
-    public void Owner_vault_explicitly_allows_operator_data_plane_access()
+    public void Owner_vault_keeps_public_access_disabled_by_policy()
     {
         var template = File.ReadAllText(Path.Combine(FindRepoRoot(), "infra", "owner-keyvault.bicep"));
 
-        Assert.Contains("publicNetworkAccess: 'Enabled'", template);
-        Assert.Contains("defaultAction: 'Allow'", template);
+        Assert.Contains("publicNetworkAccess: 'Disabled'", template);
+        Assert.Contains("defaultAction: 'Deny'", template);
     }
 
     [Fact]
-    public async Task Write_credentials_uses_private_file_and_suppresses_secret_output()
+    public void Owner_secret_template_uses_secure_parameters()
     {
-        var runner = new RecordingAzureCliRunner();
+        var template = File.ReadAllText(Path.Combine(FindRepoRoot(), "infra", "owner-secrets.bicep"));
+
+        Assert.Contains("@secure()", template);
+        Assert.Contains("resource keyVault 'Microsoft.KeyVault/vaults@2024-11-01' existing", template);
+        Assert.Contains("resource githubAppPrivateKeySecret 'Microsoft.KeyVault/vaults/secrets@", template);
+    }
+
+    [Fact]
+    public async Task Write_credentials_uses_arm_secure_parameters_and_suppresses_secret_output()
+    {
+        var runner = new RecordingAzureCliRunner(new AzureCliInvocationResult(0, "rg-dsf-app", ""));
         var client = new AzureCliOwnerBootstrapClient(runner);
 
         await client.WriteAsync(
@@ -28,13 +38,20 @@ public sealed class OwnerBootstrapAzureClientTests
                 "-----BEGIN PRIVATE KEY-----\nsecret\n-----END PRIVATE KEY-----"),
             CancellationToken.None);
 
-        Assert.Equal(3, runner.Invocations.Count);
-        Assert.All(runner.Invocations, invocation => Assert.Contains("-o", invocation));
-        Assert.All(runner.Invocations, invocation => Assert.Contains("none", invocation));
+        Assert.Equal(
+            ["keyvault", "show", "--name", "kvdsfsbx20260907", "--query", "resourceGroup", "-o", "tsv"],
+            runner.Invocations[0]);
+        var invocation = runner.Invocations[1];
+        Assert.Equal("deployment", invocation[0]);
+        Assert.Equal("group", invocation[1]);
+        Assert.Equal("create", invocation[2]);
+        Assert.Contains("--parameters", invocation);
+        Assert.Contains(invocation, argument => argument.StartsWith("@", StringComparison.Ordinal));
         Assert.DoesNotContain(
-            runner.Invocations.SelectMany(invocation => invocation),
+            invocation,
             argument => argument.Contains("PRIVATE KEY", StringComparison.Ordinal));
-        Assert.Contains("--file", runner.Invocations[2]);
+        Assert.Contains("-o", invocation);
+        Assert.Contains("none", invocation);
     }
 
     [Fact]
