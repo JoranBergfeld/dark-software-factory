@@ -37,6 +37,7 @@ public sealed class OwnerBootstrapTests
             statusStore.Statuses,
             status => Assert.DoesNotContain("BEGIN", status.Error ?? string.Empty, StringComparison.Ordinal));
         Assert.Equal("https://kvdsfsbx20260907.vault.azure.net/", credentials.KeyVaultUri);
+        Assert.True(github.Completed);
     }
 }
 
@@ -68,10 +69,18 @@ internal sealed class RecordingOwnerBootstrapStatusStore : IOwnerBootstrapStatus
 
 internal sealed class RecordingGitHubAppBootstrapper : IGitHubAppBootstrapper
 {
+    public bool Completed { get; private set; }
+
     public Task<OwnerGitHubCredentials> GetOrCreateAsync(
         OwnerBootstrapRequest request,
         CancellationToken cancellationToken) =>
         Task.FromResult(new OwnerGitHubCredentials("7", "42", "-----BEGIN PRIVATE KEY-----\nsecret\n-----END PRIVATE KEY-----"));
+
+    public Task CompleteAsync(OwnerBootstrapRequest request, CancellationToken cancellationToken)
+    {
+        Completed = true;
+        return Task.CompletedTask;
+    }
 }
 
 internal sealed class RecordingOwnerCredentialStore : IOwnerCredentialStore

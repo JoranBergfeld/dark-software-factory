@@ -311,10 +311,11 @@ internal sealed class GitHubAppBootstrapClient(
             throw new InvalidOperationException("GitHub App installation discovery returned no installation id.");
         }
 
-        var installed = uninstalled with { InstallationId = installationId };
-        await recoveryStore.DeleteAsync(request.AppName, cancellationToken);
-        return installed;
+        return uninstalled with { InstallationId = installationId };
     }
+
+    public Task CompleteAsync(OwnerBootstrapRequest request, CancellationToken cancellationToken) =>
+        recoveryStore.DeleteAsync(request.AppName, cancellationToken);
 
     private static async Task<string> DiscoverInstallationAsync(
         HttpClient httpClient,

@@ -53,7 +53,7 @@ public sealed class GitHubAppBootstrapClientTests
 
         Assert.Equal("7", credentials.AppId);
         Assert.Equal("42", credentials.InstallationId);
-        Assert.True(recovery.Deleted);
+        Assert.False(recovery.Deleted);
     }
 
     [Fact]

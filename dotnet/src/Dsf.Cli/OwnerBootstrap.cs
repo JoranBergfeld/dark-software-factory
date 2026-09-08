@@ -56,6 +56,11 @@ internal interface IGitHubAppBootstrapper
     Task<OwnerGitHubCredentials> GetOrCreateAsync(
         OwnerBootstrapRequest request,
         CancellationToken cancellationToken);
+
+    Task CompleteAsync(
+        OwnerBootstrapRequest request,
+        CancellationToken cancellationToken) =>
+        Task.CompletedTask;
 }
 
 internal interface IOwnerCredentialStore
@@ -90,6 +95,7 @@ internal sealed class OwnerBootstrapper(
             appCredentials.InstallationId);
 
         await credentials.WriteAsync(authority.KeyVaultUri, appCredentials, cancellationToken);
+        await github.CompleteAsync(request, cancellationToken);
         await WriteAsync(
             OwnerBootstrapStage.CredentialsStored,
             appCredentials.AppId,
