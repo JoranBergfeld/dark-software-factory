@@ -287,38 +287,55 @@ internal sealed class AzureCliProvisioningClient : IAzureProvisioningClient
     {
         var ownerVaultName = new Uri(request.OwnerKeyVaultUri).Host.Split('.', 2)[0];
         var productVaultName = new Uri(request.ProductKeyVaultUri).Host.Split('.', 2)[0];
-        var privateKey = await RunAsync(
+        var ownerResourceGroup = await RequiredOutputAsync(
+            ["keyvault", "show", "--name", ownerVaultName, "--query", "resourceGroup", "-o", "tsv"],
+            cancellationToken);
+        var productResourceGroup = await RequiredOutputAsync(
+            ["keyvault", "show", "--name", productVaultName, "--query", "resourceGroup", "-o", "tsv"],
+            cancellationToken);
+        var productLocation = await RequiredOutputAsync(
+            ["keyvault", "show", "--name", productVaultName, "--query", "location", "-o", "tsv"],
+            cancellationToken);
+
+        await RunAsync(
             [
-                "keyvault", "secret", "show", "--vault-name", ownerVaultName,
-                "--name", "github-app-private-key", "--query", "value", "-o", "tsv",
+                "deployment", "sub", "create",
+                "-l", productLocation,
+                "-n", $"dsf-copy-owner-secret-{productVaultName}",
+                "-f", Path.Combine(FindRepoRoot(), "infra", "copy-owner-secret.bicep"),
+                "-p",
+                $"ownerVaultName={ownerVaultName}",
+                $"ownerResourceGroup={ownerResourceGroup}",
+                $"productVaultName={productVaultName}",
+                $"productResourceGroup={productResourceGroup}",
+                "-o", "none",
             ],
             cancellationToken);
-        if (string.IsNullOrWhiteSpace(privateKey.StandardOutput))
+    }
+
+    private async Task<string> RequiredOutputAsync(
+        IReadOnlyList<string> arguments,
+        CancellationToken cancellationToken)
+    {
+        var result = await RunAsync(arguments, cancellationToken);
+        if (string.IsNullOrWhiteSpace(result.StandardOutput))
         {
-            throw new InvalidOperationException(
-                $"Owner Key Vault '{ownerVaultName}' has no github-app-private-key secret.");
+            throw new InvalidOperationException($"az {string.Join(' ', arguments)} returned no output.");
         }
 
-        var path = Path.Combine(Path.GetTempPath(), $"dsf-product-app-{Guid.NewGuid():N}.pem");
-        try
-        {
-            await File.WriteAllTextAsync(path, privateKey.StandardOutput, cancellationToken);
-            if (!OperatingSystem.IsWindows())
-            {
-                File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
-            }
+        return result.StandardOutput.Trim();
+    }
 
-            await RunAsync(
-                [
-                    "keyvault", "secret", "set", "--vault-name", productVaultName,
-                    "--name", "github-app-private-key", "--file", path, "-o", "none",
-                ],
-                cancellationToken);
-        }
-        finally
+    private static string FindRepoRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null
+               && !File.Exists(Path.Combine(directory.FullName, "infra", "main.bicep")))
         {
-            File.Delete(path);
+            directory = directory.Parent;
         }
+
+        return (directory ?? throw new DirectoryNotFoundException("Could not locate repository root.")).FullName;
     }
 
     private async Task<AzureCliInvocationResult> RunAsync(
