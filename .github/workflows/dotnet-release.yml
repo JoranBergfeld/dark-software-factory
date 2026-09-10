@@ -43,9 +43,9 @@ jobs:
       run:
         working-directory: dotnet
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Setup .NET
-        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5.4.0
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           global-json-file: dotnet/global.json
       - name: Restore locked graph
@@ -62,7 +62,7 @@ jobs:
           --output "$ARTIFACT_ROOT/nuget"
           -p:PackageVersion=${{ needs.authorize-release.outputs.version }}
       - name: Upload NuGet package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dsf-cli-nuget
           path: dotnet/artifacts/release/nuget/*.nupkg
@@ -99,9 +99,9 @@ jobs:
         working-directory: dotnet
         shell: bash
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Setup .NET
-        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5.4.0
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           global-json-file: dotnet/global.json
       - name: Restore locked graph
@@ -126,14 +126,14 @@ jobs:
           tar -C "$ARTIFACT_ROOT/${{ matrix.rid }}/payload" -czf "$ARTIFACT_ROOT/${{ matrix.rid }}/archive/${{ matrix.archive }}" .
       - name: Upload Linux RID artifact
         if: startsWith(matrix.rid, 'linux-')
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dsf-cli-${{ matrix.rid }}
           path: dotnet/artifacts/release/${{ matrix.rid }}/archive/${{ matrix.archive }}
           if-no-files-found: error
       - name: Upload unsigned signing payload
         if: startsWith(matrix.rid, 'win-') || startsWith(matrix.rid, 'osx-')
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: unsigned-payload-${{ matrix.rid }}
           path: dotnet/artifacts/release/${{ matrix.rid }}/payload
@@ -145,9 +145,9 @@ jobs:
     needs: build-and-smoke-test
     environment: release-windows-signing
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Download Windows artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: unsigned-payload-win-*
           path: dotnet/artifacts/windows-signing
@@ -173,7 +173,7 @@ jobs:
             Compress-Archive -Path "$($_.FullName)/*" -DestinationPath "dotnet/artifacts/windows-signed/dsf-cli-$rid.zip" -Force
           }
       - name: Upload signed Windows artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dsf-cli-windows-signed
           path: dotnet/artifacts/windows-signed/*
@@ -185,9 +185,9 @@ jobs:
     needs: build-and-smoke-test
     environment: release-macos-notarization
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Download macOS artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: unsigned-payload-osx-*
           path: dotnet/artifacts/macos-signing
@@ -214,7 +214,7 @@ jobs:
             tar -C "$payload" -czf "dotnet/artifacts/macos-signed/dsf-cli-$rid.tar.gz" .
           done
       - name: Upload signed macOS artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dsf-cli-macos-signed
           path: dotnet/artifacts/macos-signed/*
@@ -226,29 +226,29 @@ jobs:
     needs: [build-and-smoke-test, sign-windows, sign-macos, test-and-pack]
     environment: release-metadata-signing
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Setup .NET
-        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5.4.0
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           global-json-file: dotnet/global.json
       - name: Download Linux release artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: dsf-cli-linux-*
           path: dotnet/artifacts/final-artifacts
           merge-multiple: true
       - name: Download signed Windows release artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: dsf-cli-windows-signed
           path: dotnet/artifacts/final-artifacts
       - name: Download signed macOS release artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: dsf-cli-macos-signed
           path: dotnet/artifacts/final-artifacts
       - name: Download NuGet tool package
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: dsf-cli-nuget
           path: dotnet/artifacts/final-artifacts
@@ -293,11 +293,11 @@ jobs:
         if: always()
         run: rm -f dotnet/artifacts/final-artifacts/release-metadata/release-signing-key.pem
       - name: Attest final immutable release bytes
-        uses: actions/attest-build-provenance@v3
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: dotnet/artifacts/final-artifacts/**
       - name: Upload final release bundle
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dsf-cli-final-release-bundle
           path: dotnet/artifacts/final-artifacts
@@ -333,9 +333,9 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Download final release bundle
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: dsf-cli-final-release-bundle
           path: dotnet/artifacts/final-artifacts
@@ -371,7 +371,7 @@ jobs:
       contents: write
     steps:
       - name: Download final release bundle
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: dsf-cli-final-release-bundle
           path: dotnet/artifacts/final-artifacts
@@ -395,7 +395,7 @@ jobs:
     if: inputs.dry_run != true
     steps:
       - name: Download NuGet package
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: dsf-cli-final-release-bundle
           path: dotnet/artifacts/final-artifacts
