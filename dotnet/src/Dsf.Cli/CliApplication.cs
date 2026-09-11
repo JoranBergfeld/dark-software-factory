@@ -392,6 +392,7 @@ public static class CliApplication
                     definition.GitHub.CloudAgentCredentialSecretName,
                     definition.GitHub.AppId,
                     definition.GitHub.InstallationId,
+                    definition.Runtime.Image,
                     configRootValue);
 
                 if (definition.Runtime.Decide.EnabledSourceAgentKinds.Count > 0)
@@ -605,6 +606,7 @@ public static class CliApplication
         string cloudAgentCredentialSecretName,
         string? githubAppId,
         string? githubInstallationId,
+        string runtimeImage,
         string? configRoot)
     {
         var repoName = string.IsNullOrWhiteSpace(repo) ? product : repo;
@@ -637,7 +639,7 @@ public static class CliApplication
         terminal.WriteLine($"[dsf]  5. create_resource_group [dry-run] Create dedicated Azure resource group rg-dsf-{product}");
         terminal.WriteLine($"[dsf]       $ az group create --name rg-dsf-{product} --location {location} --tags project=dark-software-factory managed-by=dsf product={product} component=backing-services");
         terminal.WriteLine("[dsf]  6. provision_azure [dry-run] Deploy backing services into rg-dsf-" + product + " from infra/main.bicep");
-        terminal.WriteLine($"[dsf]       $ az deployment group create -g rg-dsf-{product} -n dsf-{product} -f {bicepPath} -p namePrefix={namePrefix} environmentName={environment} location={location} product={product} runtimeImage=ghcr.io/joranbergfeld/dsf-runtime:latest githubAppId= githubInstallationId= githubRepository={repoFull} operationMaturity={operationMaturity} allowPublicNetworkAccess=true --no-wait");
+        terminal.WriteLine($"[dsf]       $ az deployment group create -g rg-dsf-{product} -n dsf-{product} -f {bicepPath} -p namePrefix={namePrefix} environmentName={environment} location={location} product={product} runtimeImage={runtimeImage} githubAppId= githubInstallationId= githubRepository={repoFull} operationMaturity={operationMaturity} allowPublicNetworkAccess=true --no-wait");
         terminal.WriteLine($"[dsf]  7. seed_appconfig [seeded (dry-run)] Seed the canonical config/defaults.json into App Configuration for {product} (critic/agent flags + thresholds)");
         terminal.WriteLine($"[dsf]  8. seed_app_key   [skipped (no owner App configured)] Seed the DSF App private key from the owner Key Vault into the product Key Vault for {product}");
         terminal.WriteLine($"[dsf]  9. seed_webiq_key [skipped (no owner App configured)] Seed the WebIQ API key from the owner Key Vault into the product Key Vault for {product}");

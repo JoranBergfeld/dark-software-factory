@@ -37,6 +37,11 @@ dsf new \
 
 Run `dsf new --help` for the full flag list.
 
+For an immutable runtime image, first generate the instance manifest with
+`--dry-run --write-plan`, set its `runtime.image` to a published commit tag or
+digest, then run the same command without the dry-run flags. Repeated `dsf new`
+invocations preserve that image, and the preview reports the selected image.
+
 ## Enable Decide sources and judgment
 
 Source agents default to disabled. Supply `--decide-config <path>` to provision

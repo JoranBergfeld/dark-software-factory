@@ -8,6 +8,24 @@ namespace Dsf.Cli.Tests;
 public sealed class DecideProvisioningTests
 {
     [Fact]
+    public void Replanning_preserves_the_pinned_runtime_image()
+    {
+        const string image = "ghcr.io/acme/dsf-runtime:sha-accepted";
+        var existing = PlannedInstanceDefinition.Build(
+            "demo", "acme", "demo", "private", "aca", "dev", "swedencentral",
+            "medium", "low", "demo", null, null, null, null, null, DateTimeOffset.UnixEpoch);
+        existing = existing with { Runtime = existing.Runtime with { Image = image } };
+
+        var replanned = PlannedInstanceDefinition.Build(
+            "demo", "acme", "demo", "private", "aca", "dev", "swedencentral",
+            "medium", "low", "demo", null, null, null, null, null, DateTimeOffset.UnixEpoch, existing);
+        var topology = Assert.Single(AzureProvisioningPlan.Build(replanned, ".").Requests.OfType<DeployTopologyRequest>());
+
+        Assert.Equal(image, replanned.Runtime.Image);
+        Assert.Equal(image, topology.RuntimeImage);
+    }
+
+    [Fact]
     public async Task New_persists_and_reuses_explicit_source_configuration()
     {
         var root = Path.Combine(Path.GetTempPath(), "dsf-decide-tests", Guid.NewGuid().ToString("N"));
@@ -38,6 +56,11 @@ public sealed class DecideProvisioningTests
 
             Assert.Equal(0, await CliApplication.InvokeAsync(
                 [.. args, "--decide-config", path], CancellationToken.None, terminal));
+            var pinned = InstanceDefinitions.Read(InstanceDefinitions.PathFor(root, "demo"));
+            InstanceDefinitions.Write(pinned with
+            {
+                Runtime = pinned.Runtime with { Image = "ghcr.io/acme/dsf-runtime:sha-accepted" },
+            }, root);
             Assert.Equal(0, await CliApplication.InvokeAsync(args, CancellationToken.None, terminal));
 
             var definition = InstanceDefinitions.Read(InstanceDefinitions.PathFor(root, "demo"));
@@ -45,6 +68,8 @@ public sealed class DecideProvisioningTests
             var topology = Assert.Single(AzureProvisioningPlan.Build(definition, root)
                 .Requests.OfType<DeployTopologyRequest>());
             Assert.Equal(["azuremonitor"], topology.Decide.EnabledSourceAgentKinds);
+            Assert.Equal("ghcr.io/acme/dsf-runtime:sha-accepted", topology.RuntimeImage);
+            Assert.Contains("runtimeImage=ghcr.io/acme/dsf-runtime:sha-accepted", terminal.Output, StringComparison.Ordinal);
             Assert.Equal("workspace-id", topology.Decide.AzureMonitorWorkspaceId);
             Assert.Equal("AppExceptions | take 20", topology.Decide.AzureMonitorQuery);
             Assert.Equal(3, topology.Decide.JuryModels.Count);
