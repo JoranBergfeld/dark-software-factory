@@ -126,6 +126,10 @@ needs:
   baseline CI. The CLI does not retrieve credentials from owner stores. Pass GitHub App and
   installation identifiers with `--github-app-id` and `--github-installation-id`, or set
   `DSF_GITHUB_APP_ID` and `DSF_GITHUB_INSTALLATION_ID`.
+  Installation-binding endpoints require a supported personal access token or GitHub App
+  user token; the OAuth token returned by `gh auth token` may create repositories but is
+  rejected by those endpoints. Personal repositories support `private` or `public`,
+  not organization-only `internal` visibility.
 - **Spec Kit CLI:** `specify` on `PATH`, pinned by your operator image or workstation setup.
 - **Azure subscription RBAC:** **Owner**, or **Contributor + User Access Administrator**, on
   the subscription.

@@ -91,14 +91,25 @@ internal sealed class GitHubRestProvisioningClient : IGitHubProvisioningClient
         }
 
         var path = isUser ? "user/repos" : $"orgs/{owner}/repos";
+        var payload = new Dictionary<string, object?> { ["name"] = request.Repository };
+        if (isUser)
+        {
+            payload["private"] = request.Visibility switch
+            {
+                "private" => true,
+                "public" => false,
+                _ => throw new InvalidOperationException(
+                    $"Personal repositories support only private or public visibility, not '{request.Visibility}'."),
+            };
+        }
+        else
+        {
+            payload["visibility"] = request.Visibility;
+        }
         using var created = await SendAsync(
             HttpMethod.Post,
             path,
-            new Dictionary<string, object?>
-            {
-                ["name"] = request.Repository,
-                ["visibility"] = request.Visibility,
-            },
+            payload,
             cancellationToken);
         return await ReadRepositoryAsync(created, request.DefaultBranch, owner, cancellationToken);
     }
@@ -159,15 +170,19 @@ internal sealed class GitHubRestProvisioningClient : IGitHubProvisioningClient
 
         foreach (var label in request.Labels.Where(label => !existing.Contains(label.Name)))
         {
+            var payload = new Dictionary<string, object?> { ["name"] = label.Name };
+            if (label.Color is not null)
+            {
+                payload["color"] = label.Color;
+            }
+            if (label.Description is not null)
+            {
+                payload["description"] = label.Description;
+            }
             using var ignored = await SendAsync(
                 HttpMethod.Post,
                 $"repos/{request.RepositoryFullName}/labels",
-                new Dictionary<string, object?>
-                {
-                    ["name"] = label.Name,
-                    ["color"] = label.Color,
-                    ["description"] = label.Description,
-                },
+                payload,
                 cancellationToken);
         }
     }
