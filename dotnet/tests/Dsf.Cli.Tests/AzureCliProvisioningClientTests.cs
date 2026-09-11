@@ -90,10 +90,31 @@ public sealed class AzureCliProvisioningClientTests
                     "githubRepository=acme/paritydemo",
                     "allowPublicNetworkAccess=true",
                     "operationMaturity=low",
+                    "creationMaturity=low",
                     "adminPrincipalId=11111111-2222-3333-4444-555555555555",
                     "--query", "properties.outputs", "-o", "json",
                 ],
                 invocation);
+        }
+        finally
+        {
+            File.Delete(bicepPath);
+        }
+    }
+
+    [Fact]
+    public async Task DeployTopology_passes_creation_maturity_to_the_template()
+    {
+        var bicepPath = TempBicepFile();
+        try
+        {
+            var runner = new RecordingAzureCliRunner(new AzureCliInvocationResult(0, "{}", ""));
+            var client = new AzureCliProvisioningClient(runner);
+
+            await client.DeployTopologyAsync(
+                SampleTopologyRequest(bicepPath) with { CreationMaturity = "medium" }, CancellationToken.None);
+
+            Assert.Contains("creationMaturity=medium", Assert.Single(runner.Invocations));
         }
         finally
         {
@@ -142,6 +163,7 @@ public sealed class AzureCliProvisioningClientTests
                   "openaiEmbeddingDeployment": {"type": "String", "value": "text-embedding-3-large"},
                   "runtimePrincipalId": {"type": "String", "value": "22222222-3333-4444-5555-666666666666"},
                   "orchestratorAppName": {"type": "String", "value": "dsf-paritydemo-orchestrator"},
+                  "sourceAgentEndpoints": {"type": "Object", "value": {"DSF_SOURCE_AGENT_ENDPOINT_WEBIQ":"https://webiq.internal.example"}},
                   "keyVaultName": {"type": "String", "value": "kv-paritydemo"}
                 }
                 """;
@@ -159,6 +181,7 @@ public sealed class AzureCliProvisioningClientTests
             Assert.False(
                 result.Outputs.ContainsKey("appInsightsConnectionString"),
                 "the App Insights connection string must never be captured, even though the deployment emits it.");
+            Assert.Contains("https://webiq.internal.example", result.Outputs["sourceAgentEndpoints"], StringComparison.Ordinal);
             Assert.DoesNotContain(
                 result.Outputs.Values,
                 value => value.Contains("super-secret-key", StringComparison.Ordinal));

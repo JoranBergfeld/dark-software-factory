@@ -109,7 +109,10 @@ public sealed record ConveyorServices(
     IEvidenceClusterer? EvidenceClusterer = null,
     IReadOnlyList<IDeliberationLens>? DeliberationLenses = null,
     IReadOnlyList<IValidationJuror>? ValidationJurors = null,
-    string ProductMaturity = "high")
+    string ProductMaturity = "high",
+    int DeliberationRounds = 2,
+    TimeSpan? JuryTimeout = null,
+    IProblemIdentityResolver? ProblemIdentityResolver = null)
 {
     public IRunStore RunStore { get; } = RunStore ?? throw new ArgumentNullException(nameof(RunStore));
 
@@ -141,15 +144,11 @@ public sealed record ConveyorServices(
         DeliberationLenses ?? ModelDeliberationLens.Default();
 
     /// <summary>
-    /// The jurors S5 council's validation jury consults over a proposal the
-    /// lens synthesizer recommends proceeding with. Defaults to the three real,
-    /// model-reasoning <see cref="ModelValidationJuror"/> instances (all
-    /// currently wired to this same <paramref name="ModelClient"/> -- see <see
-    /// cref="ModelValidationJuror.Default"/>) when a factory does not wire
-    /// others in explicitly.
+    /// The explicitly configured independent jury. An absent roster fails S5;
+    /// the deliberation model never substitutes for an unconfigured juror.
     /// </summary>
     public IReadOnlyList<IValidationJuror> ValidationJurors { get; } =
-        ValidationJurors ?? ModelValidationJuror.Default(ModelClient);
+        ValidationJurors ?? [];
 
     public IEvidenceGatherer? GathererFor(string sourceKind) =>
         EvidenceGatherers.FirstOrDefault(

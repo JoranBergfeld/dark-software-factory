@@ -219,6 +219,7 @@ public static class CliApplication
         var location = StringOption("--location", "Azure region", "swedencentral");
         var creationMaturity = StringOption("--creation-maturity", "creation-phase autonomy", "low", "low", "medium", "high");
         var operationMaturity = StringOption("--operation-maturity", "operation-phase autonomy", "low", "low", "medium", "high");
+        var decideConfig = StringOption("--decide-config", "nonsecret Decide source and judgment configuration JSON");
         var dryRun = BoolOption("--dry-run", "preview only: print the what-if plan without running steps");
         var noCharter = BoolOption("--no-charter", "skip the post-provision charter prompt");
         var writePlan = BoolOption("--write-plan", "with --dry-run, still write the instance manifest");
@@ -245,6 +246,7 @@ public static class CliApplication
             location,
             creationMaturity,
             operationMaturity,
+            decideConfig,
             dryRun,
             noCharter,
             writePlan,
@@ -267,6 +269,7 @@ public static class CliApplication
             location,
             creationMaturity,
             operationMaturity,
+            decideConfig,
             dryRun,
             noCharter,
             writePlan,
@@ -358,6 +361,14 @@ public static class CliApplication
                     githubAppIdValue,
                     githubInstallationIdValue,
                     configRootValue);
+                if (parseResult.GetValue(decideConfig) is { Length: > 0 } decidePath)
+                {
+                    definition = definition with
+                    {
+                        Runtime = definition.Runtime with { Decide = DecideConfigurationFile.Read(decidePath) },
+                    };
+                }
+                definition.Runtime.Decide.Validate();
             }
             catch (InstanceDefinitionException exception)
             {
@@ -382,6 +393,12 @@ public static class CliApplication
                     definition.GitHub.AppId,
                     definition.GitHub.InstallationId,
                     configRootValue);
+
+                if (definition.Runtime.Decide.EnabledSourceAgentKinds.Count > 0)
+                {
+                    terminal.WriteLine(
+                        $"[dsf] Decide source agents: {string.Join(", ", definition.Runtime.Decide.EnabledSourceAgentKinds)}");
+                }
 
                 if (parseResult.GetValue(writePlan)
                     && !WritePlannedDefinition(
@@ -428,6 +445,11 @@ public static class CliApplication
                     await appConfig.SeedProductRecordAsync(
                         productEndpoint,
                         ProductRecordFor(updated),
+                        cancellationToken);
+                    await appConfig.SeedSourceAgentRosterAsync(
+                        productEndpoint,
+                        updated.Product.Key,
+                        updated.Runtime.Decide.EnabledSourceAgentKinds,
                         cancellationToken);
                     await appConfig.PublishRuntimeIndexAsync(
                         ownerEndpoint,
@@ -1954,7 +1976,13 @@ public static class CliApplication
             ["DSF_PRODUCT"] = definition.Product.Key,
             [ProductConfigurationKeys.OwnerIndexGitHubRepository] = definition.GitHub.FullName(),
             [ProductConfigurationKeys.OwnerIndexAppConfigEndpoint] = productEndpoint,
+            [RuntimeIntegrationSettings.CreationMaturity] = definition.Product.CreationMaturity,
+            [RuntimeIntegrationSettings.CosmosDatabase] = definition.Product.Key,
         };
+        foreach (var (key, value) in definition.Runtime.Decide.JudgmentEnvironment())
+        {
+            values[key] = value;
+        }
         foreach (var (key, value) in definition.Azure.Outputs)
         {
             if (key.EndsWith("Endpoint", StringComparison.Ordinal))
@@ -1994,6 +2022,20 @@ public static class CliApplication
         if (!string.IsNullOrWhiteSpace(definition.GitHub.PrivateKeySecretName))
         {
             values["GITHUB_APP_PRIVATE_KEY_SECRET"] = definition.GitHub.PrivateKeySecretName;
+        }
+
+        if (definition.Azure.Outputs.TryGetValue("sourceAgentEndpoints", out var sourceAgentEndpoints))
+        {
+            var endpoints = JsonSerializer.Deserialize<Dictionary<string, string>>(sourceAgentEndpoints)
+                ?? throw new InstanceDefinitionException("sourceAgentEndpoints deployment output must be an object.");
+            foreach (var kind in SourceAgentKinds.Known)
+            {
+                var key = RuntimeIntegrationSettings.SourceAgentEndpoint(kind);
+                if (endpoints.TryGetValue(key, out var endpoint) && !string.IsNullOrWhiteSpace(endpoint))
+                {
+                    values[key] = endpoint;
+                }
+            }
         }
 
         return values;

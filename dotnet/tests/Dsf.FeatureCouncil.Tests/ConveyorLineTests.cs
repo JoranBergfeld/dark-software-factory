@@ -34,7 +34,8 @@ public sealed class ConveyorLineTests
 
         Assert.Equal(RunStatus.Previewed, run.Status);
         Assert.Equal(ConveyorLine.StationNames, run.Checkpoints);
-        Assert.Equal(ConveyorLine.StationNames, store.Saved.Select(saved => saved.Station).ToArray());
+        Assert.Equal(ConveyorLine.StationNames,
+            store.Saved.Where(saved => saved.Checkpoints.Contains(saved.Station)).Select(saved => saved.Station).ToArray());
         Assert.All(store.Saved, saved => Assert.Equal(run.Id, saved.RunId));
         Assert.Null(run.FailureReason);
     }
@@ -48,11 +49,12 @@ public sealed class ConveyorLineTests
 
         await ConveyorLine.RunAsync(ScopedRun(), services, CancellationToken.None);
 
-        for (var index = 0; index < store.Saved.Count; index++)
+        var completed = store.Saved.Where(saved => saved.Checkpoints.Contains(saved.Station)).ToArray();
+        for (var index = 0; index < completed.Length; index++)
         {
             Assert.Equal(
                 ConveyorLine.StationNames.Take(index + 1).ToArray(),
-                store.Saved[index].Checkpoints);
+                completed[index].Checkpoints);
         }
     }
 
@@ -71,7 +73,7 @@ public sealed class ConveyorLineTests
         Assert.Equal(0, gatherer.Calls);
         Assert.Equal(
             ConveyorLine.StationNames.Skip(2).ToArray(),
-            store.Saved.Select(saved => saved.Station).ToArray());
+            store.Saved.Where(saved => saved.Checkpoints.Contains(saved.Station)).Select(saved => saved.Station).ToArray());
         Assert.Equal(ConveyorLine.StationNames, resumed.Checkpoints);
         Assert.Single(resumed.Evidence);
         Assert.Equal(RunStatus.Previewed, resumed.Status);
@@ -82,6 +84,7 @@ public sealed class ConveyorLineTests
     [InlineData(RunStatus.Filed)]
     [InlineData(RunStatus.Error)]
     [InlineData(RunStatus.Previewed)]
+    [InlineData(RunStatus.Escalated)]
     public async Task A_terminal_run_is_not_re_driven(RunStatus terminal)
     {
         var store = new RecordingRunStore();
@@ -205,7 +208,7 @@ public sealed class ConveyorLineTests
     }
 
     [Fact]
-    public async Task A_dry_run_previews_nothing_for_a_proposal_the_council_rejected()
+    public async Task A_dry_run_previews_nothing_when_a_unanimous_no_go_kills_any_proposal()
     {
         var services = ConveyorDoubles.Services(
             gatherers:
@@ -227,15 +230,21 @@ public sealed class ConveyorLineTests
             rejected,
             proposal => Assert.DoesNotContain(
                 finished.PreviewedIssues, preview => preview.Title == proposal.Title));
-        Assert.Equal(
-            finished.Proposals.Count(proposal => proposal.Accepted), finished.PreviewedIssues.Count);
+        Assert.Equal(RunStatus.Killed, finished.Status);
+        Assert.Empty(finished.PreviewedIssues);
+        Assert.DoesNotContain(S6Routing.StationName, finished.Checkpoints);
     }
 
     [Fact]
     public async Task A_recurring_intent_consults_the_lessons_a_prior_run_recorded_during_synthesis()
     {
         var fingerprint = RunIdentity.Compute(TriggerKind.Signal, ["acme"], ["sentry"]);
-        var intentKey = $"{fingerprint}:sentry";
+        var priorRun = new ConveyorRun { Fingerprint = fingerprint };
+        priorRun.Evidence.Add(SentryEvidence);
+        var resolver = new RecordingProblemIdentityResolver();
+        await new S3Synthesis().RunAsync(
+            priorRun, ConveyorDoubles.Services(problemIdentityResolver: resolver), CancellationToken.None);
+        var intentKey = Assert.Single(priorRun.Proposals).IntentKey;
         var learningStore = new RecordingLearningStore(
             new LearningRecord(
                 intentKey, OutcomeLabels.Rejected, "https://github.com/acme/acme/issues/7", "prior attempt",
@@ -244,7 +253,8 @@ public sealed class ConveyorLineTests
         var services = ConveyorDoubles.Services(
             gatherers: [new CountingEvidenceGatherer("sentry", SentryEvidence)],
             modelClient: model,
-            learningStore: learningStore);
+            learningStore: learningStore,
+            problemIdentityResolver: resolver);
 
         var run = await ConveyorLine.RunAsync(ScopedRun(), services, CancellationToken.None);
 

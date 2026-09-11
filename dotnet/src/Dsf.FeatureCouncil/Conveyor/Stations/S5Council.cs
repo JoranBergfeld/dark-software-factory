@@ -1,145 +1,241 @@
 namespace Dsf.FeatureCouncil.Conveyor.Stations;
 
-/// <summary>
-/// S5 — council. Weighs each grounded proposal through every configured
-/// deliberation lens (<see cref="ConveyorServices.DeliberationLenses"/>): an
-/// initial round where each lens judges the proposal independently, then a
-/// see-and-revise round where every lens judges again having seen where the
-/// others initially landed. The final round's verdicts are combined by <see
-/// cref="LensSynthesizer.Synthesize"/> -- a deterministic, pure function of the
-/// verdicts and the governed confidence threshold -- into a proceed/reject
-/// recommendation and confidence.
-///
-/// A proposal the lens synthesizer does not recommend proceeding with is
-/// simply <see cref="ProposalVerdict.Rejected"/>: the jury is never consulted
-/// for it. A proposal the lenses do recommend proceeding with is instead
-/// handed to every configured validation juror (<see
-/// cref="ConveyorServices.ValidationJurors"/>), each reviewing that
-/// recommendation independently; <see cref="JuryVerdictRules.Decide"/> then
-/// combines their verdicts -- together with the product's creation maturity --
-/// into the proposal's final <see cref="ProposalVerdict.Proceed"/>/<see
-/// cref="ProposalVerdict.Escalate"/>/<see cref="ProposalVerdict.Kill"/>. This
-/// is the station's actual verdict authority: <see cref="Proposal.Confidence"/>
-/// and <see cref="Proposal.Verdict"/> (and the <see cref="Proposal.Accepted"/>
-/// convenience read over it) are driven entirely by the lenses' weighted
-/// judgment and the jury's review of it, not by how much of the run's evidence
-/// a proposal happened to cite.
-///
-/// A juror that returns a malformed result, or whose model call fails or times
-/// out, throws rather than being caught here: the exception propagates to the
-/// conveyor line, which turns it into an audited, terminal <see
-/// cref="RunStatus.Error"/> -- never a silent pass-through. A <see
-/// cref="ProposalVerdict.Kill"/> verdict on any proposal kills the whole run
-/// (<see cref="RunStatus.Killed"/>); a <see cref="ProposalVerdict.Escalate"/>
-/// verdict on any proposal (with no kill also present) escalates the whole run
-/// (<see cref="RunStatus.Escalated"/>) -- either way the run's persisted state,
-/// including every lens and jury verdict recorded to the audit trail, is the
-/// review package a human acts on: the line never reaches S6/S7 filing for a
-/// killed or escalated run.
-/// </summary>
+/// <summary>Persists deliberation and independent jury review before allowing routing or filing.</summary>
 public sealed class S5Council : IStation
 {
     public const string StationName = "s5_council";
-
-    /// <summary>
-    /// Confidence a proposal must reach to be accepted when the product's own
-    /// App Configuration store carries no <c>threshold.&lt;product&gt;</c> entry,
-    /// matching the Python <c>DEFAULT_THRESHOLD</c> fallback in
-    /// <c>dsf.config.flags</c> and Control Center's own documented default. The
-    /// governed value -- read per run via <see cref="ConveyorServices.ConfidenceThresholdReader"/>
-    /// -- is what the council actually compares the lens synthesis's confidence
-    /// against; this constant is only the fallback a reader falls back to when
-    /// nothing is configured.
-    /// </summary>
     public const double DefaultThreshold = 0.6;
-
     public string Name => StationName;
 
     public async Task RunAsync(ConveyorRun run, ConveyorServices services, CancellationToken cancellationToken)
     {
-        var threshold = await services.ConfidenceThresholdReader.ReadThresholdAsync(cancellationToken);
-        var lenses = services.DeliberationLenses;
-        var jurors = services.ValidationJurors;
-
-        foreach (var proposal in run.Proposals)
+        cancellationToken.ThrowIfCancellationRequested();
+        try
         {
-            var initialVerdicts = new List<LensVerdict>(lenses.Count);
+            if (services.DeliberationRounds is < 1 or > 2)
+            {
+                throw new InvalidOperationException("S5 deliberation rounds must be one or two");
+            }
+
+            if (services.JuryTimeout is { } timeout && (timeout <= TimeSpan.Zero || timeout > TimeSpan.FromMinutes(10)))
+            {
+                throw new InvalidOperationException("S5 jury timeout must be positive and at most ten minutes");
+            }
+
+            var jurors = services.ValidationJurors;
+            if (jurors.Count != 3 || jurors.Any(juror => juror is null || string.IsNullOrWhiteSpace(juror.Name))
+                || jurors.Select(juror => juror.Name).Distinct(StringComparer.Ordinal).Count() != 3)
+            {
+                throw new InvalidOperationException("S5 requires exactly three distinct, configured validation jurors");
+            }
+
+            var threshold = await services.ConfidenceThresholdReader.ReadThresholdAsync(cancellationToken);
+            foreach (var proposal in run.Proposals)
+            {
+                try
+                {
+                    await ReviewAsync(proposal, run, services, threshold, cancellationToken);
+                }
+                catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+                {
+                    RecordError(proposal, exception);
+                    throw;
+                }
+            }
+
+            if (run.Proposals.Any(proposal => proposal.Verdict == ProposalVerdict.Kill))
+            {
+                run.Status = RunStatus.Killed;
+                run.Record(StationName, "killed: the jury unanimously voted no-go on at least one proposal.");
+            }
+            else if (run.Proposals.Any(proposal => proposal.Verdict == ProposalVerdict.Escalate))
+            {
+                run.Status = RunStatus.Escalated;
+                run.Record(StationName, "escalated: low creation maturity or split jury requires human review.");
+            }
+
+            run.Record(StationName,
+                $"council complete: {run.Proposals.Count(p => p.Verdict == ProposalVerdict.Proceed)} of "
+                + $"{run.Proposals.Count} proposal(s) proceeding.");
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            foreach (var proposal in run.Proposals.Where(proposal => proposal.Verdict == ProposalVerdict.Pending))
+            {
+                RecordError(proposal, exception);
+            }
+
+            run.Status = RunStatus.Error;
+            if (exception is OperationCanceledException)
+            {
+                throw new InvalidOperationException("S5 model operation timed out", exception);
+            }
+
+            throw;
+        }
+    }
+
+    private static async Task ReviewAsync(
+        Proposal proposal, ConveyorRun run, ConveyorServices services, double threshold, CancellationToken cancellationToken)
+    {
+        var lenses = services.DeliberationLenses;
+        var evidence = proposal.ClusterEvidence.Count > 0 ? proposal.ClusterEvidence
+            : run.Evidence.Where(item => proposal.SourceKinds.Contains(item.SourceKind)
+                && proposal.EvidenceReferences.Contains(item.Reference)).ToArray();
+        var jurorNames = services.ValidationJurors.Select(juror => juror.Name).ToArray();
+        var models = services.ValidationJurors.Select(juror => juror.Model).OfType<Dsf.Core.Runtime.JurorModelSettings>().ToArray();
+        var review = proposal.CouncilReview ?? new CouncilReview
+        {
+            Evidence = evidence,
+            Threshold = threshold,
+            ProductMaturity = services.ProductMaturity,
+            RoundsRequested = services.DeliberationRounds,
+            JurorNames = jurorNames,
+            Models = models,
+        };
+        proposal.CouncilReview = review;
+        if (review.Evidence.Count == 0 || !review.Evidence.ToHashSet().SetEquals(evidence)
+            || !review.JurorNames.SequenceEqual(jurorNames) || !review.Models.SequenceEqual(models))
+        {
+            throw new InvalidOperationException("S5 checkpoint evidence or jury configuration is incomplete or changed");
+        }
+
+        if (review.JuryVerdicts.Count > 3
+            || review.JuryVerdicts.Any(verdict => verdict is null || string.IsNullOrWhiteSpace(verdict.Rationale)
+                || !Enum.IsDefined(verdict.Position) || !jurorNames.Contains(verdict.JurorName))
+            || review.JuryVerdicts.Select(verdict => verdict.JurorName).Distinct(StringComparer.Ordinal).Count()
+                != review.JuryVerdicts.Count)
+        {
+            throw new InvalidOperationException("S5 checkpoint contains an invalid jury roster or incomplete result");
+        }
+
+        if (review.RoundsRequested is < 1 or > 2 || review.Rounds.Count > review.RoundsRequested
+            || review.Rounds.Where((round, index) => round.Number != index + 1).Any())
+        {
+            throw new InvalidOperationException("S5 checkpoint contains invalid deliberation rounds");
+        }
+
+        foreach (var round in review.Rounds)
+        {
+            ValidateRound(round.Verdicts, lenses);
+        }
+
+        if (review.Outcome != ProposalVerdict.Pending)
+        {
+            if (review.Outcome is not (ProposalVerdict.Proceed or ProposalVerdict.Escalate or ProposalVerdict.Kill)
+                || review.Rounds.Count != review.RoundsRequested || review.Recommendation is null
+                || review.Outcome != JuryVerdictRules.Decide(review.ProductMaturity, review.JuryVerdicts))
+            {
+                throw new InvalidOperationException("S5 checkpoint has no complete typed council outcome");
+            }
+
+            ValidateRecommendation(review);
+            proposal.Verdict = JuryVerdictRules.Decide(services.ProductMaturity, review.JuryVerdicts);
+            proposal.CouncilReview = review with { Outcome = proposal.Verdict, ProductMaturity = services.ProductMaturity };
+            return;
+        }
+
+        for (var round = review.Rounds.Count; round < review.RoundsRequested; round++)
+        {
+            var prior = round == 0 ? [] : review.Rounds[round - 1].Verdicts;
+            var verdicts = new List<LensVerdict>();
             foreach (var lens in lenses)
             {
-                initialVerdicts.Add(
-                    await lens.DeliberateAsync(proposal, run, [], services.ModelClient, cancellationToken));
+                verdicts.Add(await lens.DeliberateAsync(proposal, run, prior, services.ModelClient, cancellationToken));
             }
 
-            var finalVerdicts = new List<LensVerdict>(lenses.Count);
-            foreach (var lens in lenses)
-            {
-                finalVerdicts.Add(
-                    await lens.DeliberateAsync(proposal, run, initialVerdicts, services.ModelClient, cancellationToken));
-            }
+            ValidateRound(verdicts, lenses);
+            review = review with { Rounds = [.. review.Rounds, new DeliberationRound(round + 1, verdicts.ToArray())] };
+            proposal.CouncilReview = review;
+            await services.RunStore.SaveAsync(run, StationName, cancellationToken);
+        }
 
-            var synthesis = LensSynthesizer.Synthesize(finalVerdicts, threshold);
-            proposal.Confidence = synthesis.Confidence;
+        var synthesis = LensSynthesizer.Synthesize(review.Rounds[^1].Verdicts, review.Threshold);
+        if (review.Recommendation is not null)
+        {
+            ValidateRecommendation(review);
+        }
+        review = review with { Recommendation = synthesis };
+        proposal.CouncilReview = review;
+        proposal.Confidence = synthesis.Confidence;
+        foreach (var verdict in synthesis.Verdicts)
+        {
+            run.Record(StationName,
+                $"proposal '{proposal.Id}' lens '{verdict.LensName}' position={verdict.Position} rationale: {verdict.Rationale}");
+        }
 
-            foreach (var verdict in finalVerdicts)
+        foreach (var juror in services.ValidationJurors)
+        {
+            if (review.JuryVerdicts.Any(verdict => verdict.JurorName == juror.Name))
             {
-                run.Record(
-                    StationName,
-                    $"proposal '{proposal.Id}' lens '{verdict.LensName}' position={verdict.Position} "
-                    + $"rationale: {verdict.Rationale}");
-            }
-
-            if (!synthesis.Proceed)
-            {
-                proposal.Verdict = ProposalVerdict.Rejected;
-                run.Record(
-                    StationName,
-                    $"proposal '{proposal.Id}' confidence={proposal.Confidence:F2} verdict=rejected "
-                    + "(lens synthesis did not recommend proceeding; jury not consulted)"
-                    + (synthesis.Disagreement ? " (lenses disagreed)" : string.Empty) + ".");
                 continue;
             }
 
-            var jurorVerdicts = new List<JurorVerdict>(jurors.Count);
-            foreach (var juror in jurors)
+            JurorVerdict verdict;
+            try
             {
-                jurorVerdicts.Add(await juror.ValidateAsync(proposal, run, synthesis, cancellationToken));
+                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                timeout.CancelAfter(services.JuryTimeout ?? TimeSpan.FromSeconds(120));
+                verdict = await juror.ValidateAsync(proposal, run, synthesis, timeout.Token).WaitAsync(timeout.Token);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+            {
+                throw new InvalidOperationException($"juror '{juror.Name}' failed: {exception.Message}", exception);
             }
 
-            foreach (var verdict in jurorVerdicts)
+            if (verdict is null || verdict.JurorName != juror.Name || string.IsNullOrWhiteSpace(verdict.Rationale)
+                || !Enum.IsDefined(verdict.Position))
             {
-                run.Record(
-                    StationName,
-                    $"proposal '{proposal.Id}' juror '{verdict.JurorName}' position={verdict.Position} "
-                    + $"rationale: {verdict.Rationale}");
+                throw new InvalidOperationException($"juror '{juror.Name}' returned a malformed or incomplete verdict");
             }
 
-            proposal.Verdict = JuryVerdictRules.Decide(services.ProductMaturity, jurorVerdicts);
-            run.Record(
-                StationName,
-                $"proposal '{proposal.Id}' confidence={proposal.Confidence:F2} verdict={proposal.Verdict}"
-                + (synthesis.Disagreement ? " (lenses disagreed)" : string.Empty) + ".");
+            review = review with { JuryVerdicts = [.. review.JuryVerdicts, verdict] };
+            proposal.CouncilReview = review;
+            await services.RunStore.SaveAsync(run, StationName, cancellationToken);
+            run.Record(StationName,
+                $"proposal '{proposal.Id}' juror '{verdict.JurorName}' position={verdict.Position} rationale: {verdict.Rationale}");
         }
 
-        if (run.Proposals.Any(proposal => proposal.Verdict == ProposalVerdict.Kill))
-        {
-            run.Status = RunStatus.Killed;
-            run.Record(
-                StationName,
-                "killed: the jury unanimously voted no-go on at least one proposal the lenses recommended "
-                + "proceeding with.");
-        }
-        else if (run.Proposals.Any(proposal => proposal.Verdict == ProposalVerdict.Escalate))
-        {
-            run.Status = RunStatus.Escalated;
-            run.Record(
-                StationName,
-                "escalated: at least one proposal needs a human decision (low creation maturity, or a split jury) "
-                + "before this run can proceed to routing and filing.");
-        }
+        proposal.Verdict = JuryVerdictRules.Decide(services.ProductMaturity, review.JuryVerdicts);
+        proposal.CouncilReview = review with { Outcome = proposal.Verdict, ProductMaturity = services.ProductMaturity };
+        run.Record(StationName,
+            $"proposal '{proposal.Id}' confidence={proposal.Confidence:F2} verdict={proposal.Verdict}"
+            + (synthesis.Disagreement ? " (lenses disagreed)" : "") + ".");
+        await services.RunStore.SaveAsync(run, StationName, cancellationToken);
+    }
 
-        run.Record(
-            StationName,
-            $"council complete: {run.Proposals.Count(p => p.Verdict == ProposalVerdict.Proceed)} of "
-            + $"{run.Proposals.Count} proposal(s) proceeding.");
+    private static void ValidateRound(IReadOnlyList<LensVerdict> verdicts, IReadOnlyList<IDeliberationLens> lenses)
+    {
+        if (verdicts.Count == 0 || verdicts.Count != lenses.Count
+            || verdicts.Any(verdict => verdict is null)
+            || verdicts.Select(verdict => verdict.LensName).Distinct(StringComparer.Ordinal).Count() != lenses.Count
+            || verdicts.Any(verdict => !lenses.Any(lens => lens.Name == verdict.LensName && lens.Weight == verdict.Weight)
+                || !Enum.IsDefined(verdict.Position) || string.IsNullOrWhiteSpace(verdict.Rationale)
+                || !double.IsFinite(verdict.Weight) || verdict.Weight <= 0))
+        {
+            throw new InvalidOperationException("S5 received a malformed or incomplete deliberation round");
+        }
+    }
+
+    private static void ValidateRecommendation(CouncilReview review)
+    {
+        var calculated = LensSynthesizer.Synthesize(review.Rounds[^1].Verdicts, review.Threshold);
+        if (review.Recommendation is not { } recommendation
+            || recommendation.Proceed != calculated.Proceed || recommendation.Confidence != calculated.Confidence
+            || recommendation.Disagreement != calculated.Disagreement
+            || !recommendation.Verdicts.SequenceEqual(calculated.Verdicts))
+        {
+            throw new InvalidOperationException("S5 checkpoint recommendation does not match its completed lens round");
+        }
+    }
+
+    private static void RecordError(Proposal proposal, Exception exception)
+    {
+        proposal.Verdict = ProposalVerdict.Error;
+        proposal.CouncilReview = (proposal.CouncilReview ?? new CouncilReview()) with
+        {
+            Outcome = ProposalVerdict.Error,
+            FailureReason = exception.Message,
+        };
     }
 }

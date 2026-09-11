@@ -37,16 +37,17 @@ public static class RuntimeIntegrationSettings
 
     /// <summary>
     /// The KQL query the typed Azure Monitor source integration runs against
-    /// <see cref="AzureMonitorWorkspaceId"/> to read evidence rows.
+    /// <see cref="AzureMonitorWorkspaceId"/> to read evidence rows. Must project
+    /// nonempty string <c>Reference</c> and <c>Summary</c> columns.
     /// </summary>
     public const string AzureMonitorQuery = "DSF_AZUREMONITOR_QUERY";
 
     /// <summary>
-    /// The Azure AI Foundry project endpoint the typed FoundryIQ source
-    /// integration queries (e.g. <c>https://&lt;resource&gt;.services.ai.azure.com/api/projects/&lt;project&gt;</c>),
-    /// managed-identity authenticated.
+    /// The Azure AI Search service endpoint backing the FoundryIQ knowledge base
+    /// (e.g. <c>https://&lt;service&gt;.search.windows.net</c>), authenticated with
+    /// the source agent's managed identity and the Search Index Data Reader role.
     /// </summary>
-    public const string FoundryIqProjectEndpoint = "DSF_FOUNDRYIQ_PROJECT_ENDPOINT";
+    public const string FoundryIqSearchEndpoint = "DSF_FOUNDRYIQ_SEARCH_ENDPOINT";
 
     /// <summary>The FoundryIQ knowledge base the typed integration queries.</summary>
     public const string FoundryIqKnowledgeBase = "DSF_FOUNDRYIQ_KNOWLEDGE_BASE";
@@ -76,6 +77,9 @@ public static class RuntimeIntegrationSettings
     /// (ADR 0020: seeded by <c>dsf new</c>'s <c>seed_webiq_key</c> step).
     /// </summary>
     public const string WebIqApiKeySecret = "WEBIQ_API_KEY_SECRET";
+
+    /// <summary>Default product-vault WebIQ secret name (ADR 0020).</summary>
+    public const string DefaultWebIqApiKeySecret = "webiq-api-key";
 
     /// <summary>The repository accepted proposals are filed into (<c>owner/name</c>).</summary>
     public const string GitHubRepository = "GITHUB_REPOSITORY";

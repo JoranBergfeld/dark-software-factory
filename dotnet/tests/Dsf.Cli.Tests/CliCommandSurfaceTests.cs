@@ -133,6 +133,7 @@ command <root> desc="Dark Software Factory — factory CLI (create product insta
     option --location type=String arity=1..1 default="swedencentral" desc="Azure region"
     option --creation-maturity type=String arity=1..1 default="low" choices=[high, low, medium] desc="creation-phase autonomy"
     option --operation-maturity type=String arity=1..1 default="low" choices=[high, low, medium] desc="operation-phase autonomy"
+    option --decide-config type=String arity=1..1 desc="nonsecret Decide source and judgment configuration JSON"
     option --dry-run type=Boolean arity=0..1 default=False choices=[False, True] desc="preview only: print the what-if plan without running steps"
     option --no-charter type=Boolean arity=0..1 default=False choices=[False, True] desc="skip the post-provision charter prompt"
     option --write-plan type=Boolean arity=0..1 default=False choices=[False, True] desc="with --dry-run, still write the instance manifest"

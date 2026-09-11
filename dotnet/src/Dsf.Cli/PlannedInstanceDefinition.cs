@@ -49,6 +49,7 @@ internal static class PlannedInstanceDefinition
             {
                 Target = runtimeTarget,
                 Image = DefaultRuntimeImage,
+                Decide = existing?.Runtime.Decide ?? new(),
             },
             Governance = new GovernanceSettings
             {

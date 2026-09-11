@@ -37,6 +37,73 @@ dsf new \
 
 Run `dsf new --help` for the full flag list.
 
+## Enable Decide sources and judgment
+
+Source agents default to disabled. Supply `--decide-config <path>` to provision
+only the selected Microsoft-native agents, seed their product-scoped
+`agents.<kind>.enabled` flags, and wire the orchestrator's internal A2A endpoints.
+The nonsecret configuration is retained under `runtime.decide` in the instance
+definition and reused when a subsequent `dsf new` omits this option.
+
+Example `decide.json` (replace endpoints and deployment names with existing,
+authorized Azure model deployments):
+
+```json
+{
+  "enabledSourceAgentKinds": ["webiq"],
+  "webIqQuery": "checkout reliability problems and customer needs",
+  "juryModels": [
+    {"name":"value-check","provider":"openai","family":"gpt","endpoint":"https://models.example","deployment":"gpt-4o"},
+    {"name":"challenge","provider":"deepseek","family":"deepseek","endpoint":"https://models.example","deployment":"DeepSeek-V3"},
+    {"name":"independent-check","provider":"xai","family":"grok","endpoint":"https://models.example","deployment":"grok-4"}
+  ],
+  "juryTimeoutSeconds": 120,
+  "deliberationRounds": 2,
+  "lenses": [{"name":"cost","enabled":true,"weight":0.5}]
+}
+```
+
+```bash
+dsf new --product microbi --creation-maturity medium \
+  --decide-config decide.json --dry-run --write-plan
+```
+
+Enabling any source requires three distinct juror families and deployment targets.
+The supported Azure-hosted provider/family pairs are `openai/gpt`,
+`deepseek/deepseek`, and `xai/grok`; three aliases for the same model are rejected
+at configuration or response validation. The runtime uses Azure managed identity
+against `/openai/v1/chat/completions`. This template does **not** create those
+three external deployments or grant access on external accounts automatically.
+Grant the runtime identity the appropriate model data-plane role on each account.
+The synthesis/lens model remains the product's configured Azure OpenAI deployment.
+
+All five lenses default to enabled with weight 1. `lenses` can override `value`,
+`cost`, `feasibility`, `security`, or `strategic-fit`; at least one must remain
+enabled. Rounds must be 1 or 2, weights finite and positive, and juror timeouts
+1–600 seconds. Low creation maturity always escalates; medium/high permits
+filing only for a valid unanimous-go jury outcome.
+
+| Source | Required configuration | External prerequisite |
+|---|---|---|
+| `azuremonitor` | `azureMonitorWorkspaceId`, `azureMonitorQuery` (KQL) | Runtime identity authorized to query that Log Analytics workspace |
+| `foundryiq` | `foundryIqSearchEndpoint`, `foundryIqKnowledgeBase`, `foundryIqQuery` | Azure AI Search knowledge base; Search Index Data Reader for the runtime identity |
+| `webiq` | `webIqQuery` | `webiq-api-key` already present in the product Key Vault |
+
+Azure Monitor queries must return exactly one table with nonempty string
+`Reference` and `Summary` columns. For example, a Container Apps log query can
+project `Reference=strcat("azuremonitor://", _ResourceId, "/", tostring(TimeGenerated))`
+and `Summary=Log_s`. Choose references that identify the actual source record.
+Partial or truncated query results fail rather than silently losing evidence.
+For a local proof, `AZURE_TOKEN_CREDENTIALS=AzureCliCredential` selects the
+existing `az login` identity without waiting for unavailable hosted credentials;
+deployed apps continue to use managed identity.
+
+FoundryIQ uses the **Search service root**, not a Foundry project endpoint.
+WebIQ uses Microsoft's SDK-compatible `/v3/search/web` API. Do not put API keys,
+tokens, or passwords in this file; unknown properties are rejected. Secret
+seeding remains an operator prerequisite, not an implemented `dsf new` step.
+For local WebIQ development only, `WEBIQ_API_KEY` overrides Key Vault resolution.
+
 !!! note "Live progress during Azure deployment"
     The Azure provisioning step starts a deployment, polls it, and streams each resource as it
     starts and finishes. Tune cadence with `DSF_DEPLOY_POLL_INTERVAL` (seconds, default 5).

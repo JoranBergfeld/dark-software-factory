@@ -18,4 +18,8 @@ public sealed record RuntimeSettings(
     string GitHubInstallationId,
     string GitHubAppPrivateKeySecret,
     string GitHubRepository,
-    string CreationMaturity = "low");
+    string CreationMaturity = "low")
+{
+    public IReadOnlyDictionary<string, string?> IntegrationSettings { get; init; } =
+        new Dictionary<string, string?>(StringComparer.Ordinal);
+}

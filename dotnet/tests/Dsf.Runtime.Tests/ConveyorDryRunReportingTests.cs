@@ -184,7 +184,7 @@ public sealed class ConveyorDryRunReportingTests
             var preview = Assert.Single(previews);
             Assert.Equal("[azuremonitor] checkout 500s spiked after release 4.2", preview.GetProperty("title").GetString());
             Assert.Contains(
-                "ready-for-agent",
+                "creation:ready",
                 preview.GetProperty("labels").EnumerateArray().Select(label => label.GetString()));
             Assert.Empty(summary.GetProperty("filedIssues").EnumerateArray());
             Assert.Empty(filer.Filed);

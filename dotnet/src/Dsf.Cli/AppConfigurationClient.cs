@@ -27,6 +27,12 @@ internal interface IAppConfigurationClient
         ProductRecord record,
         CancellationToken cancellationToken);
 
+    Task SeedSourceAgentRosterAsync(
+        string productEndpoint,
+        string product,
+        IReadOnlyList<string> enabledKinds,
+        CancellationToken cancellationToken);
+
     Task PublishRuntimeIndexAsync(
         string ownerEndpoint,
         string product,
@@ -140,6 +146,20 @@ internal sealed class AzureCliAppConfigurationClient(IAzureCliRunner runner) : I
         foreach (var (key, value) in values)
         {
             await SetAsync(ownerEndpoint, key, value, product, cancellationToken);
+        }
+    }
+
+    public async Task SeedSourceAgentRosterAsync(
+        string productEndpoint,
+        string product,
+        IReadOnlyList<string> enabledKinds,
+        CancellationToken cancellationToken)
+    {
+        RequireEndpoint(productEndpoint, "AZURE_APPCONFIG_ENDPOINT");
+        foreach (var kind in SourceAgentKinds.Known)
+        {
+            await SetAsync(productEndpoint, ProductConfigurationKeys.AgentEnabled(kind),
+                enabledKinds.Contains(kind, StringComparer.Ordinal) ? "true" : "false", product, cancellationToken);
         }
     }
 

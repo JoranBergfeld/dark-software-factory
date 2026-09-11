@@ -83,7 +83,12 @@ param allowPublicNetworkAccess bool = false
 @allowed(['low', 'medium', 'high'])
 param operationMaturity string = 'low'
 
+@description('Creation-phase maturity used by the validation jury. Low always escalates for human review.')
+@allowed(['low', 'medium', 'high'])
+param creationMaturity string = 'low'
+
 @description('Microsoft-native source agent kinds enabled for this product (a served Container App is provisioned per kind, running `serve-agent --kind <kind>`). Every kind not listed here has no Container App at all -- not merely a disabled one.')
+@allowed(['azuremonitor', 'foundryiq', 'webiq'])
 param enabledSourceAgentKinds array = []
 
 @description('Log Analytics workspace ID the typed azuremonitor source agent queries. Required when "azuremonitor" is in enabledSourceAgentKinds.')
@@ -92,8 +97,8 @@ param azureMonitorWorkspaceId string = ''
 @description('KQL query the typed azuremonitor source agent runs against azureMonitorWorkspaceId to read evidence rows. Required when "azuremonitor" is in enabledSourceAgentKinds.')
 param azureMonitorQuery string = ''
 
-@description('Azure AI Foundry project endpoint the typed foundryiq source agent queries. Required when "foundryiq" is in enabledSourceAgentKinds.')
-param foundryIqProjectEndpoint string = ''
+@description('Azure AI Search service root hosting the FoundryIQ knowledge base. Required when "foundryiq" is enabled; grant the runtime identity Search Index Data Reader on that service.')
+param foundryIqSearchEndpoint string = ''
 
 @description('FoundryIQ knowledge base the typed foundryiq source agent queries. Required when "foundryiq" is in enabledSourceAgentKinds.')
 param foundryIqKnowledgeBase string = ''
@@ -103,6 +108,22 @@ param foundryIqQuery string = ''
 
 @description('Search query the typed webiq source agent runs against Microsoft WebIQ (ADR 0020) to read evidence results. Required when "webiq" is in enabledSourceAgentKinds.')
 param webIqQuery string = ''
+
+@description('Three existing Azure-hosted chat deployments, each with name, provider, family, endpoint and deployment. Supported pairs: openai/gpt, deepseek/deepseek, xai/grok. No credentials; the runtime identity requires access to each endpoint.')
+param juryModels array = []
+
+@description('Timeout for each validation juror; incomplete results fail the run.')
+@minValue(1)
+@maxValue(600)
+param juryTimeoutSeconds int = 120
+
+@description('Number of deliberation rounds, including the initial independent positions.')
+@minValue(1)
+@maxValue(2)
+param deliberationRounds int = 2
+
+@description('Optional overrides for the five lenses, each with name, enabled and weight; omitted lenses stay enabled with weight 1.')
+param deliberationLenses array = []
 
 // ---------------------------------------------------------------------------
 // Variables
@@ -433,6 +454,8 @@ resource containerEnv 'Microsoft.App/managedEnvironments@2025-01-01' = {
 // integration needs.
 var runtimeBaseEnv = [
   { name: 'DSF_PRODUCT', value: product }
+  { name: 'DSF_CREATION_MATURITY', value: creationMaturity }
+  { name: 'DSF_COSMOS_DATABASE', value: product }
   { name: 'AZURE_CLIENT_ID', value: runtimeIdentity.properties.clientId }
   { name: 'AZURE_APPCONFIG_ENDPOINT', value: appConfig.properties.endpoint }
   { name: 'AZURE_KEYVAULT_URI', value: keyVault.properties.vaultUri }
@@ -448,6 +471,22 @@ var runtimeBaseEnv = [
   { name: 'GITHUB_APP_PRIVATE_KEY_SECRET', value: 'github-app-private-key' }
   { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: appInsights.properties.ConnectionString }
 ]
+
+var sourceAgentEndpointEnv = map(enabledSourceAgentKinds, kind => {
+  name: 'DSF_SOURCE_AGENT_ENDPOINT_${toUpper(kind)}'
+  value: 'https://${take('${namePrefix}-agent-${kind}', 32)}.internal.${containerEnv.properties.defaultDomain}'
+})
+
+var lensEnvironment = flatten(map(deliberationLenses, lens => [
+  { name: 'DSF_LENS_${toUpper(replace(lens.name, '-', '_'))}_ENABLED', value: string(lens.?enabled ?? true) }
+  { name: 'DSF_LENS_${toUpper(replace(lens.name, '-', '_'))}_WEIGHT', value: string(lens.?weight ?? 1) }
+]))
+
+var judgmentEnvironment = concat([
+  { name: 'DSF_JURY_MODELS', value: string(juryModels) }
+  { name: 'DSF_JURY_TIMEOUT_SECONDS', value: string(juryTimeoutSeconds) }
+  { name: 'DSF_DELIBERATION_ROUNDS', value: string(deliberationRounds) }
+], lensEnvironment)
 
 resource orchestratorApp 'Microsoft.App/containerApps@2025-01-01' = {
   // Lead with the bounded namePrefix (<=12 chars) so the name stays under Azure's 32-char Container App limit for long product names (raw product overflowed).
@@ -492,7 +531,7 @@ resource orchestratorApp 'Microsoft.App/containerApps@2025-01-01' = {
             cpu: json('0.5')
             memory: '1Gi'
           }
-          env: union(runtimeBaseEnv, [
+          env: concat(runtimeBaseEnv, sourceAgentEndpointEnv, judgmentEnvironment, [
             { name: 'DSF_ASSIGN_CLOUD_AGENT', value: string(operationMaturity != 'low') }
             // The scheduled sweep always files live (never a dry run), so the
             // manual live-filing gate is confirmed once here at provisioning
@@ -524,7 +563,7 @@ var sourceAgentKindEnv = {
     { name: 'DSF_AZUREMONITOR_QUERY', value: azureMonitorQuery }
   ]
   foundryiq: [
-    { name: 'DSF_FOUNDRYIQ_PROJECT_ENDPOINT', value: foundryIqProjectEndpoint }
+    { name: 'DSF_FOUNDRYIQ_SEARCH_ENDPOINT', value: foundryIqSearchEndpoint }
     { name: 'DSF_FOUNDRYIQ_KNOWLEDGE_BASE', value: foundryIqKnowledgeBase }
     { name: 'DSF_FOUNDRYIQ_QUERY', value: foundryIqQuery }
   ]
@@ -632,3 +671,6 @@ output appInsightsId string = appInsights.id
 
 @description('Log Analytics workspace resource id (consumed by the SRE agent connector + RBAC).')
 output logAnalyticsId string = logAnalytics.id
+
+@description('Nonsecret A2A endpoint settings for provisioned source agents, reachable inside the Container Apps environment.')
+output sourceAgentEndpoints object = toObject(sourceAgentEndpointEnv, entry => entry.name, entry => entry.value)

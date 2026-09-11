@@ -37,8 +37,66 @@ With `DSF_RUNTIME_HOST` configured, manual operator checks use the `dsf` front d
 ```bash
 dsf run --product <product> --signal /absolute/path/to/operator-signal.json --dry-run
 dsf sweep --product <product> --dry-run
-dsf serve-agent --kind sentry --host 127.0.0.1 --port 8082
+dsf serve-agent --kind azuremonitor --host 127.0.0.1 --port 8082
 ```
+
+### Sweep controls and live acceptance
+
+Sweep controls are product App Configuration values, not Container App updates:
+
+```bash
+dsf sweep pause --product <product>
+dsf sweep resume --product <product>
+dsf sweep interval 300 --product <product>
+dsf sweep status --product <product>
+```
+
+Source agents have internal ingress. Run a manual acceptance sweep from inside
+the same Container Apps environment (for example, an orchestrator console);
+a laptop cannot reach internal A2A endpoints just by resolving the owner index.
+Configure the runtime's GitHub App secret, vendor credentials, tracing, and three
+distinct chat-model families before attempting live filing.
+
+For the live gate in #183, retain the manual run ID, its S3 evidence references
+and S5 review records, the S7 `creation:ready` issue URL, and logs identifying an
+autonomous sweep. `Proceed` is required to file; `Escalate`, `Kill`, and `Error`
+are auditable outcomes, not successful filing evidence. Scripted test fixtures
+do not satisfy this gate. A ticking process with repeated Cosmos authorization
+or firewall errors is not a working sweep.
+
+Do not relax network policy merely to make a proof pass: the runtime needs an
+authorized network path to its Cosmos, App Configuration, Key Vault, and model
+endpoints. The deployment adds `runs` and `learning` containers partitioned by
+`/product`, without changing the partition keys of existing containers.
+
+### Sweep lease recovery
+
+Manual and periodic sweeps share one product-wide Cosmos document,
+`id = "sweep-lease"` in the `runs` container. It does not expire: advancing the
+clock or changing cadence must not allow a second worker to file concurrently.
+Normal completion and cancellation release it with owner and ETag checks.
+Contention reports an explicit skip, not a fabricated successful run.
+
+After a crash or failed cleanup, first stop/drain every worker for that product
+and confirm no manual sweep remains active. Only then remove the orphaned
+`sweep-lease` document in the product partition and restart the orchestrator.
+Never delete a lease solely because it is old. When upgrading from the old
+window-keyed lease implementation, drain old revisions before starting the new
+one; the two locking protocols cannot coordinate with each other.
+
+### Problem identity retention
+
+The `learning` container also holds nonexpiring `problem-index-*` documents,
+one per run scope in the product partition. Each stores opaque problem IDs and
+their representative evidence profiles. Conditional writes prevent concurrent
+runs from allocating different IDs for the same recognized problem.
+
+Preserve these indexes with the learning records: deleting or expiring them
+loses recurring-intent associations and can permit duplicate issues. Ambiguous
+profile matches, write failures, and Cosmos document-size limits stop S3 before
+filing; identities are never silently evicted. Reconcile legacy per-source
+intent markers with existing issues before a live upgrade: they do not contain
+enough information to infer per-problem mappings automatically.
 
 ## Product charter
 

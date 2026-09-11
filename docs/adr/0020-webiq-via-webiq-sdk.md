@@ -80,3 +80,21 @@ read at runtime via the Container App managed identity — consistent with ADR
   consumes the provider constant directly, so there is no stored `foundry`
   provider data to migrate. Any pre-existing demo repo with Bing resources would
   need the infra re-deployed from the updated Bicep.
+
+## Current .NET realization
+
+The Python paths, Tavily option, and automatic `seed_webiq_key` step above
+describe the original rollout, not the current .NET CLI. `WebIqIntegration`
+implements the Microsoft SDK's HTTP contract directly: `POST
+https://api.microsoft.ai/v3/search/web`, `x-apikey` authentication, and typed
+`webResults` evidence. The v3 path is retained; this is not the generic source
+integration's JSON-shape guessing. The SDK response is bounded by `maxResults`
+and does not expose a paging cursor.
+
+The contract is verified against Microsoft's
+[WebIQ SDK 0.1.8 distribution](https://pypi.org/project/webiq/0.1.8/).
+Protocol-shaped fixtures are not live vendor recordings or proof of #183.
+`DSF_WEBIQ_QUERY` supplies the query. `WEBIQ_API_KEY` is a local override;
+otherwise the agent reads `WEBIQ_API_KEY_SECRET` (default `webiq-api-key`) from
+`AZURE_KEYVAULT_URI`. The operator must seed that product-vault secret before
+enabling `webiq`; current `dsf new` does not copy it from the owner vault.

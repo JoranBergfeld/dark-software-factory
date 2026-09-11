@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Dsf.FeatureCouncil.Conveyor;
@@ -12,7 +13,7 @@ namespace Dsf.Runtime;
 /// reached, refuses, or answers something unreadable throws -- the investigation
 /// station turns that into an audited, failed run rather than silent emptiness.
 /// </summary>
-internal sealed class SourceAgentEvidenceGatherer(string sourceKind, Uri endpoint, HttpClient httpClient)
+internal sealed class SourceAgentEvidenceGatherer(string sourceKind, string product, Uri endpoint, HttpClient httpClient)
     : IEvidenceGatherer
 {
     public string SourceKind { get; } = sourceKind.Trim().ToLowerInvariant();
@@ -32,12 +33,12 @@ internal sealed class SourceAgentEvidenceGatherer(string sourceKind, Uri endpoin
                 {
                     kind = SourceKind,
                     runId = run.Id,
-                    product = run.ProductHints.FirstOrDefault() ?? string.Empty,
+                    product,
                     sourceKinds = run.SourceKinds,
                 },
                 cancellationToken);
         }
-        catch (Exception exception) when (exception is not OperationCanceledException)
+        catch (HttpRequestException exception)
         {
             throw new InvalidOperationException(
                 $"could not reach the '{SourceKind}' source agent at {uri}: {exception.Message}", exception);
@@ -46,22 +47,30 @@ internal sealed class SourceAgentEvidenceGatherer(string sourceKind, Uri endpoin
         using (response)
         {
             var body = await response.Content.ReadAsStringAsync(cancellationToken);
-            if (!response.IsSuccessStatusCode)
+            if (response.StatusCode != HttpStatusCode.OK)
             {
                 throw new InvalidOperationException(
                     $"the '{SourceKind}' source agent at {uri} refused to gather "
                     + $"({(int)response.StatusCode}): {body}");
             }
 
-            return Parse(body, uri);
+            return Parse(body, uri, product);
         }
     }
 
-    private IReadOnlyList<EvidenceItem> Parse(string body, Uri uri)
+    private IReadOnlyList<EvidenceItem> Parse(string body, Uri uri, string product)
     {
         try
         {
             using var document = JsonDocument.Parse(body);
+            if (document.RootElement.ValueKind != JsonValueKind.Object
+                || Text(document.RootElement, "kind") != SourceKind
+                || Text(document.RootElement, "product") != product)
+            {
+                throw new InvalidOperationException(
+                    $"the '{SourceKind}' source agent at {uri} answered for a different kind or product.");
+            }
+
             if (!document.RootElement.TryGetProperty("evidence", out var evidence)
                 || evidence.ValueKind != JsonValueKind.Array)
             {
@@ -69,13 +78,19 @@ internal sealed class SourceAgentEvidenceGatherer(string sourceKind, Uri endpoin
                     $"the '{SourceKind}' source agent at {uri} answered without an 'evidence' array.");
             }
 
-            return evidence.EnumerateArray()
-                .Select(item => new EvidenceItem(
-                    SourceKind,
-                    Text(item, "reference"),
-                    Text(item, "summary")))
-                .Where(item => item.Reference.Length > 0)
-                .ToArray();
+            return evidence.EnumerateArray().Select(item =>
+            {
+                var reference = Text(item, "reference");
+                var summary = Text(item, "summary");
+                if (Text(item, "sourceKind") != SourceKind
+                    || string.IsNullOrWhiteSpace(reference) || string.IsNullOrWhiteSpace(summary))
+                {
+                    throw new InvalidOperationException(
+                        $"the '{SourceKind}' source agent at {uri} returned malformed or misattributed evidence.");
+                }
+
+                return new EvidenceItem(SourceKind, reference, summary);
+            }).ToArray();
         }
         catch (JsonException exception)
         {
@@ -85,7 +100,8 @@ internal sealed class SourceAgentEvidenceGatherer(string sourceKind, Uri endpoin
     }
 
     private static string Text(JsonElement element, string property) =>
-        element.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.String
+        element.ValueKind == JsonValueKind.Object
+            && element.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.String
             ? value.GetString() ?? string.Empty
             : string.Empty;
 }

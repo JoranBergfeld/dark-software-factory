@@ -77,6 +77,18 @@ public sealed class AzureProvisioningPlaneTests
     }
 
     [Fact]
+    public void Plan_preserves_creation_maturity_for_the_runtime()
+    {
+        var definition = SampleDefinition();
+        definition = definition with { Product = definition.Product with { CreationMaturity = "high" } };
+
+        var topology = Assert.Single(AzureProvisioningPlan.Build(definition, "/repo-root")
+            .Requests.OfType<DeployTopologyRequest>());
+
+        Assert.Equal("high", topology.CreationMaturity);
+    }
+
+    [Fact]
     public async Task Execution_threads_topology_outputs_into_the_sre_agent_request()
     {
         var azure = new RecordingAzureProvisioningClient();
@@ -171,6 +183,7 @@ public sealed class AzureProvisioningPlaneTests
         try
         {
             var azure = new RecordingAzureProvisioningClient();
+            var appConfig = new RecordingAppConfigurationClient();
 
             var exitCode = await CliApplication.InvokeAsync(
                 [
@@ -182,7 +195,7 @@ public sealed class AzureProvisioningPlaneTests
                 PlainTerminal(),
                 new RecordingGitHubProvisioningClient(),
                 azure,
-                new RecordingAppConfigurationClient(),
+                appConfig,
                 new RecordingCharterRepositoryClient(null));
 
             Assert.Equal(0, exitCode);
@@ -193,6 +206,9 @@ public sealed class AzureProvisioningPlaneTests
             Assert.Equal(azure.AgentEndpoint, written.Azure.Outputs["sreAgentEndpoint"]);
             Assert.Equal(InstanceState.Executed, written.Status.State);
             Assert.NotEmpty(azure.Requests);
+            var roster = Assert.Single(appConfig.SourceRosters);
+            Assert.Equal("paritydemo", roster.Product);
+            Assert.Empty(roster.Kinds);
         }
         finally
         {

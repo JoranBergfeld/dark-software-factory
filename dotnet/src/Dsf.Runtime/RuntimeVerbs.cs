@@ -89,41 +89,101 @@ public static class RuntimeVerbs
     /// resulting scheduled run through the conveyor. A reachable store with no
     /// enabled agents yields a real, audited empty sweep (nothing to gather); an
     /// unreachable store throws rather than reporting an empty roster it never read.
+    /// Returns null, without composing or driving a run, when another sweep owns
+    /// the product. Both manual and periodic sweeps enter through this guard.
     /// </summary>
-    public static async Task<ConveyorRun> SweepAsync(
+    public static async Task<ConveyorRun?> SweepAsync(
         RuntimeSettings settings,
         bool dryRun,
         RuntimeDependencies dependencies,
         CancellationToken cancellationToken,
-        IReadOnlyDictionary<string, string?>? env = null)
+        IReadOnlyDictionary<string, string?>? env = null,
+        ISweepLease? sweepLease = null)
     {
         ArgumentNullException.ThrowIfNull(settings);
         ArgumentNullException.ThrowIfNull(dependencies);
 
         RuntimeWorkflow.EnsureLiveFilingConfirmed(dryRun, env);
+        cancellationToken.ThrowIfCancellationRequested();
 
-        var services = ComposeServices(settings, dependencies);
-
-        IReadOnlyList<string> kinds;
+        IAsyncDisposable? ownership;
         try
         {
-            kinds = await dependencies.SourceAgentRosterReader.ReadEnabledKindsAsync(settings, cancellationToken);
+            ownership = await (sweepLease ?? dependencies.SweepLeaseFor(settings, env)).TryAcquireAsync(
+                settings.Product, DateTimeOffset.UtcNow,
+                PeriodicSweepService.ResolveInterval(null, env ?? new Dictionary<string, string?>()),
+                cancellationToken);
         }
-        catch (RuntimeConfigurationException exception)
+        catch (Exception exception) when (exception is not OperationCanceledException
+                                          || !cancellationToken.IsCancellationRequested)
         {
-            throw new RuntimeVerbException(exception.Message);
+            throw new RuntimeVerbException(
+                $"could not acquire the sweep lease for product '{settings.Product}': {exception.Message}");
         }
 
-        var run = await RuntimeWorkflow.LoadOrCreateRunAsync(
-            services, TriggerKind.Scheduled, [settings.Product], kinds, dryRun, cancellationToken,
-            resumeTerminal: false);
-        run.Record(
-            "trigger:scheduled",
-            $"scheduled sweep for product '{settings.Product}': enabled sources="
-            + $"[{(kinds.Count == 0 ? "(none)" : string.Join(", ", kinds))}] "
-            + $"(resolved from {settings.AppConfigEndpoint}).");
+        if (ownership is null)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return null;
+        }
 
-        return await ConveyorLine.RunAsync(run, services, cancellationToken);
+        Exception? failure = null;
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var services = ComposeServices(settings, dependencies);
+            IReadOnlyList<string> kinds;
+            try
+            {
+                kinds = await dependencies.SourceAgentRosterReader.ReadEnabledKindsAsync(settings, cancellationToken);
+            }
+            catch (RuntimeConfigurationException exception)
+            {
+                throw new RuntimeVerbException(exception.Message);
+            }
+
+            var run = await RuntimeWorkflow.LoadOrCreateRunAsync(
+                services, TriggerKind.Scheduled, [settings.Product], kinds, dryRun, cancellationToken,
+                resumeTerminal: false);
+            run.Record(
+                "trigger:scheduled",
+                $"scheduled sweep for product '{settings.Product}': enabled sources="
+                + $"[{(kinds.Count == 0 ? "(none)" : string.Join(", ", kinds))}] "
+                + $"(resolved from {settings.AppConfigEndpoint}).");
+
+            var result = await ConveyorLine.RunAsync(run, services, cancellationToken);
+            if (result.Status == RunStatus.Error)
+            {
+                failure = new RuntimeVerbException(result.FailureReason ?? "conveyor ended in error");
+            }
+
+            return result;
+        }
+        catch (Exception exception)
+        {
+            failure = exception;
+            throw;
+        }
+        finally
+        {
+            try
+            {
+                await ownership.DisposeAsync();
+            }
+            catch (Exception releaseFailure)
+            {
+                var message = $"could not release the sweep lease for product '{settings.Product}': "
+                    + $"{releaseFailure.Message}. Verify the old worker has stopped before recovering its lease.";
+                if (failure is OperationCanceledException cancelled)
+                {
+                    throw new OperationCanceledException(
+                        $"sweep cancelled; {message}", new AggregateException(cancelled, releaseFailure),
+                        cancelled.CancellationToken);
+                }
+
+                throw new RuntimeVerbException(failure is null ? message : $"sweep failed: {failure.Message}; {message}");
+            }
+        }
     }
 
     /// <summary>
@@ -269,7 +329,7 @@ public static class RuntimeVerbs
                 sweepInterval.Value,
                 env,
                 dependencies.SweepControlStoreFor(settings),
-                BuildSweepLease(settings, env),
+                dependencies.SweepLeaseFor(settings, env),
                 provider.GetRequiredService<ILogger<PeriodicSweepService>>()));
         }
 
@@ -412,13 +472,16 @@ public static class RuntimeVerbs
     /// database and container the run store already uses (<see
     /// cref="RuntimeIntegrationSettings.CosmosDatabase"/>/<see
     /// cref="RuntimeIntegrationSettings.CosmosContainer"/>, falling back to the
-    /// same defaults), so no separate Cosmos container needs provisioning just
-    /// for the lease.
+    /// same defaults). Nonblank environment values override owner-index
+    /// integration settings, so manual and deployed sweeps use the same store.
     /// </summary>
-    private static ISweepLease BuildSweepLease(RuntimeSettings settings, IReadOnlyDictionary<string, string?>? env)
+    internal static ISweepLease BuildSweepLease(
+        RuntimeSettings settings, IReadOnlyDictionary<string, string?>? env, ICosmosDocumentGateway? gateway = null)
     {
-        string Read(string key) => (env is not null && env.TryGetValue(key, out var value) ? value : null)?.Trim()
-            ?? string.Empty;
+        string Read(string key) =>
+            env is not null && env.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value)
+                ? value.Trim()
+                : settings.IntegrationSettings.GetValueOrDefault(key)?.Trim() ?? string.Empty;
 
         var database = Read(RuntimeIntegrationSettings.CosmosDatabase);
         var container = Read(RuntimeIntegrationSettings.CosmosContainer);
@@ -426,7 +489,7 @@ public static class RuntimeVerbs
             settings.CosmosEndpoint.Trim(),
             database.Length > 0 ? database : RuntimeIntegrationSettings.DefaultCosmosDatabase,
             container.Length > 0 ? container : RuntimeIntegrationSettings.DefaultCosmosContainer,
-            new AzureCosmosDocumentGateway());
+            gateway ?? new AzureCosmosDocumentGateway());
     }
 
     private static WebApplicationBuilder CreateBuilder(string host, int port)

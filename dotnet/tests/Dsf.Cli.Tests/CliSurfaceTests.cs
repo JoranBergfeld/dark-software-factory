@@ -68,6 +68,7 @@ public sealed class CliSurfaceTests
               --location <location>                                  Azure region [default: swedencentral]
               --creation-maturity <high|low|medium>                  creation-phase autonomy [default: low]
               --operation-maturity <high|low|medium>                 operation-phase autonomy [default: low]
+              --decide-config <decide-config>                        nonsecret Decide source and judgment configuration JSON
               --dry-run                                              preview only: print the what-if plan without running steps
               --no-charter                                           skip the post-provision charter prompt
               --write-plan                                           with --dry-run, still write the instance manifest

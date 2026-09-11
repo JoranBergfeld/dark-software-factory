@@ -171,8 +171,14 @@ public static class InstanceDefinitions
                 exception);
         }
 
-        return definition
-            ?? throw new InstanceDefinitionException(Guidance($"Instance definition '{source}' is empty."));
+        if (definition?.Runtime?.Decide is null)
+        {
+            throw new InstanceDefinitionException(
+                Guidance($"Instance definition '{source}' requires a runtime.decide configuration object."));
+        }
+
+        definition.Runtime.Decide.Validate();
+        return definition;
     }
 
     private static string Guidance(string problem) =>

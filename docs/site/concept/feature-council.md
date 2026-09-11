@@ -21,14 +21,15 @@ it drops is logged with a reason.
 The Council runs as a seven-station line (the conveyor). Each station has one
 job and hands the run to the next:
 
-- **S1 Triage** drains the signal buffer on a schedule the operator sets,
-  normalizes each trigger into a scoped run, and debounces duplicates so the same
-  signal cannot start two runs inside the window. Intake is a pull: nothing
-  outside the factory sets the council's pace.
+- **S1 Triage** normalizes a sweep into a scoped run and debounces duplicates.
+  The orchestrator's in-process loop owns scheduled intake; there is no inbound
+  signal queue in the .NET runtime.
 - **S2 Investigation** dispatches the product's enabled source agents in
   parallel and collects their structured evidence. A source that is down or
   disabled contributes nothing and says so. Coverage is never invented.
-- **S3 Synthesis** clusters the evidence into candidate proposals.
+- **S3 Synthesis** clusters related evidence across source kinds into candidate
+  proposals, retaining contributing evidence references and source kinds.
+  It does not decide whether a proposal is worth building.
 - **S4 Grounding** is a hard gate. It strips any claim that does not trace to a
   real evidence item, and kills any proposal left standing on nothing.
 - **S5 Decision** deliberates, then validates. A council of role agents, one per
@@ -37,11 +38,9 @@ job and hands the run to the next:
   recommendation. A separate, model-diverse jury reads that recommendation and
   returns go or no-go by consensus. A deterministic outcome policy turns the
   result into an action: strong consensus proceeds, a split escalates to a
-  person, consensus against kills. Every step goes to the log. (Today the proposer
-  tier runs deterministic critics with a unilateral veto and a weighted score
-  against a threshold, and the model-diverse validation jury, the maturity-gated
-  outcome policy, and the escalate-to-review outcome are built. The multi-round
-  deliberation council is designed in ADR 0011 and still pending. See below.)
+  person, consensus against kills. Low creation maturity always requires human
+  review. Malformed, missing, or failed juror results are errors, not approval.
+  Every step goes to the log.
 - **S6 Routing** maps each accepted proposal to a product and repo, attaches
   labels from the product's taxonomy, and writes the issue body with a grounded
   evidence appendix.
@@ -55,10 +54,8 @@ S5 is where the Council earns its name. A grounded proposal is argued by a
 council of role agents, validated by a separate panel, and a fixed policy turns
 the result into an action. Two deterministic gates, grounding and duplication,
 bracket the debate and can veto on their own; the five role lenses deliberate
-over one or two see-and-revise rounds, and a synthesizer folds the gate and lens
-scores into one recommendation for the validation jury. (Intake is the one piece
-still pending: today a scheduled sweep runs next to a push endpoint, and the
-redesign moves to a governed pull. See "Where it lives" below.)
+over one or two see-and-revise rounds, and a deterministic synthesizer folds the
+lens positions into one recommendation for the separate validation jury.
 
 ```mermaid
 flowchart TD
@@ -70,7 +67,7 @@ flowchart TD
         lenses["Role agents: value, cost, feasibility, security, strategic fit"]
         lenses --> rounds["One or two see-and-revise rounds, adversarial challenge"]
         gates --> synth
-        rounds --> synth["Synthesizer: weighted vote over gate and lens scores, one recommendation"]
+        rounds --> synth["Synthesizer: weighted lens positions, disagreement, one recommendation"]
     end
 
     synth --> panel
@@ -106,12 +103,11 @@ layered-aggregation result (Wang et al. 2024).
 
 ## Inputs and outputs
 
-**In:** signals scoped to one product. They arrive one way: sources collect into
-a buffer and the Council drains it on a schedule it owns, so nothing outside the
-factory sets the pace. The webhook endpoint (`/ingest`) only enqueues; the
-scheduled worker drains the buffer on each tick. Event-driven urgency stays with
-the SRE fast-path (ADR 0011). The sources today are Sentry, Grafana, FoundryIQ,
-WebIQ, and tickets.
+**In:** evidence scoped to one product, gathered over A2A `/gather` from enabled
+served source agents. The Microsoft-native roster is `azuremonitor`, `foundryiq`,
+and `webiq`; unconfigured kinds remain disabled and receive no Container App.
+The .NET runtime has neither an in-process S2 fallback nor an `/ingest` queue.
+Event-driven urgency stays with the Operation phase.
 
 **Out:** GitHub issues in the product's repo. Each one is labeled by type and
 severity, carries the handoff label, and includes the problem, the proposed
@@ -133,23 +129,25 @@ the label does the wiring, which keeps the two phases independent. See
 
 This is the most tunable phase, and most of the factory's dials live here:
 
-- Turn individual critics, source agents, and triggers on or off per product.
-- Set each critic's weight in the council vote, and change it while the line
-  runs.
-- Set the per-product accept threshold.
-- Flip the global dry-run switch to run the whole line without filing anything.
+- Pause/resume sweeps and adjust cadence through product App Configuration.
+- Enable provisioned source agents through `agents.<kind>.enabled`.
+- Set the per-product synthesis threshold.
+- Configure lens enablement/weights, rounds, and the separate jury roster at
+  deployment with `dsf new --decide-config`.
+- Use `--dry-run` to run the line without filing anything.
 
 Grounding and de-duplication are not optional dials. The grounding gate and the
 final dedup always run, so the factory cannot file an ungrounded or repeated
 issue regardless of how the other dials are set.
 
-These dials have evolved in place with the deliberation redesign (ADR 0011): the
-critic toggles enable or disable lenses, the critic weights set each lens's
-influence in the synthesized vote, the accept threshold is the consensus bar, a
-per-product deliberation-rounds dial sets how many see-and-revise rounds the
-lenses run, and a per-product maturity level sets how much jury consensus is
-needed to act without a person and whether the drafted spec auto-merges. All stay
-adjustable while the line runs.
+Sweep controls and source flags are read from App Configuration. Lens/jury
+configuration and creation maturity are runtime environment settings, so changing
+the deployed values requires a revision update. The synthesis threshold is not
+a shortcut around the jury: only a valid unanimous-go result can proceed at
+medium/high maturity, and low maturity always escalates.
+Routing and filing reapply the current maturity even when S5 or S6 was already
+checkpointed. Lowering maturity to low therefore escalates an earlier approval
+instead of allowing it to auto-file.
 
 ## Where it lives and how autonomous it is today
 
@@ -160,19 +158,33 @@ production as Azure Container Apps scoped to a single product (ADR 0004). It is
 the most built-out phase of the loop: the full conveyor, the grounding gate, and
 the filing path all run today.
 
-The decision path is the intended shape. The proposer tier is the deliberation
-council: five role lenses debate over one or two see-and-revise rounds, grounding
-and duplication run as deterministic veto gates, and a synthesizer folds the
-scores into one recommendation (Plan 2, landed). A separate model-diverse
-validation jury reviews that recommendation under a per-product maturity dial that
-accepts, escalates to a human review queue, or kills (Plan 1, landed). Offline the
-lenses fall back to their former critics, so the synthesis is the same audited
-weighted vote the factory shipped before. Intake is a governed pull: the webhook
-endpoint only enqueues and the scheduled worker drains the buffer on the Council's
-own cadence (Plan 3, landed). The whole redesign is grounded in the multi-agent
-literature and designed in ADR 0011 and its spec. Architecture decisions for this
-phase live in ADR 0006 (data adapters), ADR 0007 (the creation handoff), and ADR 0011
-(the deliberative redesign).
+S3 uses cross-source-capable lexical similarity clustering. S5 records typed lens
+positions, deterministic synthesis, juror results, and an explicit
+`Proceed` / `Escalate` / `Kill` / `Error` verdict. S6/S7 consume that verdict;
+an escalated run retains its review package and cannot auto-file. Production
+has no offline model fallback.
+Persisted votes and recommendation fields must be explicit: an incomplete
+review becomes an audited error, never an implicit go vote.
+
+S3 resolves each cluster against persisted problem profiles using the same
+lexical clustering policy. The resulting opaque problem ID, within the run's
+scope namespace, identifies both filing intents and human lessons. References
+and changing observation text are evidence, not the ID. Ambiguous matches to
+multiple known problems fail for human consolidation rather than silently
+merging their histories. Newly recognized observations extend the persisted
+profile under the same ID, so subsequent runs can recognize them too.
+
+The always-on orchestrator runs `serve-orchestrator --loop`, reads sweep controls
+from App Configuration, and acquires a Cosmos lease before driving the line.
+The `runs` and `learning` containers use the `/product` partition key; existing
+legacy `/id` containers are retained separately.
+
+Offline integration tests exercise HTTP hosting and station control flow with
+scripted external boundaries. They are not evidence that a vendor API works,
+that three different model families judged a real proposal, or that production
+filed an issue. [Issue #183](https://github.com/JoranBergfeld/dark-software-factory/issues/183)
+requires a separate live/staging manual sweep, an observed autonomous tick, and
+the resulting GitHub issue. See [Operate it](../get-started/operate.md).
 
 **See also:** the [loop overview](the-loop.md), the next phase
 [Creation phase](creation.md), and the decision-path redesign in

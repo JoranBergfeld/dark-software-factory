@@ -6,8 +6,8 @@ using Dsf.FeatureCouncil.Conveyor;
 namespace Dsf.Runtime;
 
 /// <summary>
-/// A served source agent's connection to the system it speaks for (Sentry,
-/// Grafana, an incident tracker, ...). The agent host's <c>/gather</c> endpoint
+/// A served source agent's connection to Azure Monitor, FoundryIQ, or WebIQ.
+/// The agent host's <c>/gather</c> endpoint
 /// delegates here, so the agent reports either real upstream evidence or the exact
 /// reason it could not read any.
 /// </summary>

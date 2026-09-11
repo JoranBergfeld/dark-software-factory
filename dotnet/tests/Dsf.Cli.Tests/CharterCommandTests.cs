@@ -992,6 +992,18 @@ public sealed class CharterCommandTests
 internal sealed class RecordingAppConfigurationClient(params ProductLocation[] products)
     : IAppConfigurationClient
 {
+    public List<(string Product, IReadOnlyList<string> Kinds)> SourceRosters { get; } = [];
+
+    public Task SeedSourceAgentRosterAsync(
+        string productEndpoint,
+        string product,
+        IReadOnlyList<string> enabledKinds,
+        CancellationToken cancellationToken)
+    {
+        SourceRosters.Add((product, enabledKinds));
+        return Task.CompletedTask;
+    }
+
     public Task<IReadOnlyList<ProductLocation>> ListProductsAsync(
         string ownerEndpoint,
         CancellationToken cancellationToken) => Task.FromResult<IReadOnlyList<ProductLocation>>(products);

@@ -162,6 +162,14 @@
           "System.CommandLine": "[2.0.11, )"
         }
       },
+      "dsf.agenthost": {
+        "type": "Project",
+        "dependencies": {
+          "Dsf.Core": "[0.0.1, )",
+          "Dsf.FeatureCouncil": "[0.0.1, )",
+          "dsf-runtime": "[0.0.1, )"
+        }
+      },
       "dsf.core": {
         "type": "Project"
       },

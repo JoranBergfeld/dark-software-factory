@@ -85,7 +85,7 @@ public static class RuntimeCliApplication
             stderr,
             parseResult.GetValue(product),
             dependencies,
-            (settings, token) => RuntimeVerbs.RunAsync(
+            async (settings, token) => await RuntimeVerbs.RunAsync(
                 settings, parseResult.GetValue(signal), parseResult.GetValue(dryRun), dependencies, token, env),
             cancellationToken));
         return command;
@@ -372,7 +372,7 @@ public static class RuntimeCliApplication
         TextWriter stderr,
         string? productOption,
         RuntimeDependencies dependencies,
-        Func<RuntimeSettings, CancellationToken, Task<ConveyorRun>> operation,
+        Func<RuntimeSettings, CancellationToken, Task<ConveyorRun?>> operation,
         CancellationToken cancellationToken)
     {
         var settings = await ComposeSettings(env, stderr, productOption, dependencies, cancellationToken);
@@ -381,7 +381,7 @@ public static class RuntimeCliApplication
             return Failure;
         }
 
-        ConveyorRun run;
+        ConveyorRun? run;
         try
         {
             run = await operation(settings, cancellationToken);
@@ -390,6 +390,12 @@ public static class RuntimeCliApplication
         {
             stderr.WriteLine($"[dsf] error: {exception.Message}");
             return Failure;
+        }
+
+        if (run is null)
+        {
+            stdout.WriteLine($"[dsf] sweep skipped for product '{settings.Product}': another sweep owns the lease.");
+            return Success;
         }
 
         var summary = RuntimeRunSummary.From(run);

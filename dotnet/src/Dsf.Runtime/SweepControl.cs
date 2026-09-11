@@ -63,13 +63,18 @@ internal sealed class AzureAppConfigurationSweepControlStore(
             {
                 if (string.Equals(key, PausedKey, StringComparison.Ordinal))
                 {
-                    paused = string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
+                    if (!bool.TryParse(value, out paused))
+                    {
+                        throw new FormatException($"'{PausedKey}' must be 'true' or 'false'.");
+                    }
                 }
-                else if (string.Equals(key, IntervalKey, StringComparison.Ordinal)
-                    && int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed)
-                    && parsed > 0)
+                else if (string.Equals(key, IntervalKey, StringComparison.Ordinal))
                 {
-                    intervalSeconds = parsed;
+                    if (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out intervalSeconds)
+                        || intervalSeconds < 1)
+                    {
+                        throw new FormatException($"'{IntervalKey}' must be a positive integer number of seconds.");
+                    }
                 }
             }
         }

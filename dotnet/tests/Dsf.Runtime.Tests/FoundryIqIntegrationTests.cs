@@ -13,7 +13,7 @@ public sealed class FoundryIqIntegrationTests
 {
     private static readonly Dictionary<string, string?> FullyConfigured = new()
     {
-        ["DSF_FOUNDRYIQ_PROJECT_ENDPOINT"] = "https://acme-foundry.services.ai.azure.com/api/projects/acme",
+        ["DSF_FOUNDRYIQ_SEARCH_ENDPOINT"] = "https://acme-search.search.windows.net",
         ["DSF_FOUNDRYIQ_KNOWLEDGE_BASE"] = "roadmap",
         ["DSF_FOUNDRYIQ_QUERY"] = "checkout latency regressions",
     };
@@ -34,32 +34,31 @@ public sealed class FoundryIqIntegrationTests
         Assert.Equal("foundryiq", evidence[0].SourceKind);
         // A result with no title falls back to its content.
         Assert.Equal("same trace, second event", evidence[1].Summary);
-        Assert.Equal("https://acme-foundry.services.ai.azure.com/api/projects/acme", gateway.RequestedProjectEndpoint);
+        Assert.Equal("https://acme-search.search.windows.net", gateway.RequestedSearchEndpoint);
         Assert.Equal("roadmap", gateway.RequestedKnowledgeBase);
         Assert.Equal("checkout latency regressions", gateway.RequestedQuery);
     }
 
     [Fact]
-    public async Task Gather_drops_results_with_no_id()
+    public async Task Gather_rejects_results_with_no_id()
     {
         var gateway = new ScriptedFoundryIqKnowledgeGateway(new FoundryIqResult(string.Empty, "no id here", null));
         var integration = new FoundryIqIntegration(FullyConfigured, gateway);
 
-        var evidence = await integration.GatherAsync("foundryiq", "acme", CancellationToken.None);
-
-        Assert.Empty(evidence);
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => integration.GatherAsync("foundryiq", "acme", CancellationToken.None));
     }
 
     [Fact]
-    public async Task Gather_without_a_configured_project_endpoint_names_the_unset_setting()
+    public async Task Gather_without_a_configured_search_endpoint_names_the_unset_setting()
     {
-        var env = new Dictionary<string, string?>(FullyConfigured) { ["DSF_FOUNDRYIQ_PROJECT_ENDPOINT"] = "" };
+        var env = new Dictionary<string, string?>(FullyConfigured) { ["DSF_FOUNDRYIQ_SEARCH_ENDPOINT"] = "" };
         var integration = new FoundryIqIntegration(env, new ScriptedFoundryIqKnowledgeGateway());
 
         var exception = await Assert.ThrowsAsync<RuntimeConfigurationException>(
             () => integration.GatherAsync("foundryiq", "acme", CancellationToken.None));
 
-        Assert.Contains("DSF_FOUNDRYIQ_PROJECT_ENDPOINT", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("DSF_FOUNDRYIQ_SEARCH_ENDPOINT", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -87,15 +86,15 @@ public sealed class FoundryIqIntegrationTests
     }
 
     [Fact]
-    public async Task Gather_reports_an_unreachable_project_instead_of_empty_evidence()
+    public async Task Gather_reports_an_unreachable_search_service_instead_of_empty_evidence()
     {
         var integration = new FoundryIqIntegration(
-            FullyConfigured, new UnreachableFoundryIqKnowledgeGateway("project not found"));
+            FullyConfigured, new UnreachableFoundryIqKnowledgeGateway("search service not found"));
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(
             () => integration.GatherAsync("foundryiq", "acme", CancellationToken.None));
 
-        Assert.Contains("project not found", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("search service not found", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]

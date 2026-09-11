@@ -26,7 +26,8 @@ internal static class TestDependencies
         IModelClient? modelClient = null,
         ITracer? tracer = null,
         ILearningComposer? learningComposer = null,
-        Func<RuntimeSettings, ISweepControlStore>? sweepControlStoreFactory = null) =>
+        Func<RuntimeSettings, ISweepControlStore>? sweepControlStoreFactory = null,
+        Func<RuntimeSettings, ISweepLease>? sweepLeaseFactory = null) =>
         new(
             ownerRuntimeIndexReader ?? new RecordingOwnerRuntimeIndexReader(),
             sourceAgentRosterReader ?? new RosterReader([]),
@@ -40,7 +41,8 @@ internal static class TestDependencies
             new SourceIntegrationRegistry(sourceIntegrationsByKind ?? SourceIntegrationsFor(
                 sourceIntegration ?? new ScriptedSourceIntegration())),
             learningComposer ?? new ScriptedLearningComposer(new RecordingOutcomeSource(), new RecordingLearningStore()),
-            sweepControlStoreFactory);
+            sweepControlStoreFactory,
+            sweepLeaseFactory ?? (_ => new ScriptedSweepLease()));
 
     private static IReadOnlyDictionary<string, ISourceIntegration> SourceIntegrationsFor(
         ISourceIntegration sourceIntegration)
@@ -123,10 +125,25 @@ internal sealed class ScriptedConveyorComposer(
     ITracer tracer,
     IConfidenceThresholdReader? confidenceThresholdReader = null) : IConveyorComposer
 {
+    private readonly ProblemIdentityTestGateway problemIdentities = new();
+
     public ConveyorServices ComposeFor(RuntimeSettings settings) =>
         new(
             settings.Product, gatherers, issueFiler, runStore, modelClient, tracer,
-            confidenceThresholdReader ?? new FixedConfidenceThresholdReader(S5Council.DefaultThreshold));
+            confidenceThresholdReader ?? new FixedConfidenceThresholdReader(S5Council.DefaultThreshold),
+            ValidationJurors:
+            [
+                TestJuror("test-openai", "openai", "gpt"),
+                TestJuror("test-deepseek", "deepseek", "deepseek"),
+                TestJuror("test-xai", "xai", "grok"),
+            ],
+            ProblemIdentityResolver: new CosmosProblemIdentityResolver(
+                "https://cosmos.example", "dsf", "learning", settings.Product, problemIdentities));
+
+    private static IValidationJuror TestJuror(string name, string provider, string family) =>
+        new ModelValidationJuror(
+            name, "the scripted test proposal", new RecordingModelClient(),
+            new JurorModelSettings(name, provider, family, $"https://{name}.example", $"test-{family}"));
 }
 
 /// <summary>A deterministic model client that answers a fixed, recorded completion for every prompt.</summary>
@@ -254,30 +271,30 @@ internal sealed class UnreachableAzureMonitorLogsGateway(string reason) : IAzure
 
 /// <summary>
 /// A FoundryIQ knowledge base gateway that answers a fixed, scripted set of
-/// results for any project/knowledge base/query, so <see cref="FoundryIqIntegration"/>
-/// can be tested at the <c>GatherAsync</c> seam without a live Foundry project.
+/// results for any search service/knowledge base/query, so <see cref="FoundryIqIntegration"/>
+/// can be tested at the <c>GatherAsync</c> seam without a live Search service.
 /// </summary>
 internal sealed class ScriptedFoundryIqKnowledgeGateway(params FoundryIqResult[] results) : IFoundryIqKnowledgeGateway
 {
-    public string? RequestedProjectEndpoint { get; private set; }
+    public string? RequestedSearchEndpoint { get; private set; }
     public string? RequestedKnowledgeBase { get; private set; }
     public string? RequestedQuery { get; private set; }
 
     public Task<IReadOnlyList<FoundryIqResult>> QueryAsync(
-        string projectEndpoint, string knowledgeBase, string query, CancellationToken cancellationToken)
+        string searchEndpoint, string knowledgeBase, string query, CancellationToken cancellationToken)
     {
-        RequestedProjectEndpoint = projectEndpoint;
+        RequestedSearchEndpoint = searchEndpoint;
         RequestedKnowledgeBase = knowledgeBase;
         RequestedQuery = query;
         return Task.FromResult<IReadOnlyList<FoundryIqResult>>(results);
     }
 }
 
-/// <summary>A FoundryIQ knowledge base gateway whose project cannot be reached.</summary>
+/// <summary>A FoundryIQ knowledge base gateway whose Search service cannot be reached.</summary>
 internal sealed class UnreachableFoundryIqKnowledgeGateway(string reason) : IFoundryIqKnowledgeGateway
 {
     public Task<IReadOnlyList<FoundryIqResult>> QueryAsync(
-        string projectEndpoint, string knowledgeBase, string query, CancellationToken cancellationToken) =>
+        string searchEndpoint, string knowledgeBase, string query, CancellationToken cancellationToken) =>
         throw new InvalidOperationException(reason);
 }
 
@@ -375,11 +392,17 @@ internal sealed class ScriptedSweepLease(bool acquires = true) : ISweepLease
 {
     public List<(string Product, DateTimeOffset Now, TimeSpan Interval)> Requests { get; } = [];
 
-    public Task<bool> TryAcquireAsync(
+    public Task<IAsyncDisposable?> TryAcquireAsync(
         string product, DateTimeOffset now, TimeSpan interval, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         Requests.Add((product, now, interval));
-        return Task.FromResult(acquires);
+        return Task.FromResult<IAsyncDisposable?>(acquires ? new Ownership() : null);
+    }
+
+    private sealed class Ownership : IAsyncDisposable
+    {
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 }
 

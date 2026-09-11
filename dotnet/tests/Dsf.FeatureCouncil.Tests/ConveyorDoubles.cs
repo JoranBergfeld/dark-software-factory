@@ -22,7 +22,9 @@ internal static class ConveyorDoubles
         ILearningStore? learningStore = null,
         IReadOnlyList<IDeliberationLens>? deliberationLenses = null,
         IReadOnlyList<IValidationJuror>? validationJurors = null,
-        string? productMaturity = null) =>
+        string? productMaturity = null,
+        IEvidenceClusterer? evidenceClusterer = null,
+        IProblemIdentityResolver? problemIdentityResolver = null) =>
         new(
             Product,
             gatherers ?? [],
@@ -32,9 +34,51 @@ internal static class ConveyorDoubles
             tracer ?? new RecordingTracer(),
             confidenceThresholdReader ?? new FixedConfidenceThresholdReader(S5Council.DefaultThreshold),
             learningStore,
+            EvidenceClusterer: evidenceClusterer,
             DeliberationLenses: deliberationLenses,
-            ValidationJurors: validationJurors,
-            ProductMaturity: productMaturity ?? "high");
+            ValidationJurors: validationJurors ??
+                [new RecommendationJuror("a"), new RecommendationJuror("b"), new RecommendationJuror("c")],
+            ProductMaturity: productMaturity ?? "high",
+            ProblemIdentityResolver: problemIdentityResolver ?? new RecordingProblemIdentityResolver());
+}
+
+internal sealed class RecordingProblemIdentityResolver(Func<string, EvidenceCluster, string>? answer = null)
+    : IProblemIdentityResolver
+{
+    private readonly List<(string Scope, EvidenceItem[] Evidence, string Key)> identities = [];
+    public List<(string Scope, EvidenceCluster Cluster)> Requests { get; } = [];
+
+    public Task<string> ResolveAsync(string scope, EvidenceCluster cluster, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        Requests.Add((scope, cluster));
+        if (answer is not null)
+        {
+            return Task.FromResult(answer(scope, cluster));
+        }
+
+        foreach (var identity in identities)
+        {
+            if (identity.Scope == scope && identity.Evidence.ToHashSet().SetEquals(cluster.Evidence))
+            {
+                return Task.FromResult(identity.Key);
+            }
+        }
+
+        var key = $"problem-{identities.Count + 1}";
+        identities.Add((scope, cluster.Evidence.ToArray(), key));
+        return Task.FromResult(key);
+    }
+}
+
+internal sealed class RecommendationJuror(string name) : IValidationJuror
+{
+    public string Name => name;
+
+    public Task<JurorVerdict> ValidateAsync(
+        Proposal proposal, ConveyorRun run, LensSynthesis lensSynthesis, CancellationToken cancellationToken) =>
+        Task.FromResult(new JurorVerdict(Name, lensSynthesis.Proceed ? JurorPosition.Go : JurorPosition.NoGo,
+            "deterministic test jury agrees with recommendation"));
 }
 
 /// <summary>A confidence threshold reader that always answers a fixed value.</summary>

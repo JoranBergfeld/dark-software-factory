@@ -17,7 +17,7 @@ public interface IWebHostRunner
 /// <summary>Runs the host for real: serves until cancelled.</summary>
 internal sealed class WebApplicationHostRunner : IWebHostRunner
 {
-    public Task RunAsync(WebApplication app, CancellationToken cancellationToken) => app.RunAsync();
+    public Task RunAsync(WebApplication app, CancellationToken cancellationToken) => app.RunAsync(cancellationToken);
 }
 
 /// <summary>
@@ -37,7 +37,8 @@ public sealed record RuntimeDependencies(
     IConveyorComposer ConveyorComposer,
     SourceIntegrationRegistry SourceIntegrationRegistry,
     ILearningComposer LearningComposer,
-    Func<RuntimeSettings, ISweepControlStore>? SweepControlStoreFactory = null)
+    Func<RuntimeSettings, ISweepControlStore>? SweepControlStoreFactory = null,
+    Func<RuntimeSettings, ISweepLease>? SweepLeaseFactory = null)
 {
     /// <summary>Production dependencies resolved from the real process environment.</summary>
     public static RuntimeDependencies Production() => Production(CurrentEnvironment());
@@ -59,7 +60,8 @@ public sealed record RuntimeDependencies(
             new WebApplicationHostRunner(),
             new EnvironmentConveyorComposer(env),
             registry,
-            new EnvironmentLearningComposer(env));
+            new EnvironmentLearningComposer(env),
+            SweepLeaseFactory: settings => RuntimeVerbs.BuildSweepLease(settings, env));
     }
 
     /// <summary>
@@ -71,6 +73,14 @@ public sealed record RuntimeDependencies(
     {
         ArgumentNullException.ThrowIfNull(settings);
         return (SweepControlStoreFactory ?? (s => new AzureAppConfigurationSweepControlStore(s)))(settings);
+    }
+
+    /// <summary>Resolves the product-wide lease shared by manual and periodic sweeps.</summary>
+    public ISweepLease SweepLeaseFor(
+        RuntimeSettings settings, IReadOnlyDictionary<string, string?>? env = null)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        return SweepLeaseFactory?.Invoke(settings) ?? RuntimeVerbs.BuildSweepLease(settings, env);
     }
 
     /// <summary>The learning loop's collaborators for <paramref name="settings"/>'s product.</summary>

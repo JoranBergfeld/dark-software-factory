@@ -19,6 +19,12 @@ param containerNames array = [
   'charters'
 ]
 
+@description('Containers used by the .NET run, lease, and learning stores, partitioned by product.')
+param productPartitionedContainerNames array = [
+  'runs'
+  'learning'
+]
+
 @description('Shared autoscale maximum RU/s for the runtime database.')
 param maxThroughput int = 1000
 
@@ -92,6 +98,26 @@ resource containers 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containe
         partitionKey: {
           paths: [
             '/id'
+          ]
+          kind: 'Hash'
+        }
+        defaultTtl: -1
+      }
+    }
+  }
+]
+
+// Preserve the existing /id containers; changing a populated partition key is destructive.
+resource productContainers 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = [
+  for containerName in productPartitionedContainerNames: {
+    parent: database
+    name: containerName
+    properties: {
+      resource: {
+        id: containerName
+        partitionKey: {
+          paths: [
+            '/product'
           ]
           kind: 'Hash'
         }

@@ -48,6 +48,8 @@ public sealed record RuntimeSettings
     public string Target { get; init; } = "aca";
 
     public string Image { get; init; } = "ghcr.io/joranbergfeld/dsf-runtime:latest";
+
+    public DecideDeploymentSettings Decide { get; init; } = new();
 }
 
 /// <summary>Runtime-governable council settings captured at provision time.</summary>
