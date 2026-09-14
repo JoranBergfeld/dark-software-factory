@@ -3,6 +3,7 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 using Dsf.Core.Charters;
+using Dsf.Core.Runtime;
 
 namespace Dsf.Cli;
 
@@ -23,7 +24,7 @@ internal sealed class CosmosCharterStore : ICharterStore
 {
     private const string Container = "charters";
     private const string CosmosApiVersion = "2018-12-31";
-    private const string EndpointSetting = "AZURE_COSMOS_ENDPOINT";
+    private const string EndpointSetting = RuntimeSettingsComposer.AzureCosmosEndpoint;
 
     /// <summary>
     /// Cosmos DB's fixed data-plane AAD resource id (see Microsoft Learn: "Configure role-based
@@ -43,29 +44,43 @@ internal sealed class CosmosCharterStore : ICharterStore
     private readonly IAzureCliRunner runner;
     private readonly string? endpoint;
     private readonly string? database;
+    private readonly string? ownerEndpoint;
+    private readonly IOwnerRuntimeIndexReader? ownerRuntimeIndexReader;
 
-    internal CosmosCharterStore(HttpClient httpClient, IAzureCliRunner runner, string? endpoint, string? database)
+    internal CosmosCharterStore(
+        HttpClient httpClient,
+        IAzureCliRunner runner,
+        string? endpoint,
+        string? database,
+        string? ownerEndpoint = null,
+        IOwnerRuntimeIndexReader? ownerRuntimeIndexReader = null)
     {
         this.httpClient = httpClient;
         this.runner = runner;
         this.endpoint = endpoint;
         this.database = database;
+        this.ownerEndpoint = ownerEndpoint;
+        this.ownerRuntimeIndexReader = ownerRuntimeIndexReader;
     }
 
     /// <summary>
-    /// Binds to the Cosmos account named by <c>AZURE_COSMOS_ENDPOINT</c>, using the product
-    /// database (<c>DSF_COSMOS_DATABASE</c>, defaulting to the product key). Configuration is
-    /// resolved per call so an unrelated command never pays for — or fails on — charter config.
+    /// Resolves the product's Cosmos endpoint and database from the owner runtime index,
+    /// with explicit environment overrides. Lookup is deferred until a charter operation.
     /// </summary>
-    internal static CosmosCharterStore FromEnvironment() => new(
-        new HttpClient(),
-        new SystemAzureCliRunner(),
+    internal static CosmosCharterStore FromEnvironment() =>
+        FromEnvironment(new HttpClient(), new SystemAzureCliRunner());
+
+    internal static CosmosCharterStore FromEnvironment(HttpClient httpClient, IAzureCliRunner runner) => new(
+        httpClient,
+        runner,
         Environment.GetEnvironmentVariable(EndpointSetting),
-        Environment.GetEnvironmentVariable("DSF_COSMOS_DATABASE"));
+        Environment.GetEnvironmentVariable(RuntimeIntegrationSettings.CosmosDatabase),
+        Environment.GetEnvironmentVariable(RuntimeSettingsComposer.OwnerAppConfigEndpoint),
+        new AzureCliAppConfigurationClient(runner));
 
     public async Task<StoredCharter?> GetCharterAsync(string product, CancellationToken cancellationToken)
     {
-        var (account, db) = RequireConfiguration(product);
+        var (account, db) = await ResolveConfigurationAsync(product, cancellationToken);
         using var request = new HttpRequestMessage(
             HttpMethod.Get,
             new Uri(account, $"dbs/{db}/colls/{Container}/docs/{product}"));
@@ -92,7 +107,7 @@ internal sealed class CosmosCharterStore : ICharterStore
 
     public async Task PutCharterAsync(StoredCharter stored, CancellationToken cancellationToken)
     {
-        var (account, db) = RequireConfiguration(stored.Product);
+        var (account, db) = await ResolveConfigurationAsync(stored.Product, cancellationToken);
         var payload = JsonSerializer.Serialize(
             new { id = stored.Product, product = stored.Product, stored },
             SerializerOptions);
@@ -108,16 +123,39 @@ internal sealed class CosmosCharterStore : ICharterStore
         await EnsureSuccessAsync(response, cancellationToken);
     }
 
-    private (Uri Account, string Database) RequireConfiguration(string product)
+    private async Task<(Uri Account, string Database)> ResolveConfigurationAsync(
+        string product,
+        CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(endpoint))
+        var resolvedEndpoint = endpoint?.Trim();
+        var resolvedDatabase = database?.Trim();
+        if (!string.IsNullOrWhiteSpace(ownerEndpoint))
         {
-            throw new InvalidOperationException(
-                $"{EndpointSetting} is required to read or write the stored charter.");
+            var reader = ownerRuntimeIndexReader
+                ?? throw new InvalidOperationException("An owner runtime index reader is required for charter configuration.");
+            var values = await reader.ReadAsync(ownerEndpoint.Trim(), product, cancellationToken);
+            if (string.IsNullOrWhiteSpace(resolvedEndpoint))
+            {
+                resolvedEndpoint = values.GetValueOrDefault(EndpointSetting)?.Trim();
+            }
+            if (string.IsNullOrWhiteSpace(resolvedDatabase))
+            {
+                resolvedDatabase = values.GetValueOrDefault(RuntimeIntegrationSettings.CosmosDatabase)?.Trim();
+            }
         }
 
-        var db = string.IsNullOrWhiteSpace(database) ? product : database;
-        return (new Uri(endpoint.EndsWith('/') ? endpoint : endpoint + "/"), db);
+        if (string.IsNullOrWhiteSpace(resolvedEndpoint))
+        {
+            throw new InvalidOperationException(
+                string.IsNullOrWhiteSpace(ownerEndpoint)
+                    ? $"{EndpointSetting} is required to read or write the stored charter; "
+                        + $"set {RuntimeSettingsComposer.OwnerAppConfigEndpoint} to discover it from the owner runtime index."
+                    : $"Product '{product}' has no {EndpointSetting} in the owner App Configuration runtime index "
+                        + $"at '{ownerEndpoint}'; verify that dsf new completed runtime index publication.");
+        }
+
+        var db = string.IsNullOrWhiteSpace(resolvedDatabase) ? product : resolvedDatabase;
+        return (new Uri(resolvedEndpoint.EndsWith('/') ? resolvedEndpoint : resolvedEndpoint + "/"), db);
     }
 
     private async Task<HttpResponseMessage> SendAsync(

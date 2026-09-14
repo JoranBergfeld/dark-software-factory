@@ -158,7 +158,7 @@ public sealed class GitHubProvisioningPlaneTests
                 Assert.Equal("main", ruleset.TargetBranch);
                 Assert.Equal(["ci"], ruleset.RequiredStatusChecks);
                 Assert.Equal(1, ruleset.RequiredApprovingReviewCount);
-                Assert.False(ruleset.AllowAutoMerge);
+                Assert.True(ruleset.AllowAutoMerge);
                 Assert.False(ruleset.RequireCopilotApprovalGate);
                 Assert.Equal("dsf-creation", ruleset.Name);
                 Assert.Null(ruleset.ExistingRulesetId);

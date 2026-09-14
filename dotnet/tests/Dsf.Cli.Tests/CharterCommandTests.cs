@@ -1,3 +1,4 @@
+using System.Net;
 using Dsf.Cli;
 using Dsf.Core.Charters;
 using Xunit;
@@ -31,6 +32,69 @@ public sealed class CharterCommandTests
         ## Glossary
         - Charter: human-owned intent
         """;
+
+    [Theory]
+    [InlineData("implement")]
+    [InlineData("sync")]
+    [InlineData("status")]
+    public async Task Charter_commands_discover_cosmos_without_environment_overrides(string command)
+    {
+        await WithOwnerEndpointAsync(async () =>
+        {
+            var previous = Environment.GetEnvironmentVariable("AZURE_COSMOS_ENDPOINT");
+            var previousDatabase = Environment.GetEnvironmentVariable("DSF_COSMOS_DATABASE");
+            Environment.SetEnvironmentVariable("AZURE_COSMOS_ENDPOINT", null);
+            Environment.SetEnvironmentVariable("DSF_COSMOS_DATABASE", null);
+            try
+            {
+                var terminal = NonInteractiveTerminal();
+                var runner = new CharterConfigurationRunner();
+                var handler = new CharterCosmosHandler();
+                using var httpClient = new HttpClient(handler);
+                var repository = new RecordingCharterRepositoryClient(new CharterFile(ValidCharter, "abc123"))
+                {
+                    MarkConstitutionCurrentAfterOpeningPullRequest = true,
+                };
+                string[] args = command == "implement"
+                    ? ["charter", command, "--product", "demo", "--no-wait"]
+                    : ["charter", command, "--product", "demo"];
+                var exitCode = await CliApplication.InvokeAsync(
+                    args,
+                    CancellationToken.None,
+                    terminal,
+                    new AzureCliAppConfigurationClient(runner),
+                    repository,
+                    CosmosCharterStore.FromEnvironment(httpClient, runner));
+
+                Assert.True(exitCode == 0, terminal.Error);
+                Assert.NotEmpty(handler.Requests);
+                Assert.All(handler.Requests, uri =>
+                {
+                    Assert.Equal("demo.documents.azure.com", uri.Host);
+                    Assert.StartsWith("/dbs/demo-data/colls/charters/docs", uri.AbsolutePath, StringComparison.Ordinal);
+                });
+                Assert.All(runner.Invocations.Where(args => args[0] == "appconfig"), args =>
+                    Assert.Equal(
+                        ["appconfig", "kv", "list", "--endpoint", "https://owner.azconfig.io",
+                            "--auth-mode", "login", "--label", "demo", "-o", "json"],
+                        args));
+                if (command != "status")
+                {
+                    Assert.NotNull(handler.Document);
+                    Assert.Contains("abc123", handler.Document, StringComparison.Ordinal);
+                }
+                if (command == "implement")
+                {
+                    Assert.Single(repository.Issues);
+                }
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable("AZURE_COSMOS_ENDPOINT", previous);
+                Environment.SetEnvironmentVariable("DSF_COSMOS_DATABASE", previousDatabase);
+            }
+        });
+    }
 
     [Fact]
     public async Task CharterSync_resolves_the_product_from_owner_app_config_and_reads_its_repository()
@@ -363,6 +427,67 @@ public sealed class CharterCommandTests
     }
 
     [Fact]
+    public async Task CharterInit_retries_auto_merge_on_existing_pr_without_repeating_the_interview()
+    {
+        await WithOwnerEndpointAsync(async () =>
+        {
+            var terminal = NonInteractiveTerminal();
+            var repository = new RecordingCharterRepositoryClient(null)
+            {
+                ExistingPullRequest = new CharterPullRequest("https://github.test/acme/demo/pull/4", "open"),
+                ExistingHeadPrefix = "charter/init-",
+            };
+            var exitCode = await CliApplication.InvokeAsync(
+                ["charter", "init", "--product", "demo"],
+                CancellationToken.None, terminal,
+                new RecordingAppConfigurationClient(new ProductLocation("demo", "acme/demo", "https://demo.azconfig.io")),
+                repository, new RecordingCharterStore());
+
+            Assert.Equal(0, exitCode);
+            Assert.Empty(repository.InitialPullRequests);
+            Assert.Equal("https://github.test/acme/demo/pull/4", Assert.Single(repository.AutoMergeRequests));
+            Assert.Contains("auto-merge", terminal.Output);
+        });
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CharterImplement_retries_auto_merge_on_existing_constitution_and_surfaces_failures(bool failMerge)
+    {
+        await WithOwnerEndpointAsync(async () =>
+        {
+            var terminal = NonInteractiveTerminal();
+            var repository = new RecordingCharterRepositoryClient(new CharterFile(ValidCharter, "abc123"))
+            {
+                ExistingPullRequest = new CharterPullRequest("https://github.test/acme/demo/pull/4", "open"),
+                ExistingHeadPrefix = "charter/constitution-abc123-",
+                AutoMergeError = failMerge ? new InvalidOperationException("auto-merge denied for PR /4") : null,
+                ConstitutionAfterAutoMerge = "<!-- dsf:constitution schema_version=1 source_sha=abc123 source_ref=main -->",
+            };
+            var exitCode = await CliApplication.InvokeAsync(
+                ["charter", "implement", "--product", "demo", "--no-wait", "--timeout", "0.01"],
+                CancellationToken.None, terminal,
+                new RecordingAppConfigurationClient(new ProductLocation("demo", "acme/demo", "https://demo.azconfig.io")),
+                repository, new RecordingCharterStore());
+
+            Assert.Equal(failMerge ? 1 : 0, exitCode);
+            Assert.Empty(repository.FilePullRequests);
+            Assert.Equal("https://github.test/acme/demo/pull/4", Assert.Single(repository.AutoMergeRequests));
+            if (failMerge)
+            {
+                Assert.Contains("auto-merge denied", terminal.Error);
+                Assert.DoesNotContain("auto-merge requested", terminal.Output);
+                Assert.Empty(repository.Issues);
+            }
+            else
+            {
+                Assert.Single(repository.Issues);
+            }
+        });
+    }
+
+    [Fact]
     public async Task CharterImplement_fails_loudly_when_the_owner_app_config_endpoint_is_missing()
     {
         var prior = Environment.GetEnvironmentVariable("DSF_OWNER_APPCONFIG_ENDPOINT");
@@ -445,6 +570,14 @@ public sealed class CharterCommandTests
             Assert.Contains("Bootstrap the **demo** product", issue.Body, StringComparison.Ordinal);
             Assert.Contains(".specify/memory/constitution.md", issue.Body, StringComparison.Ordinal);
             Assert.Contains(".dsf/charter.md", issue.Body, StringComparison.Ordinal);
+            Assert.Contains("Replace the placeholder", issue.Body, StringComparison.Ordinal);
+            Assert.Contains(".github/workflows/ci.yml", issue.Body, StringComparison.Ordinal);
+            Assert.Contains("pull_request", issue.Body, StringComparison.Ordinal);
+            Assert.Contains("push", issue.Body, StringComparison.Ordinal);
+            Assert.Contains("lint", issue.Body, StringComparison.Ordinal);
+            Assert.Contains("static analysis", issue.Body, StringComparison.Ordinal);
+            Assert.Contains("always()", issue.Body, StringComparison.Ordinal);
+            Assert.Contains("continue-on-error", issue.Body, StringComparison.Ordinal);
             Assert.Contains("filed bootstrap issue", terminal.Output, StringComparison.Ordinal);
         });
     }
@@ -987,6 +1120,54 @@ public sealed class CharterCommandTests
             Environment.SetEnvironmentVariable("DSF_OWNER_APPCONFIG_ENDPOINT", prior);
         }
     }
+
+    private sealed class CharterConfigurationRunner : IAzureCliRunner
+    {
+        public List<IReadOnlyList<string>> Invocations { get; } = [];
+
+        public Task<AzureCliInvocationResult> RunAsync(
+            IReadOnlyList<string> arguments,
+            CancellationToken cancellationToken)
+        {
+            Invocations.Add(arguments);
+            var output = arguments[0] switch
+            {
+                "appconfig" => """
+                    [
+                      {"key":"GITHUB_REPOSITORY","value":"acme/demo","label":"demo"},
+                      {"key":"AZURE_APPCONFIG_ENDPOINT","value":"https://demo.azconfig.io","label":"demo"},
+                      {"key":"AZURE_COSMOS_ENDPOINT","value":"https://demo.documents.azure.com/","label":"demo"},
+                      {"key":"DSF_COSMOS_DATABASE","value":"demo-data","label":"demo"}
+                    ]
+                    """,
+                "account" => """{"accessToken":"test-token"}""",
+                _ => throw new InvalidOperationException("Unexpected Azure operation."),
+            };
+            return Task.FromResult(new AzureCliInvocationResult(0, output, ""));
+        }
+    }
+
+    private sealed class CharterCosmosHandler : HttpMessageHandler
+    {
+        public string? Document { get; private set; }
+        public List<Uri> Requests { get; } = [];
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            Requests.Add(request.RequestUri!);
+            if (request.Method == HttpMethod.Post)
+            {
+                Document = await request.Content!.ReadAsStringAsync(cancellationToken);
+                return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("{}") };
+            }
+            Assert.Equal(HttpMethod.Get, request.Method);
+            return Document is null
+                ? new HttpResponseMessage(HttpStatusCode.NotFound) { Content = new StringContent("{}") }
+                : new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(Document) };
+        }
+    }
 }
 
 internal sealed class RecordingAppConfigurationClient(params ProductLocation[] products)
@@ -1045,6 +1226,26 @@ internal sealed class RecordingAppConfigurationClient(params ProductLocation[] p
 
 internal sealed class RecordingCharterRepositoryClient(CharterFile? file) : ICharterRepositoryClient
 {
+    public CharterPullRequest? ExistingPullRequest { get; init; }
+    public string? ExistingHeadPrefix { get; init; }
+    public List<string> AutoMergeRequests { get; } = [];
+    public Exception? AutoMergeError { get; init; }
+    public string? ConstitutionAfterAutoMerge { get; init; }
+
+    public Task EnsurePullRequestAutoMergeAsync(string repository, string url, CancellationToken cancellationToken)
+    {
+        AutoMergeRequests.Add(url);
+        if (AutoMergeError is not null)
+        {
+            throw AutoMergeError;
+        }
+        if (ConstitutionAfterAutoMerge is not null)
+        {
+            ConstitutionOnMain = ConstitutionAfterAutoMerge;
+        }
+        return Task.CompletedTask;
+    }
+
     public List<(string Repository, string Path, string? Ref)> Reads { get; } = [];
     public List<(string Repository, string Product, string Content)> InitialPullRequests { get; } = [];
     public List<RecordedFilePullRequest> FilePullRequests { get; } = [];
@@ -1099,7 +1300,7 @@ internal sealed class RecordingCharterRepositoryClient(CharterFile? file) : ICha
         string repository,
         string headPrefix,
         CancellationToken cancellationToken) =>
-        Task.FromResult<CharterPullRequest?>(null);
+        Task.FromResult(headPrefix == ExistingHeadPrefix ? ExistingPullRequest : null);
 
     public Task<string> OpenFilePullRequestAsync(
         string repository,

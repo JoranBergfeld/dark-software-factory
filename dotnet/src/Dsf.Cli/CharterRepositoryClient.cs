@@ -93,6 +93,11 @@ internal interface ICharterRepositoryClient
         string headPrefix,
         CancellationToken cancellationToken);
 
+    Task EnsurePullRequestAutoMergeAsync(
+        string repository,
+        string url,
+        CancellationToken cancellationToken);
+
     Task<string> OpenFilePullRequestAsync(
         string repository,
         string path,
@@ -253,12 +258,14 @@ internal sealed class GitHubCharterRepositoryClient(HttpClient httpClient, strin
                 title = $"Add product charter for {product}",
                 head = branch,
                 @base = defaultBranch,
-                body = "Human-owned Product Charter. Review, edit, and merge to make it authoritative.",
+                body = "Human-owned Product Charter collected by `dsf charter init`. Auto-merge is requested after required checks and any required approvals; repository protections remain in force.",
             },
             cancellationToken);
         using var pullDocument = await ReadJsonAsync(pullResponse, cancellationToken);
-        return pullDocument.RootElement.GetProperty("html_url").GetString()
+        var url = pullDocument.RootElement.GetProperty("html_url").GetString()
             ?? throw new InvalidOperationException("GitHub created a charter pull request without a URL.");
+        await EnsurePullRequestAutoMergeAsync(repository, url, cancellationToken);
+        return url;
     }
 
     public async Task<CharterPullRequest?> LatestPullRequestWithHeadPrefixAsync(
@@ -350,15 +357,36 @@ internal sealed class GitHubCharterRepositoryClient(HttpClient httpClient, strin
 
         if (enableAutoMerge)
         {
-            // Best effort: a repository with auto-merge disabled rejects this, and the PR
-            // simply waits for a human merge instead of failing the whole operation.
-            RunGh(
-                ["pr", "merge", url, "--repo", repository, "--auto", "--squash"],
-                cancellationToken,
-                throwOnError: false);
+            await EnsurePullRequestAutoMergeAsync(repository, url, cancellationToken);
         }
 
         return url;
+    }
+
+    public async Task EnsurePullRequestAutoMergeAsync(
+        string repository,
+        string url,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var response = await SendAsync(HttpMethod.Get, $"repos/{repository}", null, cancellationToken);
+            using var document = await ReadJsonAsync(response, cancellationToken);
+            if (!document.RootElement.GetProperty("allow_auto_merge").GetBoolean())
+            {
+                using var updated = await SendAsync(
+                    HttpMethod.Patch, $"repos/{repository}", new { allow_auto_merge = true }, cancellationToken);
+            }
+
+            RunGh(["pr", "merge", url, "--repo", repository, "--auto", "--squash"], cancellationToken);
+        }
+        catch (Exception exception) when (exception is GitHubApiException or InvalidOperationException or HttpRequestException)
+        {
+            throw new InvalidOperationException(
+                $"Could not enable auto-merge for {url}: {exception.Message} "
+                + "The PR is preserved. Check repository permissions and required checks/approvals, then retry the charter command.",
+                exception);
+        }
     }
 
     public async Task<CharterIssue> CreateIssueAsync(

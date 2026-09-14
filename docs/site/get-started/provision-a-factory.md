@@ -256,5 +256,6 @@ After provisioning, create it explicitly:
 dsf charter init --product <product>
 ```
 
-Review and merge the charter PR, then [implement the application](implement-application.md).
+The CLI requests auto-merge after required CI and approvals. Once the charter PR
+lands, [implement the application](implement-application.md); no separate merge click is needed.
 A council sweep is not a prerequisite for this initial build.

@@ -41,7 +41,8 @@ internal interface IAppConfigurationClient
 }
 
 /// <summary>Uses the authenticated Azure CLI to access the live App Configuration authority.</summary>
-internal sealed class AzureCliAppConfigurationClient(IAzureCliRunner runner) : IAppConfigurationClient
+internal sealed class AzureCliAppConfigurationClient(IAzureCliRunner runner)
+    : IAppConfigurationClient, IOwnerRuntimeIndexReader
 {
     public async Task<IReadOnlyList<ProductLocation>> ListProductsAsync(
         string ownerEndpoint,
@@ -76,9 +77,7 @@ internal sealed class AzureCliAppConfigurationClient(IAzureCliRunner runner) : I
         string product,
         CancellationToken cancellationToken)
     {
-        RequireEndpoint(ownerEndpoint, "DSF_OWNER_APPCONFIG_ENDPOINT");
-        var values = (await ListEntriesAsync(ownerEndpoint, ["--label", product], cancellationToken))
-            .ToDictionary(entry => entry.Key, entry => entry.Value, StringComparer.Ordinal);
+        var values = await ReadAsync(ownerEndpoint, product, cancellationToken);
         var repository = values.GetValueOrDefault(ProductConfigurationKeys.OwnerIndexGitHubRepository);
         var productEndpoint = values.GetValueOrDefault(ProductConfigurationKeys.OwnerIndexAppConfigEndpoint);
         if (string.IsNullOrWhiteSpace(repository) || string.IsNullOrWhiteSpace(productEndpoint))
@@ -90,6 +89,25 @@ internal sealed class AzureCliAppConfigurationClient(IAzureCliRunner runner) : I
         }
 
         return new ProductLocation(product, repository, productEndpoint);
+    }
+
+    public async Task<IReadOnlyDictionary<string, string>> ReadAsync(
+        string ownerAppConfigEndpoint,
+        string product,
+        CancellationToken cancellationToken)
+    {
+        RequireEndpoint(ownerAppConfigEndpoint, RuntimeSettingsComposer.OwnerAppConfigEndpoint);
+        var values = (await ListEntriesAsync(
+            ownerAppConfigEndpoint, ["--label", product], cancellationToken))
+            .ToDictionary(entry => entry.Key, entry => entry.Value, StringComparer.Ordinal);
+        if (values.Count == 0)
+        {
+            throw new InvalidOperationException(
+                $"Product '{product}' has no published runtime index in the owner App Configuration "
+                + $"at '{ownerAppConfigEndpoint}'.");
+        }
+
+        return values;
     }
 
     public async Task<ProductRecord> ReadProductRecordAsync(

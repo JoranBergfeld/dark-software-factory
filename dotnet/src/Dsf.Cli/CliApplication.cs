@@ -1550,6 +1550,8 @@ public static class CliApplication
         if (current is { State: "open" or "OPEN" })
         {
             terminal.WriteLine($"[dsf] reusing open constitution PR: {current.HtmlUrl}");
+            await charterRepository.EnsurePullRequestAutoMergeAsync(repository, current.HtmlUrl, cancellationToken);
+            terminal.WriteLine("[dsf] constitution auto-merge requested; required checks and approvals still apply.");
             return (current.HtmlUrl, false);
         }
 
@@ -1560,12 +1562,13 @@ public static class CliApplication
             constitution,
             branch,
             $"Add Spec Kit constitution for {product}",
-            "Constitution derived from the product charter by `dsf charter implement`. Auto-merge is requested: on repos where it is enabled this merges once the `ci` check is green, otherwise it awaits a human review. (Creation-maturity gating is future scope.)",
+            "Constitution derived from the product charter by `dsf charter implement`. Auto-merge is requested after required checks and any required approvals; repository protections remain in force.",
             $"docs: add spec kit constitution for {product}",
             true,
             existing?.Sha,
             cancellationToken);
         terminal.WriteLine($"[dsf] opened constitution PR (auto-merge requested): {url}");
+        terminal.WriteLine("[dsf] required checks and approvals still apply; no manual merge is needed once they pass.");
         return (url, false);
     }
 
@@ -1728,6 +1731,14 @@ public static class CliApplication
             2. `/speckit.plan` — choose a sensible tech stack and architecture (a paved-road default is not wired yet — your choice for now).
             3. `/speckit.tasks` — break the plan into actionable tasks.
             4. Implement the tasks and open pull request(s); keep the `ci` check green.
+
+            ## CI and automatic code quality (required in the implementation PR)
+            - Replace the placeholder `.github/workflows/ci.yml` with real CI for the chosen language and framework. The scaffold check is not application validation.
+            - Run automatically on `pull_request` and `push` to `main`, with read-only default permissions. Do not execute untrusted PR code via `pull_request_target`.
+            - Restore dependencies reproducibly, build/type-check the application, run meaningful automated tests, and enforce lint, formatting checks, and static analysis using the chosen ecosystem's standard tools.
+            - Preserve a stable required check named `ci`. If work is split into jobs, use an `always()` aggregate job named `ci` that depends on every required job and explicitly fails unless each succeeds; failed, cancelled, or unexpectedly skipped jobs must not produce a green gate.
+            - Quality checks must fail CI on violations. Do not use `continue-on-error`, success-shaped placeholder commands, or remove repository protections to make checks green.
+            - Exercise the workflow on the implementation PR and document the same build/test/quality commands for local use. If a check cannot run, report the blocker rather than claiming successful validation.
 
             ## Governing documents
             - Constitution: `{ConstitutionPath}` (derived from the charter — your principles and quality gates).
@@ -1903,6 +1914,17 @@ public static class CliApplication
         ICharterRepositoryClient charterRepository,
         CancellationToken cancellationToken)
     {
+        var existing = await charterRepository.LatestPullRequestWithHeadPrefixAsync(
+            location.GitHubRepository, "charter/init-", cancellationToken);
+        if (existing is { State: "open" or "OPEN" })
+        {
+            terminal.WriteLine($"[dsf] reusing open charter PR: {existing.HtmlUrl}");
+            await charterRepository.EnsurePullRequestAutoMergeAsync(
+                location.GitHubRepository, existing.HtmlUrl, cancellationToken);
+            terminal.WriteLine("[dsf] charter auto-merge requested; required checks and approvals still apply.");
+            return Success;
+        }
+
         if (!terminal.Capabilities.IsInteractive)
         {
             terminal.WriteErrorLine(
@@ -1914,6 +1936,7 @@ public static class CliApplication
         var url = await charterRepository.OpenInitialPullRequestAsync(
             location.GitHubRepository, product, content, cancellationToken);
         terminal.WriteLine($"[dsf] opened charter PR: {url}");
+        terminal.WriteLine("[dsf] auto-merge requested; required checks and approvals still apply. Wait for it to merge before implementing.");
         return Success;
     }
 

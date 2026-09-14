@@ -58,7 +58,7 @@ internal sealed record GitHubProvisioningPlan(IReadOnlyList<GitHubProvisioningRe
                 ["ci"],
                 RequiredApprovingReviews(creationMaturity),
                 definition.GitHub.BranchProtectionRulesetId,
-                AllowAutoMerge: AllowsAutoMerge(creationMaturity),
+                AllowAutoMerge: true,
                 RequireCopilotApprovalGate: RequiresCopilotApprovalGate(creationMaturity)),
         };
 
@@ -197,10 +197,6 @@ internal sealed record GitHubProvisioningPlan(IReadOnlyList<GitHubProvisioningRe
     /// cref="RequiresCopilotApprovalGate"/>), never by dropping the requirement to zero.
     /// </summary>
     private static int RequiredApprovingReviews(string creationMaturity) => 1;
-
-    /// <summary>Auto-merge is available once the gating review can be satisfied unattended.</summary>
-    private static bool AllowsAutoMerge(string creationMaturity) =>
-        creationMaturity is "medium" or "high";
 
     /// <summary>
     /// Medium and high both auto-merge on a Copilot approval rather than a standing human

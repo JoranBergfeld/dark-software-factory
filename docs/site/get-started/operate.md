@@ -109,12 +109,18 @@ it during sweeps; manage charter state through the operator commands below.
 
 Operator commands:
 
-- `dsf charter init --product <product>` — interview, then open a PR adding the charter.
+- `dsf charter init --product <product>` — interview, then open a charter PR with auto-merge.
 - `dsf charter sync --product <product>` — force a sync now.
 - `dsf charter status --product <product>` — print stored charter status and drift.
-- `dsf charter implement --product <product>` — propose the constitution, wait for its
+- `dsf charter implement --product <product>` — propose the constitution with auto-merge, wait for its
   merge, then file the application build issue and attempt agent assignment.
 - `dsf charter watch --product <product>` — watch the build PR and request review when ready.
+
+`sync`, `status`, and `implement` discover Cosmos settings from the owner App Configuration
+index using `DSF_OWNER_APPCONFIG_ENDPOINT` and `--product`. Explicit `AZURE_COSMOS_ENDPOINT`
+and `DSF_COSMOS_DATABASE` exports override indexed values; otherwise the database defaults
+to the product key when no database is indexed. Missing or unreadable configuration fails
+with an error, not a local-storage fallback.
 
 `dsf charter` reaches the product repository through the master DSF GitHub App. Keep
 `DSF_OWNER_KEYVAULT_URI` and `DSF_OWNER_APPCONFIG_ENDPOINT` exported so the CLI can resolve

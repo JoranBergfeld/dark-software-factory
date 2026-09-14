@@ -9,6 +9,144 @@ namespace Dsf.Cli.Tests;
 public sealed class CosmosCharterStoreTests
 {
     [Fact]
+    public void Creating_the_default_store_does_not_access_Azure()
+    {
+        var runner = new RecordingAzureCliRunner();
+        var handler = new StubHttpMessageHandler();
+        using var client = new HttpClient(handler);
+
+        CosmosCharterStore.FromEnvironment(client, runner);
+
+        Assert.Empty(runner.Invocations);
+        Assert.Empty(handler.Requests);
+    }
+
+    [Theory]
+    [InlineData(null, null, "published-db", "demo.documents.azure.com", "published-db")]
+    [InlineData(" ", " ", "published-db", "demo.documents.azure.com", "published-db")]
+    [InlineData("https://override.documents.azure.com/", null, "published-db", "override.documents.azure.com", "published-db")]
+    [InlineData(null, "override-db", "published-db", "demo.documents.azure.com", "override-db")]
+    [InlineData("https://override.documents.azure.com/", "override-db", "published-db", "override.documents.azure.com", "override-db")]
+    [InlineData(null, null, null, "demo.documents.azure.com", "demo")]
+    public async Task Owner_index_settings_are_used_unless_explicitly_overridden(
+        string? endpointOverride,
+        string? databaseOverride,
+        string? publishedDatabase,
+        string expectedHost,
+        string expectedDatabase)
+    {
+        var handler = new StubHttpMessageHandler(Response(HttpStatusCode.NotFound, "{}"));
+        var runner = new RecordingAzureCliRunner(
+            IndexResponse("demo", "https://demo.documents.azure.com/", publishedDatabase),
+            new AzureCliInvocationResult(0, """{"accessToken":"cosmos-token"}""", ""));
+        var store = IndexedStore(handler, runner, endpointOverride, databaseOverride);
+
+        Assert.Null(await store.GetCharterAsync("demo", CancellationToken.None));
+
+        var request = Assert.Single(handler.Requests);
+        Assert.Equal(expectedHost, request.Host);
+        Assert.Equal($"/dbs/{expectedDatabase}/colls/charters/docs/demo", request.Path);
+    }
+
+    [Fact]
+    public async Task Owner_index_resolution_keeps_products_isolated()
+    {
+        var handler = new StubHttpMessageHandler(
+            Response(HttpStatusCode.NotFound, "{}"),
+            Response(HttpStatusCode.NotFound, "{}"));
+        var token = new AzureCliInvocationResult(0, """{"accessToken":"cosmos-token"}""", "");
+        var runner = new RecordingAzureCliRunner(
+            IndexResponse("one", "https://one.documents.azure.com/", "one-db"),
+            token,
+            IndexResponse("two", "https://two.documents.azure.com/", "two-db"),
+            token);
+        var store = IndexedStore(handler, runner);
+
+        await store.GetCharterAsync("one", CancellationToken.None);
+        await store.GetCharterAsync("two", CancellationToken.None);
+
+        Assert.Equal(["one.documents.azure.com", "two.documents.azure.com"], handler.Requests.Select(r => r.Host));
+        Assert.Equal(
+            ["/dbs/one-db/colls/charters/docs/one", "/dbs/two-db/colls/charters/docs/two"],
+            handler.Requests.Select(r => r.Path));
+        Assert.Contains("one", runner.Invocations[0]);
+        Assert.Contains("two", runner.Invocations[2]);
+    }
+
+    [Fact]
+    public async Task Missing_index_endpoint_names_the_product_and_configuration_authority()
+    {
+        var handler = new StubHttpMessageHandler();
+        var runner = new RecordingAzureCliRunner(IndexResponse("demo", null, "demo-db"));
+        var store = IndexedStore(handler, runner);
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => store.GetCharterAsync("demo", CancellationToken.None));
+
+        Assert.Contains("demo", error.Message, StringComparison.Ordinal);
+        Assert.Contains("AZURE_COSMOS_ENDPOINT", error.Message, StringComparison.Ordinal);
+        Assert.Contains("owner App Configuration runtime index", error.Message, StringComparison.Ordinal);
+        Assert.Contains("dsf new", error.Message, StringComparison.Ordinal);
+        Assert.Single(runner.Invocations);
+        Assert.Empty(handler.Requests);
+    }
+
+    [Theory]
+    [InlineData(0, "[]", "", "no published runtime index")]
+    [InlineData(1, "", "access denied", "access denied")]
+    public async Task Owner_lookup_failures_are_not_hidden_by_local_overrides(
+        int exitCode, string output, string errorOutput, string expectedError)
+    {
+        var handler = new StubHttpMessageHandler();
+        var runner = new RecordingAzureCliRunner(new AzureCliInvocationResult(exitCode, output, errorOutput));
+        var store = IndexedStore(handler, runner, "https://override.documents.azure.com/", "override-db");
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => store.GetCharterAsync("demo", CancellationToken.None));
+
+        Assert.Contains(expectedError, error.Message, StringComparison.Ordinal);
+        Assert.Single(runner.Invocations);
+        Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
+    public async Task Cancellation_during_owner_lookup_does_not_access_Cosmos()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var handler = new StubHttpMessageHandler();
+        var runner = new RecordingAzureCliRunner(cancellation);
+        var store = IndexedStore(handler, runner);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => store.GetCharterAsync("demo", cancellation.Token));
+
+        Assert.Empty(handler.Requests);
+    }
+
+    private static CosmosCharterStore IndexedStore(
+        StubHttpMessageHandler handler,
+        RecordingAzureCliRunner runner,
+        string? endpoint = null,
+        string? database = null) =>
+        new(new HttpClient(handler), runner, endpoint, database,
+            "https://owner.azconfig.io", new AzureCliAppConfigurationClient(runner));
+
+    private static AzureCliInvocationResult IndexResponse(string product, string? endpoint, string? database)
+    {
+        var values = new Dictionary<string, string> { ["DSF_PRODUCT"] = product };
+        if (endpoint is not null)
+        {
+            values["AZURE_COSMOS_ENDPOINT"] = endpoint;
+        }
+        if (database is not null)
+        {
+            values["DSF_COSMOS_DATABASE"] = database;
+        }
+        return new AzureCliInvocationResult(0, JsonSerializer.Serialize(
+            values.Select(entry => new { key = entry.Key, value = entry.Value, label = product })), "");
+    }
+
+    [Fact]
     public async Task GetCharter_reads_the_product_document_from_the_charters_container()
     {
         var handler = new StubHttpMessageHandler(
@@ -154,6 +292,7 @@ public sealed class CosmosCharterStoreTests
             Requests.Add(
                 new RecordedCosmosRequest(
                     request.Method,
+                    request.RequestUri!.Host,
                     request.RequestUri!.PathAndQuery,
                     request.Content is null ? null : await request.Content.ReadAsStringAsync(cancellationToken),
                     Header(request, "Authorization"),
@@ -170,6 +309,7 @@ public sealed class CosmosCharterStoreTests
 
     private sealed record RecordedCosmosRequest(
         HttpMethod Method,
+        string Host,
         string Path,
         string? Body,
         string? Authorization,
