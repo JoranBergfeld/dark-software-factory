@@ -1,6 +1,6 @@
 # Azure discovery and observe-only telemetry access
 
-Research date: **2026-09-14**. Question: [#190](https://github.com/JoranBergfeld/dark-software-factory/issues/190), under [map #189](https://github.com/JoranBergfeld/dark-software-factory/issues/189).
+Research date: **2026-09-14**. Question: [Establish Azure discovery and observe-only telemetry access](https://github.com/JoranBergfeld/dark-software-factory/issues/190), under [Onboard existing applications with dsf onboard decide](https://github.com/JoranBergfeld/dark-software-factory/issues/189).
 
 **Outcome: conditionally feasible, not a universal least-privilege attachment recipe.**
 Azure can enumerate visible infrastructure and query already-collected, authorized
@@ -312,7 +312,9 @@ handling need an explicit contract, not silent `take` truncation. Current DSF's
 partial-error rejection does not resolve permission-filtered successful responses.[^response][^limits][base-query]
 
 **I - Inputs needed before declaring evidence readiness:** These are candidate
-verification obligations for #192, not a decided manifest or readiness policy:
+verification obligations for
+[Define product intent and evidence readiness](https://github.com/JoranBergfeld/dark-software-factory/issues/192),
+not a decided manifest or readiness policy:
 
 - Identity/tenant/cloud, selected application IDs, separately approved telemetry IDs,
   allowed destination workspaces, and evidence-to-application provenance.[^scope][^resource-query]
@@ -406,9 +408,13 @@ These limitations are part of the answer, not reasons to invent a universal role
 
 ### Decision-ticket inputs and newly sharp questions
 
-Existing tickets already own product/application boundaries (#194), infrastructure
-and permissions (#191), evidence readiness (#192), lifecycle (#193), and wizard
-behavior (#195). This report does not answer those human decisions.
+Existing tickets already own these human decisions:
+[Define product identity and application-resource boundaries](https://github.com/JoranBergfeld/dark-software-factory/issues/194),
+[Define council-only infrastructure and runtime permissions](https://github.com/JoranBergfeld/dark-software-factory/issues/191),
+[Define product intent and evidence readiness](https://github.com/JoranBergfeld/dark-software-factory/issues/192),
+[Define safe retry, completion, and offboarding](https://github.com/JoranBergfeld/dark-software-factory/issues/193),
+and [Prototype the resource-selection and confirmation wizard](https://github.com/JoranBergfeld/dark-software-factory/issues/195).
+This report does not answer those human decisions.
 
 Potential **new, narrow research questions**, rather than duplicate decision tickets:
 
