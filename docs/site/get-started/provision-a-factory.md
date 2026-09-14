@@ -1,9 +1,8 @@
 # Provision a factory
 
-!!! warning "Configure the owner outside DSF"
-    `dsf bootstrap` is not implemented in the .NET CLI. Before running `dsf new`, configure
-    any owner services outside DSF. Export `DSF_OWNER_APPCONFIG_ENDPOINT` when publishing the
-    product index. `dsf new` does not retrieve credentials from an owner Key Vault.
+!!! warning "Bootstrap the owner first"
+    Run `dsf bootstrap` before a live `dsf new`, then export the printed
+    `DSF_OWNER_KEYVAULT_URI` and `DSF_OWNER_APPCONFIG_ENDPOINT`.
 
 The factory CLI is `dsf`. Provisioning a product needs only `--product`:
 
@@ -48,12 +47,11 @@ Provisioning spans GitHub, Azure resources, and Azure RBAC. The principal runnin
 needs:
 
 - **Owner configuration:** `DSF_OWNER_KEYVAULT_URI` and `DSF_OWNER_APPCONFIG_ENDPOINT`
-  are optional configuration inputs; `DSF_OWNER_APPCONFIG_ENDPOINT` (or
+  identify the control plane created by `dsf bootstrap`; the App Configuration endpoint (or
   `--owner-appconfig-endpoint`) is required for a live run to publish the product index.
 - **GitHub:** `GH_TOKEN` or `GITHUB_TOKEN` that can create repositories under `--owner` and seed
-  baseline CI. The CLI does not retrieve credentials from owner stores. Pass GitHub App and
-  installation identifiers with `--github-app-id` and `--github-installation-id`, or set
-  `DSF_GITHUB_APP_ID` and `DSF_GITHUB_INSTALLATION_ID`.
+  baseline CI. The CLI does not retrieve credentials from owner stores. When owner Key Vault is configured, the CLI resolves stored GitHub App and
+  installation identifiers automatically; explicit identifiers remain supported.
 - **Spec Kit CLI:** `specify` on `PATH`, pinned by your operator image or workstation setup.
 - **Azure subscription RBAC:** **Owner**, or **Contributor + User Access Administrator**, on
   the subscription.

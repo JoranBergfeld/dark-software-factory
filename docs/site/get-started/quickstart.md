@@ -47,19 +47,17 @@ Self-contained install:
 3. Extract it and put the extracted directory on `PATH`.
 4. Run `dsf --help`.
 
-## Owner bootstrap unavailable
+## Bootstrap the owner
 
-`dsf bootstrap` is **not implemented** in the current .NET CLI. It exits successfully without
-provisioning a GitHub App, owner Key Vault, App Configuration, or credentials. Configure that
-owner infrastructure outside DSF before using product provisioning. `dsf new` does not retrieve
-or seed credentials from configured owner stores; provide its GitHub credential and any GitHub App
-or installation identifiers with the documented options or environment variables.
-
-For an already configured owner, export the App Configuration endpoint needed to publish the
-product index:
+Before provisioning a product, create the owner App Configuration store, Key Vault, and
+DSF GitHub App:
 
 ```bash
-export DSF_OWNER_APPCONFIG_ENDPOINT=https://<owner-appconfig>.azconfig.io
+dsf bootstrap --app-name dsf-<owner> --keyvault-name <owner-keyvault> \
+  --appconfig-name <owner-appconfig> --dry-run
 ```
+
+Review the plan, then rerun without `--dry-run` and export the two endpoints printed
+on success. See [Bootstrap](bootstrap.md).
 
 Next: [provision a factory](provision-a-factory.md).

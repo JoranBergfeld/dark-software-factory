@@ -281,6 +281,63 @@ internal sealed class AzureCliProvisioningClient : IAzureProvisioningClient
             outputs.GetValueOrDefault("agentPrincipalId"));
     }
 
+    public async Task CopyOwnerAppPrivateKeyAsync(
+        CopyOwnerAppPrivateKeyRequest request,
+        CancellationToken cancellationToken)
+    {
+        var ownerVaultName = new Uri(request.OwnerKeyVaultUri).Host.Split('.', 2)[0];
+        var productVaultName = new Uri(request.ProductKeyVaultUri).Host.Split('.', 2)[0];
+        var ownerResourceGroup = await RequiredOutputAsync(
+            ["keyvault", "show", "--name", ownerVaultName, "--query", "resourceGroup", "-o", "tsv"],
+            cancellationToken);
+        var productResourceGroup = await RequiredOutputAsync(
+            ["keyvault", "show", "--name", productVaultName, "--query", "resourceGroup", "-o", "tsv"],
+            cancellationToken);
+        var productLocation = await RequiredOutputAsync(
+            ["keyvault", "show", "--name", productVaultName, "--query", "location", "-o", "tsv"],
+            cancellationToken);
+
+        await RunAsync(
+            [
+                "deployment", "sub", "create",
+                "-l", productLocation,
+                "-n", $"dsf-copy-owner-secret-{productVaultName}",
+                "-f", Path.Combine(FindRepoRoot(), "infra", "copy-owner-secret.bicep"),
+                "-p",
+                $"ownerVaultName={ownerVaultName}",
+                $"ownerResourceGroup={ownerResourceGroup}",
+                $"productVaultName={productVaultName}",
+                $"productResourceGroup={productResourceGroup}",
+                "-o", "none",
+            ],
+            cancellationToken);
+    }
+
+    private async Task<string> RequiredOutputAsync(
+        IReadOnlyList<string> arguments,
+        CancellationToken cancellationToken)
+    {
+        var result = await RunAsync(arguments, cancellationToken);
+        if (string.IsNullOrWhiteSpace(result.StandardOutput))
+        {
+            throw new InvalidOperationException($"az {string.Join(' ', arguments)} returned no output.");
+        }
+
+        return result.StandardOutput.Trim();
+    }
+
+    private static string FindRepoRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null
+               && !File.Exists(Path.Combine(directory.FullName, "infra", "main.bicep")))
+        {
+            directory = directory.Parent;
+        }
+
+        return (directory ?? throw new DirectoryNotFoundException("Could not locate repository root.")).FullName;
+    }
+
     private async Task<AzureCliInvocationResult> RunAsync(
         IReadOnlyList<string> arguments,
         CancellationToken cancellationToken)

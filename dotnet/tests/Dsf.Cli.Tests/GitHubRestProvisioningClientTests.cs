@@ -56,7 +56,33 @@ public sealed class GitHubRestProvisioningClientTests
                 Assert.Equal("/user/repos", request.Path);
                 using var payload = JsonDocument.Parse(request.Body!);
                 Assert.Equal("demo", payload.RootElement.GetProperty("name").GetString());
-                Assert.Equal("private", payload.RootElement.GetProperty("visibility").GetString());
+                Assert.True(payload.RootElement.GetProperty("private").GetBoolean());
+                Assert.False(payload.RootElement.TryGetProperty("visibility", out _));
+            });
+    }
+
+    [Fact]
+    public async Task Existing_public_repository_is_made_private_when_private_requested()
+    {
+        var handler = new RecordingHttpMessageHandler(
+            Response(HttpStatusCode.OK, """{"id":123,"default_branch":"main","private":false,"owner":{"login":"octocat"}}"""),
+            Response(HttpStatusCode.OK, """{"id":123,"default_branch":"main","private":true,"owner":{"login":"octocat"}}"""));
+        var client = new GitHubRestProvisioningClient(new HttpClient(handler), "test-token");
+
+        var result = await client.EnsureRepositoryAsync(
+            new EnsureRepositoryRequest("octocat", "demo", "private", "main"),
+            CancellationToken.None);
+
+        Assert.Equal(123, result.RepositoryId);
+        Assert.Collection(
+            handler.Requests,
+            request => Assert.Equal("/repos/octocat/demo", request.Path),
+            request =>
+            {
+                Assert.Equal(HttpMethod.Patch, request.Method);
+                Assert.Equal("/repos/octocat/demo", request.Path);
+                using var payload = JsonDocument.Parse(request.Body!);
+                Assert.True(payload.RootElement.GetProperty("private").GetBoolean());
             });
     }
 
@@ -216,6 +242,24 @@ public sealed class GitHubRestProvisioningClientTests
     }
 
     [Fact]
+    public async Task Labels_create_default_color_for_missing_plain_labels()
+    {
+        var handler = new RecordingHttpMessageHandler(
+            Response(HttpStatusCode.OK, "[]"),
+            Response(HttpStatusCode.Created, """{"name":"feature"}"""));
+        var client = new GitHubRestProvisioningClient(new HttpClient(handler), "test-token");
+
+        await client.EnsureLabelsAsync(
+            new EnsureLabelsRequest("acme/demo", [new GitHubLabelDefinition("feature")]),
+            CancellationToken.None);
+
+        using var payload = JsonDocument.Parse(handler.Requests[1].Body!);
+        Assert.Equal("feature", payload.RootElement.GetProperty("name").GetString());
+        Assert.Equal("ededed", payload.RootElement.GetProperty("color").GetString());
+        Assert.False(payload.RootElement.TryGetProperty("description", out _));
+    }
+
+    [Fact]
     public async Task App_binding_adds_repository_when_selected_installation_does_not_cover_it()
     {
         var handler = new RecordingHttpMessageHandler(
@@ -317,6 +361,27 @@ public sealed class GitHubRestProvisioningClientTests
                 Assert.Equal(
                     "/user/installations/42/repositories?per_page=100",
                     request.Path);
+            });
+    }
+
+    [Fact]
+    public async Task App_binding_skips_installation_lookup_when_selection_is_all()
+    {
+        var handler = new RecordingHttpMessageHandler(
+            Response(HttpStatusCode.OK, """{"id":123,"default_branch":"main"}"""));
+        var client = new GitHubRestProvisioningClient(new HttpClient(handler), "test-token");
+
+        var result = await client.EnsureAppBindingAsync(
+            new EnsureAppBindingRequest("acme/demo", "7", "42", "all"),
+            CancellationToken.None);
+
+        Assert.NotNull(result);
+        Assert.Collection(
+            handler.Requests,
+            request =>
+            {
+                Assert.Equal(HttpMethod.Get, request.Method);
+                Assert.Equal("/repos/acme/demo", request.Path);
             });
     }
 

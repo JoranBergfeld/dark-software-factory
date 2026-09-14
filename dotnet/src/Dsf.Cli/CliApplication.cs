@@ -189,7 +189,7 @@ public static class CliApplication
         root.Subcommands.Add(BuildNewCommand(terminal, providedOptions, github, azure, appConfig));
         root.Subcommands.Add(BuildListCommand(terminal, appConfig));
         root.Subcommands.Add(BuildOffboardCommand());
-        root.Subcommands.Add(BuildBootstrapCommand());
+        root.Subcommands.Add(BuildBootstrapCommand(terminal));
         root.Subcommands.Add(BuildDeleteCommand("delete"));
         root.Subcommands.Add(BuildDeleteCommand("deprovision"));
         root.Subcommands.Add(BuildRunCommand());
@@ -231,6 +231,12 @@ public static class CliApplication
             "--github-installation-id",
             "owner DSF GitHub App installation id",
             string.Empty);
+        var githubInstallationSelection = StringOption(
+            "--github-installation-selection",
+            "owner DSF GitHub App installation selection",
+            string.Empty,
+            "all",
+            "selected");
 
         var command = new Command("new", "create a new isolated product factory instance");
         AddOptions(
@@ -253,7 +259,8 @@ public static class CliApplication
             ownerAppConfigEndpoint,
             adminPrincipalId,
             githubAppId,
-            githubInstallationId);
+            githubInstallationId,
+            githubInstallationSelection);
 
         var newOptions = new Option[]
         {
@@ -276,6 +283,7 @@ public static class CliApplication
             adminPrincipalId,
             githubAppId,
             githubInstallationId,
+            githubInstallationSelection,
         };
 
         command.SetAction(async (parseResult, cancellationToken) =>
@@ -316,6 +324,33 @@ public static class CliApplication
             var githubInstallationIdValue = FirstConfiguredValue(
                 parseResult.GetValue(githubInstallationId),
                 "DSF_GITHUB_INSTALLATION_ID");
+            var ownerKeyVaultUriValue = FirstConfiguredValue(
+                parseResult.GetValue(ownerKeyVaultUri),
+                "DSF_OWNER_KEYVAULT_URI");
+            var ownerAppConfigEndpointValue = FirstConfiguredValue(
+                parseResult.GetValue(ownerAppConfigEndpoint),
+                "DSF_OWNER_APPCONFIG_ENDPOINT");
+            var githubInstallationSelectionValue = FirstConfiguredValue(
+                parseResult.GetValue(githubInstallationSelection),
+                "DSF_GITHUB_INSTALLATION_SELECTION");
+            var isDryRun = parseResult.GetValue(dryRun);
+            if (!isDryRun
+                && string.IsNullOrWhiteSpace(githubAppIdValue)
+                && string.IsNullOrWhiteSpace(githubInstallationIdValue)
+                && !string.IsNullOrWhiteSpace(ownerKeyVaultUriValue))
+            {
+                var ownerCredentials = new OwnerCredentialResolver(
+                    new AzureCliOwnerBootstrapClient(new SystemAzureCliRunner()));
+                var identity = await ownerCredentials.ResolveIdentityAsync(
+                    ownerKeyVaultUriValue,
+                    ownerAppConfigEndpointValue,
+                    cancellationToken);
+                githubAppIdValue = identity.AppId;
+                githubInstallationIdValue = identity.InstallationId;
+                githubInstallationSelectionValue = string.IsNullOrWhiteSpace(githubInstallationSelectionValue)
+                    ? identity.InstallationSelection
+                    : githubInstallationSelectionValue;
+            }
             if (!ValidateGitHubIdentifier(
                     terminal,
                     "--github-app-id",
@@ -352,11 +387,12 @@ public static class CliApplication
                     parseResult.GetValue(creationMaturity) ?? "low",
                     parseResult.GetValue(operationMaturity) ?? "low",
                     effectivePrefix,
-                    parseResult.GetValue(ownerKeyVaultUri),
-                    parseResult.GetValue(ownerAppConfigEndpoint),
+                    isDryRun ? parseResult.GetValue(ownerKeyVaultUri) : ownerKeyVaultUriValue,
+                    isDryRun ? parseResult.GetValue(ownerAppConfigEndpoint) : ownerAppConfigEndpointValue,
                     parseResult.GetValue(adminPrincipalId),
                     githubAppIdValue,
                     githubInstallationIdValue,
+                    githubInstallationSelectionValue,
                     configRootValue);
             }
             catch (InstanceDefinitionException exception)
@@ -680,6 +716,7 @@ public static class CliApplication
         string? adminPrincipalId,
         string? githubAppId,
         string? githubInstallationId,
+        string? githubInstallationSelection,
         string? configRoot)
     {
         var root = configRoot ?? Directory.GetCurrentDirectory();
@@ -700,6 +737,7 @@ public static class CliApplication
             adminPrincipalId,
             githubAppId,
             githubInstallationId,
+            githubInstallationSelection,
             DateTimeOffset.UtcNow,
             existing);
     }
@@ -807,21 +845,77 @@ public static class CliApplication
         return command;
     }
 
-    private static Command BuildBootstrapCommand()
+    private static Command BuildBootstrapCommand(ICliTerminal terminal)
     {
         var appName = RequiredStringOption("--app-name", "GitHub App name");
         var keyVaultName = RequiredStringOption("--keyvault-name", "owner Key Vault name for App credentials");
         var appConfigName = RequiredStringOption("--appconfig-name", "owner App Configuration store name");
         var resourceGroup = StringOption("--resource-group", "resource group for the owner Key Vault", "rg-dsf-app");
         var location = StringOption("--location", "Azure region for the owner Key Vault", "swedencentral");
+        var dryRun = BoolOption("--dry-run", "preview the owner bootstrap plan without side effects");
+        var yes = BoolOption("--yes", "approve owner Azure and GitHub App creation without prompts");
+        var githubCallback = StringOption(
+            "--github-callback",
+            "GitHub App manifest callback URL or code for headless setup");
         var command = new Command("bootstrap", "one-time: create the DSF GitHub App and store it in the owner Key Vault");
-        AddOptions(command, appName, keyVaultName, appConfigName, resourceGroup, location);
-        command.SetAction(_ =>
+        AddOptions(command, appName, keyVaultName, appConfigName, resourceGroup, location, dryRun, yes, githubCallback);
+        command.SetAction(async (parseResult, cancellationToken) =>
         {
-            Console.Out.WriteLine("[dsf] bootstrap is not implemented in the .NET migration shell.");
+            var request = new OwnerBootstrapRequest(
+                parseResult.GetRequiredValue(appName),
+                parseResult.GetValue(resourceGroup) ?? "rg-dsf-app",
+                parseResult.GetRequiredValue(keyVaultName),
+                parseResult.GetRequiredValue(appConfigName),
+                parseResult.GetValue(location) ?? "swedencentral");
+            if (parseResult.GetValue(dryRun))
+            {
+                terminal.WriteLine($"[dsf] owner bootstrap plan for {request.AppName} (DRY-RUN)");
+                terminal.WriteLine($"[dsf]  1. Create resource group {request.ResourceGroup}.");
+                terminal.WriteLine($"[dsf]  2. Create owner App Configuration {request.AppConfigName} and status record.");
+                terminal.WriteLine($"[dsf]  3. Create owner Key Vault {request.KeyVaultName} and operator RBAC.");
+                terminal.WriteLine("[dsf]  4. Create and install a selected-repositories GitHub App.");
+                terminal.WriteLine("[dsf]  5. Store GitHub App credentials in Key Vault.");
+                return Success;
+            }
+
+            if (!parseResult.GetValue(yes))
+            {
+                if (!terminal.Capabilities.IsInteractive)
+                {
+                    terminal.WriteErrorLine("[dsf] error: live bootstrap requires an interactive terminal or --yes.");
+                    return Failure;
+                }
+
+                if (!Confirm(terminal, "[dsf] This creates owner Azure services. Continue? [y/N] "))
+                {
+                    return Failure;
+                }
+                if (!Confirm(terminal, "[dsf] This creates a private GitHub App. Continue? [y/N] "))
+                {
+                    return Failure;
+                }
+            }
+
+            var azure = new AzureCliOwnerBootstrapClient(new SystemAzureCliRunner());
+            var bootstrapper = new OwnerBootstrapper(
+                azure,
+                azure,
+                GitHubAppBootstrapClient.Create(terminal, parseResult.GetValue(githubCallback)),
+                azure);
+            await bootstrapper.ExecuteAsync(request, cancellationToken);
+            terminal.WriteLine($"[dsf] owner bootstrap complete for {request.AppName}.");
+            terminal.WriteLine($"[dsf] export DSF_OWNER_KEYVAULT_URI=https://{request.KeyVaultName}.vault.azure.net/");
+            terminal.WriteLine($"[dsf] export DSF_OWNER_APPCONFIG_ENDPOINT=https://{request.AppConfigName}.azconfig.io");
             return Success;
         });
         return command;
+    }
+
+    private static bool Confirm(ICliTerminal terminal, string prompt)
+    {
+        var answer = terminal.Prompt(prompt)?.Trim();
+        return string.Equals(answer, "y", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(answer, "yes", StringComparison.OrdinalIgnoreCase);
     }
 
     private static Command BuildDeleteCommand(string name)

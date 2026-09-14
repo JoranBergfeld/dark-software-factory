@@ -202,6 +202,7 @@ public sealed class AzureCliProvisioningClientTests
                   "agentEndpoint": {"type": "String", "value": "https://dsf-sre-paritydemo.sre.azure.com"},
                   "agentPrincipalId": {"type": "String", "value": "33333333-4444-5555-6666-777777777777"}
                 }
+
                 """;
             var runner = new RecordingAzureCliRunner(new AzureCliInvocationResult(0, stdout, ""));
             var client = new AzureCliProvisioningClient(runner);
@@ -239,6 +240,37 @@ public sealed class AzureCliProvisioningClientTests
         {
             File.Delete(bicepPath);
         }
+    }
+
+    [Fact]
+    public async Task CopyOwnerAppPrivateKey_uses_subscription_deployment_without_reading_secret()
+    {
+        var runner = new RecordingAzureCliRunner(
+            new AzureCliInvocationResult(0, "rg-dsf-owner", ""),
+            new AzureCliInvocationResult(0, "rg-dsf-paritydemo", ""),
+            new AzureCliInvocationResult(0, "swedencentral", ""),
+            new AzureCliInvocationResult(0, "", ""));
+        var client = new AzureCliProvisioningClient(runner);
+
+        await client.CopyOwnerAppPrivateKeyAsync(
+            new CopyOwnerAppPrivateKeyRequest(
+                "https://kv-owner.vault.azure.net/",
+                "https://kv-paritydemo.vault.azure.net/"),
+            CancellationToken.None);
+
+        Assert.DoesNotContain(runner.Invocations, invocation => invocation.Contains("secret"));
+        var invocation = runner.Invocations[3];
+        Assert.Equal("deployment", invocation[0]);
+        Assert.Equal("sub", invocation[1]);
+        Assert.Equal("create", invocation[2]);
+        Assert.Contains("-l", invocation);
+        Assert.Contains("swedencentral", invocation);
+        Assert.Contains("ownerVaultName=kv-owner", invocation);
+        Assert.Contains("ownerResourceGroup=rg-dsf-owner", invocation);
+        Assert.Contains("productVaultName=kv-paritydemo", invocation);
+        Assert.Contains("productResourceGroup=rg-dsf-paritydemo", invocation);
+        Assert.Contains("-o", invocation);
+        Assert.Contains("none", invocation);
     }
 
     [Fact]

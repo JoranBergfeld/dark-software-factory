@@ -86,4 +86,12 @@ public sealed class AppConfigurationClientTests
         Assert.Equal("\0", ProductConfigurationKeys.NoLabel);
         Assert.Equal("*", ProductConfigurationKeys.AnyLabel);
     }
+
+    [Fact]
+    public void Owner_bootstrap_status_key_is_stable_per_app()
+    {
+        Assert.Equal(
+            "dsf/owner/bootstrap/dsf-sbx-20260907/status",
+            ProductConfigurationKeys.OwnerBootstrapStatus("dsf-sbx-20260907"));
+    }
 }

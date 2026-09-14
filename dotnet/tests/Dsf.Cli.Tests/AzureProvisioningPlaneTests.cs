@@ -89,6 +89,29 @@ public sealed class AzureProvisioningPlaneTests
     }
 
     [Fact]
+    public async Task Execution_copies_owner_app_key_to_the_product_vault_before_sre_deployment()
+    {
+        var azure = new RecordingAzureProvisioningClient();
+        var definition = SampleDefinition() with
+        {
+            Azure = SampleDefinition().Azure with
+            {
+                OwnerAuthority = new OwnerAuthoritySettings
+                {
+                    KeyVaultUri = "https://kv-owner.vault.azure.net/",
+                },
+            },
+        };
+
+        await AzureProvisioningPlan.Build(definition, "/repo-root").ExecuteAsync(azure, CancellationToken.None);
+
+        var copy = Assert.IsType<CopyOwnerAppPrivateKeyRequest>(azure.Requests[2]);
+        Assert.Equal("https://kv-owner.vault.azure.net/", copy.OwnerKeyVaultUri);
+        Assert.Equal("https://kv-paritydemo.vault.azure.net/", copy.ProductKeyVaultUri);
+        Assert.IsType<DeploySreAgentRequest>(azure.Requests[3]);
+    }
+
+    [Fact]
     public async Task Executed_plan_captures_outputs_without_secret_values()
     {
         var azure = new RecordingAzureProvisioningClient();
@@ -307,5 +330,13 @@ internal sealed class RecordingAzureProvisioningClient : IAzureProvisioningClien
         Requests.Add(request);
         cancellationToken.ThrowIfCancellationRequested();
         return Task.FromResult(new AzureSreAgentProvisioningResult(AgentId, AgentEndpoint, AgentPrincipalId));
+    }
+
+    public Task CopyOwnerAppPrivateKeyAsync(
+        CopyOwnerAppPrivateKeyRequest request,
+        CancellationToken cancellationToken)
+    {
+        Requests.Add(request);
+        return Task.CompletedTask;
     }
 }

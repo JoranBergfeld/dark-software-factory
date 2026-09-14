@@ -80,30 +80,25 @@ public sealed class LivingDocumentationTests
     }
 
     [Fact]
-    public void Bootstrap_docs_do_not_claim_unimplemented_owner_provisioning()
+    public void Bootstrap_docs_describe_shipped_owner_provisioning()
     {
         var bootstrap = ReadRepoFile("docs/site/get-started/bootstrap.md");
         var quickstart = ReadRepoFile("docs/site/get-started/quickstart.md");
         var provisioning = ReadRepoFile("docs/site/get-started/provision-a-factory.md");
 
-        Assert.Contains("not implemented", bootstrap, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("not implemented", quickstart, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("creates the DSF GitHub App", bootstrap, StringComparison.Ordinal);
-        Assert.DoesNotContain("dsf bootstrap creates that once", quickstart, StringComparison.Ordinal);
-        Assert.DoesNotContain("created by [`dsf bootstrap`", provisioning, StringComparison.Ordinal);
+        Assert.Contains("dsf bootstrap", bootstrap, StringComparison.Ordinal);
+        Assert.Contains("--dry-run", bootstrap, StringComparison.Ordinal);
+        Assert.Contains("App Configuration", bootstrap, StringComparison.Ordinal);
+        Assert.Contains("Key Vault", bootstrap, StringComparison.Ordinal);
+        Assert.DoesNotContain("not implemented", bootstrap, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("not implemented", quickstart, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Bootstrap the owner first", provisioning, StringComparison.Ordinal);
     }
 
     [Fact]
     public void Readme_command_examples_match_the_documented_cli_surface()
     {
         var readme = ReadRepoFile("README.md");
-
-        // `dsf bootstrap` is not implemented (see bootstrap.md); the README must say so
-        // wherever it shows the verb.
-        if (readme.Contains("dsf bootstrap", StringComparison.Ordinal))
-        {
-            Assert.Contains("not implemented", readme, StringComparison.OrdinalIgnoreCase);
-        }
 
         // Runtime verbs are forwarded to `dsf-runtime`; the README must not present them as
         // plain packaged-CLI usage without naming that dependency.
@@ -125,7 +120,7 @@ public sealed class LivingDocumentationTests
         var provisioning = ReadRepoFile("docs/site/get-started/provision-a-factory.md");
         var releaseVerification = ReadRepoFile("docs/site/get-started/verify-release.md");
 
-        Assert.DoesNotContain("dsf bootstrap — create owner", agents, StringComparison.Ordinal);
+        Assert.Contains("dsf bootstrap", agents, StringComparison.Ordinal);
 
         // The quickstart is packaged-install only. It may name the .NET SDK, because
         // `dotnet tool install` needs it, but it must not teach the contributor
@@ -137,10 +132,9 @@ public sealed class LivingDocumentationTests
             Assert.DoesNotContain(contributorCommand, quickstart, StringComparison.Ordinal);
         }
 
-        Assert.Contains("does not retrieve", bootstrap, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("seed owner-vault credentials", bootstrap, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("does not retrieve", quickstart, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("seed credentials", quickstart, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Secrets are never stored in App Configuration", bootstrap, StringComparison.Ordinal);
+        Assert.Contains("DSF_OWNER_KEYVAULT_URI", bootstrap, StringComparison.Ordinal);
+        Assert.Contains("dsf bootstrap", quickstart, StringComparison.Ordinal);
         Assert.Contains("GH_TOKEN", provisioning, StringComparison.Ordinal);
         Assert.Contains("does not retrieve credentials", provisioning, StringComparison.OrdinalIgnoreCase);
 

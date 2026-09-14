@@ -15,6 +15,10 @@ internal interface IAzureProvisioningClient
     Task<AzureSreAgentProvisioningResult> DeploySreAgentAsync(
         DeploySreAgentRequest request,
         CancellationToken cancellationToken);
+
+    Task CopyOwnerAppPrivateKeyAsync(
+        CopyOwnerAppPrivateKeyRequest request,
+        CancellationToken cancellationToken);
 }
 
 /// <summary>
@@ -40,8 +44,8 @@ internal sealed record AzureProvisioningPlan(IReadOnlyList<AzureProvisioningRequ
             ["component"] = "backing-services",
         };
 
-        return new AzureProvisioningPlan(
-            [
+        var requests = new List<AzureProvisioningRequest>
+        {
                 new EnsureResourceGroupRequest(azure.ResourceGroup, azure.Location, tags),
                 new DeployTopologyRequest(
                     azure.ResourceGroup,
@@ -58,7 +62,14 @@ internal sealed record AzureProvisioningPlan(IReadOnlyList<AzureProvisioningRequ
                     AllowPublicNetworkAccess: true,
                     definition.Governance.AdminPrincipalId,
                     definition.Product.OperationMaturity),
-                new DeploySreAgentRequest(
+        };
+        if (!string.IsNullOrWhiteSpace(azure.OwnerAuthority.KeyVaultUri))
+        {
+            requests.Add(new CopyOwnerAppPrivateKeyRequest(azure.OwnerAuthority.KeyVaultUri, string.Empty));
+        }
+
+        requests.Add(
+            new DeploySreAgentRequest(
                     azure.SreAgent.Location,
                     $"dsf-sre-{definition.Product.Key}",
                     Path.Combine(repoRoot, "infra", "sre-agent.bicep"),
@@ -69,8 +80,8 @@ internal sealed record AzureProvisioningPlan(IReadOnlyList<AzureProvisioningRequ
                     AppInsightsId: string.Empty,
                     LogAnalyticsId: string.Empty,
                     OperationMaturity: definition.Product.OperationMaturity,
-                    definition.Governance.AdminPrincipalId),
-            ]);
+                    definition.Governance.AdminPrincipalId));
+        return new AzureProvisioningPlan(requests);
     }
 
     public async Task<AzureProvisioningResult> ExecuteAsync(
@@ -108,6 +119,18 @@ internal sealed record AzureProvisioningPlan(IReadOnlyList<AzureProvisioningRequ
                             ?? sreAgentRequest.LogAnalyticsId,
                     };
                     sreAgent = await client.DeploySreAgentAsync(effectiveSreAgent, cancellationToken);
+                    break;
+                case CopyOwnerAppPrivateKeyRequest copyRequest:
+                    var productKeyVaultUri = topology?.Outputs.GetValueOrDefault("keyVaultUri");
+                    if (string.IsNullOrWhiteSpace(productKeyVaultUri))
+                    {
+                        throw new InvalidOperationException(
+                            "Product topology returned no keyVaultUri; cannot copy the owner GitHub App private key.");
+                    }
+
+                    await client.CopyOwnerAppPrivateKeyAsync(
+                        copyRequest with { ProductKeyVaultUri = productKeyVaultUri },
+                        cancellationToken);
                     break;
                 default:
                     throw new InvalidOperationException(
@@ -158,6 +181,11 @@ internal sealed record DeploySreAgentRequest(
     string OperationMaturity,
     string? AdminPrincipalId)
     : AzureProvisioningRequest("deploy_sre_agent");
+
+internal sealed record CopyOwnerAppPrivateKeyRequest(
+    string OwnerKeyVaultUri,
+    string ProductKeyVaultUri)
+    : AzureProvisioningRequest("copy_owner_app_private_key");
 
 internal sealed record AzureResourceGroupProvisioningResult(string Name);
 
