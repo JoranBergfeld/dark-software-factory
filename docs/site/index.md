@@ -31,15 +31,30 @@ flowchart LR
     OP -->|signals and lessons| FC
 ```
 
-Every product gets its own copy of this loop, fully isolated, stamped out by a single
-command. This repository is the blueprint, not a factory that's already running.
+Every product gets an isolated factory. This repository is the blueprint, not a
+factory that's already running or a finished application.
+
+## Set up the factory, then build the application
+
+```mermaid
+flowchart LR
+    B["dsf bootstrap<br/>Shared owner setup"] --> N["dsf new<br/>One product factory"]
+    N -->|charter approved| I["dsf charter implement<br/>Start the application build"]
+```
+
+**`bootstrap` and `new` prepare the factory; neither builds or deploys your application.**
+`charter implement` starts implementation work. Application deployment comes later
+through the product's review, CI, and release workflow.
+
+See the [command comparison](get-started/quickstart.md#three-commands-three-jobs).
 
 ## Where to next
 
 - **New to the idea?** Read [The loop](concept/the-loop.md) and
   [The harness](concept/the-harness.md).
 - **Want to run it?** Start with the [Quickstart](get-started/quickstart.md), then
-  [provision a factory](get-started/provision-a-factory.md) and
+  [provision a factory](get-started/provision-a-factory.md),
+  [implement the application](get-started/implement-application.md), and
   [operate it](get-started/operate.md).
 - **Each phase in depth:** [Feature Council](concept/feature-council.md),
   [Product Charter](concept/product-charter.md),

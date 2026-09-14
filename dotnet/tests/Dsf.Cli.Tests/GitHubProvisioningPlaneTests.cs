@@ -7,6 +7,25 @@ namespace Dsf.Cli.Tests;
 public sealed class GitHubProvisioningPlaneTests
 {
     [Fact]
+    public async Task Execute_reports_github_operations_before_the_client_starts()
+    {
+        var terminal = PlainTerminal();
+        var client = new RecordingGitHubProvisioningClient
+        {
+            OnEnsureRepository = () => Assert.Contains("Ensuring GitHub repository", terminal.Output),
+        };
+
+        await GitHubProvisioningPlan.Build(SampleDefinition()).ExecuteAsync(
+            client, CancellationToken.None, terminal);
+
+        Assert.Contains("Ensuring baseline CI", terminal.Output);
+        Assert.Contains("Ensuring GitHub labels", terminal.Output);
+        Assert.Contains("Binding GitHub App installation", terminal.Output);
+        Assert.Contains("Ensuring branch protection", terminal.Output);
+        Assert.Contains("Completed:", terminal.Output);
+    }
+
+    [Fact]
     public async Task Dry_run_prints_github_operations_without_mutating_github()
     {
         var terminal = PlainTerminal();
@@ -55,6 +74,7 @@ public sealed class GitHubProvisioningPlaneTests
             "DSF App 7 installation 42",
             terminal.Output,
             StringComparison.Ordinal);
+        Assert.Contains("githubAppId=7 githubInstallationId=42", terminal.Output);
         Assert.DoesNotContain(
             "install_app    [skipped (no owner App configured)]",
             terminal.Output,

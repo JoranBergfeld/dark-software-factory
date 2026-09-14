@@ -993,6 +993,7 @@ internal sealed class RecordingAppConfigurationClient(params ProductLocation[] p
     : IAppConfigurationClient
 {
     public List<(string Product, IReadOnlyList<string> Kinds)> SourceRosters { get; } = [];
+    public Action<string>? OnWrite { get; init; }
 
     public Task SeedSourceAgentRosterAsync(
         string productEndpoint,
@@ -1000,6 +1001,7 @@ internal sealed class RecordingAppConfigurationClient(params ProductLocation[] p
         IReadOnlyList<string> enabledKinds,
         CancellationToken cancellationToken)
     {
+        OnWrite?.Invoke(nameof(SeedSourceAgentRosterAsync));
         SourceRosters.Add((product, enabledKinds));
         return Task.CompletedTask;
     }
@@ -1018,7 +1020,11 @@ internal sealed class RecordingAppConfigurationClient(params ProductLocation[] p
     public Task SeedProductRecordAsync(
         string productEndpoint,
         Dsf.Core.Products.ProductRecord record,
-        CancellationToken cancellationToken) => Task.CompletedTask;
+        CancellationToken cancellationToken)
+    {
+        OnWrite?.Invoke(nameof(SeedProductRecordAsync));
+        return Task.CompletedTask;
+    }
 
     public Task<Dsf.Core.Products.ProductRecord> ReadProductRecordAsync(
         string productEndpoint,
@@ -1030,7 +1036,11 @@ internal sealed class RecordingAppConfigurationClient(params ProductLocation[] p
         string ownerEndpoint,
         string product,
         IReadOnlyDictionary<string, string> values,
-        CancellationToken cancellationToken) => Task.CompletedTask;
+        CancellationToken cancellationToken)
+    {
+        OnWrite?.Invoke(nameof(PublishRuntimeIndexAsync));
+        return Task.CompletedTask;
+    }
 }
 
 internal sealed class RecordingCharterRepositoryClient(CharterFile? file) : ICharterRepositoryClient

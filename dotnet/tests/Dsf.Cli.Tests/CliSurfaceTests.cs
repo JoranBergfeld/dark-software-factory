@@ -175,6 +175,86 @@ public sealed class CliSurfaceTests
         }
     }
 
+    [Theory]
+    [InlineData(true, true, false)]
+    [InlineData(true, true, true)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(false, false, false)]
+    public async Task New_dry_run_uses_effective_owner_settings_without_resolving_credentials(
+        bool exportVault, bool exportAppConfig, bool explicitOverrides)
+    {
+        var configRoot = Path.Combine(
+            DsfProcess.FindSolutionRoot().FullName, ".test-artifacts", "cli-tests", Guid.NewGuid().ToString("N"));
+        var environment = new Dictionary<string, string?>
+        {
+            ["DSF_OWNER_KEYVAULT_URI"] = exportVault ? "https://env-owner.vault.azure.net/" : null,
+            ["DSF_OWNER_APPCONFIG_ENDPOINT"] = exportAppConfig ? "https://env-owner.azconfig.io" : null,
+        };
+        var vault = explicitOverrides ? "https://flag-owner.vault.azure.net/" : environment["DSF_OWNER_KEYVAULT_URI"];
+        var appConfig = explicitOverrides ? "https://flag-owner.azconfig.io" : environment["DSF_OWNER_APPCONFIG_ENDPOINT"];
+        var arguments = new List<string>
+        {
+            "new", "--product", "owner-preview", "--owner", "acme",
+            "--dry-run", "--write-plan", "--config-root", configRoot,
+        };
+        if (explicitOverrides)
+        {
+            arguments.AddRange(["--owner-keyvault-uri", vault!, "--owner-appconfig-endpoint", appConfig!]);
+        }
+
+        try
+        {
+            var result = await DsfProcess.RunAsync(environment, arguments.ToArray());
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.Empty(result.Stderr);
+            var definition = Dsf.Core.Instances.InstanceDefinitions.Read(
+                Path.Combine(configRoot, "config", "instances", "owner-preview.json"));
+            Assert.Equal(vault, definition.Azure.OwnerAuthority.KeyVaultUri);
+            Assert.Equal(appConfig, definition.Azure.OwnerAuthority.AppConfigEndpoint);
+            Assert.Null(definition.GitHub.AppId);
+            Assert.Null(definition.GitHub.InstallationId);
+            Assert.Null(definition.Governance.AdminPrincipalId);
+
+            if (vault is not null)
+            {
+                Assert.DoesNotContain("DSF_OWNER_KEYVAULT_URI is unset", result.Stdout);
+                Assert.Contains("install_app    [pending owner credential resolution]", result.Stdout);
+                Assert.Contains("seed_app_key   [planned (dry-run)]", result.Stdout);
+                Assert.Contains("githubAppId=<resolved-from-owner> githubInstallationId=<resolved-from-owner>", result.Stdout);
+                Assert.Contains(vault, result.Stdout);
+            }
+            else
+            {
+                Assert.Contains("DSF_OWNER_KEYVAULT_URI is unset", result.Stdout);
+                Assert.Contains("install_app    [skipped (no installation ID configured)]", result.Stdout);
+                Assert.Contains("seed_app_key   [skipped (no owner Key Vault configured)]", result.Stdout);
+            }
+
+            if (appConfig is not null)
+            {
+                Assert.DoesNotContain("DSF_OWNER_APPCONFIG_ENDPOINT is unset", result.Stdout);
+                Assert.Contains("publish_runtime_index [planned (dry-run)]", result.Stdout);
+                Assert.Contains(appConfig, result.Stdout);
+            }
+            else
+            {
+                Assert.Contains("DSF_OWNER_APPCONFIG_ENDPOINT is unset", result.Stdout);
+                Assert.Contains("publish_runtime_index [blocked (owner App Configuration endpoint required)]", result.Stdout);
+            }
+
+            Assert.Contains("seed_webiq_key [manual prerequisite]", result.Stdout);
+        }
+        finally
+        {
+            if (Directory.Exists(configRoot))
+            {
+                Directory.Delete(configRoot, recursive: true);
+            }
+        }
+    }
+
     [Fact]
     public async Task New_missing_product_fails_in_redirected_process_without_ansi_or_emoji()
     {
@@ -357,6 +437,14 @@ public sealed class CliSurfaceTests
                 RedirectStandardError = true,
             };
             startInfo.Environment.Remove("DSF_PRODUCT");
+            foreach (var name in new[]
+            {
+                "DSF_OWNER_KEYVAULT_URI", "DSF_OWNER_APPCONFIG_ENDPOINT",
+                "DSF_GITHUB_APP_ID", "DSF_GITHUB_INSTALLATION_ID", "DSF_GITHUB_INSTALLATION_SELECTION",
+            })
+            {
+                startInfo.Environment.Remove(name);
+            }
             // The `dsf` front door launches the runtime host for every runtime verb.
             // Installed side by side in production; in the test build tree the two
             // projects have separate output directories, so point the CLI at the

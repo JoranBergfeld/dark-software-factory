@@ -1,8 +1,11 @@
 # Operate the factory
 
-A provisioned factory runs itself. The council sweeps sources, files grounded
-`creation:ready` issues, the Creation phase builds them, and the Operation phase watches production
-and feeds incidents back to the start. Operators govern from outside the line.
+`dsf new` provisions the factory runtime, not your application. Start application
+work with [Implement the application](implement-application.md).
+
+Once sources and credentials are configured, the council sweeps sources and files
+grounded `creation:ready` issues. The Creation phase builds them; the Operation phase
+watches production once deployed. Operators govern from outside the line.
 
 ## Runtime
 
@@ -109,8 +112,8 @@ Operator commands:
 - `dsf charter init --product <product>` — interview, then open a PR adding the charter.
 - `dsf charter sync --product <product>` — force a sync now.
 - `dsf charter status --product <product>` — print stored charter status and drift.
-- `dsf charter implement --product <product>` — render the constitution and file the bootstrap
-  `creation:ready` issue.
+- `dsf charter implement --product <product>` — propose the constitution, wait for its
+  merge, then file the application build issue and attempt agent assignment.
 - `dsf charter watch --product <product>` — watch the build PR and request review when ready.
 
 `dsf charter` reaches the product repository through the master DSF GitHub App. Keep

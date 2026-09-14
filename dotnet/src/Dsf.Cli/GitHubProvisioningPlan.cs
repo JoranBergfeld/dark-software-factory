@@ -75,7 +75,8 @@ internal sealed record GitHubProvisioningPlan(IReadOnlyList<GitHubProvisioningRe
 
     public async Task<GitHubProvisioningResult> ExecuteAsync(
         IGitHubProvisioningClient client,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ICliTerminal? terminal = null)
     {
         ArgumentNullException.ThrowIfNull(client);
 
@@ -90,8 +91,13 @@ internal sealed record GitHubProvisioningPlan(IReadOnlyList<GitHubProvisioningRe
             switch (request)
             {
                 case EnsureRepositoryRequest repositoryRequest:
-                    repository = await client.EnsureRepositoryAsync(
-                        repositoryRequest,
+                    var repositoryLabel = string.IsNullOrWhiteSpace(repositoryRequest.Owner)
+                        ? $"{repositoryRequest.Repository} (authenticated owner)"
+                        : $"{repositoryRequest.Owner}/{repositoryRequest.Repository}";
+                    repository = await CliOperationProgress.RunAsync(
+                        terminal,
+                        $"Ensuring GitHub repository {repositoryLabel}",
+                        token => client.EnsureRepositoryAsync(repositoryRequest, token),
                         cancellationToken);
                     if (!string.IsNullOrWhiteSpace(repository?.Owner))
                     {
@@ -102,28 +108,37 @@ internal sealed record GitHubProvisioningPlan(IReadOnlyList<GitHubProvisioningRe
                     var effectiveSeed = resolvedRepoFullName is not null && seedRequest.RepositoryFullName != resolvedRepoFullName
                         ? seedRequest with { RepositoryFullName = resolvedRepoFullName }
                         : seedRequest;
-                    await client.EnsureSeedRepoAsync(effectiveSeed, cancellationToken);
+                    await CliOperationProgress.RunAsync(
+                        terminal, $"Ensuring baseline CI for {effectiveSeed.RepositoryFullName}",
+                        token => client.EnsureSeedRepoAsync(effectiveSeed, token), cancellationToken);
                     break;
                 case EnsureLabelsRequest labelsRequest:
                     var effectiveLabels = resolvedRepoFullName is not null && labelsRequest.RepositoryFullName != resolvedRepoFullName
                         ? labelsRequest with { RepositoryFullName = resolvedRepoFullName }
                         : labelsRequest;
-                    await client.EnsureLabelsAsync(effectiveLabels, cancellationToken);
+                    await CliOperationProgress.RunAsync(
+                        terminal, $"Ensuring GitHub labels for {effectiveLabels.RepositoryFullName}",
+                        token => client.EnsureLabelsAsync(effectiveLabels, token), cancellationToken);
                     break;
                 case EnsureAppBindingRequest { InstallationId: not null } appRequest:
                     var effectiveApp = resolvedRepoFullName is not null && appRequest.RepositoryFullName != resolvedRepoFullName
                         ? appRequest with { RepositoryFullName = resolvedRepoFullName }
                         : appRequest;
-                    appBinding = await client.EnsureAppBindingAsync(effectiveApp, cancellationToken);
+                    appBinding = await CliOperationProgress.RunAsync(
+                        terminal, $"Binding GitHub App installation to {effectiveApp.RepositoryFullName}",
+                        token => client.EnsureAppBindingAsync(effectiveApp, token), cancellationToken);
                     break;
                 case EnsureAppBindingRequest:
+                    terminal?.WriteLine("[dsf] Skipping GitHub App binding: no installation ID configured.");
                     break;
                 case EnsureBranchProtectionRulesetRequest rulesetRequest:
                     var effectiveRuleset = resolvedRepoFullName is not null && rulesetRequest.RepositoryFullName != resolvedRepoFullName
                         ? rulesetRequest with { RepositoryFullName = resolvedRepoFullName }
                         : rulesetRequest;
-                    ruleset = await client.EnsureBranchProtectionRulesetAsync(
-                        effectiveRuleset,
+                    ruleset = await CliOperationProgress.RunAsync(
+                        terminal,
+                        $"Ensuring branch protection for {effectiveRuleset.RepositoryFullName}",
+                        token => client.EnsureBranchProtectionRulesetAsync(effectiveRuleset, token),
                         cancellationToken);
                     break;
                 case EnsureCreationRetryWorkflowRequest retryWorkflowRequest:
@@ -131,7 +146,9 @@ internal sealed record GitHubProvisioningPlan(IReadOnlyList<GitHubProvisioningRe
                         && retryWorkflowRequest.RepositoryFullName != resolvedRepoFullName
                         ? retryWorkflowRequest with { RepositoryFullName = resolvedRepoFullName }
                         : retryWorkflowRequest;
-                    await client.EnsureCreationRetryWorkflowAsync(effectiveRetryWorkflow, cancellationToken);
+                    await CliOperationProgress.RunAsync(
+                        terminal, $"Ensuring experimental creation retry workflow for {effectiveRetryWorkflow.RepositoryFullName}",
+                        token => client.EnsureCreationRetryWorkflowAsync(effectiveRetryWorkflow, token), cancellationToken);
                     break;
             }
         }

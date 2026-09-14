@@ -63,5 +63,6 @@ nav:
       - Quickstart: get-started/quickstart.md
       - Bootstrap the owner: get-started/bootstrap.md
       - Provision a factory: get-started/provision-a-factory.md
+      - Implement the application: get-started/implement-application.md
       - Operate it: get-started/operate.md
       - Verify a release: get-started/verify-release.md

@@ -4,6 +4,12 @@
     Run `dsf bootstrap` before a live `dsf new`, then export the printed
     `DSF_OWNER_KEYVAULT_URI` and `DSF_OWNER_APPCONFIG_ENDPOINT`.
 
+!!! info "This provisions the factory, not the application"
+    `dsf new` creates the product repository and the services that run its factory.
+    It does not implement application features, provision application-specific
+    infrastructure, or deploy a working application. That work starts with
+    [`dsf charter implement`](implement-application.md), after charter approval.
+
 The factory CLI is `dsf`. Provisioning a product needs only `--product`:
 
 ```bash
@@ -21,6 +27,17 @@ Preview before provisioning:
 dsf new --product <product> --dry-run
 dsf new --product <product> --dry-run --write-plan
 ```
+
+Dry-run uses the same owner endpoints as live provisioning: explicit
+`--owner-keyvault-uri` / `--owner-appconfig-endpoint` options take precedence over
+`DSF_OWNER_KEYVAULT_URI` / `DSF_OWNER_APPCONFIG_ENDPOINT`. `--write-plan` saves these
+nonsecret endpoints in the instance manifest.
+
+Dry-run does not read owner credentials. With an owner Key Vault configured but no
+explicit App/installation IDs, App binding is shown as **pending owner credential
+resolution**, not skipped. Private-key copying and product-index publication are
+planned independently from their configured endpoints. WebIQ key seeding remains
+a manual prerequisite, not an automatic provisioning step.
 
 Full explicit form:
 
@@ -152,10 +169,21 @@ tokens, or passwords in this file; unknown properties are rejected. Secret
 seeding remains an operator prerequisite, not an implemented `dsf new` step.
 For local WebIQ development only, `WEBIQ_API_KEY` overrides Key Vault resolution.
 
-!!! note "Live progress during Azure deployment"
-    The Azure provisioning step starts a deployment, polls it, and streams each resource as it
-    starts and finishes. Tune cadence with `DSF_DEPLOY_POLL_INTERVAL` (seconds, default 5).
-    `DSF_DEPLOY_TIMEOUT` bounds the wait (seconds, default 600; set `<= 0` to wait indefinitely).
+!!! note "Live provisioning progress"
+    `dsf new` reports preparation immediately, then names each owner-identity lookup,
+    GitHub operation, Azure deployment, configuration write, and manifest save before
+    it starts. Long operations print `Still waiting: <operation>` every 10 seconds,
+    with elapsed time. `Completed` means the operation returned successfully;
+    `Stopped` is followed by the command's error or cancellation outcome.
+
+    These are stage-level waiting notices, not Azure resource-level progress or
+    completion percentages. Tokens, private keys, and raw subprocess output are not
+    included in progress messages.
+
+    A rebuilt CLI only changes subsequent runs. Do not start a second provisioning
+    command alongside an existing one. Ctrl+C cancels the local invocation, but an
+    Azure deployment already submitted may continue server-side; check its state
+    before retrying with the same product and resource names.
 
 ## Prerequisites
 
@@ -186,7 +214,7 @@ needs:
 
 ## What gets provisioned
 
-A complete, isolated factory for the product:
+An isolated factory foundation for the product:
 
 - a GitHub repository (`<owner>/<product>`) with baseline CI, DSF label taxonomy, DSF GitHub
   App installation, and the `dsf-creation` branch-protection ruleset,
@@ -201,41 +229,32 @@ provisioning does not enable `Autonomous` mode.
 
 ```mermaid
 flowchart TD
-    boot["externally configured owner<br/>App + owner stores"] -.->|reused| new
-    new["dsf new --product PRODUCT"]
-    new --> ghp["GitHub plane"]
-    new --> azp["Azure plane"]
-    new --> regp["owner product index"]
-    ghp --> repo["product repo owner/product<br/>+ baseline CI"]
-    ghp --> labels["DSF labels<br/>+ creation-ready handoff"]
-    ghp --> appinst["DSF App installed"]
-    ghp --> ruleset["dsf-creation ruleset"]
-    azp --> rg["resource group rg-dsf-product"]
-    rg --> runtime["Feature Council runtime on ACA<br/>Cosmos, App Config, Key Vault, Azure OpenAI"]
-    rg --> sre["SRE Agent wired to production"]
-    regp --> rec["product record + instance manifest"]
+    Owner["dsf bootstrap<br/>Shared owner control plane"] -->|reused| New["dsf new --product PRODUCT"]
+    subgraph Factory["Created for this product"]
+        Repo["Repository + baseline CI"]
+        Runtime["Azure factory runtime<br/>and backing services"]
+        Governance["App binding, policy<br/>and SRE Agent"]
+        Record["Product registration<br/>and instance manifest"]
+    end
+    New --> Repo
+    New --> Runtime
+    New --> Governance
+    New --> Record
+    Repo -.->|after charter approval| Implement["dsf charter implement<br/>Start application work"]
 ```
 
 The persisted manifest lives under `config/instances/<product>.json`. Re-running `dsf new`
-for the same product is idempotent.
+for the same product is idempotent. Source agents default to disabled; provisioning
+alone does not enable the autonomous Decide loop.
 
 ## Seed product intent
 
-A freshly provisioned factory is inert until a [product charter](operate.md#product-charter)
-(`.dsf/charter.md`) lands on the product repository's default branch. On greenfield products,
-`dsf new` offers to launch the charter interview:
+The [product charter](operate.md#product-charter) defines the application to build.
+After provisioning, create it explicitly:
 
-```text
-[dsf] Your factory has no intent yet. Seed its charter now? [Y/n]
+```bash
+dsf charter init --product <product>
 ```
 
-Answer `Y` to run `dsf charter init --product <product>`. Non-interactive shells and
-`--no-charter` skip the prompt and print the next command.
-
-The charter path is:
-
-```text
-dsf new  →  charter PR  →  review & merge  →  dsf sweep  →  dsf charter implement
-```
-
-See [Operate it](operate.md) for charter operations.
+Review and merge the charter PR, then [implement the application](implement-application.md).
+A council sweep is not a prerequisite for this initial build.

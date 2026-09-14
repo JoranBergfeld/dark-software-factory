@@ -3,6 +3,10 @@
 `dsf bootstrap` creates the reusable owner App Configuration store, owner Key Vault,
 and DSF GitHub App required before provisioning product factories.
 
+**Run once per owner, reuse across products.** This creates neither a product
+repository nor your application. Next, [`dsf new`](provision-a-factory.md) creates
+a product's factory.
+
 ## Prerequisites
 
 - `az login` completed in the target subscription with permission to create resource

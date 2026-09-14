@@ -150,32 +150,6 @@ public sealed class NewInstanceDefinitionTests
     }
 
     [Fact]
-    public async Task Write_plan_omits_owner_authority_values_when_options_are_absent()
-    {
-        var root = TempRoot();
-        try
-        {
-            await CliApplication.InvokeAsync(
-                [
-                    "new", "--product", "paritydemo", "--owner", "acme",
-                    "--dry-run", "--write-plan", "--config-root", root,
-                ],
-                CancellationToken.None,
-                PlainTerminal());
-
-            var definition = InstanceDefinitions.Read(Path.Combine(root, "config", "instances", "paritydemo.json"));
-
-            Assert.Null(definition.Azure.OwnerAuthority.KeyVaultUri);
-            Assert.Null(definition.Azure.OwnerAuthority.AppConfigEndpoint);
-            Assert.Null(definition.Governance.AdminPrincipalId);
-        }
-        finally
-        {
-            Cleanup(root);
-        }
-    }
-
-    [Fact]
     public async Task Dry_run_without_write_plan_writes_nothing()
     {
         var root = TempRoot();

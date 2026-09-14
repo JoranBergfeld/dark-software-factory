@@ -218,7 +218,37 @@ public sealed class CutoverAcceptanceTests
             var result = await RunDsfProcessAsync(NormalizeArgv(evidence.Argv));
 
             Assert.Equal(evidence.ExitCode, result.ExitCode);
-            Assert.Equal(NormalizeRepoToken(evidence.Stdout), result.Stdout);
+            // Keep frozen Python evidence unchanged; pin only the corrected owner diagnostics.
+            var expectedOutput = evidence.Stdout
+                .Replace(
+                    "[dsf] WARNING: install_app, seed_app_key, seed_webiq_key, publish_runtime_index will be SKIPPED.",
+                    "[dsf] WARNING: the owner GitHub App private key cannot be copied to the product Key Vault.",
+                    StringComparison.Ordinal)
+                .Replace(
+                    "[dsf] WARNING: the GitHub App won't be wired; `dsf charter init` and runtime GitHub access will fail.",
+                    "[dsf] WARNING: DSF_OWNER_APPCONFIG_ENDPOINT is unset and --owner-appconfig-endpoint was not passed.",
+                    StringComparison.Ordinal)
+                .Replace(
+                    "[dsf] WARNING: fix: run `dsf bootstrap` once, then export DSF_OWNER_KEYVAULT_URI and DSF_OWNER_APPCONFIG_ENDPOINT, then re-run `dsf new`.",
+                    "[dsf] WARNING: live provisioning requires the owner App Configuration endpoint to publish the product index.",
+                    StringComparison.Ordinal)
+                .Replace(
+                    "install_app    [skipped (no owner App configured)]",
+                    "install_app    [skipped (no installation ID configured)]",
+                    StringComparison.Ordinal)
+                .Replace(
+                    "seed_app_key   [skipped (no owner App configured)] Seed the DSF App private key from the owner Key Vault",
+                    "seed_app_key   [skipped (no owner Key Vault configured)] Seed the DSF App private key",
+                    StringComparison.Ordinal)
+                .Replace(
+                    "seed_webiq_key [skipped (no owner App configured)] Seed the WebIQ API key from the owner Key Vault into the product Key Vault for paritydemo",
+                    "seed_webiq_key [manual prerequisite] Seed webiq-api-key in the product Key Vault for paritydemo if enabling WebIQ; dsf new does not copy this secret.",
+                    StringComparison.Ordinal)
+                .Replace(
+                    "publish_runtime_index [skipped (no owner App Config configured)]",
+                    "publish_runtime_index [blocked (owner App Configuration endpoint required)]",
+                    StringComparison.Ordinal);
+            Assert.Equal(NormalizeRepoToken(expectedOutput), result.Stdout);
             Assert.Equal(evidence.Stderr, result.Stderr);
         }
         finally
@@ -278,6 +308,14 @@ public sealed class CutoverAcceptanceTests
             RedirectStandardError = true,
         };
         startInfo.Environment.Remove("DSF_PRODUCT");
+        foreach (var name in new[]
+        {
+            "DSF_OWNER_KEYVAULT_URI", "DSF_OWNER_APPCONFIG_ENDPOINT",
+            "DSF_GITHUB_APP_ID", "DSF_GITHUB_INSTALLATION_ID", "DSF_GITHUB_INSTALLATION_SELECTION",
+        })
+        {
+            startInfo.Environment.Remove(name);
+        }
         startInfo.Environment["DSF_RUNTIME_HOST"] = FindRuntimeHostExecutable();
         startInfo.ArgumentList.Add("run");
         startInfo.ArgumentList.Add("--project");

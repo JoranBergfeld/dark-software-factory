@@ -18,7 +18,7 @@ internal interface IOwnerCredentialReader
         CancellationToken cancellationToken);
 }
 
-internal sealed class OwnerCredentialResolver(IOwnerCredentialReader reader)
+internal sealed class OwnerCredentialResolver(IOwnerCredentialReader reader, ICliTerminal? terminal = null)
 {
     public async Task<OwnerGitHubIdentity> ResolveIdentityAsync(
         string keyVaultUri,
@@ -32,16 +32,24 @@ internal sealed class OwnerCredentialResolver(IOwnerCredentialReader reader)
     {
         if (!string.IsNullOrWhiteSpace(ownerAppConfigEndpoint))
         {
-            var statusIdentity = await reader.ReadIdentityFromStatusAsync(
-                ownerAppConfigEndpoint,
+            var statusIdentity = await CliOperationProgress.RunAsync(
+                terminal,
+                $"Reading owner GitHub identity from App Configuration {ownerAppConfigEndpoint}",
+                token => reader.ReadIdentityFromStatusAsync(ownerAppConfigEndpoint, token),
                 cancellationToken);
             if (statusIdentity is not null)
             {
                 return statusIdentity;
             }
+
+            terminal?.WriteLine("[dsf] No completed owner identity found in App Configuration; checking Key Vault identifiers.");
         }
 
-        var credentials = await reader.ReadAsync(keyVaultUri, includePrivateKey: false, cancellationToken);
+        var credentials = await CliOperationProgress.RunAsync(
+            terminal,
+            $"Reading owner GitHub identifiers from Key Vault {keyVaultUri}",
+            token => reader.ReadAsync(keyVaultUri, includePrivateKey: false, token),
+            cancellationToken);
         if (string.IsNullOrWhiteSpace(credentials.AppId)
             || string.IsNullOrWhiteSpace(credentials.InstallationId))
         {

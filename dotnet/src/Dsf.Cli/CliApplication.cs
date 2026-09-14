@@ -347,13 +347,17 @@ public static class CliApplication
                 parseResult.GetValue(githubInstallationSelection),
                 "DSF_GITHUB_INSTALLATION_SELECTION");
             var isDryRun = parseResult.GetValue(dryRun);
+            if (!isDryRun)
+            {
+                terminal.WriteLine($"[dsf] Preparing live provisioning for product {productValue}...");
+            }
             if (!isDryRun
                 && string.IsNullOrWhiteSpace(githubAppIdValue)
                 && string.IsNullOrWhiteSpace(githubInstallationIdValue)
                 && !string.IsNullOrWhiteSpace(ownerKeyVaultUriValue))
             {
                 var ownerCredentials = new OwnerCredentialResolver(
-                    new AzureCliOwnerBootstrapClient(new SystemAzureCliRunner()));
+                    new AzureCliOwnerBootstrapClient(new SystemAzureCliRunner()), terminal);
                 var identity = await ownerCredentials.ResolveIdentityAsync(
                     ownerKeyVaultUriValue,
                     ownerAppConfigEndpointValue,
@@ -400,8 +404,8 @@ public static class CliApplication
                     parseResult.GetValue(creationMaturity) ?? "low",
                     parseResult.GetValue(operationMaturity) ?? "low",
                     effectivePrefix,
-                    isDryRun ? parseResult.GetValue(ownerKeyVaultUri) : ownerKeyVaultUriValue,
-                    isDryRun ? parseResult.GetValue(ownerAppConfigEndpoint) : ownerAppConfigEndpointValue,
+                    ownerKeyVaultUriValue,
+                    ownerAppConfigEndpointValue,
                     parseResult.GetValue(adminPrincipalId),
                     githubAppIdValue,
                     githubInstallationIdValue,
@@ -438,6 +442,7 @@ public static class CliApplication
                     definition.GitHub.CloudAgentCredentialSecretName,
                     definition.GitHub.AppId,
                     definition.GitHub.InstallationId,
+                    definition.Azure.OwnerAuthority,
                     definition.Runtime.Image,
                     definition.Azure.InfrastructureSubnetId,
                     configRootValue);
@@ -472,12 +477,12 @@ public static class CliApplication
                 try
                 {
                     var githubResult = await GitHubProvisioningPlan.Build(definition)
-                        .ExecuteAsync(github, cancellationToken);
+                        .ExecuteAsync(github, cancellationToken, terminal);
                     var afterGitHub = githubResult.ApplyTo(definition);
 
                     var azureRoot = configRootValue ?? Directory.GetCurrentDirectory();
                     var azureResult = await AzureProvisioningPlan.Build(afterGitHub, azureRoot)
-                        .ExecuteAsync(azure, cancellationToken);
+                        .ExecuteAsync(azure, cancellationToken, terminal);
                     var updated = azureResult.ApplyTo(afterGitHub) with
                     {
                         Status = afterGitHub.Status with { State = InstanceState.Executed },
@@ -490,21 +495,27 @@ public static class CliApplication
                             "provision_azure returned no appConfigEndpoint; cannot seed product record.");
                     }
 
-                    await appConfig.SeedProductRecordAsync(
-                        productEndpoint,
-                        ProductRecordFor(updated),
+                    await CliOperationProgress.RunAsync(
+                        terminal, $"Writing product record for {updated.Product.Key}",
+                        token => appConfig.SeedProductRecordAsync(
+                            productEndpoint, ProductRecordFor(updated), token), cancellationToken);
+                    await CliOperationProgress.RunAsync(
+                        terminal, $"Writing source-agent settings for {updated.Product.Key}",
+                        token => appConfig.SeedSourceAgentRosterAsync(
+                            productEndpoint, updated.Product.Key, updated.Runtime.Decide.EnabledSourceAgentKinds, token),
                         cancellationToken);
-                    await appConfig.SeedSourceAgentRosterAsync(
-                        productEndpoint,
-                        updated.Product.Key,
-                        updated.Runtime.Decide.EnabledSourceAgentKinds,
+                    await CliOperationProgress.RunAsync(
+                        terminal, $"Publishing product runtime index to {ownerEndpoint}",
+                        token => appConfig.PublishRuntimeIndexAsync(
+                            ownerEndpoint, updated.Product.Key, RuntimeIndexValues(updated, productEndpoint), token),
                         cancellationToken);
-                    await appConfig.PublishRuntimeIndexAsync(
-                        ownerEndpoint,
-                        updated.Product.Key,
-                        RuntimeIndexValues(updated, productEndpoint),
-                        cancellationToken);
-                    InstanceDefinitions.Write(updated, azureRoot);
+                    await CliOperationProgress.RunAsync(
+                        terminal, $"Saving instance manifest for {updated.Product.Key}",
+                        _ =>
+                        {
+                            InstanceDefinitions.Write(updated, azureRoot);
+                            return Task.CompletedTask;
+                        }, cancellationToken);
                     terminal.WriteLine($"[dsf] GitHub provisioning complete for {updated.GitHub.FullName()}.");
                     terminal.WriteLine($"[dsf] Azure provisioning complete for {updated.Product.Key} ({updated.Azure.ResourceGroup}).");
                 }
@@ -653,6 +664,7 @@ public static class CliApplication
         string cloudAgentCredentialSecretName,
         string? githubAppId,
         string? githubInstallationId,
+        OwnerAuthoritySettings ownerAuthority,
         string runtimeImage,
         string? infrastructureSubnetId,
         string? configRoot)
@@ -664,22 +676,38 @@ public static class CliApplication
         var manifestPath = InstanceDefinitions.PathFor(root, product);
         var bicepPath = Path.Combine(root, "infra", "main.bicep");
         var networkParameter = infrastructureSubnetId is null ? "" : $" infrastructureSubnetId={infrastructureSubnetId}";
+        var hasOwnerVault = !string.IsNullOrWhiteSpace(ownerAuthority.KeyVaultUri);
+        var hasOwnerAppConfig = !string.IsNullOrWhiteSpace(ownerAuthority.AppConfigEndpoint);
+        var resolveOwnerIdentity = hasOwnerVault
+            && string.IsNullOrWhiteSpace(githubAppId)
+            && string.IsNullOrWhiteSpace(githubInstallationId);
 
-        if (string.IsNullOrWhiteSpace(githubInstallationId))
+        if (!hasOwnerVault)
         {
             terminal.WriteLine("[dsf] WARNING: DSF_OWNER_KEYVAULT_URI is unset and --owner-keyvault-uri was not passed.");
-            terminal.WriteLine("[dsf] WARNING: install_app, seed_app_key, seed_webiq_key, publish_runtime_index will be SKIPPED.");
-            terminal.WriteLine("[dsf] WARNING: the GitHub App won't be wired; `dsf charter init` and runtime GitHub access will fail.");
-            terminal.WriteLine("[dsf] WARNING: fix: run `dsf bootstrap` once, then export DSF_OWNER_KEYVAULT_URI and DSF_OWNER_APPCONFIG_ENDPOINT, then re-run `dsf new`.");
+            terminal.WriteLine("[dsf] WARNING: the owner GitHub App private key cannot be copied to the product Key Vault.");
+        }
+        if (!hasOwnerAppConfig)
+        {
+            terminal.WriteLine("[dsf] WARNING: DSF_OWNER_APPCONFIG_ENDPOINT is unset and --owner-appconfig-endpoint was not passed.");
+            terminal.WriteLine("[dsf] WARNING: live provisioning requires the owner App Configuration endpoint to publish the product index.");
+        }
+        if (resolveOwnerIdentity)
+        {
+            terminal.WriteLine("[dsf] Owner GitHub App identity will be resolved during live provisioning; dry-run does not read owner credentials.");
         }
         terminal.WriteLine($"[dsf] instance plan for product={product} (DRY-RUN)");
         terminal.WriteLine($"[dsf]  1. create_repo    [dry-run] Create GitHub repo {repoFull} ({visibility})");
         terminal.WriteLine($"[dsf]       $ gh repo create {repoFull} {visibilityFlag}");
         terminal.WriteLine($"[dsf]  2. seed_repo      [seeded (dry-run)] Seed {repoFull} with the Spec Kit scaffold (specify init) and a baseline ci workflow so the required 'ci' check is producible before branch protection");
         terminal.WriteLine($"[dsf]  3. create_labels  [dry-run] Create the label taxonomy + handoff label in {repoFull}");
-        if (string.IsNullOrWhiteSpace(githubInstallationId))
+        if (resolveOwnerIdentity)
         {
-            terminal.WriteLine($"[dsf]  4. install_app    [skipped (no owner App configured)] Add {repoFull} to the DSF App installation <installation>");
+            terminal.WriteLine($"[dsf]  4. install_app    [pending owner credential resolution] Resolve the owner GitHub App identity, then bind {repoFull}.");
+        }
+        else if (string.IsNullOrWhiteSpace(githubInstallationId))
+        {
+            terminal.WriteLine($"[dsf]  4. install_app    [skipped (no installation ID configured)] Add {repoFull} to the DSF App installation <installation>");
         }
         else
         {
@@ -688,12 +716,28 @@ public static class CliApplication
         terminal.WriteLine($"[dsf]  5. create_resource_group [dry-run] Create dedicated Azure resource group rg-dsf-{product}");
         terminal.WriteLine($"[dsf]       $ az group create --name rg-dsf-{product} --location {location} --tags project=dark-software-factory managed-by=dsf product={product} component=backing-services");
         terminal.WriteLine("[dsf]  6. provision_azure [dry-run] Deploy backing services into rg-dsf-" + product + " from infra/main.bicep");
-        terminal.WriteLine($"[dsf]       $ az deployment group create -g rg-dsf-{product} -n dsf-{product} -f {bicepPath} -p namePrefix={namePrefix} environmentName={environment} location={location} product={product} runtimeImage={runtimeImage} githubAppId= githubInstallationId= githubRepository={repoFull} operationMaturity={operationMaturity} allowPublicNetworkAccess=true{networkParameter} --no-wait");
+        var plannedAppId = resolveOwnerIdentity ? "<resolved-from-owner>" : githubAppId ?? string.Empty;
+        var plannedInstallationId = resolveOwnerIdentity ? "<resolved-from-owner>" : githubInstallationId ?? string.Empty;
+        terminal.WriteLine($"[dsf]       $ az deployment group create -g rg-dsf-{product} -n dsf-{product} -f {bicepPath} -p namePrefix={namePrefix} environmentName={environment} location={location} product={product} runtimeImage={runtimeImage} githubAppId={plannedAppId} githubInstallationId={plannedInstallationId} githubRepository={repoFull} operationMaturity={operationMaturity} allowPublicNetworkAccess=true{networkParameter} --no-wait");
         terminal.WriteLine($"[dsf]  7. seed_appconfig [seeded (dry-run)] Seed the canonical config/defaults.json into App Configuration for {product} (critic/agent flags + thresholds)");
-        terminal.WriteLine($"[dsf]  8. seed_app_key   [skipped (no owner App configured)] Seed the DSF App private key from the owner Key Vault into the product Key Vault for {product}");
-        terminal.WriteLine($"[dsf]  9. seed_webiq_key [skipped (no owner App configured)] Seed the WebIQ API key from the owner Key Vault into the product Key Vault for {product}");
+        if (hasOwnerVault)
+        {
+            terminal.WriteLine($"[dsf]  8. seed_app_key   [planned (dry-run)] Copy the DSF App private key from {ownerAuthority.KeyVaultUri} into the product Key Vault for {product}");
+        }
+        else
+        {
+            terminal.WriteLine($"[dsf]  8. seed_app_key   [skipped (no owner Key Vault configured)] Seed the DSF App private key into the product Key Vault for {product}");
+        }
+        terminal.WriteLine($"[dsf]  9. seed_webiq_key [manual prerequisite] Seed webiq-api-key in the product Key Vault for {product} if enabling WebIQ; dsf new does not copy this secret.");
         terminal.WriteLine($"[dsf]  10. seed_product_record [seeded (dry-run)] Seed the {product} Product record (repo, taxonomy, source scopes, threshold) into its per-product App Configuration");
-        terminal.WriteLine($"[dsf]  11. publish_runtime_index [skipped (no owner App Config configured)] Publish {product} runtime env (endpoints + pointers) to the owner App Configuration index");
+        if (hasOwnerAppConfig)
+        {
+            terminal.WriteLine($"[dsf]  11. publish_runtime_index [planned (dry-run)] Publish {product} runtime env (endpoints + pointers) to {ownerAuthority.AppConfigEndpoint}");
+        }
+        else
+        {
+            terminal.WriteLine($"[dsf]  11. publish_runtime_index [blocked (owner App Configuration endpoint required)] Publish {product} runtime env (endpoints + pointers) to the owner App Configuration index");
+        }
         terminal.WriteLine($"[dsf]  12. deploy_council [rendered (dry-run)] Render + bring up the feature-council runtime scoped to {product}");
         terminal.WriteLine($"[dsf]  13. branch_protection [ruleset planned (dry-run)] Apply the '{creationMaturity}' creation maturity dial to {repoFull} as a branch-protection ruleset (required review + green 'ci' check; medium/high gate the review on a Copilot approval instead of a standing human requirement)");
         if (creationMaturity is "medium" or "high")

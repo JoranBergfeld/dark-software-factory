@@ -7,6 +7,17 @@ For the big picture, read [The loop](../concept/the-loop.md) and
 [The harness](../concept/the-harness.md). For design history, see the
 [ADRs](https://github.com/JoranBergfeld/dark-software-factory/tree/main/docs/adr).
 
+## Three commands, three jobs
+
+| Command | Scope | Creates or starts | Does not do |
+| --- | --- | --- | --- |
+| [`dsf bootstrap`](bootstrap.md) | Once per owner; reused across products | Shared GitHub App, App Configuration, and Key Vault | Create a product factory or application |
+| [`dsf new --product <product>`](provision-a-factory.md) | One isolated factory per product | Product repo, baseline CI/governance, and Azure factory services | Build application features or deploy the application |
+| [`dsf charter implement --product <product>`](implement-application.md) | Application work after charter approval | Constitution PR, then a build issue and agent assignment | Instantly deliver a running application |
+
+**Factory infrastructure is not application infrastructure.** The first two commands
+prepare the machinery; the third starts the work that produces the application.
+
 ## Prerequisites
 
 - A GitHub API token that can create repositories under the selected owner:
@@ -60,4 +71,5 @@ dsf bootstrap --app-name dsf-<owner> --keyvault-name <owner-keyvault> \
 Review the plan, then rerun without `--dry-run` and export the two endpoints printed
 on success. See [Bootstrap](bootstrap.md).
 
-Next: [provision a factory](provision-a-factory.md).
+Next: [provision a factory](provision-a-factory.md), then
+[implement the application](implement-application.md).

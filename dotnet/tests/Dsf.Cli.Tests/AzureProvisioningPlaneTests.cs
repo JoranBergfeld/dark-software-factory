@@ -7,6 +7,32 @@ namespace Dsf.Cli.Tests;
 public sealed class AzureProvisioningPlaneTests
 {
     [Fact]
+    public async Task Execute_reports_azure_operations_before_the_client_starts()
+    {
+        var terminal = PlainTerminal();
+        var client = new RecordingAzureProvisioningClient
+        {
+            OnEnsureResourceGroup = () => Assert.Contains("Ensuring Azure resource group", terminal.Output),
+        };
+        var definition = SampleDefinition();
+        definition = definition with
+        {
+            Azure = definition.Azure with
+            {
+                OwnerAuthority = new OwnerAuthoritySettings { KeyVaultUri = "https://owner.vault.azure.net/" },
+            },
+        };
+
+        await AzureProvisioningPlan.Build(definition, "/repo-root").ExecuteAsync(
+            client, CancellationToken.None, terminal);
+
+        Assert.Contains("Deploying Azure backing services", terminal.Output);
+        Assert.Contains("Copying owner GitHub App private key", terminal.Output);
+        Assert.Contains("Deploying Azure SRE Agent", terminal.Output);
+        Assert.Contains("Completed:", terminal.Output);
+    }
+
+    [Fact]
     public async Task Dry_run_prints_azure_operations_without_mutating_azure()
     {
         var terminal = PlainTerminal();

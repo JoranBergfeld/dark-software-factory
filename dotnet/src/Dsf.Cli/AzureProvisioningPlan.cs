@@ -93,7 +93,8 @@ internal sealed record AzureProvisioningPlan(IReadOnlyList<AzureProvisioningRequ
 
     public async Task<AzureProvisioningResult> ExecuteAsync(
         IAzureProvisioningClient client,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ICliTerminal? terminal = null)
     {
         ArgumentNullException.ThrowIfNull(client);
 
@@ -107,12 +108,16 @@ internal sealed record AzureProvisioningPlan(IReadOnlyList<AzureProvisioningRequ
             switch (request)
             {
                 case EnsureResourceGroupRequest resourceGroupRequest:
-                    resourceGroup = await client.EnsureResourceGroupAsync(
-                        resourceGroupRequest,
+                    resourceGroup = await CliOperationProgress.RunAsync(
+                        terminal,
+                        $"Ensuring Azure resource group {resourceGroupRequest.ResourceGroup}",
+                        token => client.EnsureResourceGroupAsync(resourceGroupRequest, token),
                         cancellationToken);
                     break;
                 case DeployTopologyRequest topologyRequest:
-                    topology = await client.DeployTopologyAsync(topologyRequest, cancellationToken);
+                    topology = await CliOperationProgress.RunAsync(
+                        terminal, $"Deploying Azure backing services to {topologyRequest.ResourceGroup}",
+                        token => client.DeployTopologyAsync(topologyRequest, token), cancellationToken);
                     break;
                 case DeploySreAgentRequest sreAgentRequest:
                     // The SRE Agent template needs the Application Insights + Log
@@ -125,7 +130,9 @@ internal sealed record AzureProvisioningPlan(IReadOnlyList<AzureProvisioningRequ
                         LogAnalyticsId = topology?.Outputs.GetValueOrDefault("logAnalyticsId")
                             ?? sreAgentRequest.LogAnalyticsId,
                     };
-                    sreAgent = await client.DeploySreAgentAsync(effectiveSreAgent, cancellationToken);
+                    sreAgent = await CliOperationProgress.RunAsync(
+                        terminal, $"Deploying Azure SRE Agent {effectiveSreAgent.AgentName}",
+                        token => client.DeploySreAgentAsync(effectiveSreAgent, token), cancellationToken);
                     break;
                 case CopyOwnerAppPrivateKeyRequest copyRequest:
                     var productKeyVaultUri = topology?.Outputs.GetValueOrDefault("keyVaultUri");
@@ -135,8 +142,11 @@ internal sealed record AzureProvisioningPlan(IReadOnlyList<AzureProvisioningRequ
                             "Product topology returned no keyVaultUri; cannot copy the owner GitHub App private key.");
                     }
 
-                    await client.CopyOwnerAppPrivateKeyAsync(
-                        copyRequest with { ProductKeyVaultUri = productKeyVaultUri },
+                    await CliOperationProgress.RunAsync(
+                        terminal,
+                        "Copying owner GitHub App private key to the product Key Vault",
+                        token => client.CopyOwnerAppPrivateKeyAsync(
+                            copyRequest with { ProductKeyVaultUri = productKeyVaultUri }, token),
                         cancellationToken);
                     break;
                 default:

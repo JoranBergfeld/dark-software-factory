@@ -96,6 +96,32 @@ public sealed class LivingDocumentationTests
     }
 
     [Fact]
+    public void Published_guides_distinguish_owner_factory_and_application_setup()
+    {
+        var home = ReadRepoFile("docs/site/index.md");
+        var quickstart = ReadRepoFile("docs/site/get-started/quickstart.md");
+        var bootstrap = ReadRepoFile("docs/site/get-started/bootstrap.md");
+        var provisioning = ReadRepoFile("docs/site/get-started/provision-a-factory.md");
+        var implementation = ReadRepoFile("docs/site/get-started/implement-application.md");
+        var navigation = ReadRepoFile("mkdocs.yml");
+
+        Assert.Contains("Three commands, three jobs", quickstart, StringComparison.Ordinal);
+        Assert.Contains("dsf bootstrap", quickstart, StringComparison.Ordinal);
+        Assert.Contains("dsf new --product", quickstart, StringComparison.Ordinal);
+        Assert.Contains("dsf charter implement --product", quickstart, StringComparison.Ordinal);
+        Assert.Contains("Run once per owner", bootstrap, StringComparison.Ordinal);
+        Assert.Contains("This provisions the factory, not the application", provisioning, StringComparison.Ordinal);
+        Assert.Contains("A council sweep is not a prerequisite", provisioning, StringComparison.Ordinal);
+        Assert.Contains("Constitution PR", implementation, StringComparison.Ordinal);
+        Assert.Contains("creation:ready", implementation, StringComparison.Ordinal);
+        Assert.Contains("GitHub Cloud Agent", implementation, StringComparison.Ordinal);
+        Assert.Contains("does **not** skip constitution approval", implementation, StringComparison.Ordinal);
+        Assert.Contains("```mermaid", home, StringComparison.Ordinal);
+        Assert.Contains("```mermaid", implementation, StringComparison.Ordinal);
+        Assert.Contains("get-started/implement-application.md", navigation, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Readme_command_examples_match_the_documented_cli_surface()
     {
         var readme = ReadRepoFile("README.md");
