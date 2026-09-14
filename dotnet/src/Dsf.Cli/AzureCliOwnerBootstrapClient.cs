@@ -1,11 +1,18 @@
 using System.Text.Json;
-using Dsf.Core.Runtime;
 
 namespace Dsf.Cli;
 
-internal sealed class AzureCliOwnerBootstrapClient(IAzureCliRunner runner)
+internal sealed class AzureCliOwnerBootstrapClient(
+    IAzureCliRunner runner,
+    ICliTerminal? terminal = null,
+    HttpClient? appConfigHttpClient = null,
+    Func<TimeSpan, CancellationToken, Task>? authorizationRetryDelay = null)
     : IOwnerInfrastructure, IOwnerBootstrapStatusStore, IOwnerCredentialStore, IOwnerCredentialReader
 {
+    private static readonly HttpClient DefaultAppConfigHttpClient = new();
+    private readonly OwnerAppConfigurationStatusStore statusStore = new(
+        runner, appConfigHttpClient ?? DefaultAppConfigHttpClient, terminal, authorizationRetryDelay);
+
     public async Task<OwnerGitHubCredentials> ReadAsync(
         string keyVaultUri,
         bool includePrivateKey,
@@ -110,31 +117,18 @@ internal sealed class AzureCliOwnerBootstrapClient(IAzureCliRunner runner)
         }
     }
 
-    public async Task WriteAsync(
+    public Task WriteAsync(
         OwnerAuthority authority,
         OwnerBootstrapRequest request,
         OwnerBootstrapStatus status,
-        CancellationToken cancellationToken)
-    {
-        var value = JsonSerializer.Serialize(status);
-        if (value.Contains("PRIVATE KEY", StringComparison.Ordinal))
-        {
-            throw new InvalidOperationException("Bootstrap status must not contain private-key material.");
-        }
-
-        await RunAsync(
-            [
-                "appconfig", "kv", "set", "--endpoint", authority.AppConfigEndpoint,
-                "--auth-mode", "login", "--key", ProductConfigurationKeys.OwnerBootstrapStatus(request.AppName),
-                "--value", value, "--yes",
-            ],
-            cancellationToken);
-    }
+        CancellationToken cancellationToken) =>
+        statusStore.WriteAsync(authority, request, status, cancellationToken);
 
     public async Task<OwnerAuthority> EnsureAsync(
         OwnerBootstrapRequest request,
         CancellationToken cancellationToken)
     {
+        terminal?.WriteLine("[dsf] Checking Azure subscription and signed-in operator...");
         var subscriptionId = await RequiredOutputAsync(
             ["account", "show", "--query", "id", "-o", "tsv"],
             cancellationToken);
@@ -142,9 +136,12 @@ internal sealed class AzureCliOwnerBootstrapClient(IAzureCliRunner runner)
             ["ad", "signed-in-user", "show", "--query", "id", "-o", "tsv"],
             cancellationToken);
 
+        terminal?.WriteLine($"[dsf] Ensuring resource group {request.ResourceGroup} in {request.Location} (subscription {subscriptionId})...");
         await RunAsync(
             ["group", "create", "--name", request.ResourceGroup, "--location", request.Location],
             cancellationToken);
+        terminal?.WriteLine($"[dsf] Resource group {request.ResourceGroup} ready.");
+        terminal?.WriteLine($"[dsf] Ensuring App Configuration {request.AppConfigName}; Azure provisioning may take several minutes...");
         await RunAsync(
             [
                 "appconfig", "create", "--name", request.AppConfigName,
@@ -152,6 +149,8 @@ internal sealed class AzureCliOwnerBootstrapClient(IAzureCliRunner runner)
                 "--sku", "Standard", "--disable-local-auth", "true",
             ],
             cancellationToken);
+        terminal?.WriteLine($"[dsf] App Configuration {request.AppConfigName} ready.");
+        terminal?.WriteLine($"[dsf] Deploying Key Vault {request.KeyVaultName}; Azure provisioning may take several minutes...");
         await RunAsync(
             [
                 "deployment", "group", "create", "--resource-group", request.ResourceGroup,
@@ -160,6 +159,7 @@ internal sealed class AzureCliOwnerBootstrapClient(IAzureCliRunner runner)
                 "--parameters", $"vaultName={request.KeyVaultName}", $"location={request.Location}",
             ],
             cancellationToken);
+        terminal?.WriteLine($"[dsf] Key Vault {request.KeyVaultName} ready.");
 
         await AssignRoleAsync(
             "App Configuration Data Owner",
@@ -172,6 +172,7 @@ internal sealed class AzureCliOwnerBootstrapClient(IAzureCliRunner runner)
             $"/subscriptions/{subscriptionId}/resourceGroups/{request.ResourceGroup}/providers/Microsoft.KeyVault/vaults/{request.KeyVaultName}",
             cancellationToken);
 
+        terminal?.WriteLine("[dsf] Owner Azure services and operator role assignments ready.");
         return new OwnerAuthority(
             $"https://{request.KeyVaultName}.vault.azure.net/",
             $"https://{request.AppConfigName}.azconfig.io");
@@ -181,7 +182,9 @@ internal sealed class AzureCliOwnerBootstrapClient(IAzureCliRunner runner)
         string role,
         string assigneeObjectId,
         string scope,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken)
+    {
+        terminal?.WriteLine($"[dsf] Ensuring operator role: {role}...");
         await RunAsync(
             [
                 "role", "assignment", "create", "--role", role,
@@ -190,6 +193,8 @@ internal sealed class AzureCliOwnerBootstrapClient(IAzureCliRunner runner)
                 "--scope", scope,
             ],
             cancellationToken);
+        terminal?.WriteLine($"[dsf] Operator role assigned: {role}.");
+    }
 
     private async Task<string> ReadSecretAsync(
         string vaultName,

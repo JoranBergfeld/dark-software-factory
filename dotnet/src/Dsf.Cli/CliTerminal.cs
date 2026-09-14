@@ -14,6 +14,8 @@ internal interface ICliTerminal
     void WriteErrorLine(string value);
 
     string? Prompt(string message);
+
+    Task<string?> PromptSecretAsync(string message, CancellationToken cancellationToken);
 }
 
 internal sealed class SystemCliTerminal : ICliTerminal
@@ -72,5 +74,55 @@ internal sealed class SystemCliTerminal : ICliTerminal
     {
         Console.Out.Write(message);
         return Console.ReadLine();
+    }
+
+    public Task<string?> PromptSecretAsync(string message, CancellationToken cancellationToken) =>
+        PromptSecretAsync(
+            message,
+            () => Console.KeyAvailable,
+            () => Console.ReadKey(intercept: true),
+            Console.Out,
+            cancellationToken);
+
+    internal static async Task<string?> PromptSecretAsync(
+        string message,
+        Func<bool> keyAvailable,
+        Func<ConsoleKeyInfo> readKey,
+        TextWriter output,
+        CancellationToken cancellationToken)
+    {
+        var input = new System.Text.StringBuilder();
+        output.Write(message);
+        try
+        {
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!keyAvailable())
+                {
+                    await Task.Delay(50, cancellationToken);
+                    continue;
+                }
+
+                var key = readKey();
+                if (key.Key == ConsoleKey.Enter)
+                {
+                    return input.ToString();
+                }
+
+                if (key.Key == ConsoleKey.Backspace && input.Length > 0)
+                {
+                    input.Length--;
+                }
+                else if (!char.IsControl(key.KeyChar))
+                {
+                    input.Append(key.KeyChar);
+                }
+            }
+        }
+        finally
+        {
+            output.WriteLine();
+        }
     }
 }

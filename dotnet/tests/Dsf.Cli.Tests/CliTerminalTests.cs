@@ -6,6 +6,42 @@ namespace Dsf.Cli.Tests;
 public sealed class CliTerminalTests
 {
     [Fact]
+    public async Task Secret_prompt_reads_edited_input_without_echoing_it()
+    {
+        var keys = new Queue<ConsoleKeyInfo>(
+        [
+            new('a', ConsoleKey.A, false, false, false),
+            new('b', ConsoleKey.B, false, false, false),
+            new('\b', ConsoleKey.Backspace, false, false, false),
+            new('c', ConsoleKey.C, false, false, false),
+            new('\r', ConsoleKey.Enter, false, false, false),
+        ]);
+        using var output = new StringWriter();
+
+        var value = await SystemCliTerminal.PromptSecretAsync(
+            "Callback: ", () => keys.Count > 0, keys.Dequeue, output, CancellationToken.None);
+
+        Assert.Equal("ac", value);
+        Assert.Equal("Callback: " + Environment.NewLine, output.ToString());
+    }
+
+    [Fact]
+    public async Task Secret_prompt_cancellation_does_not_leave_a_blocked_reader()
+    {
+        using var cancellation = new CancellationTokenSource();
+        using var output = new StringWriter();
+        var prompt = SystemCliTerminal.PromptSecretAsync(
+            "Callback: ", () => false,
+            () => throw new InvalidOperationException("No key is available."),
+            output, cancellation.Token);
+
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => prompt);
+        Assert.Equal("Callback: " + Environment.NewLine, output.ToString());
+    }
+
+    [Fact]
     public void Detect_reports_full_capabilities_for_an_attached_terminal()
     {
         var terminal = SystemCliTerminal.Detect(

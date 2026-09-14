@@ -145,9 +145,19 @@ public static class CliApplication
         var root = BuildRootCommand(
             terminal, providedOptions, github, azure, appConfig, charterRepository, charterStore);
         var parseResult = root.Parse(args);
+        return await InvokeAsync(parseResult, terminal, cancellationToken);
+    }
+
+    internal static async Task<int> InvokeAsync(
+        ParseResult parseResult,
+        ICliTerminal terminal,
+        CancellationToken cancellationToken)
+    {
         try
         {
-            var exitCode = await parseResult.InvokeAsync(cancellationToken: cancellationToken);
+            var exitCode = await parseResult.InvokeAsync(
+                new() { EnableDefaultExceptionHandler = false },
+                cancellationToken);
             return parseResult.Errors.Count > 0 ? 2 : exitCode;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -923,12 +933,13 @@ public static class CliApplication
                 }
             }
 
-            var azure = new AzureCliOwnerBootstrapClient(new SystemAzureCliRunner());
+            var azure = new AzureCliOwnerBootstrapClient(new SystemAzureCliRunner(), terminal);
             var bootstrapper = new OwnerBootstrapper(
                 azure,
                 azure,
                 GitHubAppBootstrapClient.Create(terminal, parseResult.GetValue(githubCallback)),
-                azure);
+                azure,
+                terminal);
             await bootstrapper.ExecuteAsync(request, cancellationToken);
             terminal.WriteLine($"[dsf] owner bootstrap complete for {request.AppName}.");
             terminal.WriteLine($"[dsf] export DSF_OWNER_KEYVAULT_URI=https://{request.KeyVaultName}.vault.azure.net/");

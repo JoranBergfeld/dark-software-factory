@@ -24,4 +24,10 @@ internal sealed class ScriptedTerminal(TerminalCapabilities capabilities, IReadO
         _prompts.Add(message);
         return _answers.Count == 0 ? null : _answers.Dequeue();
     }
+
+    public Task<string?> PromptSecretAsync(string message, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(Prompt(message));
+    }
 }

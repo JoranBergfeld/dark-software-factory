@@ -24,7 +24,8 @@ internal sealed record OwnerGitHubCredentials(
     string AppId,
     string InstallationId,
     string PrivateKey,
-    string? InstallationSelection = null);
+    string? InstallationSelection = null,
+    string? Slug = null);
 
 internal sealed record OwnerBootstrapStatus(
     OwnerBootstrapStage Stage,
@@ -77,7 +78,8 @@ internal sealed class OwnerBootstrapper(
     IOwnerInfrastructure infrastructure,
     IOwnerBootstrapStatusStore statusStore,
     IGitHubAppBootstrapper github,
-    IOwnerCredentialStore credentials)
+    IOwnerCredentialStore credentials,
+    ICliTerminal? terminal = null)
 {
     public async Task ExecuteAsync(
         OwnerBootstrapRequest request,
@@ -97,7 +99,9 @@ internal sealed class OwnerBootstrapper(
             appCredentials.InstallationId,
             appCredentials.InstallationSelection);
 
+        terminal?.WriteLine($"[dsf] Storing GitHub App credentials in Key Vault {request.KeyVaultName}...");
         await credentials.WriteAsync(authority.KeyVaultUri, appCredentials, cancellationToken);
+        terminal?.WriteLine("[dsf] Credentials stored in Key Vault.");
         await github.CompleteAsync(request, cancellationToken);
         await WriteAsync(
             OwnerBootstrapStage.CredentialsStored,
@@ -121,6 +125,7 @@ internal sealed class OwnerBootstrapper(
                 completed.Add(stage);
             }
 
+            terminal?.WriteLine($"[dsf] Recording owner bootstrap status: {stage}...");
             await statusStore.WriteAsync(
                 authority,
                 request,

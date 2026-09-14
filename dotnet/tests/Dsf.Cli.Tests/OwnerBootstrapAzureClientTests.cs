@@ -6,6 +6,28 @@ namespace Dsf.Cli.Tests;
 public sealed class OwnerBootstrapAzureClientTests
 {
     [Fact]
+    public async Task Ensure_reports_resource_and_role_progress()
+    {
+        var terminal = new ScriptedTerminal(new TerminalCapabilities(false, false, false), []);
+        var runner = new RecordingAzureCliRunner(
+            new AzureCliInvocationResult(0, "sub-id", ""),
+            new AzureCliInvocationResult(0, "operator-id", ""));
+        var client = new AzureCliOwnerBootstrapClient(runner, terminal);
+
+        await client.EnsureAsync(
+            new OwnerBootstrapRequest("dsf-test", "rg-dsf-test", "kvtest", "cfgtest", "swedencentral"),
+            CancellationToken.None);
+
+        Assert.Contains("subscription", terminal.Output);
+        Assert.Contains("rg-dsf-test", terminal.Output);
+        Assert.Contains("App Configuration cfgtest", terminal.Output);
+        Assert.Contains("Key Vault kvtest", terminal.Output);
+        Assert.Contains("App Configuration Data Owner", terminal.Output);
+        Assert.Contains("Key Vault Secrets Officer", terminal.Output);
+        Assert.Contains("ready", terminal.Output);
+    }
+
+    [Fact]
     public void Owner_vault_keeps_public_access_disabled_by_policy()
     {
         var template = File.ReadAllText(Path.Combine(FindRepoRoot(), "infra", "owner-keyvault.bicep"));
@@ -52,33 +74,6 @@ public sealed class OwnerBootstrapAzureClientTests
             argument => argument.Contains("PRIVATE KEY", StringComparison.Ordinal));
         Assert.Contains("-o", invocation);
         Assert.Contains("none", invocation);
-    }
-
-    [Fact]
-    public async Task Write_status_persists_a_non_secret_document_in_owner_app_configuration()
-    {
-        var runner = new RecordingAzureCliRunner();
-        var client = new AzureCliOwnerBootstrapClient(runner);
-        var authority = new OwnerAuthority(
-            "https://kvdsfsbx20260907.vault.azure.net/",
-            "https://appcsdsfsbx20260907.azconfig.io");
-
-        await client.WriteAsync(
-            authority,
-            new OwnerBootstrapRequest(
-                "dsf-sbx-20260907", "rg-dsf-app", "kvdsfsbx20260907",
-                "appcsdsfsbx20260907", "swedencentral"),
-            new OwnerBootstrapStatus(
-                OwnerBootstrapStage.AppConfigurationReady,
-                DateTimeOffset.UnixEpoch,
-                [OwnerBootstrapStage.AppConfigurationReady],
-                AppConfigEndpoint: authority.AppConfigEndpoint),
-            CancellationToken.None);
-
-        var invocation = Assert.Single(runner.Invocations);
-        Assert.Equal("appconfig", invocation[0]);
-        Assert.Contains("dsf/owner/bootstrap/dsf-sbx-20260907/status", invocation);
-        Assert.DoesNotContain(invocation, argument => argument.Contains("PRIVATE KEY", StringComparison.Ordinal));
     }
 
     [Fact]

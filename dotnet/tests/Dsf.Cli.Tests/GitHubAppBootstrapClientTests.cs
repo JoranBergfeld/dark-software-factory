@@ -7,13 +7,191 @@ namespace Dsf.Cli.Tests;
 public sealed class GitHubAppBootstrapClientTests
 {
     [Fact]
+    public async Task Automatic_callback_stops_pending_terminal_input()
+    {
+        var terminal = new CallbackTerminal();
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var manifestUrl = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var capture = GitHubAppBootstrapClient.CaptureCodeAsync(
+            terminal, "dsf-test", cancellation.Token,
+            new Uri("http://127.0.0.1:0/callback"),
+            (url, _) =>
+            {
+                manifestUrl.SetResult(url);
+                return Task.CompletedTask;
+            });
+        try
+        {
+            var url = await manifestUrl.Task.WaitAsync(cancellation.Token);
+            await terminal.PromptStarted.Task.WaitAsync(cancellation.Token);
+            using var http = new HttpClient();
+            using var response = await http.GetAsync($"{url}callback?code=test-code", cancellation.Token);
+
+            Assert.Equal("test-code", await capture.WaitAsync(cancellation.Token));
+            Assert.False(terminal.InputPending);
+            Assert.Contains("callback received", terminal.Output);
+        }
+        finally
+        {
+            terminal.Input.TrySetResult(null);
+            cancellation.Cancel();
+        }
+    }
+
+    [Fact]
+    public async Task Pasted_callback_is_acknowledged_without_echoing_the_code()
+    {
+        var terminal = new CallbackTerminal();
+        terminal.Input.SetResult("test-secret-code");
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+
+        var code = await GitHubAppBootstrapClient.CaptureCodeAsync(
+            terminal, "dsf-test", cancellation.Token,
+            new Uri("http://127.0.0.1:0/callback"), (_, _) => Task.CompletedTask);
+
+        Assert.Equal("test-secret-code", code);
+        Assert.Contains("callback received", terminal.Output);
+        Assert.DoesNotContain("test-secret-code", terminal.Output);
+    }
+
+    [Fact]
+    public async Task Cancelling_callback_capture_stops_pending_terminal_input()
+    {
+        var terminal = new CallbackTerminal();
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var capture = GitHubAppBootstrapClient.CaptureCodeAsync(
+            terminal, "dsf-test", cancellation.Token,
+            new Uri("http://127.0.0.1:0/callback"), (_, _) => Task.CompletedTask);
+        await terminal.PromptStarted.Task.WaitAsync(cancellation.Token);
+
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => capture);
+        Assert.False(terminal.InputPending);
+        Assert.DoesNotContain("callback received", terminal.Output);
+    }
+
+    [Fact]
+    public async Task Empty_paste_keeps_waiting_for_browser_callback()
+    {
+        var terminal = new CallbackTerminal();
+        terminal.Input.SetResult("");
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        string? manifestUrl = null;
+        var capture = GitHubAppBootstrapClient.CaptureCodeAsync(
+            terminal, "dsf-test", cancellation.Token,
+            new Uri("http://127.0.0.1:0/callback"),
+            (url, _) =>
+            {
+                manifestUrl = url;
+                return Task.CompletedTask;
+            });
+        await terminal.PromptStarted.Task.WaitAsync(cancellation.Token);
+        Assert.False(capture.IsCompleted);
+
+        using var http = new HttpClient();
+        using var response = await http.GetAsync($"{manifestUrl}callback?code=test-code", cancellation.Token);
+
+        Assert.Equal("test-code", await capture);
+    }
+
+    [Fact]
+    public async Task Failed_browser_opener_is_reported_without_leaking_child_output()
+    {
+        var terminal = new ScriptedTerminal(new TerminalCapabilities(true, false, false), []);
+        var process = new FailedBrowserProcess();
+        System.Diagnostics.ProcessStartInfo? startInfo = null;
+
+        await GitHubAppBootstrapClient.TryOpenBrowserAsync(
+            terminal, "http://127.0.0.1:8765/", CancellationToken.None,
+            info =>
+            {
+                startInfo = info;
+                return process;
+            },
+            new GitHubAppBrowserLaunch("test-browser"));
+
+        Assert.NotNull(startInfo);
+        Assert.True(startInfo.RedirectStandardOutput);
+        Assert.True(startInfo.RedirectStandardError);
+        Assert.True(process.Waited);
+        Assert.Contains("exited 1", terminal.Error);
+        Assert.Contains("Open the printed URL manually", terminal.Error);
+        Assert.DoesNotContain("gio:", terminal.Error);
+        Assert.True(process.Disposed);
+    }
+
+    [Fact]
+    public async Task Cancelling_browser_wait_does_not_kill_the_operators_browser()
+    {
+        var terminal = new ScriptedTerminal(new TerminalCapabilities(true, false, false), []);
+        var process = new FakeManagedProcess();
+        using var cancellation = new CancellationTokenSource();
+        var opening = GitHubAppBootstrapClient.TryOpenBrowserAsync(
+            terminal, "http://127.0.0.1:8765/", cancellation.Token, _ => process,
+            new GitHubAppBrowserLaunch("test-browser"));
+
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => opening);
+        Assert.Equal(0, process.KillCallCount);
+        Assert.True(process.Disposed);
+    }
+
+    [Fact]
+    public async Task Long_running_browser_opener_does_not_kill_the_operators_browser()
+    {
+        var terminal = new ScriptedTerminal(new TerminalCapabilities(true, false, false), []);
+        var process = new FakeManagedProcess();
+
+        await GitHubAppBootstrapClient.TryOpenBrowserAsync(
+            terminal, "http://127.0.0.1:8765/", CancellationToken.None, _ => process,
+            new GitHubAppBrowserLaunch("test-browser"));
+
+        Assert.Equal(0, process.KillCallCount);
+        Assert.Contains("Browser opener is still running", terminal.Output);
+        Assert.Empty(terminal.Error);
+        Assert.True(process.Disposed);
+    }
+
+    [Fact]
+    public async Task Manifest_conversion_reports_separate_installation_step()
+    {
+        var terminal = new ScriptedTerminal(new TerminalCapabilities(false, false, false), []);
+        var recovery = new RecordingGitHubAppRecoveryStore();
+        var handler = new StubHttpMessageHandler(new HttpResponseMessage(HttpStatusCode.Created)
+        {
+            Content = new StringContent("""{"id":7,"pem":"test-private-key","slug":"dsf-test"}"""),
+        });
+        var client = new GitHubAppBootstrapClient(
+            new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") },
+            (_, _) => Task.FromResult("test-secret-code"),
+            (_, _) =>
+            {
+                Assert.Contains("https://github.com/apps/dsf-test/installations/new", terminal.Output);
+                Assert.Contains("Waiting", terminal.Output);
+                return Task.FromResult(new GitHubInstallationDiscovery("42", "selected"));
+            },
+            recovery,
+            terminal);
+
+        await client.GetOrCreateAsync(SampleRequest(), CancellationToken.None);
+
+        Assert.Equal("dsf-test", (await recovery.LoadAsync(SampleRequest().AppName, CancellationToken.None))?.Slug);
+        Assert.Contains("Exchanging", terminal.Output);
+        Assert.Contains("installation found", terminal.Output);
+        Assert.DoesNotContain("test-private-key", terminal.Output);
+        Assert.DoesNotContain("test-secret-code", terminal.Output);
+    }
+
+    [Fact]
     public async Task Get_or_create_exchanges_manifest_code_for_owner_credentials()
     {
         var handler = new StubHttpMessageHandler(
             new HttpResponseMessage(System.Net.HttpStatusCode.Created)
             {
                 Content = new StringContent("""
-                    {"id":7,"pem":"-----BEGIN PRIVATE KEY-----\nsecret\n-----END PRIVATE KEY-----"}
+                    {"id":7,"pem":"-----BEGIN PRIVATE KEY-----\nsecret\n-----END PRIVATE KEY-----","slug":"dsf-test"}
                     """),
             });
         var client = new GitHubAppBootstrapClient(
@@ -38,6 +216,7 @@ public sealed class GitHubAppBootstrapClientTests
     [Fact]
     public async Task Get_or_create_recovers_converted_app_when_installation_discovery_failed()
     {
+        var terminal = new ScriptedTerminal(new TerminalCapabilities(false, false, false), []);
         var recovery = new RecordingGitHubAppRecoveryStore();
         var converted = new OwnerGitHubCredentials("7", string.Empty, CreatePrivateKeyPem());
         await recovery.SaveAsync("dsf-sbx-20260907", converted, CancellationToken.None);
@@ -48,7 +227,8 @@ public sealed class GitHubAppBootstrapClientTests
             },
             (_, _) => throw new InvalidOperationException("manifest should not be captured"),
             (_, _) => Task.FromResult(new GitHubInstallationDiscovery("42", "all")),
-            recovery);
+            recovery,
+            terminal);
 
         var credentials = await client.GetOrCreateAsync(SampleRequest(), CancellationToken.None);
 
@@ -56,6 +236,9 @@ public sealed class GitHubAppBootstrapClientTests
         Assert.Equal("42", credentials.InstallationId);
         Assert.Equal("all", credentials.InstallationSelection);
         Assert.False(recovery.Deleted);
+        Assert.Contains("Resuming GitHub App 7", terminal.Output);
+        Assert.Contains("https://github.com/settings/apps", terminal.Output);
+        Assert.DoesNotContain("Exchanging", terminal.Output);
     }
 
     [Fact]
@@ -98,6 +281,15 @@ public sealed class GitHubAppBootstrapClientTests
         Assert.Equal(expected, GitHubAppManifest.ParseCode(raw));
     }
 
+    [Theory]
+    [InlineData("http://127.0.0.1:8765/callback")]
+    [InlineData("?state=abc123")]
+    [InlineData("http://127.0.0.1:8765/callback?code=")]
+    public void Callback_code_parser_rejects_urls_without_a_code(string raw)
+    {
+        Assert.Throws<InvalidOperationException>(() => GitHubAppManifest.ParseCode(raw));
+    }
+
     [Fact]
     public async Task Loopback_listener_returns_the_callback_code()
     {
@@ -109,6 +301,39 @@ public sealed class GitHubAppBootstrapClientTests
         var response = await client.GetAsync($"{listener.CallbackUri}?code=manifest-code");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("manifest-code", await code);
+    }
+
+    [Fact]
+    public async Task Loopback_callback_explains_that_installation_is_still_pending()
+    {
+        using var listener = new GitHubAppLoopbackListener(new Uri("http://127.0.0.1:0/callback"));
+        listener.Start();
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var client = new HttpClient();
+        var code = listener.WaitForCodeAsync(cancellation.Token);
+
+        var page = await client.GetStringAsync($"{listener.CallbackUri}?code=manifest-code", cancellation.Token);
+
+        Assert.Equal("manifest-code", await code);
+        Assert.Contains("Return to the terminal", page);
+        Assert.Contains("install", page);
+    }
+
+    [Fact]
+    public async Task Loopback_listener_rejects_missing_code_and_keeps_waiting()
+    {
+        using var listener = new GitHubAppLoopbackListener(new Uri("http://127.0.0.1:0/callback"));
+        listener.Start();
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var client = new HttpClient();
+        var code = listener.WaitForCodeAsync(cancellation.Token);
+
+        using var invalid = await client.GetAsync(listener.CallbackUri, cancellation.Token);
+        Assert.Equal(HttpStatusCode.BadRequest, invalid.StatusCode);
+        Assert.False(code.IsCompleted);
+
+        using var valid = await client.GetAsync($"{listener.CallbackUri}?code=manifest-code", cancellation.Token);
         Assert.Equal("manifest-code", await code);
     }
 
@@ -224,6 +449,65 @@ public sealed class GitHubAppBootstrapClientTests
             Deleted = true;
             credentials = null;
             return Task.CompletedTask;
+        }
+    }
+
+    private sealed class FailedBrowserProcess : IManagedProcess
+    {
+        public int ExitCode => 1;
+        public bool Waited { get; private set; }
+        public bool Disposed { get; private set; }
+        public void Start() { }
+        public Task<string> ReadStandardOutputAsync(CancellationToken cancellationToken) => Task.FromResult("");
+        public Task<string> ReadStandardErrorAsync(CancellationToken cancellationToken) =>
+            Task.FromResult("gio: http://127.0.0.1:8765/: Operation not supported");
+        public Task WaitForExitAsync(CancellationToken cancellationToken)
+        {
+            Waited = true;
+            return Task.CompletedTask;
+        }
+        public void Kill(bool entireProcessTree) => throw new InvalidOperationException("Already exited.");
+        public void Dispose() => Disposed = true;
+    }
+
+    private sealed class CallbackTerminal : ICliTerminal
+    {
+        private readonly System.Text.StringBuilder output = new();
+        public TerminalCapabilities Capabilities => new(true, false, false);
+        public TaskCompletionSource<string?> Input { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource PromptStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public bool InputPending { get; private set; }
+        public string Output => output.ToString();
+        public void WriteLine(string value) => output.AppendLine(value);
+        public void WriteErrorLine(string value) => output.AppendLine(value);
+
+        public string? Prompt(string message)
+        {
+            InputPending = true;
+            PromptStarted.TrySetResult();
+            try
+            {
+                return Input.Task.GetAwaiter().GetResult();
+            }
+            finally
+            {
+                InputPending = false;
+            }
+
+        }
+
+        public async Task<string?> PromptSecretAsync(string message, CancellationToken cancellationToken)
+        {
+            InputPending = true;
+            PromptStarted.TrySetResult();
+            try
+            {
+                return await Input.Task.WaitAsync(cancellationToken);
+            }
+            finally
+            {
+                InputPending = false;
+            }
         }
     }
 }

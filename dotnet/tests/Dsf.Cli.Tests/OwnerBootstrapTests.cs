@@ -6,6 +6,24 @@ namespace Dsf.Cli.Tests;
 public sealed class OwnerBootstrapTests
 {
     [Fact]
+    public async Task Execute_reports_credential_storage_and_status_progress_without_secrets()
+    {
+        var terminal = new ScriptedTerminal(new TerminalCapabilities(false, false, false), []);
+        var bootstrapper = new OwnerBootstrapper(
+            new RecordingOwnerInfrastructure(), new RecordingOwnerBootstrapStatusStore(),
+            new RecordingGitHubAppBootstrapper(), new RecordingOwnerCredentialStore(), terminal);
+
+        await bootstrapper.ExecuteAsync(
+            new OwnerBootstrapRequest("dsf-test", "rg-dsf-test", "kvtest", "cfgtest", "swedencentral"),
+            CancellationToken.None);
+
+        Assert.Contains("status", terminal.Output);
+        Assert.Contains("Storing GitHub App credentials", terminal.Output);
+        Assert.Contains("Credentials stored", terminal.Output);
+        Assert.DoesNotContain("PRIVATE KEY", terminal.Output);
+    }
+
+    [Fact]
     public async Task Execute_records_non_secret_stage_boundaries_in_order()
     {
         var infrastructure = new RecordingOwnerInfrastructure();

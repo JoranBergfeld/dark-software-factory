@@ -51,7 +51,9 @@ internal sealed record GitHubAppManifest(
             throw new InvalidOperationException("GitHub App manifest callback code is required.");
         }
 
-        if (!text.Contains("code=", StringComparison.Ordinal))
+        if (!text.Contains("code=", StringComparison.Ordinal)
+            && !Uri.TryCreate(text, UriKind.Absolute, out _)
+            && !text.StartsWith('?'))
         {
             return text;
         }
@@ -190,6 +192,10 @@ internal sealed class GitHubAppLoopbackListener(Uri callbackUri) : IDisposable
             {
                 throw new OperationCanceledException(cancellationToken);
             }
+            catch (HttpListenerException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw new OperationCanceledException(cancellationToken);
+            }
 
             if (manifest is not null
                 && string.Equals(context.Request.Url?.AbsolutePath, ManifestUri.AbsolutePath, StringComparison.Ordinal))
@@ -205,10 +211,22 @@ internal sealed class GitHubAppLoopbackListener(Uri callbackUri) : IDisposable
                 continue;
             }
 
-            var code = GitHubAppManifest.ParseCode(context.Request.Url?.ToString() ?? string.Empty);
+            var code = context.Request.QueryString["code"];
+            if (string.IsNullOrWhiteSpace(code))
+            {
+                context.Response.StatusCode = (int)HttpStatusCode.BadRequest;
+                await WriteResponseAsync(
+                    context,
+                    "No GitHub App manifest code received. Return to GitHub to finish App creation.",
+                    "text/plain; charset=utf-8",
+                    cancellationToken);
+                continue;
+            }
+
             await WriteResponseAsync(
                 context,
-                "GitHub App setup received. You may close this window.",
+                "GitHub App creation callback received. Return to the terminal for the installation link. "
+                    + "Bootstrap is not complete until the App is installed and credentials are stored.",
                 "text/plain; charset=utf-8",
                 cancellationToken);
             return code;
@@ -257,7 +275,8 @@ internal sealed class GitHubAppBootstrapClient(
     HttpClient httpClient,
     Func<OwnerBootstrapRequest, CancellationToken, Task<string>> captureCode,
     Func<OwnerGitHubCredentials, CancellationToken, Task<GitHubInstallationDiscovery>> discoverInstallation,
-    IGitHubAppRecoveryStore? recoveryStore = null)
+    IGitHubAppRecoveryStore? recoveryStore = null,
+    ICliTerminal? terminal = null)
     : IGitHubAppBootstrapper
 {
     private static readonly Uri CallbackUri = new("http://127.0.0.1:8765/callback");
@@ -273,7 +292,8 @@ internal sealed class GitHubAppBootstrapClient(
             (request, cancellationToken) => string.IsNullOrWhiteSpace(callbackCode)
                 ? CaptureCodeAsync(terminal, request.AppName, cancellationToken)
                 : Task.FromResult(callbackCode),
-            (credentials, cancellationToken) => DiscoverInstallationDetailsAsync(httpClient, credentials, cancellationToken));
+            (credentials, cancellationToken) => DiscoverInstallationDetailsAsync(httpClient, credentials, cancellationToken),
+            terminal: terminal);
     }
 
     public async Task<OwnerGitHubCredentials> GetOrCreateAsync(
@@ -284,6 +304,7 @@ internal sealed class GitHubAppBootstrapClient(
         if (uninstalled is null)
         {
             var code = GitHubAppManifest.ParseCode(await captureCode(request, cancellationToken));
+            terminal?.WriteLine("[dsf] Exchanging GitHub App creation callback for credentials...");
             using var response = await httpClient.PostAsync(
                 $"app-manifests/{Uri.EscapeDataString(code)}/conversions",
                 content: null,
@@ -303,16 +324,34 @@ internal sealed class GitHubAppBootstrapClient(
                 throw new InvalidOperationException("GitHub App manifest conversion returned no private key.");
             }
 
-            uninstalled = new OwnerGitHubCredentials(appId, string.Empty, privateKey);
+            var slug = payload.RootElement.GetProperty("slug").GetString();
+            if (string.IsNullOrWhiteSpace(slug))
+            {
+                throw new InvalidOperationException("GitHub App manifest conversion returned no App slug.");
+            }
+
+            uninstalled = new OwnerGitHubCredentials(appId, string.Empty, privateKey, Slug: slug);
             await recoveryStore.SaveAsync(request.AppName, uninstalled, cancellationToken);
+            terminal?.WriteLine($"[dsf] GitHub App created (ID {appId}); recovery credentials saved locally until Key Vault storage succeeds.");
+        }
+        else
+        {
+            terminal?.WriteLine($"[dsf] Resuming GitHub App {uninstalled.AppId} from saved recovery credentials; no new App will be created.");
         }
 
+        var installationUrl = string.IsNullOrWhiteSpace(uninstalled.Slug)
+            ? "https://github.com/settings/apps"
+            : $"https://github.com/apps/{Uri.EscapeDataString(uninstalled.Slug)}/installations/new";
+        terminal?.WriteLine("[dsf] App creation and installation are separate steps. Open this URL and install the App for selected repositories:");
+        terminal?.WriteLine(installationUrl);
+        terminal?.WriteLine("[dsf] Waiting for GitHub App installation (up to 5 minutes; checking every 5 seconds)...");
         var installation = await discoverInstallation(uninstalled, cancellationToken);
         if (string.IsNullOrWhiteSpace(installation.Id))
         {
             throw new InvalidOperationException("GitHub App installation discovery returned no installation id.");
         }
 
+        terminal?.WriteLine($"[dsf] GitHub App installation found (ID {installation.Id}, repositories: {installation.Selection}).");
         return uninstalled with
         {
             InstallationId = installation.Id,
@@ -398,69 +437,153 @@ internal sealed class GitHubAppBootstrapClient(
     private static string Base64Url(byte[] value) =>
         Convert.ToBase64String(value).TrimEnd('=').Replace('+', '-').Replace('/', '_');
 
-    private static async Task<string> CaptureCodeAsync(
+    internal static async Task<string> CaptureCodeAsync(
         ICliTerminal terminal,
         string appName,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Uri? callbackUri = null,
+        Func<string, CancellationToken, Task>? openBrowser = null)
     {
-        using var listener = new GitHubAppLoopbackListener(CallbackUri);
+        using var listener = new GitHubAppLoopbackListener(callbackUri ?? CallbackUri);
         listener.Start();
         var manifest = GitHubAppManifest.Create(appName, listener.CallbackUri) with
         {
             Url = listener.ManifestUri.AbsoluteUri,
         };
-        if (GitHubAppBrowserOpener.ShouldLaunch(terminal.Capabilities))
-        {
-            TryOpenBrowser(listener.ManifestUri.AbsoluteUri);
-        }
         terminal.WriteLine("[dsf] Open this GitHub App manifest URL in a browser:");
         terminal.WriteLine(listener.ManifestUri.AbsoluteUri);
         terminal.WriteLine(
-            "[dsf] Complete GitHub App creation and selected-repositories installation. "
-            + "The browser callback completes automatically; paste it here if needed.");
+            "[dsf] Create the GitHub App, then return here. Installation follows after the creation callback.");
+        terminal.WriteLine(
+            $"[dsf] Remote/WSL browser cannot reach localhost? Forward port {listener.CallbackUri.Port}, "
+            + "or paste the redirected callback URL/code below.");
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromMinutes(15));
         var callback = listener.WaitForCodeAsync(manifest, timeout.Token);
-        if (!terminal.Capabilities.IsInteractive)
-        {
-            return await callback;
-        }
-
-        var pasted = Task.Run<string?>(
-            () => terminal.Prompt("[dsf] GitHub callback: "),
-            cancellationToken);
-        var completed = await Task.WhenAny((Task)callback, pasted);
-        if (completed == callback)
-        {
-            return await callback;
-        }
-
-        var raw = await pasted;
-        return string.IsNullOrWhiteSpace(raw) ? await callback : raw;
-    }
-
-    private static void TryOpenBrowser(string url)
-    {
+        Task<string?>? pasted = null;
         try
         {
-            var launch = GitHubAppBrowserOpener.Resolve();
+            if (GitHubAppBrowserOpener.ShouldLaunch(terminal.Capabilities))
+            {
+                await (openBrowser ?? ((url, token) => TryOpenBrowserAsync(terminal, url, token)))(
+                    listener.ManifestUri.AbsoluteUri, timeout.Token);
+            }
+
+            terminal.WriteLine("[dsf] Waiting for GitHub App creation callback (up to 15 minutes)...");
+            string raw;
+            if (terminal.Capabilities.IsInteractive && !callback.IsCompleted)
+            {
+                pasted = terminal.PromptSecretAsync(
+                    "[dsf] Optional: paste callback URL/code, then Enter (input hidden): ", timeout.Token);
+                var completed = await Task.WhenAny((Task)callback, pasted);
+                raw = completed == callback ? await callback : (await pasted ?? string.Empty);
+                if (string.IsNullOrWhiteSpace(raw))
+                {
+                    raw = await callback;
+                }
+            }
+            else
+            {
+                raw = await callback;
+            }
+
+            var code = GitHubAppManifest.ParseCode(raw);
+            await timeout.CancelAsync();
+            await ObserveCancellationAsync(pasted);
+            terminal.WriteLine("[dsf] GitHub App creation callback received.");
+            return code;
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new InvalidOperationException(
+                "Timed out waiting for the GitHub App creation callback after 15 minutes. "
+                + "Check localhost connectivity or rerun bootstrap with --github-callback '<callback-url-or-code>'.");
+        }
+        finally
+        {
+            await timeout.CancelAsync();
+            await ObserveCancellationAsync(callback);
+            await ObserveCancellationAsync(pasted);
+        }
+    }
+
+    private static async Task ObserveCancellationAsync(Task? task)
+    {
+        if (task is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await task;
+        }
+        catch (OperationCanceledException)
+        {
+            // The losing callback/input operation is cancelled and joined before continuing.
+        }
+    }
+
+    internal static async Task TryOpenBrowserAsync(
+        ICliTerminal terminal,
+        string url,
+        CancellationToken cancellationToken,
+        Func<ProcessStartInfo, IManagedProcess>? processFactory = null,
+        GitHubAppBrowserLaunch? launch = null)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(10));
+        try
+        {
+            launch ??= GitHubAppBrowserOpener.Resolve();
             if (launch is null)
             {
+                terminal.WriteErrorLine("[dsf] Browser opener unavailable. Open the printed URL manually.");
                 return;
             }
 
-            var startInfo = new ProcessStartInfo(launch.FileName) { UseShellExecute = false };
+            var startInfo = new ProcessStartInfo(launch.FileName)
+            {
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            };
             if (launch.Subcommand is not null)
             {
                 startInfo.ArgumentList.Add(launch.Subcommand);
             }
 
             startInfo.ArgumentList.Add(url);
-            Process.Start(startInfo);
+            using var process = (processFactory ?? (info => new RealManagedProcess(new Process { StartInfo = info })))(startInfo);
+            process.Start();
+            var stdout = process.ReadStandardOutputAsync(timeout.Token);
+            var stderr = process.ReadStandardErrorAsync(timeout.Token);
+            try
+            {
+                await process.WaitForExitAsync(timeout.Token);
+            }
+            finally
+            {
+                await ObserveCancellationAsync(stdout);
+                await ObserveCancellationAsync(stderr);
+            }
+
+            if (process.ExitCode != 0)
+            {
+                terminal.WriteErrorLine(
+                    $"[dsf] Browser could not be opened automatically ({launch.FileName} exited {process.ExitCode}). "
+                    + "Open the printed URL manually; bootstrap is still waiting for the callback.");
+            }
         }
-        catch (Exception exception) when (exception is System.ComponentModel.Win32Exception or InvalidOperationException)
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            // The operator can still paste the callback code without a local browser opener.
+            terminal.WriteLine(
+                "[dsf] Browser opener is still running; continuing to wait for the callback. "
+                + "If no browser opened, open the printed URL manually.");
+        }
+        catch (Exception exception) when (exception is System.ComponentModel.Win32Exception or InvalidOperationException or IOException)
+        {
+            terminal.WriteErrorLine("[dsf] Browser could not be opened automatically. Open the printed URL manually.");
         }
     }
 }
