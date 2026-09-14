@@ -73,6 +73,7 @@ internal static class PlannedInstanceDefinition
                 NamePrefix = namePrefix,
                 ResourceGroup = resourceGroup,
                 DeploymentName = $"dsf-{product}",
+                InfrastructureSubnetId = existing?.Azure.InfrastructureSubnetId,
                 SreAgent = new SreAgentSettings
                 {
                     Name = $"dsf-sre-{product}",

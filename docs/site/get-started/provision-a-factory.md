@@ -42,6 +42,47 @@ For an immutable runtime image, first generate the instance manifest with
 digest, then run the same command without the dry-run flags. Repeated `dsf new`
 invocations preserve that image, and the preview reports the selected image.
 
+## Private backing-service connectivity
+
+Inherited Azure Policy can disable Key Vault or Cosmos public access even when a
+deployment requests public access. Do not relax that policy: connect the runtime
+through private endpoints and private DNS instead.
+
+Set `azure.infrastructureSubnetId` in the saved instance manifest to the full ID
+of a subnet delegated to `Microsoft.App/environments`. Repeated `dsf new` calls
+preserve it and select a separate VNet-integrated, Consumption-profile Container
+Apps environment. Omit this field to retain the default environment; an empty or
+malformed value is rejected. Private endpoints and DNS must be reachable on the
+chosen VNet before expecting healthy runtime data-plane access.
+
+For existing backing services, including a partially completed new factory,
+`infra/instance-private-network.bicep` creates an isolated VNet, delegated app
+subnet, and private endpoints/DNS for that resource group's Key Vault and Cosmos:
+
+```bash
+az deployment group create \
+  --resource-group rg-dsf-<product> --name dsf-private-network \
+  --template-file infra/instance-private-network.bicep \
+  --parameters namePrefix=<effective-prefix> \
+    keyVaultName=<existing-vault> cosmosAccountName=<existing-cosmos> \
+  --query properties.outputs.infrastructureSubnetId.value --output tsv
+```
+
+Use the manifest's effective `azure.namePrefix`, not the unnormalized command-line
+base prefix. Save the returned subnet ID in `azure.infrastructureSubnetId`, then
+rerun provisioning. The default ranges are `10.173.0.0/16`, `10.173.0.0/23`
+(apps), and `10.173.2.0/24` (endpoints); override the three address-prefix
+parameters before deployment when peering requires different, nonoverlapping
+ranges. This template does not change either service's public-access policy.
+External private Search/model services need their own authorized connectivity.
+
+!!! warning "Existing apps cannot move environments in place"
+    Switching between default and VNet-integrated environments is not an automatic
+    migration. Pause the factory, retain its desired configuration, and recreate
+    only its Container Apps in the new environment. Do not delete backing services
+    or another factory's resources. Remove the superseded environment only after
+    the replacement apps resolve private DNS and authenticate to the real services.
+
 ## Enable Decide sources and judgment
 
 Source agents default to disabled. Supply `--decide-config <path>` to provision
@@ -96,8 +137,11 @@ filing only for a valid unanimous-go jury outcome.
 
 Azure Monitor queries must return exactly one table with nonempty string
 `Reference` and `Summary` columns. For example, a Container Apps log query can
-project `Reference=strcat("azuremonitor://", _ResourceId, "/", tostring(TimeGenerated))`
-and `Summary=Log_s`. Choose references that identify the actual source record.
+project `Reference=strcat("azuremonitor://<workspace-id>/", ContainerAppName_s, "/", ContainerGroupName_s, "/", tostring(TimeGenerated))`
+and `Summary=Log_s`, replacing `<workspace-id>` with the actual workspace ID.
+Choose references that identify the actual source record; `_ResourceId` can be
+empty in Container Apps custom logs. Use Kusto's `tostring` for timestamps, not
+the .NET-only `format_datetime(..., "o")` format.
 Partial or truncated query results fail rather than silently losing evidence.
 For a local proof, `AZURE_TOKEN_CREDENTIALS=AzureCliCredential` selects the
 existing `az login` identity without waiting for unavailable hosted credentials;
@@ -149,6 +193,10 @@ A complete, isolated factory for the product:
   `infra/main.bicep`,
 - a product record in the owner App Configuration index,
 - an SRE Agent wired to production scope.
+
+The SRE Agent uses the provider-supported, approval-required `Review` mode with
+`Low` access. Operation maturity controls its separately scoped remediation RBAC;
+provisioning does not enable `Autonomous` mode.
 
 ```mermaid
 flowchart TD

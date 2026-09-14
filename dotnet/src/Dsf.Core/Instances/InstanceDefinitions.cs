@@ -178,6 +178,7 @@ public static class InstanceDefinitions
         }
 
         definition.Runtime.Decide.Validate();
+        definition.Azure?.Validate();
         return definition;
     }
 

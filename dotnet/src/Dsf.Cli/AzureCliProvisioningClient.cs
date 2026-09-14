@@ -209,6 +209,10 @@ internal sealed class AzureCliProvisioningClient : IAzureProvisioningClient
             $"operationMaturity={request.OperationMaturity}",
             $"creationMaturity={request.CreationMaturity}",
         };
+        if (request.InfrastructureSubnetId is not null)
+        {
+            parameters.Add($"infrastructureSubnetId={request.InfrastructureSubnetId}");
+        }
         if (request.Decide.EnabledSourceAgentKinds.Count > 0)
         {
             parameters.Add($"enabledSourceAgentKinds={JsonSerializer.Serialize(request.Decide.EnabledSourceAgentKinds)}");

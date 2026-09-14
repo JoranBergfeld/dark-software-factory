@@ -8,6 +8,54 @@ namespace Dsf.Cli.Tests;
 public sealed class DecideProvisioningTests
 {
     [Fact]
+    public async Task Saved_infrastructure_subnet_survives_replanning_and_reaches_bicep()
+    {
+        const string subnet = "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Network/virtualNetworks/factory/subnets/apps";
+        var existing = PlannedInstanceDefinition.Build(
+            "demo", "acme", "demo", "private", "aca", "dev", "swedencentral",
+            "medium", "low", "demo", null, null, null, null, null, DateTimeOffset.UnixEpoch);
+        var document = System.Text.Json.Nodes.JsonNode.Parse(InstanceDefinitions.Serialize(existing))!;
+        document["azure"]!["infrastructureSubnetId"] = subnet;
+        existing = InstanceDefinitions.Parse(document.ToJsonString(), "instance.json");
+        var replanned = PlannedInstanceDefinition.Build(
+            "demo", "acme", "demo", "private", "aca", "dev", "swedencentral",
+            "medium", "low", "demo", null, null, null, null, null, DateTimeOffset.UnixEpoch, existing);
+        var saved = System.Text.Json.Nodes.JsonNode.Parse(InstanceDefinitions.Serialize(replanned))!;
+        Assert.Equal(subnet, saved["azure"]!["infrastructureSubnetId"]?.GetValue<string>());
+        Assert.Equal(existing.Azure, replanned.Azure);
+        Assert.Equal(existing.Azure.GetHashCode(), replanned.Azure.GetHashCode());
+        Assert.NotEqual(existing.Azure, existing.Azure with { InfrastructureSubnetId = null });
+
+        var bicep = Path.GetTempFileName();
+        try
+        {
+            var runner = new RecordingAzureCliRunner(new AzureCliInvocationResult(0, "{}", ""));
+            var request = Assert.Single(AzureProvisioningPlan.Build(replanned, ".").Requests.OfType<DeployTopologyRequest>());
+            await new AzureCliProvisioningClient(runner).DeployTopologyAsync(
+                request with { BicepPath = bicep }, CancellationToken.None);
+            Assert.Contains($"infrastructureSubnetId={subnet}", Assert.Single(runner.Invocations));
+        }
+        finally
+        {
+            File.Delete(bicep);
+        }
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("not-a-subnet")]
+    public void Invalid_infrastructure_subnet_is_rejected_when_loading(string subnet)
+    {
+        var definition = PlannedInstanceDefinition.Build(
+            "demo", "acme", "demo", "private", "aca", "dev", "swedencentral",
+            "medium", "low", "demo", null, null, null, null, null, DateTimeOffset.UnixEpoch);
+        var document = System.Text.Json.Nodes.JsonNode.Parse(InstanceDefinitions.Serialize(definition))!;
+        document["azure"]!["infrastructureSubnetId"] = subnet;
+
+        Assert.Throws<InstanceDefinitionException>(() => InstanceDefinitions.Parse(document.ToJsonString(), "instance.json"));
+    }
+
+    [Fact]
     public void Replanning_preserves_the_pinned_runtime_image()
     {
         const string image = "ghcr.io/acme/dsf-runtime:sha-accepted";
@@ -60,6 +108,10 @@ public sealed class DecideProvisioningTests
             InstanceDefinitions.Write(pinned with
             {
                 Runtime = pinned.Runtime with { Image = "ghcr.io/acme/dsf-runtime:sha-accepted" },
+                Azure = pinned.Azure with
+                {
+                    InfrastructureSubnetId = "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Network/virtualNetworks/factory/subnets/apps",
+                },
             }, root);
             Assert.Equal(0, await CliApplication.InvokeAsync(args, CancellationToken.None, terminal));
 
@@ -70,6 +122,8 @@ public sealed class DecideProvisioningTests
             Assert.Equal(["azuremonitor"], topology.Decide.EnabledSourceAgentKinds);
             Assert.Equal("ghcr.io/acme/dsf-runtime:sha-accepted", topology.RuntimeImage);
             Assert.Contains("runtimeImage=ghcr.io/acme/dsf-runtime:sha-accepted", terminal.Output, StringComparison.Ordinal);
+            Assert.Equal(definition.Azure.InfrastructureSubnetId, topology.InfrastructureSubnetId);
+            Assert.Contains($"infrastructureSubnetId={definition.Azure.InfrastructureSubnetId}", terminal.Output, StringComparison.Ordinal);
             Assert.Equal("workspace-id", topology.Decide.AzureMonitorWorkspaceId);
             Assert.Equal("AppExceptions | take 20", topology.Decide.AzureMonitorQuery);
             Assert.Equal(3, topology.Decide.JuryModels.Count);

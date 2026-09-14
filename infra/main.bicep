@@ -79,6 +79,9 @@ param softDeleteRetentionInDays int = 90
 @description('Gate public network access to backing services. Defaults to false (off). Enable only for dev environments lacking private endpoint connectivity.')
 param allowPublicNetworkAccess bool = false
 
+@description('Existing subnet delegated to Microsoft.App/environments. Nonempty selects a separate VNet-integrated Container Apps environment; backing-service private endpoints and DNS must be provisioned on that VNet.')
+param infrastructureSubnetId string = ''
+
 @description('Operation-phase autonomy dial (low/medium/high). At medium/high, the runtime auto-assigns the GitHub Coding Agent to incident issues the SRE Agent files, instead of requiring a human to notice and assign it.')
 @allowed(['low', 'medium', 'high'])
 param operationMaturity string = 'low'
@@ -433,10 +436,19 @@ resource foundryOpenAIUserDeployerAssignment 'Microsoft.Authorization/roleAssign
 // ---------------------------------------------------------------------------
 
 resource containerEnv 'Microsoft.App/managedEnvironments@2025-01-01' = {
-  name: '${namePrefix}-cae-${suffix}'
+  name: empty(infrastructureSubnetId) ? '${namePrefix}-cae-${suffix}' : '${namePrefix}-cae-private-${suffix}'
   location: location
   tags: tags
   properties: {
+    vnetConfiguration: empty(infrastructureSubnetId) ? null : {
+      infrastructureSubnetId: infrastructureSubnetId
+    }
+    workloadProfiles: empty(infrastructureSubnetId) ? null : [
+      {
+        name: 'Consumption'
+        workloadProfileType: 'Consumption'
+      }
+    ]
     appLogsConfiguration: {
       destination: 'log-analytics'
       logAnalyticsConfiguration: {

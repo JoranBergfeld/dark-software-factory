@@ -31,6 +31,7 @@ internal sealed record AzureProvisioningPlan(IReadOnlyList<AzureProvisioningRequ
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(repoRoot);
         definition.Runtime.Decide.Validate();
+        definition.Azure.Validate();
 
         var azure = definition.Azure;
         var tags = new Dictionary<string, string>(StringComparer.Ordinal)
@@ -62,6 +63,7 @@ internal sealed record AzureProvisioningPlan(IReadOnlyList<AzureProvisioningRequ
                     definition.Product.CreationMaturity)
                 {
                     Decide = definition.Runtime.Decide,
+                    InfrastructureSubnetId = azure.InfrastructureSubnetId,
                 },
                 new DeploySreAgentRequest(
                     azure.SreAgent.Location,
@@ -152,6 +154,7 @@ internal sealed record DeployTopologyRequest(
     : AzureProvisioningRequest("deploy_topology")
 {
     public DecideDeploymentSettings Decide { get; init; } = new();
+    public string? InfrastructureSubnetId { get; init; }
 }
 
 internal sealed record DeploySreAgentRequest(
