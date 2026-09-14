@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-artifact_dir="${1:?artifact directory required}"
+artifact_dir="$(cd "${1:?artifact directory required}" && pwd)"
 rid="${2:?rid required}"
+eng="$(cd "$(dirname "$0")" && pwd)"
 
 case "$rid" in
-  win-*) exe="$artifact_dir/dsf.exe" ;;
-  *) exe="$artifact_dir/dsf" ;;
+  win-*) exe="$artifact_dir/dsf.exe"; runtime="$artifact_dir/runtime/dsf-runtime.exe" ;;
+  *) exe="$artifact_dir/dsf"; runtime="$artifact_dir/runtime/dsf-runtime" ;;
 esac
 
 if [[ ! -f "$exe" ]]; then
@@ -14,7 +15,11 @@ if [[ ! -f "$exe" ]]; then
   exit 1
 fi
 
-chmod +x "$exe" 2>/dev/null || true
+test -s "$runtime"
+chmod +x "$exe" "$runtime"
+for template in owner-keyvault owner-secrets main sre-agent copy-owner-secret; do
+  test -s "$artifact_dir/assets/infra/$template.json"
+done
 
 host_os="$(uname -s | tr '[:upper:]' '[:lower:]')"
 host_arch="$(uname -m)"
@@ -31,7 +36,7 @@ case "$rid:$host_os:$host_arch" in
 esac
 
 if [[ "$can_execute" == "true" ]]; then
-  "$exe" --help >/dev/null
+  dotnet run --project "$eng/InstallationSmoke" -- --cli "$exe" --payload "$artifact_dir"
 else
   test -s "$exe"
   echo "metadata smoke passed for non-native $rid on $host_os/$host_arch"

@@ -23,25 +23,26 @@ dsf serve-orchestrator --product <product> --loop --interval 300
 
 ### Packaged CLI and runtime host
 
-The packaged global tool and release archive publish `dsf` (`Dsf.Cli`) only. Runtime verbs
-(`run`, `sweep`, `serve-orchestrator`, and `serve-agent`) are forwarded to a separate
-`dsf-runtime` executable; they do not run from a standalone packaged `dsf`.
+The global tool and every release archive include a matching runtime host under `runtime/`.
+`dsf` automatically forwards `run`, `sweep`, `serve-orchestrator`, `serve-agent`, and
+`poll-outcomes` to that host. No separate build/install or environment override is needed.
+Source invocation also builds and resolves the matching host automatically.
 
-Deploy or run the runtime host separately through a source or service deployment. For a local `dsf`
-front door, point `DSF_RUNTIME_HOST` at an existing, separately deployed or built runtime-host
-executable before using a runtime verb:
+`DSF_RUNTIME_HOST=/absolute/path/to/dsf-runtime` remains an advanced override for a
+custom executable. Unset it to use the bundled version. Missing/corrupt bundle errors
+require reinstalling the tool or re-extracting the complete archive, not cloning this repository.
 
-```bash
-export DSF_RUNTIME_HOST=/absolute/path/to/dsf-runtime
-```
-
-With `DSF_RUNTIME_HOST` configured, manual operator checks use the `dsf` front door:
+Manual operator checks use the `dsf` front door:
 
 ```bash
 dsf run --product <product> --signal /absolute/path/to/operator-signal.json --dry-run
 dsf sweep --product <product> --dry-run
 dsf serve-agent --kind azuremonitor --host 127.0.0.1 --port 8082
 ```
+
+These commands launch **locally**, not inside the deployed factory. Bundling does not grant
+Azure authentication, bypass firewalls, or provide access to internal source-agent ingress.
+The existing authorized network-path requirements below still apply.
 
 ### Sweep controls and live acceptance
 

@@ -72,7 +72,7 @@ public sealed class CliSurfaceTests
               --dry-run                                              preview only: print the what-if plan without running steps
               --no-charter                                           skip the post-provision charter prompt
               --write-plan                                           with --dry-run, still write the instance manifest
-              --config-root <config-root>                            override repo root where config/instances/ is written
+              --config-root <config-root>                            override instance output root where config/instances/ is written
               --owner-keyvault-uri <owner-keyvault-uri>              owner Key Vault URI
               --owner-appconfig-endpoint <owner-appconfig-endpoint>  owner App Configuration endpoint
               --admin-principal-id <admin-principal-id>              human owner/governance principal object id
@@ -354,7 +354,7 @@ public sealed class CliSurfaceTests
     [Fact]
     public async Task Runtime_verb_reports_a_missing_runtime_host_by_path()
     {
-        var missing = Path.Combine(Path.GetTempPath(), $"dsf-runtime-{Guid.NewGuid():N}");
+        var missing = Path.Combine(Directory.GetCurrentDirectory(), $"dsf-runtime-{Guid.NewGuid():N}");
         var env = new Dictionary<string, string?>
         {
             ["DSF_PRODUCT"] = "acme",
@@ -366,6 +366,40 @@ public sealed class CliSurfaceTests
         Assert.Equal(1, result.ExitCode);
         Assert.Equal(string.Empty, result.Stdout);
         Assert.Contains(missing, result.Stderr);
+    }
+
+    [Fact]
+    public async Task Runtime_override_preserves_real_argument_boundaries_output_environment_and_exit_code()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var executable = Path.Combine(Directory.GetCurrentDirectory(), $"runtime host {Guid.NewGuid():N}.sh");
+        try
+        {
+            await File.WriteAllTextAsync(executable,
+                "#!/bin/sh\nprintf '<%s>\\n' \"$@\"\nprintf '%s\\n' \"$DSF_LAUNCHER_TEST_VALUE\" >&2\nexit 37\n");
+            File.SetUnixFileMode(executable,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            var signal = "a path/with \"quotes\" 雪 $HOME; echo nope.json";
+            var env = new Dictionary<string, string?>
+            {
+                [DsfProcess.RuntimeHostEnvironmentVariable] = executable,
+                ["DSF_LAUNCHER_TEST_VALUE"] = "inherited unchanged",
+            };
+
+            var result = await DsfProcess.RunAsync(env, "run", "--signal", signal);
+
+            Assert.Equal(37, result.ExitCode);
+            Assert.Equal($"<run>\n<--signal>\n<{signal}>\n", result.Stdout);
+            Assert.Equal("inherited unchanged\n", result.Stderr);
+        }
+        finally
+        {
+            File.Delete(executable);
+        }
     }
 
     [Fact]
@@ -445,17 +479,18 @@ public sealed class CliSurfaceTests
             {
                 startInfo.Environment.Remove(name);
             }
-            // The `dsf` front door launches the runtime host for every runtime verb.
-            // Installed side by side in production; in the test build tree the two
-            // projects have separate output directories, so point the CLI at the
-            // runtime host the same build just produced.
-            startInfo.Environment[RuntimeHostEnvironmentVariable] = FindRuntimeHostExecutable();
+            startInfo.Environment.Remove(RuntimeHostEnvironmentVariable);
             foreach (var entry in env ?? new Dictionary<string, string?>())
             {
                 startInfo.Environment[entry.Key] = entry.Value;
             }
 
             startInfo.ArgumentList.Add("run");
+            startInfo.ArgumentList.Add("--no-build");
+            startInfo.ArgumentList.Add("--configuration");
+            startInfo.ArgumentList.Add(AppContext.BaseDirectory.Contains(
+                $"{Path.DirectorySeparatorChar}Release{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
+                ? "Release" : "Debug");
             startInfo.ArgumentList.Add("--project");
             startInfo.ArgumentList.Add("src/Dsf.Cli/Dsf.Cli.csproj");
             startInfo.ArgumentList.Add("--");
@@ -487,24 +522,6 @@ public sealed class CliSurfaceTests
 
         /// <summary>Env var the CLI reads to locate the runtime host executable.</summary>
         public const string RuntimeHostEnvironmentVariable = "DSF_RUNTIME_HOST";
-
-        /// <summary>
-        /// The <c>dsf-runtime</c> executable this test run's build produced, resolved
-        /// from the configuration the test assembly itself was built in.
-        /// </summary>
-        public static string FindRuntimeHostExecutable()
-        {
-            var configuration = AppContext.BaseDirectory.Contains(
-                $"{Path.DirectorySeparatorChar}Release{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
-                ? "Release"
-                : "Debug";
-            var fileName = OperatingSystem.IsWindows() ? "dsf-runtime.exe" : "dsf-runtime";
-            var path = Path.Combine(
-                FindSolutionRoot().FullName, "src", "Dsf.Runtime", "bin", configuration, "net10.0", fileName);
-
-            Assert.True(File.Exists(path), $"Expected the runtime host executable to be built at {path}.");
-            return path;
-        }
 
         public static DirectoryInfo FindSolutionRoot()
         {

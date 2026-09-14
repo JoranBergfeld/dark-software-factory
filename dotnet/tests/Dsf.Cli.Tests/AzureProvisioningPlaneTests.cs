@@ -7,6 +7,31 @@ namespace Dsf.Cli.Tests;
 public sealed class AzureProvisioningPlaneTests
 {
     [Fact]
+    public async Task New_preflight_failure_prevents_github_and_azure_mutations()
+    {
+        var terminal = PlainTerminal();
+        var github = new RecordingGitHubProvisioningClient();
+        var azure = new RecordingAzureProvisioningClient
+        {
+            OnPreflight = () => throw new InvalidOperationException("preflight failed"),
+        };
+
+        var exitCode = await CliApplication.InvokeAsync(
+            [
+                "new", "--product", "paritydemo", "--owner", "acme",
+                "--owner-appconfig-endpoint", "https://owner.azconfig.io",
+                "--config-root", ArtifactRoot(),
+            ],
+            CancellationToken.None, terminal, github, azure,
+            new RecordingAppConfigurationClient(), new RecordingCharterRepositoryClient(null));
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("preflight failed", terminal.Error);
+        Assert.Empty(github.Requests);
+        Assert.Empty(azure.Requests);
+    }
+
+    [Fact]
     public async Task Execute_reports_azure_operations_before_the_client_starts()
     {
         var terminal = PlainTerminal();
@@ -23,7 +48,7 @@ public sealed class AzureProvisioningPlaneTests
             },
         };
 
-        await AzureProvisioningPlan.Build(definition, "/repo-root").ExecuteAsync(
+        await AzureProvisioningPlan.Build(definition).ExecuteAsync(
             client, CancellationToken.None, terminal);
 
         Assert.Contains("Deploying Azure backing services", terminal.Output);
@@ -58,7 +83,7 @@ public sealed class AzureProvisioningPlaneTests
     [Fact]
     public void Plan_uses_expected_request_shapes()
     {
-        var plan = AzureProvisioningPlan.Build(SampleDefinition(), "/repo-root");
+        var plan = AzureProvisioningPlan.Build(SampleDefinition());
 
         Assert.Collection(
             plan.Requests,
@@ -78,7 +103,7 @@ public sealed class AzureProvisioningPlaneTests
                 Assert.Equal("deploy_topology", topology.Method);
                 Assert.Equal("rg-dsf-paritydemo", topology.ResourceGroup);
                 Assert.Equal("dsf-paritydemo", topology.DeploymentName);
-                Assert.Equal("/repo-root/infra/main.bicep".Replace('/', Path.DirectorySeparatorChar), topology.BicepPath);
+                Assert.Equal(Path.Combine(AppContext.BaseDirectory, "assets", "infra", "main.json"), topology.TemplatePath);
                 Assert.Equal("parityde0000", topology.NamePrefix);
                 Assert.Equal("dev", topology.EnvironmentName);
                 Assert.Equal("swedencentral", topology.Location);
@@ -95,7 +120,7 @@ public sealed class AzureProvisioningPlaneTests
                 Assert.Equal("dsf-sre-paritydemo", sreAgent.AgentName);
                 Assert.Equal("rg-dsf-sre-paritydemo", sreAgent.AgentResourceGroup);
                 Assert.Equal(["rg-dsf-paritydemo"], sreAgent.TargetResourceGroups);
-                Assert.Equal("/repo-root/infra/sre-agent.bicep".Replace('/', Path.DirectorySeparatorChar), sreAgent.BicepPath);
+                Assert.Equal(Path.Combine(AppContext.BaseDirectory, "assets", "infra", "sre-agent.json"), sreAgent.TemplatePath);
                 // Not known until the topology deployment runs -- ExecuteAsync threads these in.
                 Assert.Equal("", sreAgent.AppInsightsId);
                 Assert.Equal("", sreAgent.LogAnalyticsId);
@@ -108,7 +133,7 @@ public sealed class AzureProvisioningPlaneTests
         var definition = SampleDefinition();
         definition = definition with { Product = definition.Product with { CreationMaturity = "high" } };
 
-        var topology = Assert.Single(AzureProvisioningPlan.Build(definition, "/repo-root")
+        var topology = Assert.Single(AzureProvisioningPlan.Build(definition)
             .Requests.OfType<DeployTopologyRequest>());
 
         Assert.Equal("high", topology.CreationMaturity);
@@ -119,7 +144,7 @@ public sealed class AzureProvisioningPlaneTests
     {
         var azure = new RecordingAzureProvisioningClient();
 
-        await AzureProvisioningPlan.Build(SampleDefinition(), "/repo-root").ExecuteAsync(azure, CancellationToken.None);
+        await AzureProvisioningPlan.Build(SampleDefinition()).ExecuteAsync(azure, CancellationToken.None);
 
         var sreRequest = Assert.IsType<DeploySreAgentRequest>(azure.Requests[2]);
         Assert.Equal(azure.TopologyOutputs["appInsightsId"], sreRequest.AppInsightsId);
@@ -141,7 +166,7 @@ public sealed class AzureProvisioningPlaneTests
             },
         };
 
-        await AzureProvisioningPlan.Build(definition, "/repo-root").ExecuteAsync(azure, CancellationToken.None);
+        await AzureProvisioningPlan.Build(definition).ExecuteAsync(azure, CancellationToken.None);
 
         var copy = Assert.IsType<CopyOwnerAppPrivateKeyRequest>(azure.Requests[2]);
         Assert.Equal("https://kv-owner.vault.azure.net/", copy.OwnerKeyVaultUri);
@@ -154,7 +179,7 @@ public sealed class AzureProvisioningPlaneTests
     {
         var azure = new RecordingAzureProvisioningClient();
 
-        var result = await AzureProvisioningPlan.Build(SampleDefinition(), "/repo-root")
+        var result = await AzureProvisioningPlan.Build(SampleDefinition())
             .ExecuteAsync(azure, CancellationToken.None);
         var updated = result.ApplyTo(SampleDefinition());
         var json = InstanceDefinitions.Serialize(updated);
@@ -327,6 +352,15 @@ internal sealed record UnknownProvisioningRequest() : AzureProvisioningRequest("
 internal sealed class RecordingAzureProvisioningClient : IAzureProvisioningClient
 {
     public List<AzureProvisioningRequest> Requests { get; } = [];
+
+    public Action? OnPreflight { get; init; }
+
+    public Task PreflightAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        OnPreflight?.Invoke();
+        return Task.CompletedTask;
+    }
 
     public IReadOnlyDictionary<string, string> TopologyOutputs { get; init; } = new Dictionary<string, string>(StringComparer.Ordinal)
     {

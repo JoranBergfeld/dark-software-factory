@@ -50,8 +50,10 @@ jobs:
           global-json-file: dotnet/global.json
       - name: Restore locked graph
         run: dotnet restore Dsf.sln --locked-mode
+      - name: Install build-time Bicep compiler
+        run: ./eng/install-bicep.sh
       - name: Build
-        run: dotnet build Dsf.sln --no-restore --configuration "$CONFIGURATION"
+        run: dotnet build Dsf.sln --no-restore --configuration "$CONFIGURATION" -p:Version=${{ needs.authorize-release.outputs.version }}
       - name: Test
         run: dotnet test Dsf.sln --no-build --configuration "$CONFIGURATION"
       - name: Pack NuGet global tool
@@ -60,7 +62,9 @@ jobs:
           --no-build
           --configuration "$CONFIGURATION"
           --output "$ARTIFACT_ROOT/nuget"
-          -p:PackageVersion=${{ needs.authorize-release.outputs.version }}
+          -p:Version=${{ needs.authorize-release.outputs.version }}
+      - name: Smoke test installed NuGet tool
+        run: ./eng/smoke-test-tool-package.sh "$ARTIFACT_ROOT/nuget/DarkSoftwareFactory.Cli.${{ needs.authorize-release.outputs.version }}.nupkg"
       - name: Upload NuGet package
         uses: actions/upload-artifact@v7
         with:
@@ -106,6 +110,8 @@ jobs:
           global-json-file: dotnet/global.json
       - name: Restore locked graph
         run: dotnet restore "$CLI_PROJECT" --runtime ${{ matrix.rid }}
+      - name: Install build-time Bicep compiler
+        run: ./eng/install-bicep.sh
       - name: Publish self-contained single-file CLI
         run: >
           dotnet publish "$CLI_PROJECT"
@@ -146,6 +152,10 @@ jobs:
     environment: release-windows-signing
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Setup .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: dotnet/global.json
       - name: Download Windows artifacts
         uses: actions/download-artifact@v8
         with:
@@ -186,6 +196,10 @@ jobs:
     environment: release-macos-notarization
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Setup .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: dotnet/global.json
       - name: Download macOS artifacts
         uses: actions/download-artifact@v8
         with:
@@ -272,6 +286,8 @@ jobs:
               --overwrite
           done
           rm -f "$certificate_path"
+      - name: Smoke test installed signed NuGet tool
+        run: ./dotnet/eng/smoke-test-tool-package.sh dotnet/artifacts/final-artifacts/DarkSoftwareFactory.Cli.*.nupkg
       - name: Write Ed25519 release signing key
         shell: bash
         env:
@@ -334,32 +350,17 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Setup .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: dotnet/global.json
       - name: Download final release bundle
         uses: actions/download-artifact@v8
         with:
           name: dsf-cli-final-release-bundle
           path: dotnet/artifacts/final-artifacts
-      - name: Extract final ${{ matrix.rid }} artifact
-        run: |
-          archive="dotnet/artifacts/final-artifacts/${{ matrix.archive }}"
-          payload="dotnet/artifacts/final-smoke/${{ matrix.rid }}/payload"
-          if [[ ! -f "$archive" ]]; then
-            echo "Missing final artifact for ${{ matrix.rid }}: $archive" >&2
-            exit 1
-          fi
-          mkdir -p "$payload"
-          case "$archive" in
-            *.tar.gz) tar -xzf "$archive" -C "$payload" ;;
-            *.zip)
-              pwsh -NoProfile -Command "Expand-Archive -Path '$archive' -DestinationPath '$payload' -Force"
-              ;;
-            *)
-              echo "Unsupported final artifact archive: $archive" >&2
-              exit 1
-              ;;
-          esac
       - name: Smoke test final ${{ matrix.rid }} CLI bytes
-        run: ./dotnet/eng/smoke-test-release-artifact.sh "dotnet/artifacts/final-smoke/${{ matrix.rid }}/payload" "${{ matrix.rid }}"
+        run: ./dotnet/eng/smoke-test-release-archive.sh "dotnet/artifacts/final-artifacts/${{ matrix.archive }}" "${{ matrix.rid }}"
 
   publish-github-release:
     name: Create GitHub release and upload assets

@@ -15,6 +15,10 @@ This directory is the active Dark Software Factory implementation.
 
 ## Common commands
 
+Source builds require the .NET 10 SDK and Bicep CLI on `PATH` (release builds pin
+Bicep 0.44.1). Bicep is a **build-time** prerequisite, not an installed-CLI prerequisite.
+To use a compiler outside `PATH`, pass `-p:BicepCommand=/absolute/path/to/bicep`.
+
 ```bash
 dotnet restore Dsf.sln --locked-mode
 dotnet build Dsf.sln --no-restore
@@ -47,11 +51,30 @@ dotnet publish src/Dsf.Cli/Dsf.Cli.csproj -c Release -r linux-x64 --self-contain
 Supported release runtime identifiers are `linux-x64`, `linux-arm64`, `osx-x64`,
 `osx-arm64`, `win-x64`, and `win-arm64`.
 
+Keep the entire payload together: `dsf`, `runtime/`, and `assets/infra/`.
+NuGet includes the framework-dependent runtime host and requires the .NET 10 SDK
+(including the ASP.NET Core runtime). Native archives include self-contained CLI and runtime
+executables and require neither the SDK nor a separately installed .NET runtime.
+
+The CLI's build-only runtime dependency builds the matching runtime automatically,
+including for `dotnet run --project src/Dsf.Cli -- sweep --product <product>`.
+`eng/CliBundle.targets` publishes its dependency closure into `runtime/` and compiles
+the five provisioning entrypoints into self-contained ARM JSON under `assets/infra/`.
+Use one `-p:Version=<version>` for build, pack, and publish; when using `--no-build`,
+the configuration and version must match the preceding build.
+
+Offline installation checks (no Azure/GitHub writes):
+
+```bash
+./eng/smoke-test-tool-package.sh artifacts/release/nuget/DarkSoftwareFactory.Cli.<version>.nupkg
+./eng/smoke-test-release-archive.sh <archive.tar.gz> linux-x64
+```
+
 ## Runtime host
 
 `src/Dsf.Runtime` (`dsf-runtime`) is the deployed runtime entrypoint. The `dsf` front door
-resolves it next to itself or from `DSF_RUNTIME_HOST`, then forwards runtime verbs without a
-project reference.
+automatically resolves the bundled host under `runtime/`, then forwards runtime verbs without an
+assembly reference. `DSF_RUNTIME_HOST` remains an advanced override for a custom host executable.
 
 - `run --signal <path> [--dry-run] [--product <product>]` — parse a signal and drive the
   Feature Council conveyor. Dry-run stops at filing and prints the issues it would file.

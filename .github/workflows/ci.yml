@@ -23,6 +23,8 @@ jobs:
           global-json-file: dotnet/global.json
       - name: Restore (locked)
         run: dotnet restore Dsf.sln --locked-mode
+      - name: Install build-time Bicep compiler
+        run: ./eng/install-bicep.sh
       - name: Build
         run: dotnet build Dsf.sln --no-restore --configuration Release
       - name: Parity acceptance gate
@@ -35,6 +37,10 @@ jobs:
         run: dotnet test Dsf.sln --no-build --configuration Release
       - name: Module-reference boundary check
         run: dotnet test tests/Dsf.ModuleBoundaries.Tests --no-build --configuration Release
+      - name: Pack and smoke-test installed CLI
+        run: |
+          dotnet pack src/Dsf.Cli/Dsf.Cli.csproj --no-build --configuration Release --output artifacts/ci-package
+          ./eng/smoke-test-tool-package.sh artifacts/ci-package/DarkSoftwareFactory.Cli.*.nupkg
       - name: Dependency audit
         run: |
           set -euo pipefail

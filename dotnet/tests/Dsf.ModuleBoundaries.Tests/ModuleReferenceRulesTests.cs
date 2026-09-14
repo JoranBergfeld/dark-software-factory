@@ -43,14 +43,27 @@ public sealed class ModuleReferenceRulesTests
         return dir;
     }
 
-    private static IReadOnlyList<string> ReadProjectReferences(FileInfo csproj)
+    private static IReadOnlyList<string> ReadProjectReferences(FileInfo csproj, bool includeBuildOnly = true)
     {
         var doc = XDocument.Load(csproj.FullName);
         return doc.Descendants("ProjectReference")
+            .Where(e => includeBuildOnly || !string.Equals(e.Attribute("ReferenceOutputAssembly")?.Value, "false",
+                StringComparison.OrdinalIgnoreCase))
             .Select(e => e.Attribute("Include")?.Value)
             .Where(v => !string.IsNullOrWhiteSpace(v))
             .Select(v => Path.GetFileNameWithoutExtension(v!.Replace('\\', '/')))
             .ToList()!;
+    }
+
+    [Fact]
+    public void Cli_runtime_dependency_is_build_only()
+    {
+        var project = XDocument.Load(Path.Combine(
+            FindSolutionRoot().FullName, "src", "Dsf.Cli", "Dsf.Cli.csproj"));
+        var runtime = Assert.Single(project.Descendants("ProjectReference"),
+            reference => reference.Attribute("Include")!.Value.Contains("Dsf.Runtime", StringComparison.Ordinal));
+        Assert.Equal("false", runtime.Attribute("ReferenceOutputAssembly")?.Value);
+        Assert.Equal("false", runtime.Attribute("Private")?.Value);
     }
 
     /// <summary>
@@ -120,7 +133,7 @@ public sealed class ModuleReferenceRulesTests
         var csproj = new FileInfo(Path.Combine(root.FullName, "src", projectName, $"{projectName}.csproj"));
         Assert.True(csproj.Exists, $"Expected project file to exist: {csproj.FullName}");
 
-        var actual = ReadProjectReferences(csproj);
+        var actual = ReadProjectReferences(csproj, includeBuildOnly: false);
         var allowed = AllowedReferences[projectName];
 
         var forbidden = actual.Except(allowed).ToList();

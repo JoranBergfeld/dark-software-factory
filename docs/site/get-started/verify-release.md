@@ -8,6 +8,11 @@ release is available today.
 Each published release carries the global-tool package, self-contained CLI archives, release
 metadata, SBOMs, native package metadata, and provenance.
 
+Every tool package and archive contains a version-matched runtime host under `runtime/`
+and five self-contained ARM templates under `assets/infra/`. Keep the installation tree intact.
+NuGet signatures cover the whole package; archive hashes and provenance cover both executables
+and the templates. Individual ARM JSON files do not have executable code signatures.
+
 ## Assets to expect
 
 - `DarkSoftwareFactory.Cli.<version>.nupkg` — signed NuGet global tool package.
@@ -62,7 +67,7 @@ verifies the same signature when the feed enforces a signature trust policy.
 
 ## Verify executable code signatures
 
-The `dsf` executable inside each Windows and macOS archive is code-signed and timestamped
+Both `dsf` and `runtime/dsf-runtime` inside each Windows and macOS archive are code-signed and timestamped
 during release; the Linux archives are not code-signed and rely on hash, SBOM signature, and
 provenance checks above.
 
@@ -70,6 +75,7 @@ Windows (Authenticode) — extract the archive, then:
 
 ```powershell
 Get-AuthenticodeSignature .\dsf.exe | Format-List Status, StatusMessage, SignerCertificate, TimeStamperCertificate
+Get-AuthenticodeSignature .\runtime\dsf-runtime.exe | Format-List Status, StatusMessage, SignerCertificate, TimeStamperCertificate
 ```
 
 `Status` must be `Valid`, the signer certificate must be the expected DSF release certificate,
@@ -81,6 +87,9 @@ macOS (Developer ID and notarization) — extract the archive, then:
 codesign --verify --deep --strict --verbose=2 ./dsf
 codesign --display --verbose=4 ./dsf
 spctl --assess --type execute --verbose ./dsf
+codesign --verify --deep --strict --verbose=2 ./runtime/dsf-runtime
+codesign --display --verbose=4 ./runtime/dsf-runtime
+spctl --assess --type execute --verbose ./runtime/dsf-runtime
 ```
 
 `codesign --verify` must exit zero, the display output must name a `Developer ID Application`

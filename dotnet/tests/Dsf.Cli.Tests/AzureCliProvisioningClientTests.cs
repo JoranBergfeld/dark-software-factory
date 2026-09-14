@@ -5,10 +5,13 @@ namespace Dsf.Cli.Tests;
 
 public sealed class AzureCliProvisioningClientTests
 {
+    private static readonly AzureCliInvocationResult AzureVersion =
+        new(0, """{"azure-cli":"2.77.0"}""", "");
+
     [Fact]
     public async Task EnsureResourceGroup_invokes_az_group_create_with_tags()
     {
-        var runner = new RecordingAzureCliRunner(new AzureCliInvocationResult(0, "", ""));
+        var runner = new RecordingAzureCliRunner(AzureVersion, new AzureCliInvocationResult(0, "", ""));
         var client = new AzureCliProvisioningClient(runner);
 
         var result = await client.EnsureResourceGroupAsync(
@@ -23,7 +26,8 @@ public sealed class AzureCliProvisioningClientTests
             CancellationToken.None);
 
         Assert.Equal("rg-dsf-paritydemo", result.Name);
-        var invocation = Assert.Single(runner.Invocations);
+        Assert.Equal(["version", "--output", "json"], runner.Invocations[0]);
+        var invocation = Assert.Single(runner.Invocations.Skip(1));
         Assert.Equal(
             [
                 "group", "create",
@@ -37,7 +41,7 @@ public sealed class AzureCliProvisioningClientTests
     [Fact]
     public async Task EnsureResourceGroup_failure_fails_loudly_with_stderr()
     {
-        var runner = new RecordingAzureCliRunner(new AzureCliInvocationResult(1, "", "boom"));
+        var runner = new RecordingAzureCliRunner(AzureVersion, new AzureCliInvocationResult(1, "", "boom"));
         var client = new AzureCliProvisioningClient(runner);
 
         var error = await Assert.ThrowsAsync<InvalidOperationException>(
@@ -49,15 +53,15 @@ public sealed class AzureCliProvisioningClientTests
     }
 
     [Fact]
-    public async Task DeployTopology_missing_bicep_template_fails_loudly_before_any_az_invocation()
+    public async Task DeployTopology_missing_arm_template_fails_loudly_before_any_az_invocation()
     {
         var runner = new RecordingAzureCliRunner(new AzureCliInvocationResult(0, "{}", ""));
         var client = new AzureCliProvisioningClient(runner);
 
         var error = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => client.DeployTopologyAsync(SampleTopologyRequest("/nonexistent/main.bicep"), CancellationToken.None));
+            () => client.DeployTopologyAsync(SampleTopologyRequest("/nonexistent/main.json"), CancellationToken.None));
 
-        Assert.Contains("/nonexistent/main.bicep", error.Message, StringComparison.Ordinal);
+        Assert.Contains("/nonexistent/main.json", error.Message, StringComparison.Ordinal);
         Assert.Empty(runner.Invocations);
     }
 
@@ -67,12 +71,12 @@ public sealed class AzureCliProvisioningClientTests
         var bicepPath = TempBicepFile();
         try
         {
-            var runner = new RecordingAzureCliRunner(new AzureCliInvocationResult(0, "{}", ""));
+            var runner = new RecordingAzureCliRunner(AzureVersion, new AzureCliInvocationResult(0, "{}", ""));
             var client = new AzureCliProvisioningClient(runner);
 
             await client.DeployTopologyAsync(SampleTopologyRequest(bicepPath), CancellationToken.None);
 
-            var invocation = Assert.Single(runner.Invocations);
+            var invocation = Assert.Single(runner.Invocations.Skip(1));
             Assert.Equal(
                 [
                     "deployment", "group", "create",
@@ -108,13 +112,13 @@ public sealed class AzureCliProvisioningClientTests
         var bicepPath = TempBicepFile();
         try
         {
-            var runner = new RecordingAzureCliRunner(new AzureCliInvocationResult(0, "{}", ""));
+            var runner = new RecordingAzureCliRunner(AzureVersion, new AzureCliInvocationResult(0, "{}", ""));
             var client = new AzureCliProvisioningClient(runner);
 
             await client.DeployTopologyAsync(
                 SampleTopologyRequest(bicepPath) with { CreationMaturity = "medium" }, CancellationToken.None);
 
-            Assert.Contains("creationMaturity=medium", Assert.Single(runner.Invocations));
+            Assert.Contains("creationMaturity=medium", Assert.Single(runner.Invocations.Skip(1)));
         }
         finally
         {
@@ -128,14 +132,14 @@ public sealed class AzureCliProvisioningClientTests
         var bicepPath = TempBicepFile();
         try
         {
-            var runner = new RecordingAzureCliRunner(new AzureCliInvocationResult(0, "{}", ""));
+            var runner = new RecordingAzureCliRunner(AzureVersion, new AzureCliInvocationResult(0, "{}", ""));
             var client = new AzureCliProvisioningClient(runner);
 
             await client.DeployTopologyAsync(
                 SampleTopologyRequest(bicepPath) with { AdminPrincipalId = null },
                 CancellationToken.None);
 
-            var invocation = Assert.Single(runner.Invocations);
+            var invocation = Assert.Single(runner.Invocations.Skip(1));
             Assert.DoesNotContain(invocation, argument => argument.StartsWith("adminPrincipalId=", StringComparison.Ordinal));
         }
         finally
@@ -167,7 +171,7 @@ public sealed class AzureCliProvisioningClientTests
                   "keyVaultName": {"type": "String", "value": "kv-paritydemo"}
                 }
                 """;
-            var runner = new RecordingAzureCliRunner(new AzureCliInvocationResult(0, stdout, ""));
+            var runner = new RecordingAzureCliRunner(AzureVersion, new AzureCliInvocationResult(0, stdout, ""));
             var client = new AzureCliProvisioningClient(runner);
 
             var result = await client.DeployTopologyAsync(SampleTopologyRequest(bicepPath), CancellationToken.None);
@@ -227,7 +231,7 @@ public sealed class AzureCliProvisioningClientTests
                 }
 
                 """;
-            var runner = new RecordingAzureCliRunner(new AzureCliInvocationResult(0, stdout, ""));
+            var runner = new RecordingAzureCliRunner(AzureVersion, new AzureCliInvocationResult(0, stdout, ""));
             var client = new AzureCliProvisioningClient(runner);
 
             var result = await client.DeploySreAgentAsync(SampleSreAgentRequest(bicepPath), CancellationToken.None);
@@ -238,7 +242,7 @@ public sealed class AzureCliProvisioningClientTests
             Assert.Equal("https://dsf-sre-paritydemo.sre.azure.com", result.AgentEndpoint);
             Assert.Equal("33333333-4444-5555-6666-777777777777", result.AgentPrincipalId);
 
-            var invocation = Assert.Single(runner.Invocations);
+            var invocation = Assert.Single(runner.Invocations.Skip(1));
             Assert.Equal(
                 [
                     "deployment", "sub", "create",
@@ -269,6 +273,7 @@ public sealed class AzureCliProvisioningClientTests
     public async Task CopyOwnerAppPrivateKey_uses_subscription_deployment_without_reading_secret()
     {
         var runner = new RecordingAzureCliRunner(
+            AzureVersion,
             new AzureCliInvocationResult(0, "rg-dsf-owner", ""),
             new AzureCliInvocationResult(0, "rg-dsf-paritydemo", ""),
             new AzureCliInvocationResult(0, "swedencentral", ""),
@@ -282,7 +287,7 @@ public sealed class AzureCliProvisioningClientTests
             CancellationToken.None);
 
         Assert.DoesNotContain(runner.Invocations, invocation => invocation.Contains("secret"));
-        var invocation = runner.Invocations[3];
+        var invocation = runner.Invocations[4];
         Assert.Equal("deployment", invocation[0]);
         Assert.Equal("sub", invocation[1]);
         Assert.Equal("create", invocation[2]);
@@ -294,6 +299,7 @@ public sealed class AzureCliProvisioningClientTests
         Assert.Contains("productResourceGroup=rg-dsf-paritydemo", invocation);
         Assert.Contains("-o", invocation);
         Assert.Contains("none", invocation);
+        Assert.Contains(Path.Combine(AppContext.BaseDirectory, "assets", "infra", "copy-owner-secret.json"), invocation);
     }
 
     [Fact]
@@ -345,8 +351,11 @@ public sealed class AzureCliProvisioningClientTests
 
     private static string TempBicepFile()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"dsf-azure-cli-test-{Guid.NewGuid():N}.bicep");
-        File.WriteAllText(path, "// test fixture\n");
+        var directory = Path.Combine(
+            Directory.GetCurrentDirectory(), ".test-artifacts", "azure-client", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        var path = Path.Combine(directory, "main.json");
+        File.WriteAllText(path, ProvisioningAssetFixture.Template);
         return path;
     }
 }

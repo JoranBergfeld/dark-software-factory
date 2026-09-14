@@ -130,8 +130,8 @@ internal sealed class SystemAzureCliRunner : IAzureCliRunner
 
 /// <summary>
 /// Provisions the Azure side of `dsf new` via the <c>az</c> CLI: the dedicated resource
-/// group, the backing-services topology (<c>infra/main.bicep</c>), and the Azure SRE
-/// Agent (<c>infra/sre-agent.bicep</c>). Only non-secret deployment outputs (endpoints,
+/// group, the shipped backing-services topology and Azure SRE
+/// Agent templates. Only non-secret deployment outputs (endpoints,
 /// resource names/ids) are surfaced to callers — never secret values.
 /// </summary>
 internal sealed class AzureCliProvisioningClient : IAzureProvisioningClient
@@ -159,18 +159,29 @@ internal sealed class AzureCliProvisioningClient : IAzureProvisioningClient
         ];
 
     private readonly IAzureCliRunner runner;
+    private readonly ProvisioningAssets assets;
 
-    internal AzureCliProvisioningClient(IAzureCliRunner runner)
+    internal AzureCliProvisioningClient(IAzureCliRunner runner, ProvisioningAssets? assets = null)
     {
         this.runner = runner;
+        this.assets = assets ?? new ProvisioningAssets();
     }
 
     internal static AzureCliProvisioningClient FromEnvironment() => new(new SystemAzureCliRunner());
+
+    public async Task PreflightAsync(CancellationToken cancellationToken)
+    {
+        assets.Resolve("main.json");
+        assets.Resolve("sre-agent.json");
+        assets.Resolve("copy-owner-secret.json");
+        await ProvisioningAssets.CheckAzureCliAsync(runner, cancellationToken);
+    }
 
     public async Task<AzureResourceGroupProvisioningResult> EnsureResourceGroupAsync(
         EnsureResourceGroupRequest request,
         CancellationToken cancellationToken)
     {
+        await PreflightAsync(cancellationToken);
         var arguments = new List<string>
         {
             "group", "create",
@@ -188,12 +199,9 @@ internal sealed class AzureCliProvisioningClient : IAzureProvisioningClient
         DeployTopologyRequest request,
         CancellationToken cancellationToken)
     {
-        if (!File.Exists(request.BicepPath))
-        {
-            throw new InvalidOperationException(
-                $"Azure provisioning requires the backing-services template at '{request.BicepPath}'.");
-        }
+        ProvisioningAssets.ValidateTemplate(request.TemplatePath);
         request.Decide.Validate();
+        await ProvisioningAssets.CheckAzureCliAsync(runner, cancellationToken);
 
         var parameters = new List<string>
         {
@@ -256,7 +264,7 @@ internal sealed class AzureCliProvisioningClient : IAzureProvisioningClient
             "deployment", "group", "create",
             "-g", request.ResourceGroup,
             "-n", request.DeploymentName,
-            "-f", request.BicepPath,
+            "-f", request.TemplatePath,
             "-p",
         };
         arguments.AddRange(parameters);
@@ -273,11 +281,7 @@ internal sealed class AzureCliProvisioningClient : IAzureProvisioningClient
         DeploySreAgentRequest request,
         CancellationToken cancellationToken)
     {
-        if (!File.Exists(request.BicepPath))
-        {
-            throw new InvalidOperationException(
-                $"Azure provisioning requires the SRE Agent template at '{request.BicepPath}'.");
-        }
+        ProvisioningAssets.ValidateTemplate(request.TemplatePath);
 
         if (string.IsNullOrWhiteSpace(request.AppInsightsId) || string.IsNullOrWhiteSpace(request.LogAnalyticsId))
         {
@@ -285,6 +289,7 @@ internal sealed class AzureCliProvisioningClient : IAzureProvisioningClient
                 "Azure SRE Agent provisioning requires appInsightsId and logAnalyticsId from the "
                 + "backing-services deployment outputs; provision_azure must run first.");
         }
+        await ProvisioningAssets.CheckAzureCliAsync(runner, cancellationToken);
 
         var parameters = new List<string>
         {
@@ -307,7 +312,7 @@ internal sealed class AzureCliProvisioningClient : IAzureProvisioningClient
             "deployment", "sub", "create",
             "-l", request.Location,
             "-n", request.DeploymentName,
-            "-f", request.BicepPath,
+            "-f", request.TemplatePath,
             "-p",
         };
         arguments.AddRange(parameters);
@@ -325,6 +330,8 @@ internal sealed class AzureCliProvisioningClient : IAzureProvisioningClient
         CopyOwnerAppPrivateKeyRequest request,
         CancellationToken cancellationToken)
     {
+        var templatePath = assets.Resolve("copy-owner-secret.json");
+        await ProvisioningAssets.CheckAzureCliAsync(runner, cancellationToken);
         var ownerVaultName = new Uri(request.OwnerKeyVaultUri).Host.Split('.', 2)[0];
         var productVaultName = new Uri(request.ProductKeyVaultUri).Host.Split('.', 2)[0];
         var ownerResourceGroup = await RequiredOutputAsync(
@@ -342,7 +349,7 @@ internal sealed class AzureCliProvisioningClient : IAzureProvisioningClient
                 "deployment", "sub", "create",
                 "-l", productLocation,
                 "-n", $"dsf-copy-owner-secret-{productVaultName}",
-                "-f", Path.Combine(FindRepoRoot(), "infra", "copy-owner-secret.bicep"),
+                "-f", templatePath,
                 "-p",
                 $"ownerVaultName={ownerVaultName}",
                 $"ownerResourceGroup={ownerResourceGroup}",
@@ -364,18 +371,6 @@ internal sealed class AzureCliProvisioningClient : IAzureProvisioningClient
         }
 
         return result.StandardOutput.Trim();
-    }
-
-    private static string FindRepoRoot()
-    {
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null
-               && !File.Exists(Path.Combine(directory.FullName, "infra", "main.bicep")))
-        {
-            directory = directory.Parent;
-        }
-
-        return (directory ?? throw new DirectoryNotFoundException("Could not locate repository root.")).FullName;
     }
 
     private async Task<AzureCliInvocationResult> RunAsync(

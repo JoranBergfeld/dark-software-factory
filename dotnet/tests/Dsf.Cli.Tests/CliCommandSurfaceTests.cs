@@ -137,7 +137,7 @@ command <root> desc="Dark Software Factory — factory CLI (create product insta
     option --dry-run type=Boolean arity=0..1 default=False choices=[False, True] desc="preview only: print the what-if plan without running steps"
     option --no-charter type=Boolean arity=0..1 default=False choices=[False, True] desc="skip the post-provision charter prompt"
     option --write-plan type=Boolean arity=0..1 default=False choices=[False, True] desc="with --dry-run, still write the instance manifest"
-    option --config-root type=String arity=1..1 desc="override repo root where config/instances/ is written"
+    option --config-root type=String arity=1..1 desc="override instance output root where config/instances/ is written"
     option --owner-keyvault-uri type=String arity=1..1 default="" desc="owner Key Vault URI"
     option --owner-appconfig-endpoint type=String arity=1..1 desc="owner App Configuration endpoint"
     option --admin-principal-id type=String arity=1..1 default="" desc="human owner/governance principal object id"

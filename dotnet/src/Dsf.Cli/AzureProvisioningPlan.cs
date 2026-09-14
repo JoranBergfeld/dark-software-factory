@@ -4,6 +4,8 @@ namespace Dsf.Cli;
 
 internal interface IAzureProvisioningClient
 {
+    Task PreflightAsync(CancellationToken cancellationToken);
+
     Task<AzureResourceGroupProvisioningResult> EnsureResourceGroupAsync(
         EnsureResourceGroupRequest request,
         CancellationToken cancellationToken);
@@ -23,17 +25,17 @@ internal interface IAzureProvisioningClient
 
 /// <summary>
 /// Plans (and executes) the Azure side of `dsf new`: the dedicated resource
-/// group, the backing-services topology from <c>infra/main.bicep</c>, and the
-/// Azure SRE Agent from <c>infra/sre-agent.bicep</c> — preserving the resource
+/// group, the shipped backing-services topology, and the
+/// Azure SRE Agent template — preserving the resource
 /// graph, managed identity, role assignments, configuration/model resources,
 /// and SRE Agent behavior already deployed by the Python provisioner.
 /// </summary>
 internal sealed record AzureProvisioningPlan(IReadOnlyList<AzureProvisioningRequest> Requests)
 {
-    public static AzureProvisioningPlan Build(InstanceDefinition definition, string repoRoot)
+    public static AzureProvisioningPlan Build(InstanceDefinition definition, ProvisioningAssets? assets = null)
     {
         ArgumentNullException.ThrowIfNull(definition);
-        ArgumentNullException.ThrowIfNull(repoRoot);
+        assets ??= new ProvisioningAssets();
         definition.Runtime.Decide.Validate();
         definition.Azure.Validate();
 
@@ -52,7 +54,7 @@ internal sealed record AzureProvisioningPlan(IReadOnlyList<AzureProvisioningRequ
                 new DeployTopologyRequest(
                     azure.ResourceGroup,
                     azure.DeploymentName,
-                    Path.Combine(repoRoot, "infra", "main.bicep"),
+                    assets.Resolve("main.json"),
                     azure.NamePrefix,
                     definition.Product.Environment,
                     azure.Location,
@@ -79,7 +81,7 @@ internal sealed record AzureProvisioningPlan(IReadOnlyList<AzureProvisioningRequ
             new DeploySreAgentRequest(
                     azure.SreAgent.Location,
                     $"dsf-sre-{definition.Product.Key}",
-                    Path.Combine(repoRoot, "infra", "sre-agent.bicep"),
+                    assets.Resolve("sre-agent.json"),
                     definition.Product.Key,
                     azure.SreAgent.Name,
                     azure.SreAgent.ResourceGroup,
@@ -97,6 +99,7 @@ internal sealed record AzureProvisioningPlan(IReadOnlyList<AzureProvisioningRequ
         ICliTerminal? terminal = null)
     {
         ArgumentNullException.ThrowIfNull(client);
+        await client.PreflightAsync(cancellationToken);
 
         AzureResourceGroupProvisioningResult? resourceGroup = null;
         AzureTopologyProvisioningResult? topology = null;
@@ -171,7 +174,7 @@ internal sealed record EnsureResourceGroupRequest(
 internal sealed record DeployTopologyRequest(
     string ResourceGroup,
     string DeploymentName,
-    string BicepPath,
+    string TemplatePath,
     string NamePrefix,
     string EnvironmentName,
     string Location,
@@ -193,7 +196,7 @@ internal sealed record DeployTopologyRequest(
 internal sealed record DeploySreAgentRequest(
     string Location,
     string DeploymentName,
-    string BicepPath,
+    string TemplatePath,
     string Product,
     string AgentName,
     string AgentResourceGroup,

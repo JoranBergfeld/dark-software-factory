@@ -16,6 +16,22 @@ public sealed class ReleaseArtifactAutomationTests
     ];
 
     [Fact]
+    public void Release_smokes_installed_tools_and_signs_both_executables()
+    {
+        var workflow = ReadRepoFile(".github", "workflows", "dotnet-release.yml");
+        Assert.Contains("smoke-test-tool-package.sh", workflow, StringComparison.Ordinal);
+        Assert.Contains("smoke-test-release-archive.sh", workflow, StringComparison.Ordinal);
+        Assert.Contains("dsf-runtime.exe", ReadRepoFile("dotnet", "eng", "sign-windows-artifacts.ps1"),
+            StringComparison.Ordinal);
+        Assert.Contains("dsf-runtime", ReadRepoFile("dotnet", "eng", "sign-macos-artifacts.sh"),
+            StringComparison.Ordinal);
+        Assert.Contains("--entitlements", ReadRepoFile("dotnet", "eng", "sign-macos-artifacts.sh"),
+            StringComparison.Ordinal);
+        Assert.Contains("com.apple.security.cs.allow-jit", ReadRepoFile("dotnet", "eng", "macos-entitlements.plist"),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Cli_project_packs_as_global_tool_at_directory_version()
     {
         var root = FindRepoRoot().FullName;

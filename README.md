@@ -49,7 +49,9 @@ dotnet tool install --global DarkSoftwareFactory.Cli --version <version>
 GitHub Releases also publish self-contained archives named
 `dsf-cli-<rid>.tar.gz` or `dsf-cli-<rid>.zip` for `linux-x64`, `linux-arm64`,
 `osx-x64`, `osx-arm64`, `win-x64`, and `win-arm64`. Extract the archive, put that
-directory on `PATH`, and run `dsf`.
+directory on `PATH`, and run `dsf`. Keep its `runtime/` and `assets/` directories intact.
+Both installation formats include the runtime host and compiled provisioning templates;
+no repository checkout or operator-side Bicep compiler is required.
 
 ## Use DSF
 
@@ -66,25 +68,25 @@ GitHub App required before live product provisioning. Preview first with
 `dsf bootstrap --app-name <app> --keyvault-name <vault> --appconfig-name <config> --dry-run`.
 See [Bootstrap](docs/site/get-started/bootstrap.md).
 
-### Runtime verbs need a runtime host
+### Bundled runtime verbs
 
-`dsf run`, `dsf sweep`, `dsf serve-orchestrator`, and `dsf serve-agent` are forwarded to a
-separate `dsf-runtime` executable, which the global tool and release archives do not ship.
-Deploy or build the runtime host separately, point `DSF_RUNTIME_HOST` at it, and only then use
-these verbs through the `dsf` front door:
+`dsf run`, `dsf sweep`, `dsf serve-orchestrator`, `dsf serve-agent`, and `dsf poll-outcomes`
+automatically launch the matching bundled `dsf-runtime` host. `DSF_RUNTIME_HOST` is an optional
+advanced override, not an installation requirement:
 
 ```bash
-export DSF_RUNTIME_HOST=/absolute/path/to/dsf-runtime
 dsf run --product <product> --signal /absolute/path/to/operator-signal.json --dry-run
 dsf sweep --product <product> --dry-run
 dsf serve-orchestrator --product <product> --loop --interval 300
 ```
 
-See [Operate the factory](docs/site/get-started/operate.md) for runtime-host deployment.
+These execute locally; Azure authentication and authorized network access to the factory's
+services remain required. See [Operate the factory](docs/site/get-started/operate.md).
 
 ## Contribute
 
-The active implementation lives in `dotnet/`.
+The active implementation lives in `dotnet/`. Source builds need the .NET 10 SDK
+and Bicep CLI on `PATH`; installed archives need neither.
 
 ```bash
 cd dotnet

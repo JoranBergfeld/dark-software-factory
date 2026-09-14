@@ -6,10 +6,12 @@ internal sealed class AzureCliOwnerBootstrapClient(
     IAzureCliRunner runner,
     ICliTerminal? terminal = null,
     HttpClient? appConfigHttpClient = null,
-    Func<TimeSpan, CancellationToken, Task>? authorizationRetryDelay = null)
+    Func<TimeSpan, CancellationToken, Task>? authorizationRetryDelay = null,
+    ProvisioningAssets? assets = null)
     : IOwnerInfrastructure, IOwnerBootstrapStatusStore, IOwnerCredentialStore, IOwnerCredentialReader
 {
     private static readonly HttpClient DefaultAppConfigHttpClient = new();
+    private readonly ProvisioningAssets assets = assets ?? new ProvisioningAssets();
     private readonly OwnerAppConfigurationStatusStore statusStore = new(
         runner, appConfigHttpClient ?? DefaultAppConfigHttpClient, terminal, authorizationRetryDelay);
 
@@ -70,6 +72,8 @@ internal sealed class AzureCliOwnerBootstrapClient(
         OwnerGitHubCredentials credentials,
         CancellationToken cancellationToken)
     {
+        var templatePath = assets.Resolve("owner-secrets.json");
+        await ProvisioningAssets.CheckAzureCliAsync(runner, cancellationToken);
         var vaultName = new Uri(keyVaultUri).Host.Split('.', 2)[0];
         var resourceGroup = await RequiredOutputAsync(
             ["keyvault", "show", "--name", vaultName, "--query", "resourceGroup", "-o", "tsv"],
@@ -105,7 +109,7 @@ internal sealed class AzureCliOwnerBootstrapClient(
                 [
                     "deployment", "group", "create", "--resource-group", resourceGroup,
                     "--name", $"dsf-owner-secrets-{vaultName}",
-                    "--template-file", Path.Combine(FindRepoRoot(), "infra", "owner-secrets.bicep"),
+                    "--template-file", templatePath,
                     "--parameters", $"@{parametersPath}",
                     "-o", "none",
                 ],
@@ -128,6 +132,9 @@ internal sealed class AzureCliOwnerBootstrapClient(
         OwnerBootstrapRequest request,
         CancellationToken cancellationToken)
     {
+        var templatePath = assets.Resolve("owner-keyvault.json");
+        assets.Resolve("owner-secrets.json");
+        await ProvisioningAssets.CheckAzureCliAsync(runner, cancellationToken);
         terminal?.WriteLine("[dsf] Checking Azure subscription and signed-in operator...");
         var subscriptionId = await RequiredOutputAsync(
             ["account", "show", "--query", "id", "-o", "tsv"],
@@ -155,7 +162,7 @@ internal sealed class AzureCliOwnerBootstrapClient(
             [
                 "deployment", "group", "create", "--resource-group", request.ResourceGroup,
                 "--name", $"dsf-owner-kv-{request.KeyVaultName}",
-                "--template-file", Path.Combine(FindRepoRoot(), "infra", "owner-keyvault.bicep"),
+                "--template-file", templatePath,
                 "--parameters", $"vaultName={request.KeyVaultName}", $"location={request.Location}",
             ],
             cancellationToken);
@@ -243,15 +250,4 @@ internal sealed class AzureCliOwnerBootstrapClient(
         return result;
     }
 
-    private static string FindRepoRoot()
-    {
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null
-               && !File.Exists(Path.Combine(directory.FullName, "infra", "owner-keyvault.bicep")))
-        {
-            directory = directory.Parent;
-        }
-
-        return (directory ?? throw new DirectoryNotFoundException("Could not locate repository root.")).FullName;
-    }
 }

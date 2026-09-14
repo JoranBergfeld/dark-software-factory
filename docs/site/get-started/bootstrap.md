@@ -15,6 +15,12 @@ a product's factory.
   repositories.
 - Unique, Azure-valid names for the Key Vault and App Configuration store.
 
+The installed CLI supplies compiled ARM templates for owner Key Vault deployment and
+secret storage. Run from any directory; no clone or Bicep compiler is needed.
+Before creating resources, bootstrap checks its packaged assets and Azure CLI availability.
+A missing/corrupt asset error names the file: reinstall DSF or re-extract the complete
+verified archive before retrying with the same resource names.
+
 ## Preview
 
 ```bash

@@ -1,0 +1,55 @@
+<Project>
+  <PropertyGroup>
+    <BicepCommand Condition="'$(BicepCommand)' == ''">bicep</BicepCommand>
+    <DsfInfrastructureRoot>$(MSBuildThisFileDirectory)../../infra/</DsfInfrastructureRoot>
+    <DsfAssetOutput>$(MSBuildProjectExtensionsPath)dsf-assets/infra/</DsfAssetOutput>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <DsfTemplate Include="owner-keyvault;owner-secrets;main;sre-agent;copy-owner-secret" />
+    <DsfTemplateSource Include="$(DsfInfrastructureRoot)**/*.bicep" />
+    <Content Include="@(DsfTemplate->'$(DsfAssetOutput)%(Identity).json')"
+             Link="assets/infra/%(Filename)%(Extension)"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest"
+             ExcludeFromSingleFile="true" Pack="false" />
+  </ItemGroup>
+
+  <Target Name="CompileDsfTemplates" BeforeTargets="PrepareForBuild;GetCopyToOutputDirectoryItems"
+          Inputs="@(DsfTemplateSource);$(MSBuildThisFileFullPath)"
+          Outputs="@(DsfTemplate->'$(DsfAssetOutput)%(Identity).json')">
+    <MakeDir Directories="$(DsfAssetOutput)" />
+    <Exec Command="$(BicepCommand) build &quot;$(DsfInfrastructureRoot)%(DsfTemplate.Identity).bicep&quot; --outfile &quot;$(DsfAssetOutput)%(DsfTemplate.Identity).json&quot;" />
+  </Target>
+
+  <!-- A build dependency, never an assembly reference. Publish resolves the runtime's
+       complete dependency closure without sharing its output directory with the CLI. -->
+  <Target Name="BuildDsfRuntimeBundle" AfterTargets="Build">
+    <MSBuild Projects="$(MSBuildThisFileDirectory)../src/Dsf.Runtime/Dsf.Runtime.csproj"
+             Targets="Publish"
+             BuildInParallel="false"
+             Properties="Configuration=$(Configuration);NoBuild=true;BuildProjectReferences=false;PublishDir=$([System.IO.Path]::GetFullPath('$(TargetDir)runtime/'));UseAppHost=$(SelfContained);PublishSingleFile=$(PublishSingleFile);SelfContained=$(SelfContained);Version=$(Version)"
+             RemoveProperties="PackAsTool;PackageId;ToolCommandName" />
+    <WriteLinesToFile File="$(TargetDir)dsf-bundle.version" Lines="$(Version)"
+                      Overwrite="true" WriteOnlyWhenDifferent="true" />
+  </Target>
+
+  <Target Name="PublishDsfRuntimeBundle" AfterTargets="Publish">
+    <ItemGroup>
+      <DsfRuntimeFile Include="$(TargetDir)runtime/**/*" />
+    </ItemGroup>
+    <Error Condition="'@(DsfRuntimeFile)' == ''"
+           Text="The DSF runtime bundle is missing. Rebuild the CLI before publishing." />
+    <ReadLinesFromFile File="$(TargetDir)dsf-bundle.version">
+      <Output TaskParameter="Lines" ItemName="DsfBuiltVersion" />
+    </ReadLinesFromFile>
+    <Error Condition="'@(DsfBuiltVersion)' != '$(Version)' Or '$(PackageVersion)' != '$(Version)'"
+           Text="The DSF bundle version does not match the requested version. Rebuild with -p:Version=$(Version) and use the same version when packing/publishing." />
+    <Error Condition="!Exists('$(TargetDir)assets/infra/%(DsfTemplate.Identity).json')"
+           Text="The DSF provisioning asset %(DsfTemplate.Identity).json is missing. Rebuild the CLI before publishing." />
+    <Copy SourceFiles="@(DsfRuntimeFile)"
+          DestinationFiles="@(DsfRuntimeFile->'$(PublishDir)runtime/%(RecursiveDir)%(Filename)%(Extension)')" />
+    <Copy SourceFiles="$(TargetDir)dsf-bundle.version" DestinationFolder="$(PublishDir)" />
+  </Target>
+
+</Project>

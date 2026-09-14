@@ -20,6 +20,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Dsf.Core\Dsf.Core.csproj" />
+    <ProjectReference Include="..\Dsf.Runtime\Dsf.Runtime.csproj"
+                      ReferenceOutputAssembly="false" Private="false" />
   </ItemGroup>
 
   <ItemGroup>
@@ -29,5 +31,7 @@
   <ItemGroup>
     <InternalsVisibleTo Include="Dsf.Cli.Tests" />
   </ItemGroup>
+
+  <Import Project="..\..\eng\CliBundle.targets" />
 
 </Project>

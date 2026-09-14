@@ -32,8 +32,11 @@ prepare the machinery; the third starts the work that produces the application.
   subscription for real provisioning.
 - The packaged DSF CLI, installed as a global tool or from a self-contained release archive.
 - The [.NET SDK](https://dotnet.microsoft.com/download) (10.0 or later) **only** if you install
-  the global tool with `dotnet tool install`. The self-contained release archives bundle their
-  own runtime and need no .NET SDK.
+  the global tool with `dotnet tool install`; retain its .NET and ASP.NET Core 10 runtimes.
+  The self-contained release archives bundle their own runtimes and need no .NET SDK.
+
+Both installation formats include the DSF runtime host and compiled provisioning templates.
+No repository checkout, separate `dsf-runtime` installation, or Bicep compiler is required.
 
 ## Install DSF
 
@@ -55,8 +58,14 @@ Self-contained install:
    `dsf-cli-linux-arm64.tar.gz`, `dsf-cli-osx-x64.tar.gz`, `dsf-cli-osx-arm64.tar.gz`,
    `dsf-cli-win-x64.zip`, or `dsf-cli-win-arm64.zip`.
 2. Verify it with [Verify a release](verify-release.md).
-3. Extract it and put the extracted directory on `PATH`.
+3. Extract it and put the extracted directory on `PATH`. Keep `runtime/` and `assets/`
+   beside `dsf`; do not copy only the executable.
 4. Run `dsf --help`.
+
+If DSF reports a missing or corrupt bundled component, reinstall the same package version
+or re-extract the **complete** verified archive. Changing directories or cloning this repository
+does not repair an incomplete installation. `--config-root` selects instance-state storage,
+not a template directory.
 
 ## Bootstrap the owner
 

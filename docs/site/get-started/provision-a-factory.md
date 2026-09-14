@@ -16,6 +16,12 @@ The factory CLI is `dsf`. Provisioning a product needs only `--product`:
 dsf new --product <product>
 ```
 
+Provisioning templates are bundled as compiled ARM JSON, including topology, SRE Agent,
+and cross-vault secret-copy dependencies. Run from any directory without a clone or Bicep.
+DSF validates these assets and Azure CLI availability before creating repositories or Azure
+resources. `--config-root` changes only instance-state storage; it does not select templates.
+For missing/corrupt assets, reinstall the package or re-extract the complete verified archive.
+
 Two inputs are inferred when omitted:
 
 - `--owner` defaults to your `gh`-authenticated account. Pass `--owner <org>` for an organization.

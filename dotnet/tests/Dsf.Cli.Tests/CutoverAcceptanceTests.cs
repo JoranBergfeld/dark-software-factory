@@ -218,8 +218,25 @@ public sealed class CutoverAcceptanceTests
             var result = await RunDsfProcessAsync(NormalizeArgv(evidence.Argv));
 
             Assert.Equal(evidence.ExitCode, result.ExitCode);
-            // Keep frozen Python evidence unchanged; pin only the corrected owner diagnostics.
+            var solutionRoot = FindSolutionRoot().FullName;
+            var outputSuffix = Path.GetRelativePath(
+                Path.Combine(solutionRoot, "tests", "Dsf.Cli.Tests", "bin"), AppContext.BaseDirectory);
+            var templateRoot = Path.Combine(
+                solutionRoot, "src", "Dsf.Cli", "bin", outputSuffix, "assets", "infra");
+            var mainTemplate = Path.Combine(templateRoot, "main.json");
+            var templatePrelude = string.Concat(
+                new[] { "main.json", "sre-agent.json", "copy-owner-secret.json" }
+                    .Select(entrypoint => $"[dsf] provisioning template: {Path.Combine(templateRoot, entrypoint)}\n"));
+            // Keep frozen Python evidence unchanged; pin corrected diagnostics and shipped template paths.
             var expectedOutput = evidence.Stdout
+                .Replace(
+                    "<repo>/.parity-capture/infra/main.bicep",
+                    mainTemplate,
+                    StringComparison.Ordinal)
+                .Replace(
+                    "from infra/main.bicep",
+                    $"from {mainTemplate}",
+                    StringComparison.Ordinal)
                 .Replace(
                     "[dsf] WARNING: install_app, seed_app_key, seed_webiq_key, publish_runtime_index will be SKIPPED.",
                     "[dsf] WARNING: the owner GitHub App private key cannot be copied to the product Key Vault.",
@@ -248,7 +265,7 @@ public sealed class CutoverAcceptanceTests
                     "publish_runtime_index [skipped (no owner App Config configured)]",
                     "publish_runtime_index [blocked (owner App Configuration endpoint required)]",
                     StringComparison.Ordinal);
-            Assert.Equal(NormalizeRepoToken(expectedOutput), result.Stdout);
+            Assert.Equal(templatePrelude + NormalizeRepoToken(expectedOutput), result.Stdout);
             Assert.Equal(evidence.Stderr, result.Stderr);
         }
         finally
@@ -316,8 +333,13 @@ public sealed class CutoverAcceptanceTests
         {
             startInfo.Environment.Remove(name);
         }
-        startInfo.Environment["DSF_RUNTIME_HOST"] = FindRuntimeHostExecutable();
+        startInfo.Environment.Remove("DSF_RUNTIME_HOST");
         startInfo.ArgumentList.Add("run");
+        startInfo.ArgumentList.Add("--no-build");
+        startInfo.ArgumentList.Add("--configuration");
+        startInfo.ArgumentList.Add(AppContext.BaseDirectory.Contains(
+            $"{Path.DirectorySeparatorChar}Release{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
+            ? "Release" : "Debug");
         startInfo.ArgumentList.Add("--project");
         startInfo.ArgumentList.Add("src/Dsf.Cli/Dsf.Cli.csproj");
         startInfo.ArgumentList.Add("--");
@@ -332,27 +354,6 @@ public sealed class CutoverAcceptanceTests
         var stderrTask = process.StandardError.ReadToEndAsync();
         await process.WaitForExitAsync();
         return new CommandResult(process.ExitCode, await stdoutTask, await stderrTask);
-    }
-
-    private static string FindRuntimeHostExecutable()
-    {
-        var configuration = AppContext.BaseDirectory.Contains(
-            $"{Path.DirectorySeparatorChar}Release{Path.DirectorySeparatorChar}",
-            StringComparison.Ordinal)
-            ? "Release"
-            : "Debug";
-        var fileName = OperatingSystem.IsWindows() ? "dsf-runtime.exe" : "dsf-runtime";
-        var path = Path.Combine(
-            FindSolutionRoot().FullName,
-            "src",
-            "Dsf.Runtime",
-            "bin",
-            configuration,
-            "net10.0",
-            fileName);
-
-        Assert.True(File.Exists(path), $"Expected the runtime host executable at {path}.");
-        return path;
     }
 
     private static DirectoryInfo FindSolutionRoot()

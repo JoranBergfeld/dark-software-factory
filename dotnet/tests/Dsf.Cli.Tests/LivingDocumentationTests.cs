@@ -126,8 +126,7 @@ public sealed class LivingDocumentationTests
     {
         var readme = ReadRepoFile("README.md");
 
-        // Runtime verbs are forwarded to `dsf-runtime`; the README must not present them as
-        // plain packaged-CLI usage without naming that dependency.
+        // The separate runtime process is bundled, not separately installed.
         var runtimeVerbs = new[] { "dsf run ", "dsf sweep ", "dsf serve-orchestrator", "dsf serve-agent" };
         if (runtimeVerbs.Any(verb => readme.Contains(verb, StringComparison.Ordinal)))
         {
@@ -165,7 +164,8 @@ public sealed class LivingDocumentationTests
         Assert.Contains("does not retrieve credentials", provisioning, StringComparison.OrdinalIgnoreCase);
 
         Assert.DoesNotContain("Install `dsf-runtime` beside `dsf`", operate, StringComparison.Ordinal);
-        Assert.Contains("source or service deployment", operate, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("matching runtime host under `runtime/`", operate, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("release archive publish `dsf` (`Dsf.Cli`) only", operate, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("DSF_RUNTIME_HOST", operate, StringComparison.Ordinal);
 
         var operatorDocs = new[]

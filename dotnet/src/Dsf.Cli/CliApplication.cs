@@ -233,7 +233,7 @@ public static class CliApplication
         var dryRun = BoolOption("--dry-run", "preview only: print the what-if plan without running steps");
         var noCharter = BoolOption("--no-charter", "skip the post-provision charter prompt");
         var writePlan = BoolOption("--write-plan", "with --dry-run, still write the instance manifest");
-        var configRoot = StringOption("--config-root", "override repo root where config/instances/ is written");
+        var configRoot = StringOption("--config-root", "override instance output root where config/instances/ is written");
         var ownerKeyVaultUri = StringOption("--owner-keyvault-uri", "owner Key Vault URI", string.Empty);
         var ownerAppConfigEndpoint = StringOption("--owner-appconfig-endpoint", "owner App Configuration endpoint");
         var adminPrincipalId = StringOption("--admin-principal-id", "human owner/governance principal object id", string.Empty);
@@ -476,12 +476,13 @@ public static class CliApplication
 
                 try
                 {
+                    await azure.PreflightAsync(cancellationToken);
                     var githubResult = await GitHubProvisioningPlan.Build(definition)
                         .ExecuteAsync(github, cancellationToken, terminal);
                     var afterGitHub = githubResult.ApplyTo(definition);
 
-                    var azureRoot = configRootValue ?? Directory.GetCurrentDirectory();
-                    var azureResult = await AzureProvisioningPlan.Build(afterGitHub, azureRoot)
+                    var instanceRoot = configRootValue ?? Directory.GetCurrentDirectory();
+                    var azureResult = await AzureProvisioningPlan.Build(afterGitHub)
                         .ExecuteAsync(azure, cancellationToken, terminal);
                     var updated = azureResult.ApplyTo(afterGitHub) with
                     {
@@ -513,7 +514,7 @@ public static class CliApplication
                         terminal, $"Saving instance manifest for {updated.Product.Key}",
                         _ =>
                         {
-                            InstanceDefinitions.Write(updated, azureRoot);
+                            InstanceDefinitions.Write(updated, instanceRoot);
                             return Task.CompletedTask;
                         }, cancellationToken);
                     terminal.WriteLine($"[dsf] GitHub provisioning complete for {updated.GitHub.FullName()}.");
@@ -650,6 +651,18 @@ public static class CliApplication
 
     private sealed record NewInteraction(string? Product, IReadOnlyList<string> ExplicitArguments);
 
+    private static IReadOnlyDictionary<string, string> PrintDryRunTemplates(
+        ICliTerminal terminal, params string[] entrypoints)
+    {
+        var assets = new ProvisioningAssets();
+        var paths = entrypoints.ToDictionary(entrypoint => entrypoint, assets.Resolve, StringComparer.Ordinal);
+        foreach (var path in paths.Values)
+        {
+            terminal.WriteLine($"[dsf] provisioning template: {path}");
+        }
+        return paths;
+    }
+
     private static void PrintDryRunPlan(
         ICliTerminal terminal,
         string product,
@@ -674,7 +687,9 @@ public static class CliApplication
         var visibilityFlag = visibility == "public" ? "--public" : visibility == "internal" ? "--internal" : "--private";
         var root = configRoot ?? Directory.GetCurrentDirectory();
         var manifestPath = InstanceDefinitions.PathFor(root, product);
-        var bicepPath = Path.Combine(root, "infra", "main.bicep");
+        var templatePaths = PrintDryRunTemplates(
+            terminal, "main.json", "sre-agent.json", "copy-owner-secret.json");
+        var templatePath = templatePaths["main.json"];
         var networkParameter = infrastructureSubnetId is null ? "" : $" infrastructureSubnetId={infrastructureSubnetId}";
         var hasOwnerVault = !string.IsNullOrWhiteSpace(ownerAuthority.KeyVaultUri);
         var hasOwnerAppConfig = !string.IsNullOrWhiteSpace(ownerAuthority.AppConfigEndpoint);
@@ -715,10 +730,10 @@ public static class CliApplication
         }
         terminal.WriteLine($"[dsf]  5. create_resource_group [dry-run] Create dedicated Azure resource group rg-dsf-{product}");
         terminal.WriteLine($"[dsf]       $ az group create --name rg-dsf-{product} --location {location} --tags project=dark-software-factory managed-by=dsf product={product} component=backing-services");
-        terminal.WriteLine("[dsf]  6. provision_azure [dry-run] Deploy backing services into rg-dsf-" + product + " from infra/main.bicep");
+        terminal.WriteLine($"[dsf]  6. provision_azure [dry-run] Deploy backing services into rg-dsf-{product} from {templatePath}");
         var plannedAppId = resolveOwnerIdentity ? "<resolved-from-owner>" : githubAppId ?? string.Empty;
         var plannedInstallationId = resolveOwnerIdentity ? "<resolved-from-owner>" : githubInstallationId ?? string.Empty;
-        terminal.WriteLine($"[dsf]       $ az deployment group create -g rg-dsf-{product} -n dsf-{product} -f {bicepPath} -p namePrefix={namePrefix} environmentName={environment} location={location} product={product} runtimeImage={runtimeImage} githubAppId={plannedAppId} githubInstallationId={plannedInstallationId} githubRepository={repoFull} operationMaturity={operationMaturity} allowPublicNetworkAccess=true{networkParameter} --no-wait");
+        terminal.WriteLine($"[dsf]       $ az deployment group create -g rg-dsf-{product} -n dsf-{product} -f {templatePath} -p namePrefix={namePrefix} environmentName={environment} location={location} product={product} runtimeImage={runtimeImage} githubAppId={plannedAppId} githubInstallationId={plannedInstallationId} githubRepository={repoFull} operationMaturity={operationMaturity} allowPublicNetworkAccess=true{networkParameter} --no-wait");
         terminal.WriteLine($"[dsf]  7. seed_appconfig [seeded (dry-run)] Seed the canonical config/defaults.json into App Configuration for {product} (critic/agent flags + thresholds)");
         if (hasOwnerVault)
         {
@@ -950,6 +965,7 @@ public static class CliApplication
                 parseResult.GetValue(location) ?? "swedencentral");
             if (parseResult.GetValue(dryRun))
             {
+                PrintDryRunTemplates(terminal, "owner-keyvault.json", "owner-secrets.json");
                 terminal.WriteLine($"[dsf] owner bootstrap plan for {request.AppName} (DRY-RUN)");
                 terminal.WriteLine($"[dsf]  1. Create resource group {request.ResourceGroup}.");
                 terminal.WriteLine($"[dsf]  2. Create owner App Configuration {request.AppConfigName} and status record.");

@@ -26,19 +26,12 @@ public sealed class DecideProvisioningTests
         Assert.Equal(existing.Azure.GetHashCode(), replanned.Azure.GetHashCode());
         Assert.NotEqual(existing.Azure, existing.Azure with { InfrastructureSubnetId = null });
 
-        var bicep = Path.GetTempFileName();
-        try
-        {
-            var runner = new RecordingAzureCliRunner(new AzureCliInvocationResult(0, "{}", ""));
-            var request = Assert.Single(AzureProvisioningPlan.Build(replanned, ".").Requests.OfType<DeployTopologyRequest>());
-            await new AzureCliProvisioningClient(runner).DeployTopologyAsync(
-                request with { BicepPath = bicep }, CancellationToken.None);
-            Assert.Contains($"infrastructureSubnetId={subnet}", Assert.Single(runner.Invocations));
-        }
-        finally
-        {
-            File.Delete(bicep);
-        }
+        var runner = new RecordingAzureCliRunner(
+            new AzureCliInvocationResult(0, """{"azure-cli":"2.77.0"}""", ""),
+            new AzureCliInvocationResult(0, "{}", ""));
+        var request = Assert.Single(AzureProvisioningPlan.Build(replanned).Requests.OfType<DeployTopologyRequest>());
+        await new AzureCliProvisioningClient(runner).DeployTopologyAsync(request, CancellationToken.None);
+        Assert.Contains($"infrastructureSubnetId={subnet}", Assert.Single(runner.Invocations.Skip(1)));
     }
 
     [Theory]
@@ -67,7 +60,7 @@ public sealed class DecideProvisioningTests
         var replanned = PlannedInstanceDefinition.Build(
             "demo", "acme", "demo", "private", "aca", "dev", "swedencentral",
             "medium", "low", "demo", null, null, null, null, null, null, DateTimeOffset.UnixEpoch, existing);
-        var topology = Assert.Single(AzureProvisioningPlan.Build(replanned, ".").Requests.OfType<DeployTopologyRequest>());
+        var topology = Assert.Single(AzureProvisioningPlan.Build(replanned).Requests.OfType<DeployTopologyRequest>());
 
         Assert.Equal(image, replanned.Runtime.Image);
         Assert.Equal(image, topology.RuntimeImage);
@@ -117,7 +110,7 @@ public sealed class DecideProvisioningTests
 
             var definition = InstanceDefinitions.Read(InstanceDefinitions.PathFor(root, "demo"));
             Assert.Equal(definition, InstanceDefinitions.Parse(InstanceDefinitions.Serialize(definition), "roundtrip"));
-            var topology = Assert.Single(AzureProvisioningPlan.Build(definition, root)
+            var topology = Assert.Single(AzureProvisioningPlan.Build(definition)
                 .Requests.OfType<DeployTopologyRequest>());
             Assert.Equal(["azuremonitor"], topology.Decide.EnabledSourceAgentKinds);
             Assert.Equal("ghcr.io/acme/dsf-runtime:sha-accepted", topology.RuntimeImage);
@@ -176,42 +169,37 @@ public sealed class DecideProvisioningTests
     [Fact]
     public async Task Topology_passes_only_configured_source_parameters()
     {
-        var bicep = Path.GetTempFileName();
-        try
-        {
-            var runner = new RecordingAzureCliRunner(new AzureCliInvocationResult(0, "{}", ""));
-            var client = new AzureCliProvisioningClient(runner);
-            var request = new DeployTopologyRequest(
-                "rg-demo", "demo", bicep, "demo", "dev", "swedencentral", "demo", "image",
+        using var assets = new ProvisioningAssetFixture();
+        var runner = new RecordingAzureCliRunner(
+            new AzureCliInvocationResult(0, """{"azure-cli":"2.77.0"}""", ""),
+            new AzureCliInvocationResult(0, "{}", ""));
+        var client = new AzureCliProvisioningClient(runner, assets.Resolver);
+        var request = new DeployTopologyRequest(
+                "rg-demo", "demo", assets.PathFor("main.json"), "demo", "dev", "swedencentral", "demo", "image",
                 "1", "2", "acme/demo", true, null)
-            {
-                Decide = new DecideDeploymentSettings
-                {
-                    EnabledSourceAgentKinds = ["azuremonitor"],
-                    AzureMonitorWorkspaceId = "workspace-id",
-                    AzureMonitorQuery = "AppExceptions | take 20",
-                    JuryModels = Models(),
-                    Lenses = [new DeliberationLensSettings(" Cost ", Weight: 0.5)],
-                },
-            };
-
-            await client.DeployTopologyAsync(request, CancellationToken.None);
-
-            var invocation = Assert.Single(runner.Invocations);
-            Assert.Contains("enabledSourceAgentKinds=[\"azuremonitor\"]", invocation);
-            Assert.Contains("azureMonitorWorkspaceId=workspace-id", invocation);
-            Assert.Contains("azureMonitorQuery=AppExceptions | take 20", invocation);
-            Assert.Contains(invocation, value => value.StartsWith("juryModels=[", StringComparison.Ordinal));
-            var lenses = Assert.Single(invocation, value =>
-                value.StartsWith("deliberationLenses=", StringComparison.Ordinal));
-            Assert.Contains("\"name\":\"cost\"", lenses, StringComparison.Ordinal);
-            Assert.DoesNotContain(" Cost ", lenses, StringComparison.Ordinal);
-            Assert.DoesNotContain(invocation, value => value.StartsWith("webIqQuery=", StringComparison.Ordinal));
-        }
-        finally
         {
-            File.Delete(bicep);
-        }
+            Decide = new DecideDeploymentSettings
+            {
+                EnabledSourceAgentKinds = ["azuremonitor"],
+                AzureMonitorWorkspaceId = "workspace-id",
+                AzureMonitorQuery = "AppExceptions | take 20",
+                JuryModels = Models(),
+                Lenses = [new DeliberationLensSettings(" Cost ", Weight: 0.5)],
+            },
+        };
+
+        await client.DeployTopologyAsync(request, CancellationToken.None);
+
+        var invocation = Assert.Single(runner.Invocations.Skip(1));
+        Assert.Contains("enabledSourceAgentKinds=[\"azuremonitor\"]", invocation);
+        Assert.Contains("azureMonitorWorkspaceId=workspace-id", invocation);
+        Assert.Contains("azureMonitorQuery=AppExceptions | take 20", invocation);
+        Assert.Contains(invocation, value => value.StartsWith("juryModels=[", StringComparison.Ordinal));
+        var lenses = Assert.Single(invocation, value =>
+            value.StartsWith("deliberationLenses=", StringComparison.Ordinal));
+        Assert.Contains("\"name\":\"cost\"", lenses, StringComparison.Ordinal);
+        Assert.DoesNotContain(" Cost ", lenses, StringComparison.Ordinal);
+        Assert.DoesNotContain(invocation, value => value.StartsWith("webIqQuery=", StringComparison.Ordinal));
     }
 
     [Fact]
