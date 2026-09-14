@@ -57,7 +57,7 @@ public sealed class WebIqIntegrationTests
     }
 
     [Fact]
-    public async Task Gather_drops_results_with_no_url()
+    public async Task Gather_rejects_results_with_no_url()
     {
         var gateway = new ScriptedWebIqSearchGateway(Result("no url here", url: null!));
         var env = new Dictionary<string, string?>
@@ -67,9 +67,8 @@ public sealed class WebIqIntegrationTests
         };
         var integration = new WebIqIntegration(env, gateway);
 
-        var evidence = await integration.GatherAsync("webiq", "acme", CancellationToken.None);
-
-        Assert.Empty(evidence);
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => integration.GatherAsync("webiq", "acme", CancellationToken.None));
     }
 
     [Fact]

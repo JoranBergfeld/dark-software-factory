@@ -24,31 +24,46 @@ internal interface IAzureMonitorLogsGateway
 /// Wraps <c>Azure.Monitor.Query.LogsQueryClient</c> authenticated via <see
 /// cref="DefaultAzureCredential"/> -- the same managed-identity-capable pattern
 /// every other real Azure adapter in this project uses (ADR 0014: no offline
-/// fallback). Queries the trailing 24 hours; a served agent runs on a sweep
-/// cadence measured in minutes, so a wider window costs nothing but catches
-/// evidence even after a gap in serving.
+/// fallback). Queries the trailing 24 hours and rejects partial/truncated results;
+/// the Logs query API has no continuation token.
 /// </summary>
-internal sealed class AzureMonitorLogsGateway : IAzureMonitorLogsGateway
+internal sealed class AzureMonitorLogsGateway(LogsQueryClient? client = null) : IAzureMonitorLogsGateway
 {
     private static readonly QueryTimeRange TimeRange = new(TimeSpan.FromHours(24));
+    private readonly LogsQueryClient client = client ?? new LogsQueryClient(new DefaultAzureCredential());
 
     public async Task<IReadOnlyList<IReadOnlyDictionary<string, string>>> QueryAsync(
         string workspaceId, string query, CancellationToken cancellationToken)
     {
-        var client = new LogsQueryClient(new DefaultAzureCredential());
-
         Azure.Response<LogsQueryResult> response;
         try
         {
-            response = await client.QueryWorkspaceAsync(workspaceId, query, TimeRange, cancellationToken: cancellationToken);
+            response = await client.QueryWorkspaceAsync(workspaceId, query, TimeRange,
+                new LogsQueryOptions { AllowPartialErrors = false }, cancellationToken);
         }
-        catch (Exception exception) when (exception is not OperationCanceledException)
+        catch (Azure.RequestFailedException exception)
         {
             throw new InvalidOperationException(
                 $"could not query Azure Monitor workspace '{workspaceId}': {exception.Message}", exception);
         }
 
+        if (response.Value.AllTables.Count != 1)
+        {
+            throw new InvalidOperationException(
+                $"{RuntimeIntegrationSettings.AzureMonitorQuery} must return one table with string Reference and Summary columns.");
+        }
+
         var table = response.Value.Table;
+        foreach (var required in new[] { "Reference", "Summary" })
+        {
+            if (!table.Columns.Any(column => column.Name.Equals(required, StringComparison.OrdinalIgnoreCase)
+                && column.Type == LogsColumnType.String))
+            {
+                throw new InvalidOperationException(
+                    $"{RuntimeIntegrationSettings.AzureMonitorQuery} must project string Reference and Summary columns.");
+            }
+        }
+
         var rows = new List<IReadOnlyDictionary<string, string>>(table.Rows.Count);
         foreach (var row in table.Rows)
         {
@@ -70,16 +85,12 @@ internal sealed class AzureMonitorLogsGateway : IAzureMonitorLogsGateway
 /// Azure Monitor Log Analytics workspace via a KQL query, rather than the
 /// generic JSON-shape-guessing <see cref="HttpSourceIntegration"/> fallback. The
 /// operator's query decides what counts as evidence (which tables, which
-/// signals); this adapter only maps whatever columns it names for reference and
-/// summary onto <see cref="EvidenceItem"/>, the same column-name-probing
-/// approach the generic HTTP integration uses for JSON properties.
+/// signals) and must project string <c>Reference</c> and <c>Summary</c> columns.
+/// Invalid rows fail the entire gather rather than silently discarding evidence.
 /// </summary>
 internal sealed class AzureMonitorIntegration(IReadOnlyDictionary<string, string?> env, IAzureMonitorLogsGateway? gateway = null)
     : ISourceIntegration
 {
-    private static readonly string[] ReferenceColumns = ["Reference", "reference", "_ItemId", "Id", "id", "RowId"];
-    private static readonly string[] SummaryColumns = ["Summary", "summary", "Message", "message", "Title", "title", "OperationName"];
-
     private readonly IAzureMonitorLogsGateway gateway = gateway ?? new AzureMonitorLogsGateway();
 
     public async Task<IReadOnlyList<EvidenceItem>> GatherAsync(
@@ -107,17 +118,18 @@ internal sealed class AzureMonitorIntegration(IReadOnlyDictionary<string, string
 
         var rows = await gateway.QueryAsync(workspaceId, query, cancellationToken);
 
-        return rows
-            .Select(row => new EvidenceItem("azuremonitor", First(row, ReferenceColumns), First(row, SummaryColumns)))
-            .Where(item => item.Reference.Length > 0)
-            .ToArray();
-    }
+        return rows.Select(row =>
+        {
+            if (!row.TryGetValue("Reference", out var reference) || string.IsNullOrWhiteSpace(reference)
+                || !row.TryGetValue("Summary", out var summary) || string.IsNullOrWhiteSpace(summary))
+            {
+                throw new InvalidOperationException(
+                    $"{RuntimeIntegrationSettings.AzureMonitorQuery} returned a row without a nonempty Reference or Summary.");
+            }
 
-    private static string First(IReadOnlyDictionary<string, string> row, IEnumerable<string> columns) =>
-        columns
-            .Select(column => row.TryGetValue(column, out var value) ? value : string.Empty)
-            .FirstOrDefault(value => !string.IsNullOrWhiteSpace(value))
-        ?? string.Empty;
+            return new EvidenceItem("azuremonitor", reference, summary);
+        }).ToArray();
+    }
 
     private string Read(string name) =>
         (env.TryGetValue(name, out var value) ? value : null)?.Trim() ?? string.Empty;

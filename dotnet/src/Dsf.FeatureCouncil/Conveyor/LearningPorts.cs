@@ -2,7 +2,7 @@ namespace Dsf.FeatureCouncil.Conveyor;
 
 /// <summary>
 /// Canonical labels a human applies to a filed issue to record its outcome. S6
-/// routing labels every filed issue <c>ready-for-agent</c>; once a human resolves
+/// routing labels every filed issue <c>creation:ready</c>; once a human resolves
 /// it, applying one of these labels is the durable signal the learning loop polls
 /// for -- the disposition the council's proposal actually met in reality, not
 /// merely what was proposed.

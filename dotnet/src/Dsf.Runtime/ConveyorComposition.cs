@@ -17,11 +17,8 @@ public interface IConveyorComposer
 }
 
 /// <summary>
-/// The production composer: reads the runtime's environment and settings and
-/// wires the real adapters -- an in-process gatherer per source kind by default
-/// (reading that kind's upstream integration directly, in this process), falling
-/// back to an A2A gatherer against a remote source agent only for a kind whose
-/// agent endpoint is explicitly configured; the GitHub REST issue filer; the
+/// The production composer: merges nonsecret owner-index integrations with local
+/// environment overrides and wires served A2A source agents, the GitHub REST issue filer, the
 /// Cosmos-backed run store; the Azure OpenAI-backed model client; and the
 /// Application Insights-backed tracer. Anything unset raises
 /// <see cref="RuntimeConfigurationException"/> naming every missing setting at
@@ -34,11 +31,10 @@ internal sealed class EnvironmentConveyorComposer(
     IPrivateKeySecretReader? privateKeySecretReader = null,
     IModelCompletionGateway? modelGateway = null,
     ITelemetryGateway? telemetryGateway = null,
-    IConfigurationSettingsGateway? configurationSettingsGateway = null) : IConveyorComposer
+    IConfigurationSettingsGateway? configurationSettingsGateway = null,
+    Azure.Core.TokenCredential? juryCredential = null) : IConveyorComposer
 {
     private const string KindPlaceholder = "{kind}";
-    private const string DefaultGitHubApiUrl = "https://api.github.com/";
-
     private readonly HttpClient httpClient = httpClient ?? new HttpClient();
     private readonly IConfigurationSettingsGateway configurationSettingsGateway =
         configurationSettingsGateway ?? new AzureConfigurationSettingsGateway();
@@ -47,10 +43,19 @@ internal sealed class EnvironmentConveyorComposer(
     {
         ArgumentNullException.ThrowIfNull(settings);
 
+        var environment = new Dictionary<string, string?>(settings.IntegrationSettings, StringComparer.Ordinal);
+        foreach (var (key, value) in env)
+        {
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                environment[key] = value;
+            }
+        }
+
         var missing = new List<string>();
-        var gatherers = ComposeGatherers(settings);
-        var filer = ComposeFiler(settings, missing);
-        var runStore = ComposeRunStore(settings, missing);
+        var gatherers = ComposeGatherers(settings.Product, environment);
+        var filer = ComposeFiler(settings, missing, environment);
+        var runStore = ComposeRunStore(settings, missing, environment);
         var modelClient = ComposeModelClient(settings, missing);
         var tracer = ComposeTracer(settings, missing);
 
@@ -62,16 +67,33 @@ internal sealed class EnvironmentConveyorComposer(
                 missing);
         }
 
+        var jurySettings = JurySettings.Read(environment);
+        var deliberation = DeliberationSettings.Read(environment);
+        var lenses = deliberation.Lenses.Where(lens => lens.Enabled).Select(lens => (IDeliberationLens)(lens.Name switch
+        {
+            "value" => ModelDeliberationLens.Value(lens.Weight),
+            "cost" => ModelDeliberationLens.Cost(lens.Weight),
+            "feasibility" => ModelDeliberationLens.Feasibility(lens.Weight),
+            "security" => ModelDeliberationLens.Security(lens.Weight),
+            "strategic-fit" => ModelDeliberationLens.StrategicFit(lens.Weight),
+            _ => throw new InvalidOperationException($"unknown deliberation lens '{lens.Name}'"),
+        })).ToArray();
+        var jurors = jurySettings.Jurors.Select(juror => (IValidationJuror)new ModelValidationJuror(
+            juror.Name, "whether this recommendation is justified by the evidence and deliberation",
+            new AzureFoundryJuryModelClient(juror, juryCredential, httpClient), juror)).ToArray();
+
         // The learning store is enrichment, not a requirement: a factory whose
         // Cosmos endpoint is unset still composes and runs the line exactly as
         // before, just without any prior verdict for synthesis to consult.
-        var learningStore = ComposeLearningStore(settings);
+        var learningStore = ComposeLearningStore(settings, environment);
         var confidenceThresholdReader = new AzureAppConfigurationConfidenceThresholdReader(
             configurationSettingsGateway, settings);
 
         return new ConveyorServices(
             settings.Product, gatherers, filer, runStore!, modelClient!, tracer!, confidenceThresholdReader,
-            learningStore, ProductMaturity: settings.CreationMaturity);
+            learningStore, DeliberationLenses: lenses, ValidationJurors: jurors,
+            ProductMaturity: settings.CreationMaturity, DeliberationRounds: deliberation.Rounds, JuryTimeout: jurySettings.Timeout,
+            ProblemIdentityResolver: CosmosLearningStoreFactory.CreateProblemIdentityResolver(settings, environment, cosmosGateway));
     }
 
     /// <summary>
@@ -82,14 +104,14 @@ internal sealed class EnvironmentConveyorComposer(
     /// than raising -- learning is enrichment the filing/persistence requirements
     /// above already gate, not a new hard requirement of its own.
     /// </summary>
-    private ILearningStore? ComposeLearningStore(RuntimeSettings settings)
+    private ILearningStore? ComposeLearningStore(RuntimeSettings settings, IReadOnlyDictionary<string, string?> environment)
     {
         if (settings.CosmosEndpoint.Trim().Length == 0)
         {
             return null;
         }
 
-        return CosmosLearningStoreFactory.Create(settings, env, cosmosGateway);
+        return CosmosLearningStoreFactory.Create(settings, environment, cosmosGateway);
     }
 
     /// <summary>
@@ -104,13 +126,13 @@ internal sealed class EnvironmentConveyorComposer(
     /// as a served agent's own <c>/gather</c> endpoint would if it were
     /// unreachable.
     /// </summary>
-    private IReadOnlyList<IEvidenceGatherer> ComposeGatherers(RuntimeSettings settings)
+    private IReadOnlyList<IEvidenceGatherer> ComposeGatherers(string product, IReadOnlyDictionary<string, string?> environment)
     {
-        var template = Read(RuntimeIntegrationSettings.SourceAgentEndpointTemplate);
+        var template = Read(environment, RuntimeIntegrationSettings.SourceAgentEndpointTemplate);
         var gatherers = new List<IEvidenceGatherer>();
         foreach (var kind in SourceAgentKinds.Known)
         {
-            var endpoint = Read(RuntimeIntegrationSettings.SourceAgentEndpoint(kind));
+            var endpoint = Read(environment, RuntimeIntegrationSettings.SourceAgentEndpoint(kind));
             if (endpoint.Length == 0 && template.Length > 0)
             {
                 endpoint = template.Replace(KindPlaceholder, kind, StringComparison.OrdinalIgnoreCase);
@@ -118,7 +140,7 @@ internal sealed class EnvironmentConveyorComposer(
 
             if (endpoint.Length > 0)
             {
-                gatherers.Add(new SourceAgentEvidenceGatherer(kind, new Uri(EnsureTrailingSlash(endpoint)), httpClient));
+                gatherers.Add(new SourceAgentEvidenceGatherer(kind, product, new Uri(EnsureTrailingSlash(endpoint)), httpClient));
             }
         }
 
@@ -135,7 +157,8 @@ internal sealed class EnvironmentConveyorComposer(
     /// incomplete App configuration is reported as unset settings rather than
     /// silently accepting a personal access token in its place.
     /// </summary>
-    private IIssueFiler? ComposeFiler(RuntimeSettings settings, List<string> missing)
+    private IIssueFiler? ComposeFiler(
+        RuntimeSettings settings, List<string> missing, IReadOnlyDictionary<string, string?> environment)
     {
         var repository = settings.GitHubRepository.Trim();
         if (repository.Length == 0)
@@ -159,11 +182,12 @@ internal sealed class EnvironmentConveyorComposer(
         {
             return repository.Length > 0
                 ? GitHubIssueFiler.Create(
-                    Read(RuntimeIntegrationSettings.GitHubApiUrl),
-                    BuildGitHubAppAuthProvider(appId, installationId, keyVaultUri, privateKeySecret),
+                    Read(environment, RuntimeIntegrationSettings.GitHubApiUrl),
+                    BuildGitHubAppAuthProvider(appId, installationId, keyVaultUri, privateKeySecret,
+                        Read(environment, RuntimeIntegrationSettings.GitHubApiUrl)),
                     repository,
                     assignCloudAgent: string.Equals(
-                        Read(RuntimeIntegrationSettings.AssignCloudAgentToFiledIssues),
+                        Read(environment, RuntimeIntegrationSettings.AssignCloudAgentToFiledIssues),
                         "true",
                         StringComparison.OrdinalIgnoreCase))
                 : null;
@@ -174,16 +198,17 @@ internal sealed class EnvironmentConveyorComposer(
     }
 
     private IGitHubAuthProvider BuildGitHubAppAuthProvider(
-        string appId, string installationId, string keyVaultUri, string privateKeySecret) =>
+        string appId, string installationId, string keyVaultUri, string privateKeySecret, string apiUrl) =>
         GitHubAppAuthProviderFactory.Build(
             appId,
             installationId,
             keyVaultUri,
             privateKeySecret,
-            Read(RuntimeIntegrationSettings.GitHubApiUrl),
+            apiUrl,
             privateKeySecretReader);
 
-    private IRunStore? ComposeRunStore(RuntimeSettings settings, List<string> missing)
+    private IRunStore? ComposeRunStore(
+        RuntimeSettings settings, List<string> missing, IReadOnlyDictionary<string, string?> environment)
     {
         if (settings.CosmosEndpoint.Trim().Length == 0)
         {
@@ -191,8 +216,8 @@ internal sealed class EnvironmentConveyorComposer(
             return null;
         }
 
-        var database = Read(RuntimeIntegrationSettings.CosmosDatabase);
-        var container = Read(RuntimeIntegrationSettings.CosmosContainer);
+        var database = Read(environment, RuntimeIntegrationSettings.CosmosDatabase);
+        var container = Read(environment, RuntimeIntegrationSettings.CosmosContainer);
         return new CosmosRunStore(
             settings.CosmosEndpoint.Trim(),
             database.Length > 0 ? database : RuntimeIntegrationSettings.DefaultCosmosDatabase,
@@ -294,8 +319,8 @@ internal sealed class EnvironmentConveyorComposer(
         }
     }
 
-    private string Read(string name) =>
-        (env.TryGetValue(name, out var value) ? value : null)?.Trim() ?? string.Empty;
+    private static string Read(IReadOnlyDictionary<string, string?> environment, string name) =>
+        (environment.TryGetValue(name, out var value) ? value : null)?.Trim() ?? string.Empty;
 
     private static string EnsureTrailingSlash(string url) => url.EndsWith('/') ? url : url + "/";
 }

@@ -34,6 +34,8 @@ internal sealed record AzureProvisioningPlan(IReadOnlyList<AzureProvisioningRequ
     {
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(repoRoot);
+        definition.Runtime.Decide.Validate();
+        definition.Azure.Validate();
 
         var azure = definition.Azure;
         var tags = new Dictionary<string, string>(StringComparer.Ordinal)
@@ -61,7 +63,12 @@ internal sealed record AzureProvisioningPlan(IReadOnlyList<AzureProvisioningRequ
                     definition.GitHub.FullName(),
                     AllowPublicNetworkAccess: true,
                     definition.Governance.AdminPrincipalId,
-                    definition.Product.OperationMaturity),
+                    definition.Product.OperationMaturity,
+                    definition.Product.CreationMaturity)
+                {
+                    Decide = definition.Runtime.Decide,
+                    InfrastructureSubnetId = azure.InfrastructureSubnetId,
+                },
         };
         if (!string.IsNullOrWhiteSpace(azure.OwnerAuthority.KeyVaultUri))
         {
@@ -165,8 +172,13 @@ internal sealed record DeployTopologyRequest(
     string GitHubRepository,
     bool AllowPublicNetworkAccess,
     string? AdminPrincipalId,
-    string OperationMaturity = "low")
-    : AzureProvisioningRequest("deploy_topology");
+    string OperationMaturity = "low",
+    string CreationMaturity = "low")
+    : AzureProvisioningRequest("deploy_topology")
+{
+    public DecideDeploymentSettings Decide { get; init; } = new();
+    public string? InfrastructureSubnetId { get; init; }
+}
 
 internal sealed record DeploySreAgentRequest(
     string Location,

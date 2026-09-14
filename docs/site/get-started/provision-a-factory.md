@@ -36,6 +36,122 @@ dsf new \
 
 Run `dsf new --help` for the full flag list.
 
+For an immutable runtime image, first generate the instance manifest with
+`--dry-run --write-plan`, set its `runtime.image` to a published commit tag or
+digest, then run the same command without the dry-run flags. Repeated `dsf new`
+invocations preserve that image, and the preview reports the selected image.
+
+## Private backing-service connectivity
+
+Inherited Azure Policy can disable Key Vault or Cosmos public access even when a
+deployment requests public access. Do not relax that policy: connect the runtime
+through private endpoints and private DNS instead.
+
+Set `azure.infrastructureSubnetId` in the saved instance manifest to the full ID
+of a subnet delegated to `Microsoft.App/environments`. Repeated `dsf new` calls
+preserve it and select a separate VNet-integrated, Consumption-profile Container
+Apps environment. Omit this field to retain the default environment; an empty or
+malformed value is rejected. Private endpoints and DNS must be reachable on the
+chosen VNet before expecting healthy runtime data-plane access.
+
+For existing backing services, including a partially completed new factory,
+`infra/instance-private-network.bicep` creates an isolated VNet, delegated app
+subnet, and private endpoints/DNS for that resource group's Key Vault and Cosmos:
+
+```bash
+az deployment group create \
+  --resource-group rg-dsf-<product> --name dsf-private-network \
+  --template-file infra/instance-private-network.bicep \
+  --parameters namePrefix=<effective-prefix> \
+    keyVaultName=<existing-vault> cosmosAccountName=<existing-cosmos> \
+  --query properties.outputs.infrastructureSubnetId.value --output tsv
+```
+
+Use the manifest's effective `azure.namePrefix`, not the unnormalized command-line
+base prefix. Save the returned subnet ID in `azure.infrastructureSubnetId`, then
+rerun provisioning. The default ranges are `10.173.0.0/16`, `10.173.0.0/23`
+(apps), and `10.173.2.0/24` (endpoints); override the three address-prefix
+parameters before deployment when peering requires different, nonoverlapping
+ranges. This template does not change either service's public-access policy.
+External private Search/model services need their own authorized connectivity.
+
+!!! warning "Existing apps cannot move environments in place"
+    Switching between default and VNet-integrated environments is not an automatic
+    migration. Pause the factory, retain its desired configuration, and recreate
+    only its Container Apps in the new environment. Do not delete backing services
+    or another factory's resources. Remove the superseded environment only after
+    the replacement apps resolve private DNS and authenticate to the real services.
+
+## Enable Decide sources and judgment
+
+Source agents default to disabled. Supply `--decide-config <path>` to provision
+only the selected Microsoft-native agents, seed their product-scoped
+`agents.<kind>.enabled` flags, and wire the orchestrator's internal A2A endpoints.
+The nonsecret configuration is retained under `runtime.decide` in the instance
+definition and reused when a subsequent `dsf new` omits this option.
+
+Example `decide.json` (replace endpoints and deployment names with existing,
+authorized Azure model deployments):
+
+```json
+{
+  "enabledSourceAgentKinds": ["webiq"],
+  "webIqQuery": "checkout reliability problems and customer needs",
+  "juryModels": [
+    {"name":"value-check","provider":"openai","family":"gpt","endpoint":"https://models.example","deployment":"gpt-4o"},
+    {"name":"challenge","provider":"deepseek","family":"deepseek","endpoint":"https://models.example","deployment":"DeepSeek-V3"},
+    {"name":"independent-check","provider":"xai","family":"grok","endpoint":"https://models.example","deployment":"grok-4"}
+  ],
+  "juryTimeoutSeconds": 120,
+  "deliberationRounds": 2,
+  "lenses": [{"name":"cost","enabled":true,"weight":0.5}]
+}
+```
+
+```bash
+dsf new --product microbi --creation-maturity medium \
+  --decide-config decide.json --dry-run --write-plan
+```
+
+Enabling any source requires three distinct juror families and deployment targets.
+The supported Azure-hosted provider/family pairs are `openai/gpt`,
+`deepseek/deepseek`, and `xai/grok`; three aliases for the same model are rejected
+at configuration or response validation. The runtime uses Azure managed identity
+against `/openai/v1/chat/completions`. This template does **not** create those
+three external deployments or grant access on external accounts automatically.
+Grant the runtime identity the appropriate model data-plane role on each account.
+The synthesis/lens model remains the product's configured Azure OpenAI deployment.
+
+All five lenses default to enabled with weight 1. `lenses` can override `value`,
+`cost`, `feasibility`, `security`, or `strategic-fit`; at least one must remain
+enabled. Rounds must be 1 or 2, weights finite and positive, and juror timeouts
+1–600 seconds. Low creation maturity always escalates; medium/high permits
+filing only for a valid unanimous-go jury outcome.
+
+| Source | Required configuration | External prerequisite |
+|---|---|---|
+| `azuremonitor` | `azureMonitorWorkspaceId`, `azureMonitorQuery` (KQL) | Runtime identity authorized to query that Log Analytics workspace |
+| `foundryiq` | `foundryIqSearchEndpoint`, `foundryIqKnowledgeBase`, `foundryIqQuery` | Azure AI Search knowledge base; Search Index Data Reader for the runtime identity |
+| `webiq` | `webIqQuery` | `webiq-api-key` already present in the product Key Vault |
+
+Azure Monitor queries must return exactly one table with nonempty string
+`Reference` and `Summary` columns. For example, a Container Apps log query can
+project `Reference=strcat("azuremonitor://<workspace-id>/", ContainerAppName_s, "/", ContainerGroupName_s, "/", tostring(TimeGenerated))`
+and `Summary=Log_s`, replacing `<workspace-id>` with the actual workspace ID.
+Choose references that identify the actual source record; `_ResourceId` can be
+empty in Container Apps custom logs. Use Kusto's `tostring` for timestamps, not
+the .NET-only `format_datetime(..., "o")` format.
+Partial or truncated query results fail rather than silently losing evidence.
+For a local proof, `AZURE_TOKEN_CREDENTIALS=AzureCliCredential` selects the
+existing `az login` identity without waiting for unavailable hosted credentials;
+deployed apps continue to use managed identity.
+
+FoundryIQ uses the **Search service root**, not a Foundry project endpoint.
+WebIQ uses Microsoft's SDK-compatible `/v3/search/web` API. Do not put API keys,
+tokens, or passwords in this file; unknown properties are rejected. Secret
+seeding remains an operator prerequisite, not an implemented `dsf new` step.
+For local WebIQ development only, `WEBIQ_API_KEY` overrides Key Vault resolution.
+
 !!! note "Live progress during Azure deployment"
     The Azure provisioning step starts a deployment, polls it, and streams each resource as it
     starts and finishes. Tune cadence with `DSF_DEPLOY_POLL_INTERVAL` (seconds, default 5).
@@ -50,8 +166,15 @@ needs:
   identify the control plane created by `dsf bootstrap`; the App Configuration endpoint (or
   `--owner-appconfig-endpoint`) is required for a live run to publish the product index.
 - **GitHub:** `GH_TOKEN` or `GITHUB_TOKEN` that can create repositories under `--owner` and seed
-  baseline CI. The CLI does not retrieve credentials from owner stores. When owner Key Vault is configured, the CLI resolves stored GitHub App and
-  installation identifiers automatically; explicit identifiers remain supported.
+  baseline CI. The CLI does not retrieve credentials from App Configuration. When owner Key
+  Vault is configured, the CLI resolves stored GitHub App and installation identifiers
+  automatically. Explicit identifiers remain supported through
+  `--github-app-id` and `--github-installation-id`, or `DSF_GITHUB_APP_ID` and
+  `DSF_GITHUB_INSTALLATION_ID`.
+  Installation-binding endpoints require a supported personal access token or GitHub App
+  user token; the OAuth token returned by `gh auth token` may create repositories but is
+  rejected by those endpoints. Personal repositories support `private` or `public`,
+  not organization-only `internal` visibility.
 - **Spec Kit CLI:** `specify` on `PATH`, pinned by your operator image or workstation setup.
 - **Azure subscription RBAC:** **Owner**, or **Contributor + User Access Administrator**, on
   the subscription.
@@ -71,6 +194,10 @@ A complete, isolated factory for the product:
   `infra/main.bicep`,
 - a product record in the owner App Configuration index,
 - an SRE Agent wired to production scope.
+
+The SRE Agent uses the provider-supported, approval-required `Review` mode with
+`Low` access. Operation maturity controls its separately scoped remediation RBAC;
+provisioning does not enable `Autonomous` mode.
 
 ```mermaid
 flowchart TD

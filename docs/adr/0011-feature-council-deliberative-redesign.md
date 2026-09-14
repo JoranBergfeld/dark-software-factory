@@ -5,7 +5,7 @@
 - Fulfils: the feature-council decision-path redesign (design spec 2026-06-19). Builds on ADR 0001 (ports), ADR 0004 (ACA runtime), ADR 0007 (squad handoff, unchanged), ADR 0009 (SRE fast-path boundary). Supersedes nothing.
 - Design detail: [`docs/superpowers/specs/2026-06-19-feature-council-deliberative-redesign-design.md`](../superpowers/specs/2026-06-19-feature-council-deliberative-redesign-design.md)
 
-## Context
+## Context at the original decision
 
 The council decides with deterministic critic functions. `council/decision.py`
 runs each enabled critic and `CouncilVerdict.from_scores` applies one rule: any
@@ -80,6 +80,33 @@ review (Verga et al. 2024, arXiv:2404.18796).
   call the model through the injected port, so tests script their outputs and
   assert on pipeline behavior with no network; the outcome policy is unit-tested
   directly.
+
+## Current .NET realization
+
+Issue #173 refines this decision for the .NET implementation. S3 remains a
+separate cross-source evidence-clustering station; worth-building deliberation
+stays in S5 after grounding. Five configurable lenses feed a deterministic
+weighted synthesizer; a separately configured three-juror panel validates the
+recommendation. Jurors must use distinct model families rather than three
+personas calling the same deployment.
+
+S6/S7 read explicit `Proceed`, `Escalate`, `Kill`, or `Error` verdicts. Low
+creation maturity always escalates valid judgments, split jury votes escalate,
+unanimous no-go kills, and unanimous go can proceed at medium/high maturity.
+Invalid or unavailable results fail loudly. Escalation persists the evidence,
+lens rounds, synthesized recommendation, and jury results without filing.
+The handoff label is now `creation:ready`, not the historical `squad:ready`.
+
+The .NET intake is a lease-guarded in-process sweep over served A2A source
+agents, not the Python signal buffer described below. Production never substitutes
+offline critics or scripted model results. Tests may replace external ports;
+only the separate live/staging proof in #183 establishes unattended real filing.
+
+## Historical Python rollout
+
+The following notes describe the removed Python implementation, not the current
+.NET runtime or evidence that its live acceptance gate has passed.
+
 - **Plan 2 landed the deliberation council** (`council/deliberation.py`). The five
   lenses (value, cost, feasibility, security, strategic fit) each take a position,
   read their peers, and revise over `deliberation.rounds` rounds (a new per-product
@@ -107,8 +134,6 @@ review (Verga et al. 2024, arXiv:2404.18796).
   lease/ack/dead-letter behind the same port, the same way the model/memory/config
   ports grew real Azure siblings later. `/file` stays the deliberate human filing
   path, unchanged.
-- This ADR records the decision. The detailed design is in the spec, and the
-  implementation was staged across follow-up plans. Plan 1 (model-diverse
-  validation jury, per-product maturity dial, escalate outcome), Plan 2
-  (deliberation council), and Plan 3 (governed pull intake) have all landed, so the
-  whole ADR 0011 redesign is shipped. The phase doc marks the state honestly.
+- The original rollout delivered Plan 1 (validation jury), Plan 2 (deliberation
+  council), and Plan 3 (governed pull intake). Those historical milestones do not
+  establish completion of the current .NET implementation tickets #174-#183.

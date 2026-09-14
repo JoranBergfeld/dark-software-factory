@@ -8,19 +8,10 @@ using Xunit;
 namespace Dsf.Runtime.Tests;
 
 /// <summary>
-/// Proves the Decide phase's <c>creation:ready</c> acceptance gate end-to-end
-/// (#183): a manually-triggered <c>dsf sweep</c> reaches S7 filing with no
-/// human or mock standing in for evidence, judgment, or scheduling. WebIQ is
-/// enabled through its real typed adapter (<see cref="WebIqIntegration"/>),
-/// served by a real source-agent host (<see
-/// cref="RuntimeVerbs.BuildSourceAgentHost"/>) that the orchestrator reaches
-/// over a genuine HTTP A2A hop (<see cref="SourceAgentEvidenceGatherer"/>);
-/// only the innermost outbound call each external boundary would otherwise
-/// make -- the live WebIQ HTTP search and the live GitHub issue-filing REST
-/// call -- is scripted. Every station in between (S2 gather, S3's real
-/// <c>LexicalSimilarityEvidenceClusterer</c>, S4 grounding, S5's real
-/// five-lens deliberation and three-juror validation panel, S6 routing, S7
-/// filing) runs unmodified production code.
+/// Offline pipeline integration coverage: real HTTP A2A hosting and station code,
+/// with scripted vendor, model, persistence, lease, and filing boundaries.
+/// These tests do not prove #183's live acceptance gate, model diversity, vendor
+/// compatibility, or deployed scheduling; those require separate staging evidence.
 /// </summary>
 public sealed class EndToEndAcceptanceGateTests
 {
@@ -42,7 +33,7 @@ public sealed class EndToEndAcceptanceGateTests
         app.Urls.First().Replace("[::]", "127.0.0.1", StringComparison.Ordinal);
 
     [Fact]
-    public async Task A_manually_triggered_sweep_files_a_creation_ready_issue_through_the_real_webiq_adapter_and_five_lens_three_juror_council()
+    public async Task A_manually_triggered_sweep_exercises_served_webiq_and_council_with_scripted_external_boundaries()
     {
         var env = new Dictionary<string, string?>
         {
@@ -51,9 +42,7 @@ public sealed class EndToEndAcceptanceGateTests
             [RuntimeIntegrationSettings.ConfirmLiveFiling] = "true",
         };
 
-        // The one seam that would otherwise require a live outbound call: the
-        // WebIQ web-search HTTP endpoint itself. WebIqIntegration -- the real
-        // typed adapter -- runs unmodified against this scripted gateway.
+        // Exercise adapter and A2A transport without calling the vendor.
         var gateway = new ScriptedWebIqSearchGateway(
             new WebIqResult(
                 "Checkout 500s spiking after release 4.2",
@@ -76,7 +65,7 @@ public sealed class EndToEndAcceptanceGateTests
         {
             // The orchestrator's real A2A client, pointed at the served agent
             // over genuine HTTP -- not an in-process call to the integration.
-            var gatherer = new SourceAgentEvidenceGatherer("webiq", new Uri(BaseAddress(agent)), new HttpClient());
+            var gatherer = new SourceAgentEvidenceGatherer("webiq", "acme", new Uri(BaseAddress(agent)), new HttpClient());
             var filer = new RecordingIssueFiler();
             var runStore = new RecordingRunStore();
             var model = new RecordingModelClient();
@@ -90,6 +79,7 @@ public sealed class EndToEndAcceptanceGateTests
 
             var run = await RuntimeVerbs.SweepAsync(Settings, dryRun: false, dependencies, CancellationToken.None, env);
 
+            Assert.NotNull(run);
             Assert.Equal(RunStatus.Filed, run.Status);
             Assert.Equal(2, run.Evidence.Count);
             Assert.All(run.Evidence, item => Assert.Equal("webiq", item.SourceKind));
@@ -101,16 +91,14 @@ public sealed class EndToEndAcceptanceGateTests
             Assert.Contains("source:webiq", filed.Labels);
             Assert.False(string.IsNullOrEmpty(filed.IntentKey));
 
-            // Real five-lens deliberation and real three-juror validation both
-            // ran -- not a mock standing in for S5's judgment -- and reached an
-            // explicit Proceed outcome, all recorded to the run's audit trail.
+            // Station control flow records the scripted model's judgments.
             foreach (var lensName in new[] { "value", "cost", "feasibility", "security", "strategic-fit" })
             {
                 Assert.Contains(
                     run.Audit, record => record.Message.Contains($"lens '{lensName}'", StringComparison.Ordinal));
             }
 
-            foreach (var jurorName in new[] { "juror-primary", "juror-adversarial", "juror-operational" })
+            foreach (var jurorName in new[] { "test-openai", "test-deepseek", "test-xai" })
             {
                 Assert.Contains(
                     run.Audit, record => record.Message.Contains($"juror '{jurorName}'", StringComparison.Ordinal));
@@ -147,7 +135,7 @@ public sealed class EndToEndAcceptanceGateTests
         await agent.StartAsync();
         try
         {
-            var gatherer = new SourceAgentEvidenceGatherer("webiq", new Uri(BaseAddress(agent)), new HttpClient());
+            var gatherer = new SourceAgentEvidenceGatherer("webiq", "acme", new Uri(BaseAddress(agent)), new HttpClient());
             var runStore = new RecordingRunStore();
             var dependencies = TestDependencies.Build(
                 sourceAgentRosterReader: new RosterReader(["webiq"]),

@@ -94,4 +94,23 @@ public sealed class AppConfigurationClientTests
             "dsf/owner/bootstrap/dsf-sbx-20260907/status",
             ProductConfigurationKeys.OwnerBootstrapStatus("dsf-sbx-20260907"));
     }
+
+    [Fact]
+    public async Task Source_roster_seed_enables_only_provisioned_kinds_for_the_product()
+    {
+        var runner = new RecordingAzureCliRunner();
+        var client = new AzureCliAppConfigurationClient(runner);
+
+        await client.SeedSourceAgentRosterAsync("https://demo.azconfig.io", "demo", ["azuremonitor"], CancellationToken.None);
+
+        Assert.Equal(3, runner.Invocations.Count);
+        foreach (var kind in SourceAgentKinds.Known)
+        {
+            Assert.Contains(runner.Invocations, invocation =>
+                invocation.Contains(ProductConfigurationKeys.AgentEnabled(kind))
+                && invocation.Contains(kind == "azuremonitor" ? "true" : "false")
+                && invocation.Contains("--label")
+                && invocation.Contains("demo"));
+        }
+    }
 }

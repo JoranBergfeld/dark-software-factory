@@ -49,7 +49,8 @@ internal static class PlannedInstanceDefinition
             Runtime = new RuntimeSettings
             {
                 Target = runtimeTarget,
-                Image = DefaultRuntimeImage,
+                Image = existing?.Runtime.Image ?? DefaultRuntimeImage,
+                Decide = existing?.Runtime.Decide ?? new(),
             },
             Governance = new GovernanceSettings
             {
@@ -75,6 +76,7 @@ internal static class PlannedInstanceDefinition
                 NamePrefix = namePrefix,
                 ResourceGroup = resourceGroup,
                 DeploymentName = $"dsf-{product}",
+                InfrastructureSubnetId = existing?.Azure.InfrastructureSubnetId,
                 SreAgent = new SreAgentSettings
                 {
                     Name = $"dsf-sre-{product}",

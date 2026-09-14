@@ -1,5 +1,6 @@
 using Dsf.Core.Runtime;
 using Dsf.FeatureCouncil.Conveyor;
+using Dsf.FeatureCouncil.Conveyor.Stations;
 using Xunit;
 
 namespace Dsf.Runtime.Tests;
@@ -25,7 +26,8 @@ public sealed class ConveyorPersistenceTests
         GitHubAppId: "",
         GitHubInstallationId: "",
         GitHubAppPrivateKeySecret: "",
-        GitHubRepository: "acme/acme");
+        GitHubRepository: "acme/acme",
+        CreationMaturity: "high");
 
     /// <summary>The manual live-filing gate, confirmed -- for tests that must reach real filing.</summary>
     private static readonly IReadOnlyDictionary<string, string?> ConfirmedLiveFiling = new Dictionary<string, string?>
@@ -38,6 +40,21 @@ public sealed class ConveyorPersistenceTests
         var path = Path.Combine(Path.GetTempPath(), $"dsf-signal-{Guid.NewGuid():n}.json");
         await File.WriteAllTextAsync(path, json);
         return path;
+    }
+
+    private static async Task CheckpointReadyProposalAsync(ConveyorRun run, RuntimeDependencies dependencies)
+    {
+        run.Evidence.Add(new EvidenceItem("azuremonitor", "AZUREMONITOR-1", "checkout 500s spiked"));
+        var proposal = new Proposal("p1", "Investigate checkout 500s", ["azuremonitor"], ["AZUREMONITOR-1"])
+        {
+            IntentKey = "intent-1",
+        };
+        proposal.Labels.Add("bug");
+        run.Proposals.Add(proposal);
+        var services = dependencies.ConveyorServicesFor(Settings);
+        await new S5Council().RunAsync(run, services, CancellationToken.None);
+        await new S6Routing().RunAsync(run, services, CancellationToken.None);
+        run.Checkpoints.AddRange([S5Council.StationName, S6Routing.StationName]);
     }
 
     [Fact]
@@ -53,7 +70,7 @@ public sealed class ConveyorPersistenceTests
         {
             var run = await RuntimeVerbs.RunAsync(Settings, path, dryRun: true, dependencies, CancellationToken.None);
 
-            Assert.Equal(ConveyorLine.StationNames, store.Saved.Select(saved => saved.Station).ToArray());
+            Assert.Equal(ConveyorLine.StationNames, store.Saved.Select(saved => saved.Station).Distinct().ToArray());
             Assert.All(store.Saved, saved => Assert.Equal(run.Id, saved.RunId));
         }
         finally
@@ -108,8 +125,8 @@ public sealed class ConveyorPersistenceTests
     {
         var dependencies = TestDependencies.Build(sourceAgentRosterReader: new RosterReader(["azuremonitor"]));
 
-        var run = await RuntimeVerbs.SweepAsync(
-            Settings, dryRun: false, dependencies, CancellationToken.None, ConfirmedLiveFiling);
+        var run = Assert.IsType<ConveyorRun>(await RuntimeVerbs.SweepAsync(
+            Settings, dryRun: false, dependencies, CancellationToken.None, ConfirmedLiveFiling));
 
         Assert.Equal(RunStatus.Error, run.Status);
         Assert.NotEqual(RunStatus.Filed, run.Status);
@@ -127,10 +144,12 @@ public sealed class ConveyorPersistenceTests
             runStore: store,
             sourceAgentRosterReader: new RosterReader(["azuremonitor"]));
 
-        var first = await RuntimeVerbs.SweepAsync(Settings, dryRun: true, dependencies, CancellationToken.None);
+        var first = Assert.IsType<ConveyorRun>(
+            await RuntimeVerbs.SweepAsync(Settings, dryRun: true, dependencies, CancellationToken.None));
         Assert.Equal(RunStatus.Previewed, first.Status);
 
-        var second = await RuntimeVerbs.SweepAsync(Settings, dryRun: true, dependencies, CancellationToken.None);
+        var second = Assert.IsType<ConveyorRun>(
+            await RuntimeVerbs.SweepAsync(Settings, dryRun: true, dependencies, CancellationToken.None));
 
         // A later sweep over the exact same product and roster must still be
         // driven through every station -- the first sweep's terminal status must
@@ -171,7 +190,7 @@ public sealed class ConveyorPersistenceTests
             Assert.DoesNotContain(store.Saved, saved => saved.Station is "s1_triage" or "s2_investigation");
             Assert.Equal(
                 ConveyorLine.StationNames.Skip(2).ToArray(),
-                store.Saved.Select(saved => saved.Station).ToArray());
+                store.Saved.Select(saved => saved.Station).Distinct().ToArray());
             Assert.Equal(ConveyorLine.StationNames, run.Checkpoints);
             Assert.Equal(RunStatus.Previewed, run.Status);
         }
@@ -241,14 +260,8 @@ public sealed class ConveyorPersistenceTests
             // Simulates a crashed non-dry-run process: S1..S6 checkpointed, one
             // accepted proposal routed and ready for S7, but the process died
             // before filing it.
-            priorRun.Checkpoints.AddRange(ConveyorLine.StationNames.Take(6));
-            var proposal = new Proposal("p1", "Investigate checkout 500s", ["azuremonitor"], ["AZUREMONITOR-1"])
-            {
-                Verdict = ProposalVerdict.Proceed,
-                IntentKey = "intent-1",
-            };
-            proposal.Labels.Add("bug");
-            priorRun.Proposals.Add(proposal);
+            priorRun.Checkpoints.AddRange(ConveyorLine.StationNames.Take(4));
+            await CheckpointReadyProposalAsync(priorRun, dependencies);
             store.Seed(priorRun);
 
             var run = await RuntimeVerbs.RunAsync(Settings, path, dryRun: true, dependencies, CancellationToken.None);
@@ -292,14 +305,8 @@ public sealed class ConveyorPersistenceTests
             // same open run and must be allowed to file it for real -- the fix
             // must clear the stale DryRun=true it inherited, not just ever
             // force DryRun=true.
-            priorRun.Checkpoints.AddRange(ConveyorLine.StationNames.Take(6));
-            var proposal = new Proposal("p1", "Investigate checkout 500s", ["azuremonitor"], ["AZUREMONITOR-1"])
-            {
-                Verdict = ProposalVerdict.Proceed,
-                IntentKey = "intent-1",
-            };
-            proposal.Labels.Add("bug");
-            priorRun.Proposals.Add(proposal);
+            priorRun.Checkpoints.AddRange(ConveyorLine.StationNames.Take(4));
+            await CheckpointReadyProposalAsync(priorRun, dependencies);
             store.Seed(priorRun);
 
             var run = await RuntimeVerbs.RunAsync(

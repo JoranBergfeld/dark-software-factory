@@ -209,8 +209,8 @@ public sealed class RuntimeCliApplicationTests
 
         var (exitCode, stdout, stderr) = await InvokeAsync(FullEnvironment, dependencies, "sweep");
 
-        Assert.Equal(0, exitCode);
         Assert.Equal(string.Empty, stderr);
+        Assert.Equal(0, exitCode);
         Assert.Equal("acme", roster.RequestedSettings?.Product);
         Assert.Contains("sources=[foundryiq, azuremonitor]", stdout);
         Assert.Contains("checkpoints=[s1_triage", stdout);
@@ -226,8 +226,8 @@ public sealed class RuntimeCliApplicationTests
         // Backed by a real roster read that returned nothing -- not an unconditional
         // "nothing to do". Parity with the Python sweep, which drives an empty
         // scheduled run and exits 0.
+        Assert.True(string.IsNullOrEmpty(stderr), stderr);
         Assert.Equal(0, exitCode);
-        Assert.Equal(string.Empty, stderr);
         Assert.Contains("enabled sources=[(none)]", stdout);
     }
 
@@ -432,8 +432,8 @@ public sealed class RuntimeCliApplicationTests
 
         // Settings resolved from the owner index; the verb then does its real work
         // instead of reporting missing configuration.
-        Assert.Equal(0, exitCode);
         Assert.Equal(string.Empty, stderr);
+        Assert.Equal(0, exitCode);
         Assert.Equal("acme", reader.RequestedProduct);
     }
 

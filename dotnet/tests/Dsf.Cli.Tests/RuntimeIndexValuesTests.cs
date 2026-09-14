@@ -33,11 +33,15 @@ public sealed class RuntimeIndexValuesTests
         Assert.Equal("7", values["GITHUB_APP_ID"]);
         Assert.Equal("42", values["GITHUB_INSTALLATION_ID"]);
         Assert.Equal("github-app-private-key", values["GITHUB_APP_PRIVATE_KEY_SECRET"]);
+        Assert.Equal("medium", values[RuntimeIntegrationSettings.CreationMaturity]);
+        Assert.Equal("paritydemo", values[RuntimeIntegrationSettings.CosmosDatabase]);
+        Assert.Equal("https://webiq.internal.example",
+            values[RuntimeIntegrationSettings.SourceAgentEndpoint("webiq")]);
     }
 
     private static InstanceDefinition SampleDefinition() => new()
     {
-        Product = new ProductSettings { Key = "paritydemo" },
+        Product = new ProductSettings { Key = "paritydemo", CreationMaturity = "medium" },
         Runtime = new Dsf.Core.Instances.RuntimeSettings(),
         Governance = new GovernanceSettings(),
         GitHub = new GitHubSettings
@@ -67,6 +71,7 @@ public sealed class RuntimeIndexValuesTests
                 ["openaiDeployment"] = "gpt-deploy",
                 ["openaiEmbeddingDeployment"] = "embed-deploy",
                 ["keyVaultUri"] = "https://keyvault.example",
+                ["sourceAgentEndpoints"] = """{"DSF_SOURCE_AGENT_ENDPOINT_WEBIQ":"https://webiq.internal.example"}""",
             },
         },
         Status = new InstanceStatus { GeneratedAt = DateTimeOffset.UnixEpoch },

@@ -6,17 +6,9 @@ namespace Dsf.Runtime;
 
 /// <summary>
 /// The orchestrator worker's continuous sweep (<c>serve-orchestrator --loop</c>):
-/// sweeps the enabled source agents every interval for as long as the host serves,
-/// logging each finished run. One failing tick is logged and swallowed so a bad
-/// sweep never tears down the long-lived Container App, matching the Python
-/// <c>run_orchestrator_loop</c> behaviour.
-///
-/// Every tick re-reads <see cref="ISweepControlStore"/> so an operator's
-/// <c>dsf sweep pause</c>/<c>resume</c>/<c>interval</c> takes effect on the very
-/// next tick without a redeploy, and acquires <see cref="ISweepLease"/> before
-/// running the conveyor so two overlapping attempts for the same tick window
-/// (e.g. an old and new process instance during a rolling redeploy) can never
-/// both proceed.
+/// reads controls at least once per second while idle, and sweeps only when the
+/// current cadence has elapsed. Failed reads skip work, never unpause it.
+/// Manual and periodic work share RuntimeVerbs' product-wide ownership guard.
 /// </summary>
 internal sealed class PeriodicSweepService(
     RuntimeSettings settings,
@@ -25,8 +17,14 @@ internal sealed class PeriodicSweepService(
     IReadOnlyDictionary<string, string?>? env,
     ISweepControlStore sweepControlStore,
     ISweepLease sweepLease,
-    ILogger<PeriodicSweepService> logger) : BackgroundService
+    ILogger<PeriodicSweepService> logger,
+    TimeProvider? timeProvider = null) : BackgroundService
 {
+    private readonly TimeProvider clock = timeProvider ?? TimeProvider.System;
+    private readonly TimeSpan pollInterval = interval >= TimeSpan.FromMilliseconds(1)
+        ? (interval < TimeSpan.FromSeconds(1) ? interval : TimeSpan.FromSeconds(1))
+        : throw new ArgumentOutOfRangeException(nameof(interval), "Sweep interval must be at least one millisecond.");
+
     /// <summary>Seconds between sweeps when neither <c>--interval</c> nor the env var is set.</summary>
     public const int DefaultIntervalSeconds = 300;
 
@@ -53,80 +51,64 @@ internal sealed class PeriodicSweepService(
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        var lastAttemptEnded = clock.GetTimestamp();
         while (!stoppingToken.IsCancellationRequested)
         {
-            SweepControlState control;
             try
             {
-                control = await sweepControlStore.ReadAsync(stoppingToken);
-            }
-            catch (OperationCanceledException)
-            {
-                return;
-            }
-            catch (Exception exception)
-            {
-                logger.LogError("[dsf] orchestrator failed to read sweep controls: {Message}", exception.Message);
-                control = SweepControlState.Unset;
-            }
+                using var readTimeout = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+                readTimeout.CancelAfter(TimeSpan.FromSeconds(30));
+                var control = await sweepControlStore.ReadAsync(readTimeout.Token).WaitAsync(readTimeout.Token);
+                var effectiveInterval = control.IntervalSeconds > 0
+                    ? TimeSpan.FromSeconds(control.IntervalSeconds)
+                    : interval;
 
-            var effectiveInterval = control.IntervalSeconds > 0
-                ? TimeSpan.FromSeconds(control.IntervalSeconds)
-                : interval;
-
-            try
-            {
-                await Task.Delay(effectiveInterval, stoppingToken);
-            }
-            catch (OperationCanceledException)
-            {
-                return;
-            }
-
-            if (control.Paused)
-            {
-                logger.LogInformation("[dsf] orchestrator tick skipped: sweep is paused.");
-                continue;
-            }
-
-            bool acquired;
-            try
-            {
-                acquired = await sweepLease.TryAcquireAsync(
-                    settings.Product, DateTimeOffset.UtcNow, effectiveInterval, stoppingToken);
-            }
-            catch (OperationCanceledException)
-            {
-                return;
-            }
-            catch (Exception exception)
-            {
-                logger.LogError("[dsf] orchestrator failed to acquire the sweep lease: {Message}", exception.Message);
-                continue;
-            }
-
-            if (!acquired)
-            {
-                logger.LogInformation(
-                    "[dsf] orchestrator tick skipped: another attempt already holds the sweep lease for this window.");
-                continue;
-            }
-
-            try
-            {
-                var run = await RuntimeVerbs.SweepAsync(settings, dryRun: false, dependencies, stoppingToken, env);
-                foreach (var line in RuntimeRunSummary.From(run).ToLines())
+                if (!control.Paused && clock.GetElapsedTime(lastAttemptEnded) >= effectiveInterval)
                 {
-                    logger.LogInformation("{Line}", line);
+                    try
+                    {
+                        var run = await RuntimeVerbs.SweepAsync(
+                            settings, dryRun: false, dependencies, stoppingToken, env, sweepLease);
+                        if (run is null)
+                        {
+                            logger.LogInformation(
+                                "[dsf] orchestrator tick skipped: another sweep owns the product lease.");
+                        }
+                        else
+                        {
+                            foreach (var line in RuntimeRunSummary.From(run).ToLines())
+                            {
+                                logger.LogInformation("{Line}", line);
+                            }
+                        }
+                    }
+                    finally
+                    {
+                        lastAttemptEnded = clock.GetTimestamp();
+                    }
                 }
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException exception) when (stoppingToken.IsCancellationRequested)
             {
+                if (exception.InnerException is AggregateException)
+                {
+                    logger.LogError("[dsf] orchestrator sweep cleanup failed: {Message}", exception.Message);
+                }
+
                 return;
             }
             catch (Exception exception)
             {
-                logger.LogError("[dsf] orchestrator tick failed: {Message}", exception.Message);
+                logger.LogError("[dsf] orchestrator tick skipped or failed: {Message}", exception.Message);
+            }
+
+            try
+            {
+                await Task.Delay(pollInterval, clock, stoppingToken);
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                return;
             }
         }
     }

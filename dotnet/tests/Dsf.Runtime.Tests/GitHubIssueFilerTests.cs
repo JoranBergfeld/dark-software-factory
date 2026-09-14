@@ -216,22 +216,63 @@ public sealed class GitHubIssueFilerTests
     }
 
     [Fact]
+    public async Task Evolving_observations_of_the_same_problem_create_only_one_issue()
+    {
+        var recorded = new List<Recorded>();
+        var github = await StartGitHubAsync(recorded, _ => JsonSerializer.Serialize(new
+        {
+            items = recorded.Where(entry => entry.Path == "/repos/acme/acme/issues").Select(entry =>
+            {
+                using var document = JsonDocument.Parse(entry.Body);
+                return new { html_url = "https://github.com/acme/acme/issues/7", body = document.RootElement.GetProperty("body").GetString() };
+            }).ToArray(),
+        }));
+        await using var host = github;
+        try
+        {
+            using var http = new HttpClient { BaseAddress = new Uri($"{BaseAddress(github)}/") };
+            var filer = new GitHubIssueFiler(http, "ghp_test", "acme/acme");
+            var services = new ConveyorServices(
+                "acme", [], filer, new RecordingRunStore(), new RecordingModelClient(), new RecordingTracer(),
+                new FixedConfidenceThresholdReader(0.6),
+                ProblemIdentityResolver: new CosmosProblemIdentityResolver(
+                    "https://cosmos.example", "dsf", "learning", "acme", new ProblemIdentityTestGateway()));
+            foreach (var summary in new[] { "checkout errors: 17", "checkout errors: 18" })
+            {
+                var run = new ConveyorRun { Fingerprint = "same-scope" };
+                run.Evidence.Add(new EvidenceItem("azuremonitor", "checkout-alert", summary));
+                await new Dsf.FeatureCouncil.Conveyor.Stations.S3Synthesis().RunAsync(run, services, CancellationToken.None);
+                await filer.FileAsync(Assert.Single(run.Proposals), CancellationToken.None);
+            }
+
+            Assert.Single(recorded, entry => entry.Path == "/repos/acme/acme/issues");
+        }
+        finally
+        {
+            await github.StopAsync();
+        }
+    }
+
+    [Fact]
     public async Task Synthesis_gives_every_proposal_a_durable_intent_key()
     {
         var run = new ConveyorRun { ProductHints = ["acme"], SourceKinds = ["sentry"] };
         run.Evidence.Add(new EvidenceItem("sentry", "SENTRY-1", "checkout 500s spiked"));
         run.Fingerprint = "abc123";
 
-        await new Dsf.FeatureCouncil.Conveyor.Stations.S3Synthesis()
-            .RunAsync(
-            run,
-            new ConveyorServices(
-                "acme", [], null, new RecordingRunStore(), new RecordingModelClient(), new RecordingTracer(),
-                new FixedConfidenceThresholdReader(0.6)),
-            CancellationToken.None);
+        var services = new ConveyorServices(
+            "acme", [], null, new RecordingRunStore(), new RecordingModelClient(), new RecordingTracer(),
+            new FixedConfidenceThresholdReader(0.6),
+            ProblemIdentityResolver: new CosmosProblemIdentityResolver(
+                "https://cosmos.example", "dsf", "learning", "acme", new ProblemIdentityTestGateway()));
+        var synthesis = new Dsf.FeatureCouncil.Conveyor.Stations.S3Synthesis();
+        await synthesis.RunAsync(run, services, CancellationToken.None);
 
         var proposal = Assert.Single(run.Proposals);
-        // Stable across runs of the same scope: the fingerprint, not the run id.
-        Assert.Equal("abc123:sentry", proposal.IntentKey);
+        Assert.Matches("^abc123:[0-9a-f]{32}$", proposal.IntentKey);
+        var laterRun = new ConveyorRun { ProductHints = ["acme"], SourceKinds = ["sentry"], Fingerprint = "abc123" };
+        laterRun.Evidence.Add(new EvidenceItem("sentry", "SENTRY-2", "checkout 500s spiked"));
+        await synthesis.RunAsync(laterRun, services, CancellationToken.None);
+        Assert.Equal(proposal.IntentKey, Assert.Single(laterRun.Proposals).IntentKey);
     }
 }

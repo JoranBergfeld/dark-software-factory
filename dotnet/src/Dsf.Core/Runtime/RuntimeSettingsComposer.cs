@@ -106,7 +106,12 @@ public static class RuntimeSettingsComposer
             GitHubRepository: Read(GitHubRepository),
             CreationMaturity: Read(RuntimeIntegrationSettings.CreationMaturity) is { Length: > 0 } maturity
                 ? maturity
-                : "low");
+                : "low")
+        {
+            IntegrationSettings = RuntimeIntegrationConfiguration.Keys
+                .Where(key => Read(key).Length > 0)
+                .ToDictionary(key => key, key => (string?)Read(key), StringComparer.Ordinal),
+        };
     }
 
     /// <summary>
@@ -159,7 +164,7 @@ public static class RuntimeSettingsComposer
                     [OwnerAppConfigEndpoint]);
             }
 
-            foreach (var envVar in ComposedEnvVars)
+            foreach (var envVar in ComposedEnvVars.Concat(RuntimeIntegrationConfiguration.Keys))
             {
                 if (Read(envVar).Length == 0
                     && index.TryGetValue(envVar, out var remoteValue)

@@ -68,7 +68,7 @@ public static class ConveyorLine
                 // station whose result was lost with the process.
                 await services.RunStore.SaveAsync(run, station.Name, cancellationToken);
             }
-            catch (Exception exception) when (exception is not OperationCanceledException)
+            catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
             {
                 run.Checkpoints.Remove(station.Name);
                 run.Status = RunStatus.Error;

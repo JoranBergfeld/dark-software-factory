@@ -29,9 +29,23 @@ public sealed class S3Synthesis : IStation
     public async Task RunAsync(ConveyorRun run, ConveyorServices services, CancellationToken cancellationToken)
     {
         var clusters = services.EvidenceClusterer.Cluster(run.Evidence);
+        ValidateClusters(run.Evidence, clusters);
+        var proposals = new List<Proposal>();
+        var problemKeys = new HashSet<string>(StringComparer.Ordinal);
         for (var index = 0; index < clusters.Count; index++)
         {
             var cluster = clusters[index];
+            var resolver = services.ProblemIdentityResolver
+                ?? throw new InvalidOperationException("S3 requires a configured problem identity resolver for nonempty clusters");
+            var problemKey = await resolver.ResolveAsync(run.Fingerprint, cluster, cancellationToken);
+            if (string.IsNullOrWhiteSpace(problemKey))
+            {
+                throw new InvalidOperationException("S3 problem identity resolver returned a blank problem key");
+            }
+            if (!problemKeys.Add(problemKey))
+            {
+                throw new InvalidOperationException($"S3 problem identity resolver returned duplicate problem key '{problemKey}'");
+            }
             var references = cluster.Evidence
                 .Select(item => item.Reference)
                 .Distinct(StringComparer.Ordinal)
@@ -43,11 +57,10 @@ public sealed class S3Synthesis : IStation
                 sourceKinds: cluster.SourceKinds,
                 evidenceReferences: references)
             {
-                // Scope fingerprint, not run id: the same conclusion reached again
-                // must resolve to the same filing intent.
-                IntentKey = $"{run.Fingerprint}:{kindLabel}",
+                IntentKey = $"{run.Fingerprint}:{problemKey}",
+                ClusterEvidence = cluster.Evidence.Distinct().ToArray(),
             };
-            run.Proposals.Add(proposal);
+            proposals.Add(proposal);
 
             IReadOnlyList<LearningRecord> lessons = [];
             if (services.LearningStore is not null)
@@ -64,12 +77,50 @@ public sealed class S3Synthesis : IStation
 
             var synthesis = await services.ModelClient.CompleteAsync(
                 SynthesisPrompt(kindLabel, cluster.Evidence.Select(item => item.Summary), lessons), cancellationToken);
+            if (string.IsNullOrWhiteSpace(synthesis))
+            {
+                throw new InvalidOperationException($"S3 returned an incomplete synthesis for '{proposal.Id}'");
+            }
             run.Record(StationName, $"model synthesis for '{proposal.Id}': {synthesis}");
         }
 
+        run.Proposals.Clear();
+        run.Proposals.AddRange(proposals);
         run.Record(
             StationName,
             $"synthesized {run.Proposals.Count} proposal(s) from {run.Evidence.Count} evidence item(s).");
+    }
+
+    private static void ValidateClusters(IReadOnlyList<EvidenceItem> evidence, IReadOnlyList<EvidenceCluster> clusters)
+    {
+        if (evidence.Any(item => item is null || string.IsNullOrWhiteSpace(item.SourceKind)
+                || string.IsNullOrWhiteSpace(item.Reference) || string.IsNullOrWhiteSpace(item.Summary)))
+        {
+            throw new InvalidOperationException("S3 evidence requires a source kind, reference and summary");
+        }
+
+        var expected = evidence.ToHashSet();
+        var claimed = new HashSet<EvidenceItem>();
+        foreach (var cluster in clusters)
+        {
+            if (cluster is null || cluster.Evidence.Count == 0)
+            {
+                throw new InvalidOperationException("S3 received an empty evidence cluster");
+            }
+
+            foreach (var item in cluster.Evidence.Distinct())
+            {
+                if (!expected.Contains(item) || !claimed.Add(item))
+                {
+                    throw new InvalidOperationException("S3 clusters contain invented evidence or assign evidence to multiple proposals");
+                }
+            }
+        }
+
+        if (!claimed.SetEquals(expected))
+        {
+            throw new InvalidOperationException("S3 clusters omit gathered evidence references");
+        }
     }
 
     private static string SynthesisPrompt(

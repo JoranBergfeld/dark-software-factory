@@ -79,6 +79,26 @@ public sealed class CosmosLearningStoreFactoryTests
             create);
     }
 
+    [Fact]
+    public async Task Factory_uses_owner_index_integration_settings_when_local_values_are_absent()
+    {
+        var gateway = new RecordingCosmosGateway();
+        var settings = SettingsWith() with
+        {
+            IntegrationSettings = new Dictionary<string, string?>
+            {
+                [RuntimeIntegrationSettings.CosmosDatabase] = "acme",
+                [RuntimeIntegrationSettings.CosmosLearningContainer] = "product-learning",
+            },
+        };
+
+        var store = CosmosLearningStoreFactory.Create(settings, new Dictionary<string, string?>(), gateway);
+        await store.RecordAsync(Record(), CancellationToken.None);
+
+        Assert.Equal(("https://cosmos.example", "acme", "product-learning", "acme"),
+            Assert.Single(gateway.Creates));
+    }
+
     private static RuntimeSettings SettingsWith(string cosmosEndpoint = "https://cosmos.example") => new(
         Product: "acme",
         AppConfigEndpoint: "https://appconfig.example",

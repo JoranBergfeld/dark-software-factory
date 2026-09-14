@@ -151,8 +151,10 @@ public sealed class SourceAgentGatherTests
         }
     }
 
-    [Fact]
-    public async Task The_orchestrator_side_gatherer_reads_evidence_from_a_served_source_agent()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task The_orchestrator_side_gatherer_reads_evidence_from_a_served_source_agent(bool withProductHints)
     {
         var agent = RuntimeVerbs.BuildSourceAgentHost(
             Settings,
@@ -165,10 +167,11 @@ public sealed class SourceAgentGatherTests
         await agent.StartAsync();
         try
         {
-            var gatherer = new SourceAgentEvidenceGatherer("azuremonitor", new Uri(BaseAddress(agent)), new HttpClient());
+            var gatherer = new SourceAgentEvidenceGatherer("azuremonitor", "acme", new Uri(BaseAddress(agent)), new HttpClient());
 
             var evidence = await gatherer.GatherAsync(
-                new ConveyorRun { SourceKinds = ["azuremonitor"], ProductHints = ["acme"] }, CancellationToken.None);
+                new ConveyorRun { SourceKinds = ["azuremonitor"], ProductHints = withProductHints ? ["acme"] : [] },
+                CancellationToken.None);
 
             var item = Assert.Single(evidence);
             Assert.Equal("AZUREMONITOR-9", item.Reference);
@@ -185,7 +188,7 @@ public sealed class SourceAgentGatherTests
     public async Task The_orchestrator_side_gatherer_reports_an_unreachable_source_agent()
     {
         var gatherer = new SourceAgentEvidenceGatherer(
-            "azuremonitor", new Uri("http://127.0.0.1:1"), new HttpClient());
+            "azuremonitor", "acme", new Uri("http://127.0.0.1:1"), new HttpClient());
 
         var exception = await Assert.ThrowsAnyAsync<Exception>(
             () => gatherer.GatherAsync(new ConveyorRun { SourceKinds = ["azuremonitor"] }, CancellationToken.None));

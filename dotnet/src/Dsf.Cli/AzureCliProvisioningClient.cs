@@ -153,6 +153,7 @@ internal sealed class AzureCliProvisioningClient : IAzureProvisioningClient
             "openaiEmbeddingDeployment",
             "runtimePrincipalId",
             "orchestratorAppName",
+            "sourceAgentEndpoints",
             "appInsightsId",
             "logAnalyticsId",
         ];
@@ -192,6 +193,7 @@ internal sealed class AzureCliProvisioningClient : IAzureProvisioningClient
             throw new InvalidOperationException(
                 $"Azure provisioning requires the backing-services template at '{request.BicepPath}'.");
         }
+        request.Decide.Validate();
 
         var parameters = new List<string>
         {
@@ -205,7 +207,45 @@ internal sealed class AzureCliProvisioningClient : IAzureProvisioningClient
             $"githubRepository={request.GitHubRepository}",
             $"allowPublicNetworkAccess={(request.AllowPublicNetworkAccess ? "true" : "false")}",
             $"operationMaturity={request.OperationMaturity}",
+            $"creationMaturity={request.CreationMaturity}",
         };
+        if (request.InfrastructureSubnetId is not null)
+        {
+            parameters.Add($"infrastructureSubnetId={request.InfrastructureSubnetId}");
+        }
+        if (request.Decide.EnabledSourceAgentKinds.Count > 0)
+        {
+            parameters.Add($"enabledSourceAgentKinds={JsonSerializer.Serialize(request.Decide.EnabledSourceAgentKinds)}");
+        }
+        var sourceParameters = new Dictionary<string, string>
+        {
+            ["azureMonitorWorkspaceId"] = request.Decide.AzureMonitorWorkspaceId,
+            ["azureMonitorQuery"] = request.Decide.AzureMonitorQuery,
+            ["foundryIqSearchEndpoint"] = request.Decide.FoundryIqSearchEndpoint,
+            ["foundryIqKnowledgeBase"] = request.Decide.FoundryIqKnowledgeBase,
+            ["foundryIqQuery"] = request.Decide.FoundryIqQuery,
+            ["webIqQuery"] = request.Decide.WebIqQuery,
+        };
+        parameters.AddRange(sourceParameters.Where(entry => !string.IsNullOrWhiteSpace(entry.Value))
+            .Select(entry => $"{entry.Key}={entry.Value}"));
+        if (request.Decide.JuryModels.Count > 0)
+        {
+            parameters.Add($"juryModels={Dsf.Core.Runtime.JurySettings.Create(request.Decide.JuryModels).SerializeModels()}");
+        }
+        if (request.Decide.JuryTimeoutSeconds != 120)
+        {
+            parameters.Add($"juryTimeoutSeconds={request.Decide.JuryTimeoutSeconds}");
+        }
+        if (request.Decide.DeliberationRounds != 2)
+        {
+            parameters.Add($"deliberationRounds={request.Decide.DeliberationRounds}");
+        }
+        if (request.Decide.Lenses.Count > 0)
+        {
+            var lenses = Dsf.Core.Runtime.DeliberationSettings.Create(
+                request.Decide.DeliberationRounds, request.Decide.Lenses).Lenses;
+            parameters.Add($"deliberationLenses={JsonSerializer.Serialize(lenses, new JsonSerializerOptions(JsonSerializerDefaults.Web))}");
+        }
         if (!string.IsNullOrWhiteSpace(request.AdminPrincipalId))
         {
             parameters.Add($"adminPrincipalId={request.AdminPrincipalId}");

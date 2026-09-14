@@ -140,7 +140,7 @@ public sealed class RuntimeVerbsTests
             Assert.Equal(RunStatus.Filed, run.Status);
             Assert.Equal(ConveyorLine.StationNames, run.Checkpoints);
             var filed = Assert.Single(filer.Filed);
-            Assert.Contains("ready-for-agent", filed.Labels);
+            Assert.Contains("creation:ready", filed.Labels);
             Assert.Single(run.FiledIssues);
         }
         finally
@@ -208,6 +208,7 @@ public sealed class RuntimeVerbsTests
             CancellationToken.None);
 
         Assert.Equal("acme", roster.RequestedSettings?.Product);
+        Assert.NotNull(run);
         Assert.Equal(["foundryiq", "azuremonitor"], run.SourceKinds);
         Assert.Equal(TriggerKind.Scheduled, run.Trigger);
         Assert.Equal(RunStatus.Previewed, run.Status);
@@ -379,7 +380,7 @@ public sealed class RuntimeVerbsTests
     }
 
     [Fact]
-    public async Task Run_calls_the_model_client_during_synthesis_and_council_for_every_proposal()
+    public async Task Run_uses_the_synthesis_model_for_lenses_and_independent_jurors_for_validation()
     {
         var path = await WriteSignalAsync("""{"product_hints": "acme", "source_kinds": ["azuremonitor"]}""");
         var model = new RecordingModelClient();
@@ -392,11 +393,13 @@ public sealed class RuntimeVerbsTests
             var run = await RuntimeVerbs.RunAsync(Settings, path, dryRun: true, dependencies, CancellationToken.None);
 
             Assert.Equal(RunStatus.Previewed, run.Status);
-            // One synthesis completion, plus one council completion per lens per
-            // deliberation round (5 lenses x 2 rounds = 10), plus one jury
-            // completion per juror (3) for the single proposal.
-            Assert.Equal(14, model.Prompts.Count);
+            // Synthesis and two rounds of five lenses share this client; the jury does not.
+            Assert.Equal(11, model.Prompts.Count);
             Assert.Contains(model.Prompts, prompt => prompt.Contains("azuremonitor", StringComparison.OrdinalIgnoreCase));
+            var review = Assert.IsType<CouncilReview>(Assert.Single(run.Proposals).CouncilReview);
+            Assert.Equal(
+                ["gpt", "deepseek", "grok"],
+                review.JuryVerdicts.Select(verdict => Assert.IsType<JurorModelSettings>(verdict.Model).Family));
         }
         finally
         {

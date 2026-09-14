@@ -37,7 +37,7 @@ public sealed class AzureMonitorIntegrationTests
     }
 
     [Fact]
-    public async Task Gather_maps_alternate_column_names()
+    public async Task Gather_rejects_columns_without_the_explicit_evidence_projection()
     {
         var gateway = new ScriptedAzureMonitorLogsGateway(
             new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
@@ -52,15 +52,12 @@ public sealed class AzureMonitorIntegrationTests
         };
         var integration = new AzureMonitorIntegration(env, gateway);
 
-        var evidence = await integration.GatherAsync("azuremonitor", "acme", CancellationToken.None);
-
-        var item = Assert.Single(evidence);
-        Assert.Equal("AM-9", item.Reference);
-        Assert.Equal("queue backed up", item.Summary);
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => integration.GatherAsync("azuremonitor", "acme", CancellationToken.None));
     }
 
     [Fact]
-    public async Task Gather_drops_rows_with_no_reference_column()
+    public async Task Gather_rejects_rows_with_no_reference_column()
     {
         var gateway = new ScriptedAzureMonitorLogsGateway(
             new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["Summary"] = "no id here" });
@@ -71,9 +68,8 @@ public sealed class AzureMonitorIntegrationTests
         };
         var integration = new AzureMonitorIntegration(env, gateway);
 
-        var evidence = await integration.GatherAsync("azuremonitor", "acme", CancellationToken.None);
-
-        Assert.Empty(evidence);
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => integration.GatherAsync("azuremonitor", "acme", CancellationToken.None));
     }
 
     [Fact]

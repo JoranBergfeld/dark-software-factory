@@ -37,7 +37,7 @@ internal sealed class AzureOpenAiCompletionGateway(TokenCredential? credential =
         var token = await credential.GetTokenAsync(new TokenRequestContext(Scopes), cancellationToken);
         var uri = new Uri(
             new Uri(EnsureTrailingSlash(endpoint)),
-            $"openai/deployments/{deployment}/chat/completions?api-version={ApiVersion}");
+            $"openai/deployments/{Uri.EscapeDataString(deployment)}/chat/completions?api-version={ApiVersion}");
         using var request = new HttpRequestMessage(HttpMethod.Post, uri)
         {
             Content = JsonContent.Create(new
@@ -58,15 +58,7 @@ internal sealed class AzureOpenAiCompletionGateway(TokenCredential? credential =
         }
 
         using var document = JsonDocument.Parse(body);
-        if (!document.RootElement.TryGetProperty("choices", out var choices)
-            || choices.ValueKind != JsonValueKind.Array
-            || choices.GetArrayLength() == 0)
-        {
-            throw new InvalidOperationException(
-                $"Azure OpenAI answered no choices for deployment '{deployment}': {body}");
-        }
-
-        return choices[0].GetProperty("message").GetProperty("content").GetString() ?? string.Empty;
+        return ModelCompletionResponse.ReadText(document.RootElement, $"Azure OpenAI deployment '{deployment}'");
     }
 
     private static string EnsureTrailingSlash(string url) => url.EndsWith('/') ? url : url + "/";

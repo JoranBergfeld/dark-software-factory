@@ -98,10 +98,25 @@ internal sealed class GitHubRestProvisioningClient : IGitHubProvisioningClient
         }
 
         var path = isUser ? "user/repos" : $"orgs/{owner}/repos";
+        var payload = new Dictionary<string, object?> { ["name"] = request.Repository };
+        if (isUser)
+        {
+            payload["private"] = request.Visibility switch
+            {
+                "private" => true,
+                "public" => false,
+                _ => throw new InvalidOperationException(
+                    $"Personal repositories support only private or public visibility, not '{request.Visibility}'."),
+            };
+        }
+        else
+        {
+            payload["visibility"] = request.Visibility;
+        }
         using var created = await SendAsync(
             HttpMethod.Post,
             path,
-            RepositoryCreateBody(request.Repository, request.Visibility, isUser),
+            payload,
             cancellationToken);
         return await ReadRepositoryAsync(created, request.DefaultBranch, owner, cancellationToken);
     }
@@ -129,24 +144,6 @@ internal sealed class GitHubRestProvisioningClient : IGitHubProvisioningClient
         }
 
         return ReadRepository(root, defaultBranch, owner);
-    }
-
-    private static Dictionary<string, object?> RepositoryCreateBody(
-        string repository,
-        string visibility,
-        bool isUser)
-    {
-        var body = new Dictionary<string, object?> { ["name"] = repository };
-        if (isUser && visibility is "private")
-        {
-            body["private"] = true;
-        }
-        else
-        {
-            body["visibility"] = visibility;
-        }
-
-        return body;
     }
 
     public async Task EnsureSeedRepoAsync(

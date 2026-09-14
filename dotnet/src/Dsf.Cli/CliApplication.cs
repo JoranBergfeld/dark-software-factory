@@ -219,6 +219,7 @@ public static class CliApplication
         var location = StringOption("--location", "Azure region", "swedencentral");
         var creationMaturity = StringOption("--creation-maturity", "creation-phase autonomy", "low", "low", "medium", "high");
         var operationMaturity = StringOption("--operation-maturity", "operation-phase autonomy", "low", "low", "medium", "high");
+        var decideConfig = StringOption("--decide-config", "nonsecret Decide source and judgment configuration JSON");
         var dryRun = BoolOption("--dry-run", "preview only: print the what-if plan without running steps");
         var noCharter = BoolOption("--no-charter", "skip the post-provision charter prompt");
         var writePlan = BoolOption("--write-plan", "with --dry-run, still write the instance manifest");
@@ -251,6 +252,7 @@ public static class CliApplication
             location,
             creationMaturity,
             operationMaturity,
+            decideConfig,
             dryRun,
             noCharter,
             writePlan,
@@ -274,6 +276,7 @@ public static class CliApplication
             location,
             creationMaturity,
             operationMaturity,
+            decideConfig,
             dryRun,
             noCharter,
             writePlan,
@@ -394,6 +397,14 @@ public static class CliApplication
                     githubInstallationIdValue,
                     githubInstallationSelectionValue,
                     configRootValue);
+                if (parseResult.GetValue(decideConfig) is { Length: > 0 } decidePath)
+                {
+                    definition = definition with
+                    {
+                        Runtime = definition.Runtime with { Decide = DecideConfigurationFile.Read(decidePath) },
+                    };
+                }
+                definition.Runtime.Decide.Validate();
             }
             catch (InstanceDefinitionException exception)
             {
@@ -417,7 +428,15 @@ public static class CliApplication
                     definition.GitHub.CloudAgentCredentialSecretName,
                     definition.GitHub.AppId,
                     definition.GitHub.InstallationId,
+                    definition.Runtime.Image,
+                    definition.Azure.InfrastructureSubnetId,
                     configRootValue);
+
+                if (definition.Runtime.Decide.EnabledSourceAgentKinds.Count > 0)
+                {
+                    terminal.WriteLine(
+                        $"[dsf] Decide source agents: {string.Join(", ", definition.Runtime.Decide.EnabledSourceAgentKinds)}");
+                }
 
                 if (parseResult.GetValue(writePlan)
                     && !WritePlannedDefinition(
@@ -464,6 +483,11 @@ public static class CliApplication
                     await appConfig.SeedProductRecordAsync(
                         productEndpoint,
                         ProductRecordFor(updated),
+                        cancellationToken);
+                    await appConfig.SeedSourceAgentRosterAsync(
+                        productEndpoint,
+                        updated.Product.Key,
+                        updated.Runtime.Decide.EnabledSourceAgentKinds,
                         cancellationToken);
                     await appConfig.PublishRuntimeIndexAsync(
                         ownerEndpoint,
@@ -619,6 +643,8 @@ public static class CliApplication
         string cloudAgentCredentialSecretName,
         string? githubAppId,
         string? githubInstallationId,
+        string runtimeImage,
+        string? infrastructureSubnetId,
         string? configRoot)
     {
         var repoName = string.IsNullOrWhiteSpace(repo) ? product : repo;
@@ -627,6 +653,7 @@ public static class CliApplication
         var root = configRoot ?? Directory.GetCurrentDirectory();
         var manifestPath = InstanceDefinitions.PathFor(root, product);
         var bicepPath = Path.Combine(root, "infra", "main.bicep");
+        var networkParameter = infrastructureSubnetId is null ? "" : $" infrastructureSubnetId={infrastructureSubnetId}";
 
         if (string.IsNullOrWhiteSpace(githubInstallationId))
         {
@@ -651,7 +678,7 @@ public static class CliApplication
         terminal.WriteLine($"[dsf]  5. create_resource_group [dry-run] Create dedicated Azure resource group rg-dsf-{product}");
         terminal.WriteLine($"[dsf]       $ az group create --name rg-dsf-{product} --location {location} --tags project=dark-software-factory managed-by=dsf product={product} component=backing-services");
         terminal.WriteLine("[dsf]  6. provision_azure [dry-run] Deploy backing services into rg-dsf-" + product + " from infra/main.bicep");
-        terminal.WriteLine($"[dsf]       $ az deployment group create -g rg-dsf-{product} -n dsf-{product} -f {bicepPath} -p namePrefix={namePrefix} environmentName={environment} location={location} product={product} runtimeImage=ghcr.io/joranbergfeld/dsf-runtime:latest githubAppId= githubInstallationId= githubRepository={repoFull} operationMaturity={operationMaturity} allowPublicNetworkAccess=true --no-wait");
+        terminal.WriteLine($"[dsf]       $ az deployment group create -g rg-dsf-{product} -n dsf-{product} -f {bicepPath} -p namePrefix={namePrefix} environmentName={environment} location={location} product={product} runtimeImage={runtimeImage} githubAppId= githubInstallationId= githubRepository={repoFull} operationMaturity={operationMaturity} allowPublicNetworkAccess=true{networkParameter} --no-wait");
         terminal.WriteLine($"[dsf]  7. seed_appconfig [seeded (dry-run)] Seed the canonical config/defaults.json into App Configuration for {product} (critic/agent flags + thresholds)");
         terminal.WriteLine($"[dsf]  8. seed_app_key   [skipped (no owner App configured)] Seed the DSF App private key from the owner Key Vault into the product Key Vault for {product}");
         terminal.WriteLine($"[dsf]  9. seed_webiq_key [skipped (no owner App configured)] Seed the WebIQ API key from the owner Key Vault into the product Key Vault for {product}");
@@ -2048,7 +2075,13 @@ public static class CliApplication
             ["DSF_PRODUCT"] = definition.Product.Key,
             [ProductConfigurationKeys.OwnerIndexGitHubRepository] = definition.GitHub.FullName(),
             [ProductConfigurationKeys.OwnerIndexAppConfigEndpoint] = productEndpoint,
+            [RuntimeIntegrationSettings.CreationMaturity] = definition.Product.CreationMaturity,
+            [RuntimeIntegrationSettings.CosmosDatabase] = definition.Product.Key,
         };
+        foreach (var (key, value) in definition.Runtime.Decide.JudgmentEnvironment())
+        {
+            values[key] = value;
+        }
         foreach (var (key, value) in definition.Azure.Outputs)
         {
             if (key.EndsWith("Endpoint", StringComparison.Ordinal))
@@ -2088,6 +2121,20 @@ public static class CliApplication
         if (!string.IsNullOrWhiteSpace(definition.GitHub.PrivateKeySecretName))
         {
             values["GITHUB_APP_PRIVATE_KEY_SECRET"] = definition.GitHub.PrivateKeySecretName;
+        }
+
+        if (definition.Azure.Outputs.TryGetValue("sourceAgentEndpoints", out var sourceAgentEndpoints))
+        {
+            var endpoints = JsonSerializer.Deserialize<Dictionary<string, string>>(sourceAgentEndpoints)
+                ?? throw new InstanceDefinitionException("sourceAgentEndpoints deployment output must be an object.");
+            foreach (var kind in SourceAgentKinds.Known)
+            {
+                var key = RuntimeIntegrationSettings.SourceAgentEndpoint(kind);
+                if (endpoints.TryGetValue(key, out var endpoint) && !string.IsNullOrWhiteSpace(endpoint))
+                {
+                    values[key] = endpoint;
+                }
+            }
         }
 
         return values;

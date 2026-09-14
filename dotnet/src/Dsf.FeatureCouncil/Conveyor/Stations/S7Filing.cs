@@ -21,6 +21,11 @@ public sealed class S7Filing : IStation
 
     public async Task RunAsync(ConveyorRun run, ConveyorServices services, CancellationToken cancellationToken)
     {
+        CouncilReview.RevalidateForFiling(run, services.ProductMaturity);
+        if (run.Status == RunStatus.Escalated)
+        {
+            return;
+        }
         var accepted = run.Proposals.Where(proposal => proposal.Verdict == ProposalVerdict.Proceed).ToList();
         if (run.DryRun)
         {

@@ -174,6 +174,59 @@ public sealed class GitHubRestProvisioningClientTests
     }
 
     [Fact]
+    public async Task Labels_without_optional_metadata_use_default_color_and_do_not_send_json_nulls()
+    {
+        var handler = new RecordingHttpMessageHandler(
+            Response(HttpStatusCode.OK, "[]"),
+            Response(HttpStatusCode.Created, """{"name":"creation:ready"}"""));
+        var client = new GitHubRestProvisioningClient(new HttpClient(handler), "test-token");
+
+        await client.EnsureLabelsAsync(
+            new EnsureLabelsRequest("acme/demo", [new GitHubLabelDefinition("creation:ready")]),
+            CancellationToken.None);
+
+        using var payload = JsonDocument.Parse(handler.Requests.Single(request => request.Method == HttpMethod.Post).Body!);
+        Assert.Equal("ededed", payload.RootElement.GetProperty("color").GetString());
+        Assert.False(payload.RootElement.TryGetProperty("description", out _));
+        Assert.DoesNotContain("null", payload.RootElement.GetRawText(), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("private", true)]
+    [InlineData("public", false)]
+    public async Task Personal_repository_creation_uses_the_private_boolean(string visibility, bool isPrivate)
+    {
+        var handler = new RecordingHttpMessageHandler(
+            Response(HttpStatusCode.NotFound),
+            Response(HttpStatusCode.OK, """{"login":"octocat"}"""),
+            Response(HttpStatusCode.Created, """{"id":456,"default_branch":"main"}"""));
+        var client = new GitHubRestProvisioningClient(new HttpClient(handler), "test-token");
+
+        await client.EnsureRepositoryAsync(
+            new EnsureRepositoryRequest("octocat", "demo", visibility, "main"), CancellationToken.None);
+
+        using var payload = JsonDocument.Parse(handler.Requests.Single(request => request.Method == HttpMethod.Post).Body!);
+        Assert.True(payload.RootElement.TryGetProperty("private", out var privateFlag));
+        Assert.Equal(isPrivate, privateFlag.GetBoolean());
+        Assert.False(payload.RootElement.TryGetProperty("visibility", out _));
+    }
+
+    [Fact]
+    public async Task Internal_visibility_is_rejected_for_personal_repositories_before_creation()
+    {
+        var handler = new RecordingHttpMessageHandler(
+            Response(HttpStatusCode.NotFound),
+            Response(HttpStatusCode.OK, """{"login":"octocat"}"""),
+            Response(HttpStatusCode.Created, """{"id":456,"default_branch":"main"}"""));
+        var client = new GitHubRestProvisioningClient(new HttpClient(handler), "test-token");
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => client.EnsureRepositoryAsync(
+            new EnsureRepositoryRequest("octocat", "demo", "internal", "main"), CancellationToken.None));
+
+        Assert.DoesNotContain(handler.Requests, request => request.Method == HttpMethod.Post);
+    }
+
+    [Fact]
     public async Task Labels_create_only_missing_definitions()
     {
         var handler = new RecordingHttpMessageHandler(

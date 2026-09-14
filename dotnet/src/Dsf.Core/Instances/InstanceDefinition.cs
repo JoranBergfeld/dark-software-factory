@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 
 namespace Dsf.Core.Instances;
 
@@ -48,6 +49,8 @@ public sealed record RuntimeSettings
     public string Target { get; init; } = "aca";
 
     public string Image { get; init; } = "ghcr.io/joranbergfeld/dsf-runtime:latest";
+
+    public DecideDeploymentSettings Decide { get; init; } = new();
 }
 
 /// <summary>Runtime-governable council settings captured at provision time.</summary>
@@ -130,6 +133,9 @@ public sealed record AzureSettings
 
     public required string DeploymentName { get; init; }
 
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? InfrastructureSubnetId { get; init; }
+
     public required SreAgentSettings SreAgent { get; init; }
 
     /// <summary>Endpoints of the owner-level authority this instance is seeded from (endpoints only, never secret values).</summary>
@@ -145,13 +151,24 @@ public sealed record AzureSettings
         && NamePrefix == other.NamePrefix
         && ResourceGroup == other.ResourceGroup
         && DeploymentName == other.DeploymentName
+        && InfrastructureSubnetId == other.InfrastructureSubnetId
         && SreAgent == other.SreAgent
         && OwnerAuthority == other.OwnerAuthority
         && Outputs.Count == other.Outputs.Count
         && Outputs.All(entry => other.Outputs.TryGetValue(entry.Key, out var value) && value == entry.Value);
 
     public override int GetHashCode() =>
-        HashCode.Combine(Location, NamePrefix, ResourceGroup, DeploymentName, SreAgent, OwnerAuthority, Outputs.Count);
+        HashCode.Combine(Location, NamePrefix, ResourceGroup, DeploymentName, InfrastructureSubnetId, SreAgent, OwnerAuthority, Outputs.Count);
+
+    public void Validate()
+    {
+        if (InfrastructureSubnetId is not null && !Regex.IsMatch(InfrastructureSubnetId,
+            @"^/subscriptions/[^/\s]+/resourceGroups/[^/\s]+/providers/Microsoft\.Network/virtualNetworks/[^/\s]+/subnets/[^/\s]+$",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+        {
+            throw new InstanceDefinitionException("azure.infrastructureSubnetId must be a full Azure subnet resource ID.");
+        }
+    }
 }
 
 /// <summary>

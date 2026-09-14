@@ -1,5 +1,5 @@
 using Dsf.Core.Runtime;
-using Dsf.Runtime;
+using System.Runtime.CompilerServices;
 using Xunit;
 
 namespace Dsf.Runtime.Tests;
@@ -132,5 +132,92 @@ public sealed class SweepControlCliTests
 
         Assert.NotEqual(0, exitCode);
         Assert.Contains("403 Forbidden", stderr.ToString());
+    }
+
+    [Fact]
+    public async Task All_controls_round_trip_through_the_real_App_Configuration_store()
+    {
+        var gateway = new SweepConfigurationGateway();
+        var dependencies = TestDependencies.Build(
+            sweepControlStoreFactory: settings => new AzureAppConfigurationSweepControlStore(gateway, settings));
+
+        async Task<string> Invoke(params string[] args)
+        {
+            var stdout = new StringWriter();
+            var stderr = new StringWriter();
+            var exitCode = await RuntimeCliApplication.InvokeAsync(
+                args, FullEnvironment, stdout, stderr, dependencies, CancellationToken.None);
+            Assert.Equal("", stderr.ToString());
+            Assert.Equal(0, exitCode);
+            return stdout.ToString();
+        }
+
+        await Invoke("sweep", "pause");
+        Assert.Equal("true", gateway.Values[ProductConfigurationKeys.SweepPaused]);
+        Assert.Contains("paused", await Invoke("sweep", "status"));
+
+        await Invoke("sweep", "interval", "42");
+        Assert.Equal("42", gateway.Values[ProductConfigurationKeys.SweepIntervalSeconds]);
+        var pausedStatus = await Invoke("sweep", "status");
+        Assert.Contains("paused", pausedStatus);
+        Assert.Contains("interval=42s", pausedStatus);
+
+        await Invoke("sweep", "resume");
+        Assert.Equal("false", gateway.Values[ProductConfigurationKeys.SweepPaused]);
+        var resumedStatus = await Invoke("sweep", "status");
+        Assert.Contains("running", resumedStatus);
+        Assert.Contains("interval=42s", resumedStatus);
+        Assert.All(gateway.Endpoints, endpoint => Assert.Equal("https://appconfig.example", endpoint));
+        Assert.All(gateway.ReadLabels, label => Assert.Equal(ProductConfigurationKeys.NoLabel, label));
+        Assert.All(gateway.WriteLabels, Assert.Null);
+    }
+
+    [Fact]
+    public async Task Status_reports_invalid_stored_controls_as_an_operator_error()
+    {
+        var gateway = new SweepConfigurationGateway();
+        gateway.Values[ProductConfigurationKeys.SweepPaused] = "broken";
+        var dependencies = TestDependencies.Build(
+            sweepControlStoreFactory: settings => new AzureAppConfigurationSweepControlStore(gateway, settings));
+        var stdout = new StringWriter();
+        var stderr = new StringWriter();
+
+        var exitCode = await RuntimeCliApplication.InvokeAsync(
+            ["sweep", "status"], FullEnvironment, stdout, stderr, dependencies, CancellationToken.None);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Equal("", stdout.ToString());
+        Assert.Contains(ProductConfigurationKeys.SweepPaused, stderr.ToString());
+    }
+
+    private sealed class SweepConfigurationGateway : IConfigurationSettingsGateway
+    {
+        public Dictionary<string, string> Values { get; } = [];
+        public List<string> Endpoints { get; } = [];
+        public List<string> ReadLabels { get; } = [];
+        public List<string?> WriteLabels { get; } = [];
+
+        public async IAsyncEnumerable<(string Key, string Value)> ListAsync(
+            string endpoint, string label, [EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            Endpoints.Add(endpoint);
+            ReadLabels.Add(label);
+            foreach (var (key, value) in Values)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                yield return (key, value);
+            }
+
+            await Task.CompletedTask;
+        }
+
+        public Task SetAsync(string endpoint, string key, string value, string? label, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Endpoints.Add(endpoint);
+            WriteLabels.Add(label);
+            Values[key] = value;
+            return Task.CompletedTask;
+        }
     }
 }

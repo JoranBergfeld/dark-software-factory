@@ -65,6 +65,22 @@ internal interface ICosmosDocumentGateway
         await UpsertAsync(endpoint, database, container, partitionKey, id, json, cancellationToken);
         return true;
     }
+
+    /// <summary>Deletes only the observed document version; never an unconditional release.</summary>
+    Task<bool> DeleteIfMatchAsync(
+        string endpoint,
+        string database,
+        string container,
+        string partitionKey,
+        string id,
+        string etag,
+        CancellationToken cancellationToken) =>
+        throw new NotSupportedException("This gateway does not support conditional document deletion.");
+
+    Task<bool> ReplaceIfMatchAsync(
+        string endpoint, string database, string container, string partitionKey,
+        string id, string json, string etag, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("This gateway does not support conditional document replacement.");
 }
 
 /// <summary>
@@ -193,6 +209,74 @@ internal sealed class AzureCosmosDocumentGateway(TokenCredential? credential = n
         return true;
     }
 
+    public async Task<bool> DeleteIfMatchAsync(
+        string endpoint,
+        string database,
+        string container,
+        string partitionKey,
+        string id,
+        string etag,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(etag);
+        var token = await this.credential.GetTokenAsync(new TokenRequestContext(Scopes), cancellationToken);
+        var uri = new Uri(new Uri(EnsureTrailingSlash(endpoint)), $"dbs/{database}/colls/{container}/docs/{id}");
+        using var request = new HttpRequestMessage(HttpMethod.Delete, uri);
+        request.Headers.TryAddWithoutValidation(
+            "Authorization", Uri.EscapeDataString($"type=aad&ver=1.0&sig={token.Token}"));
+        request.Headers.TryAddWithoutValidation("x-ms-version", CosmosApiVersion);
+        request.Headers.TryAddWithoutValidation("x-ms-date", DateTime.UtcNow.ToString("r"));
+        request.Headers.TryAddWithoutValidation("If-Match", etag);
+        request.Headers.TryAddWithoutValidation(
+            "x-ms-documentdb-partitionkey", JsonSerializer.Serialize(new[] { partitionKey }));
+
+        using var response = await httpClient.SendAsync(request, cancellationToken);
+        if (response.StatusCode is System.Net.HttpStatusCode.NotFound or System.Net.HttpStatusCode.PreconditionFailed)
+        {
+            return false;
+        }
+
+        if (!response.IsSuccessStatusCode)
+        {
+            var body = await response.Content.ReadAsStringAsync(cancellationToken);
+            throw new HttpRequestException($"{(int)response.StatusCode} {response.ReasonPhrase}: {body}");
+        }
+
+        return true;
+    }
+
+    public async Task<bool> ReplaceIfMatchAsync(
+        string endpoint, string database, string container, string partitionKey,
+        string id, string json, string etag, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(etag);
+        var token = await this.credential.GetTokenAsync(new TokenRequestContext(Scopes), cancellationToken);
+        var uri = new Uri(new Uri(EnsureTrailingSlash(endpoint)), $"dbs/{database}/colls/{container}/docs/{id}");
+        using var request = new HttpRequestMessage(HttpMethod.Put, uri)
+        {
+            Content = new StringContent(json, Encoding.UTF8, "application/json"),
+        };
+        request.Headers.TryAddWithoutValidation(
+            "Authorization", Uri.EscapeDataString($"type=aad&ver=1.0&sig={token.Token}"));
+        request.Headers.TryAddWithoutValidation("x-ms-version", CosmosApiVersion);
+        request.Headers.TryAddWithoutValidation("x-ms-date", DateTime.UtcNow.ToString("r"));
+        request.Headers.TryAddWithoutValidation("If-Match", etag);
+        request.Headers.TryAddWithoutValidation(
+            "x-ms-documentdb-partitionkey", JsonSerializer.Serialize(new[] { partitionKey }));
+
+        using var response = await httpClient.SendAsync(request, cancellationToken);
+        if (response.StatusCode is System.Net.HttpStatusCode.NotFound or System.Net.HttpStatusCode.PreconditionFailed)
+        {
+            return false;
+        }
+        if (!response.IsSuccessStatusCode)
+        {
+            var body = await response.Content.ReadAsStringAsync(cancellationToken);
+            throw new HttpRequestException($"{(int)response.StatusCode} {response.ReasonPhrase}: {body}");
+        }
+        return true;
+    }
+
     private static string EnsureTrailingSlash(string url) => url.EndsWith('/') ? url : url + "/";
 }
 
@@ -242,6 +326,8 @@ internal sealed class CosmosRunStore(
                     verdict = proposal.Verdict.ToString().ToLowerInvariant(),
                     proposal.Labels,
                     proposal.EvidenceReferences,
+                    proposal.ClusterEvidence,
+                    proposal.CouncilReview,
                 }),
                 filedIssues = run.FiledIssues,
                 previewedIssues = run.PreviewedIssues.Select(preview => new
@@ -339,6 +425,20 @@ internal sealed class CosmosRunStore(
         {
             foreach (var item in proposals.EnumerateArray())
             {
+                var verdict = ReadVerdict(item);
+                CouncilReview? councilReview = null;
+                string? reviewError = null;
+                if (item.TryGetProperty("councilReview", out var review) && review.ValueKind != JsonValueKind.Null)
+                {
+                    try
+                    {
+                        councilReview = JsonSerializer.Deserialize<CouncilReview>(review.GetRawText(), SerializerOptions);
+                    }
+                    catch (JsonException exception)
+                    {
+                        reviewError = $"stored council review is incomplete or malformed: {exception.Message}";
+                    }
+                }
                 var proposal = new Proposal(
                     item.GetProperty("id").GetString()!,
                     item.GetProperty("title").GetString()!,
@@ -347,10 +447,23 @@ internal sealed class CosmosRunStore(
                 {
                     IntentKey = item.GetProperty("intentKey").GetString() ?? string.Empty,
                     Confidence = item.GetProperty("confidence").GetDouble(),
-                    Verdict = ReadVerdict(item),
+                    Verdict = reviewError is null ? verdict ?? ProposalVerdict.Error : ProposalVerdict.Error,
+                    ClusterEvidence = item.TryGetProperty("clusterEvidence", out var cluster)
+                        ? JsonSerializer.Deserialize<EvidenceItem[]>(cluster.GetRawText(), SerializerOptions)
+                            ?? throw new InvalidOperationException("stored proposal clusterEvidence must be an array")
+                        : [],
+                    CouncilReview = councilReview,
                 };
                 proposal.Labels.AddRange(ReadStrings(item, "labels"));
                 run.Proposals.Add(proposal);
+                if (verdict is null || reviewError is not null)
+                {
+                    run.Status = RunStatus.Error;
+                    var reason = reviewError ?? $"stored proposal '{proposal.Id}' has no valid typed council verdict; "
+                        + "legacy acceptance is not filing authority";
+                    run.FailureReason ??= reason;
+                    run.Record(Dsf.FeatureCouncil.Conveyor.Stations.S5Council.StationName, reason);
+                }
             }
         }
 
@@ -390,22 +503,18 @@ internal sealed class CosmosRunStore(
         array.EnumerateArray().Select(element => element.GetString()!).ToArray();
 
     /// <summary>
-    /// Reads a proposal's council verdict, preferring the current <c>verdict</c>
-    /// field and falling back to the pre-jury <c>accepted</c> boolean a run
-    /// persisted before this station gained typed verdicts -- mapped
-    /// <c>true</c> to <see cref="ProposalVerdict.Proceed"/> and <c>false</c> to
-    /// <see cref="ProposalVerdict.Rejected"/>, the closest equivalent under the
-    /// old accept/reject semantics.
+    /// Only explicit typed verdicts are authoritative. Missing or invalid values
+    /// quarantine the restored run as an audited error; legacy acceptance never implies Proceed.
     /// </summary>
-    private static ProposalVerdict ReadVerdict(JsonElement item)
+    private static ProposalVerdict? ReadVerdict(JsonElement item)
     {
-        if (item.TryGetProperty("verdict", out var verdict) && verdict.ValueKind == JsonValueKind.String)
+        if (item.TryGetProperty("verdict", out var verdict) && verdict.ValueKind == JsonValueKind.String
+            && Enum.TryParse<ProposalVerdict>(verdict.GetString(), ignoreCase: true, out var parsed)
+            && Enum.IsDefined(parsed))
         {
-            return Enum.Parse<ProposalVerdict>(verdict.GetString()!, ignoreCase: true);
+            return parsed;
         }
 
-        return item.TryGetProperty("accepted", out var accepted) && accepted.GetBoolean()
-            ? ProposalVerdict.Proceed
-            : ProposalVerdict.Rejected;
+        return null;
     }
 }

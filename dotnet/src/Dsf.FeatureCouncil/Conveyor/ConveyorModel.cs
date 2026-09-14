@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json.Serialization;
 
 namespace Dsf.FeatureCouncil.Conveyor;
 
@@ -66,11 +67,13 @@ public sealed class Proposal(string id, string title, IReadOnlyList<string> sour
 
     public IReadOnlyList<string> EvidenceReferences { get; } = evidenceReferences;
 
+    public IReadOnlyList<EvidenceItem> ClusterEvidence { get; set; } = [];
+
+    public CouncilReview? CouncilReview { get; set; }
+
     /// <summary>
-    /// Durable identity of what this proposal asks for, stable across runs of the
-    /// same scope (the run's fingerprint plus the source kind). The filing station
-    /// stamps it into the filed issue so a later run that reaches the same
-    /// conclusion resolves to the existing issue instead of filing a duplicate.
+    /// Scope-qualified durable problem identity supplied by the identity resolver.
+    /// Changing observations and source references must not create new filing intents.
     /// </summary>
     public string IntentKey { get; set; } = string.Empty;
 
@@ -78,14 +81,8 @@ public sealed class Proposal(string id, string title, IReadOnlyList<string> sour
     public double Confidence { get; set; }
 
     /// <summary>
-    /// The council's typed verdict on this proposal, set by S5 council: <see
-    /// cref="ProposalVerdict.Rejected"/> when the lens synthesizer did not
-    /// recommend proceeding (the jury panel is never consulted in that case --
-    /// there is nothing to validate proceeding with), or one of <see
-    /// cref="ProposalVerdict.Proceed"/>/<see cref="ProposalVerdict.Escalate"/>/<see
-    /// cref="ProposalVerdict.Kill"/> from the jury panel's review of a lens
-    /// recommendation to proceed. This, not <see cref="Accepted"/>, is the
-    /// verdict authority S6 routing and S7 filing act on.
+    /// The jury's typed action. S6/S7 require a complete matching
+    /// <see cref="CouncilReview"/> before acting; neither confidence nor a legacy acceptance flag is authority.
     /// </summary>
     public ProposalVerdict Verdict { get; set; } = ProposalVerdict.Pending;
 
@@ -101,16 +98,10 @@ public sealed class Proposal(string id, string title, IReadOnlyList<string> sour
 }
 
 /// <summary>
-/// S5 council's typed verdict on a proposal, replacing the earlier plain
-/// accept/reject boolean. <see cref="Pending"/> is the value every proposal
-/// carries before S5 runs -- nothing downstream of S3 synthesis reads it before
-/// then. <see cref="Rejected"/> means the lens synthesizer's own confidence
-/// vote did not clear the governed threshold; the jury panel is not consulted
-/// for a proposal in that state. <see cref="Proceed"/>/<see cref="Escalate"/>/<see
-/// cref="Kill"/> are the three outcomes the jury panel can reach over a
-/// proposal the lenses did recommend proceeding with (<see
-/// cref="Stations.S5Council"/> for the exact rules).
+/// S5's typed action. Pending is not a decision; Rejected is retained only for
+/// decoding historical records and never authorizes routing or filing.
 /// </summary>
+[JsonConverter(typeof(JsonStringEnumConverter<ProposalVerdict>))]
 public enum ProposalVerdict
 {
     Pending,
@@ -118,6 +109,7 @@ public enum ProposalVerdict
     Proceed,
     Escalate,
     Kill,
+    Error,
 }
 
 /// <summary>

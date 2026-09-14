@@ -99,6 +99,24 @@ public sealed class SweepControlTests
         Assert.Contains("https://appconfig.example", exception.Message);
     }
 
+    [Theory]
+    [InlineData(ProductConfigurationKeys.SweepPaused, "tru")]
+    [InlineData(ProductConfigurationKeys.SweepPaused, "")]
+    [InlineData(ProductConfigurationKeys.SweepIntervalSeconds, "0")]
+    [InlineData(ProductConfigurationKeys.SweepIntervalSeconds, "-1")]
+    [InlineData(ProductConfigurationKeys.SweepIntervalSeconds, "later")]
+    [InlineData(ProductConfigurationKeys.SweepIntervalSeconds, "2147483648")]
+    public async Task Invalid_stored_controls_fail_loudly_instead_of_enabling_default_sweeping(string key, string value)
+    {
+        var gateway = new RecordingConfigurationSettingsGateway([(key, value)]);
+
+        var exception = await Assert.ThrowsAsync<RuntimeConfigurationException>(
+            () => new AzureAppConfigurationSweepControlStore(gateway, Settings).ReadAsync(CancellationToken.None));
+
+        Assert.Contains(key, exception.Message);
+        Assert.Contains("acme", exception.Message);
+    }
+
     private sealed class RecordingConfigurationSettingsGateway(
         IReadOnlyList<(string Key, string Value)> settings) : IConfigurationSettingsGateway
     {

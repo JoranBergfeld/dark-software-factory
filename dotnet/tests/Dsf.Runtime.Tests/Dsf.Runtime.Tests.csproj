@@ -17,6 +17,7 @@
     <ProjectReference Include="..\..\src\Dsf.Core\Dsf.Core.csproj" />
     <ProjectReference Include="..\..\src\Dsf.FeatureCouncil\Dsf.FeatureCouncil.csproj" />
     <ProjectReference Include="..\..\src\Dsf.Runtime\Dsf.Runtime.csproj" />
+    <ProjectReference Include="..\..\src\Dsf.AgentHost\Dsf.AgentHost.csproj" />
   </ItemGroup>
 
 </Project>

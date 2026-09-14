@@ -7,8 +7,7 @@ namespace Dsf.FeatureCouncil.Tests;
 /// <summary>
 /// S5 council weighs a proposal through every configured deliberation lens
 /// across an initial round and a see-and-revise round, combines the final
-/// round's verdicts via the deterministic weighted synthesizer, and -- for a
-/// proposal the synthesizer recommends proceeding with -- hands that
+/// round's verdicts via the deterministic weighted synthesizer, and hands every
 /// recommendation to a validation jury whose verdict rules (unanimous go,
 /// unanimous no-go, split, or low creation maturity) decide the proposal's
 /// final <see cref="ProposalVerdict"/> and the run's status. <see
@@ -259,19 +258,21 @@ public sealed class S5CouncilTests
     }
 
     [Fact]
-    public async Task Never_consults_the_jury_for_a_proposal_the_lenses_do_not_recommend_proceeding_with()
+    public async Task Consults_the_jury_even_when_lenses_do_not_recommend_proceeding()
     {
         var run = RunWithOneProposal();
         var lenses = new IDeliberationLens[] { new FixedLens("value", LensPosition.NoGo) };
         var juror = new FixedJuror("juror-a", JurorPosition.Go);
         var services = ConveyorDoubles.Services(
-            deliberationLenses: lenses, validationJurors: [juror], productMaturity: "high");
+            deliberationLenses: lenses,
+            validationJurors: [juror, new FixedJuror("juror-b", JurorPosition.Go), new FixedJuror("juror-c", JurorPosition.Go)],
+            productMaturity: "high");
 
         await new S5Council().RunAsync(run, services, CancellationToken.None);
 
-        Assert.Equal(ProposalVerdict.Rejected, run.Proposals.Single().Verdict);
+        Assert.Equal(ProposalVerdict.Proceed, run.Proposals.Single().Verdict);
         Assert.Equal(RunStatus.Open, run.Status);
-        Assert.Equal(0, juror.CallCount);
+        Assert.Equal(1, juror.CallCount);
     }
 
     [Fact]
@@ -279,7 +280,10 @@ public sealed class S5CouncilTests
     {
         var run = RunWithOneProposal();
         var lenses = new IDeliberationLens[] { new FixedLens("value", LensPosition.Go) };
-        var jurors = new IValidationJuror[] { new MalformedJuror("juror-a") };
+        var jurors = new IValidationJuror[]
+        {
+            new MalformedJuror("juror-a"), new FixedJuror("juror-b", JurorPosition.Go), new FixedJuror("juror-c", JurorPosition.Go),
+        };
         var services = ConveyorDoubles.Services(deliberationLenses: lenses, validationJurors: jurors);
 
         await Assert.ThrowsAsync<InvalidOperationException>(
@@ -287,9 +291,9 @@ public sealed class S5CouncilTests
     }
 
     [Fact]
-    public void Default_validation_jury_has_three_jurors()
+    public void A_test_composition_explicitly_provides_three_jurors()
     {
-        var names = ModelValidationJuror.Default(new RecordingModelClient()).Select(juror => juror.Name).ToArray();
+        var names = ConveyorDoubles.Services().ValidationJurors.Select(juror => juror.Name).ToArray();
 
         Assert.Equal(3, names.Length);
         Assert.Equal(names.Distinct(), names);

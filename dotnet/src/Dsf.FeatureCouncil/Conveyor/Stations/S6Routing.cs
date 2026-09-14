@@ -10,12 +10,17 @@ public sealed class S6Routing : IStation
     public const string StationName = "s6_routing";
 
     /// <summary>Label every council-accepted proposal carries into filing.</summary>
-    public const string ReadyForAgentLabel = "ready-for-agent";
+    public const string ReadyForAgentLabel = "creation:ready";
 
     public string Name => StationName;
 
     public Task RunAsync(ConveyorRun run, ConveyorServices services, CancellationToken cancellationToken)
     {
+        CouncilReview.RevalidateForFiling(run, services.ProductMaturity);
+        if (run.Status == RunStatus.Escalated)
+        {
+            return Task.CompletedTask;
+        }
         foreach (var proposal in run.Proposals.Where(p => p.Verdict == ProposalVerdict.Proceed))
         {
             proposal.Labels.Add(ReadyForAgentLabel);

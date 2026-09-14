@@ -61,10 +61,8 @@ resource agentIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11
 // instance for agent-side telemetry (appId = the GUID "Application ID",
 // connectionString = the instrumentation connection string; both sensitive).
 //
-var actionMode = operationMaturity == 'high' ? 'Autonomous' : 'Review'
-
-// actionConfiguration controls how autonomously the agent acts; Review + Low is
-// the DSF default and keeps write actions human-approved.
+// Review with Low access requires approval. Remediation permissions are
+// separately scoped by operation maturity; provisioning never enables Autonomous.
 // ---------------------------------------------------------------------------
 
 resource sreAgent 'Microsoft.App/agents@2026-01-01' = {
@@ -82,7 +80,7 @@ resource sreAgent 'Microsoft.App/agents@2026-01-01' = {
 
     actionConfiguration: {
       accessLevel: 'Low'
-      mode: actionMode
+      mode: 'Review'
       // The UAMI resource id — agent uses this identity for data-plane actions.
       identity: agentIdentity.id
     }

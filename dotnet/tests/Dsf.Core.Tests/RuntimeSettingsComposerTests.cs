@@ -195,6 +195,35 @@ public sealed class RuntimeSettingsComposerTests
     }
 
     [Fact]
+    public async Task ComposeAsync_preserves_nonsecret_integration_settings_with_local_precedence()
+    {
+        var agentEndpoint = RuntimeIntegrationSettings.SourceAgentEndpoint("webiq");
+        var env = new Dictionary<string, string?>(FullEnvironment)
+        {
+            [RuntimeSettingsComposer.OwnerAppConfigEndpoint] = "https://owner-appconfig.example",
+            [agentEndpoint] = "https://local-webiq.example",
+        };
+        var reader = new StubOwnerRuntimeIndexReader(new Dictionary<string, string>
+        {
+            [agentEndpoint] = "https://remote-webiq.example",
+            [RuntimeIntegrationSettings.CosmosDatabase] = "acme",
+            [JurySettings.ModelsKey] = "configured-jury",
+            [DeliberationSettings.RoundsKey] = "1",
+            [RuntimeIntegrationSettings.WebIqApiKey] = "must-not-be-imported",
+            [RuntimeIntegrationSettings.ConfirmLiveFiling] = "true",
+        });
+
+        var settings = await RuntimeSettingsComposer.ComposeAsync(env, null, reader, CancellationToken.None);
+
+        Assert.Equal("https://local-webiq.example", settings.IntegrationSettings[agentEndpoint]);
+        Assert.Equal("acme", settings.IntegrationSettings[RuntimeIntegrationSettings.CosmosDatabase]);
+        Assert.Equal("configured-jury", settings.IntegrationSettings[JurySettings.ModelsKey]);
+        Assert.Equal("1", settings.IntegrationSettings[DeliberationSettings.RoundsKey]);
+        Assert.DoesNotContain(RuntimeIntegrationSettings.WebIqApiKey, settings.IntegrationSettings.Keys);
+        Assert.DoesNotContain(RuntimeIntegrationSettings.ConfirmLiveFiling, settings.IntegrationSettings.Keys);
+    }
+
+    [Fact]
     public async Task ComposeAsync_never_consults_the_owner_runtime_index_when_no_owner_endpoint_is_configured()
     {
         var reader = new ThrowingOwnerRuntimeIndexReader();
