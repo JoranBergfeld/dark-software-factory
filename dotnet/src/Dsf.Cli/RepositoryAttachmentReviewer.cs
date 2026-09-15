@@ -43,8 +43,8 @@ internal sealed partial class RepositoryAttachmentReviewer(IGhCliRunner gh, IOwn
         BaseAddress = new Uri("https://api.github.com/"),
     };
 
-    public static RepositoryAttachmentReviewer Create() => new(
-        new SystemGhCliRunner(), new AzureCliOwnerBootstrapClient(new SystemAzureCliRunner()), AppHttp);
+    public static RepositoryAttachmentReviewer Create(IAzureCliRunner? azure = null) => new(
+        new SystemGhCliRunner(), new AzureCliOwnerBootstrapClient(azure ?? new SystemAzureCliRunner()), AppHttp);
 
     public async Task<RepositoryAttachmentReview> ReviewAsync(RepositoryAttachmentReviewRequest request, CancellationToken cancellationToken)
     {

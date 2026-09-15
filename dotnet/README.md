@@ -81,6 +81,16 @@ runtime verb are required for this review. Confirmation is not completed onboard
 or authorization to publish. See the
 [operator guide](../docs/site/get-started/review-repository-attachment.md).
 
+`dsf onboard decide plan` adds interactive or complete `--input selection.json`
+application-boundary planning, with `--json` output and current
+`--reviewed-fingerprint` replay checks. It discovers Azure using the operator's
+explicit tenant/subscription, separates application resources from dedicated
+evidence backends, and reports exact categories and administrator handoffs.
+It creates no reservation, resource, grant, tag, secret copy or repository addition;
+symbolic factory identities require later binding checks. No extra runtime or
+provisioning asset is needed for this read-only capability. See
+[boundary planning](../docs/site/get-started/preview-application-boundary.md).
+
 ## Runtime host
 
 `src/Dsf.Runtime` (`dsf-runtime`) is the deployed runtime entrypoint. The `dsf` front door

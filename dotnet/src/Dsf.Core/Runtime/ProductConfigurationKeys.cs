@@ -11,6 +11,13 @@ public static class ProductConfigurationKeys
     public const string OwnerIndexGitHubRepository = "GITHUB_REPOSITORY";
     public const string OwnerIndexAppConfigEndpoint = "AZURE_APPCONFIG_ENDPOINT";
     public const string OwnerBootstrapStatusFilter = "dsf/owner/bootstrap/*";
+    public const string OwnerOnboardingPrefix = "dsf/onboarding/";
+    public const string OwnerOnboardingFilter = OwnerOnboardingPrefix + "*";
+
+    public static string OwnerProductClaim(string productKey) => OwnerOnboardingPrefix + "products/" + productKey;
+    public static string OwnerRepositoryClaim(long repositoryId) => OwnerOnboardingPrefix + "repositories/" + repositoryId.ToString(System.Globalization.CultureInfo.InvariantCulture);
+    public static string OwnerResourceClaim(string canonicalResourceId) => OwnerOnboardingPrefix + "resources/"
+        + Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(canonicalResourceId)));
 
     public static string OwnerBootstrapStatus(string appName) =>
         $"dsf/owner/bootstrap/{(appName ?? string.Empty).Trim().ToLowerInvariant()}/status";

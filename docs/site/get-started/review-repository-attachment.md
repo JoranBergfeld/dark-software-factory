@@ -5,6 +5,9 @@ existing GitHub.com repository. It does not onboard an application, reserve a
 factory, provision Azure resources, create a charter PR, or authorize publication.
 `dsf new` remains the separate greenfield workflow.
 
+To combine this fresh assessment with an exact Azure application selection, use
+[preview a dedicated application boundary](preview-application-boundary.md).
+
 ## Authentication and prerequisites
 
 Repository discovery uses **effective GitHub CLI authentication**, including the

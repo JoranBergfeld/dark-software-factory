@@ -16,7 +16,7 @@ public static partial class CliApplication
     };
 
     private static Command BuildOnboardCommand(
-        ICliTerminal terminal, IReadOnlySet<string> providedOptions, RepositoryAttachmentReviewer? reviewer)
+        ICliTerminal terminal, IReadOnlySet<string> providedOptions, RepositoryAttachmentReviewer? reviewer, IAzureCliRunner? boundaryAzure)
     {
         var repository = StringOption("--repo", "existing GitHub.com repository (OWNER/REPO)");
         var ownerAppConfig = StringOption("--owner-appconfig-endpoint", "prepared owner App Configuration endpoint (or DSF_OWNER_APPCONFIG_ENDPOINT)");
@@ -146,6 +146,7 @@ public static partial class CliApplication
         });
         var decide = new Command("decide", "assess attachment of an existing application to Decide");
         decide.Subcommands.Add(review);
+        decide.Subcommands.Add(BuildBoundaryPlanCommand(terminal, reviewer, boundaryAzure));
         var onboard = new Command("onboard", "review existing application attachment without greenfield provisioning");
         onboard.Subcommands.Add(decide);
         return onboard;

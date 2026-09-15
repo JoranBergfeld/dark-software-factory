@@ -6,6 +6,7 @@ using System.Text.Json.Serialization;
 using Dsf.Cli;
 using Dsf.Core.Onboarding;
 using Xunit;
+using ReviewFixture = Dsf.Cli.Tests.RepositoryReviewFixture;
 
 namespace Dsf.Cli.Tests;
 
@@ -937,145 +938,147 @@ public sealed class RepositoryAttachmentReviewTests
         Assert.Empty(terminal.Output);
     }
 
-    private sealed class ReviewFixture : HttpMessageHandler, IGhCliRunner, IOwnerCredentialReader
+}
+
+internal sealed class RepositoryReviewFixture : HttpMessageHandler, IGhCliRunner, IOwnerCredentialReader
+{
+    public static readonly string[] OwnerArguments =
+        ["--owner-appconfig-endpoint", "https://owner.azconfig.io", "--owner-keyvault-uri", "https://owner.vault.azure.net/"];
+    public static readonly string[] ClearAutomationArguments =
+        ["--issue-automation", "clear", "--pr-automation", "clear", "--label-automation", "clear", "--automation-owner", "acme/platform"];
+    private static readonly string PrivateKey = CreatePrivateKey();
+    public OwnerGitHubIdentity? OwnerIdentity { get; set; } = new(
+        "7", "42", "selected", "https://owner.vault.azure.net/", "https://owner.azconfig.io");
+    public Dictionary<string, (HttpStatusCode Status, string Json)> AppResponses { get; } = new()
     {
-        public static readonly string[] OwnerArguments =
-            ["--owner-appconfig-endpoint", "https://owner.azconfig.io", "--owner-keyvault-uri", "https://owner.vault.azure.net/"];
-        public static readonly string[] ClearAutomationArguments =
-            ["--issue-automation", "clear", "--pr-automation", "clear", "--label-automation", "clear", "--automation-owner", "acme/platform"];
-        private static readonly string PrivateKey = CreatePrivateKey();
-        public OwnerGitHubIdentity? OwnerIdentity { get; set; } = new(
-            "7", "42", "selected", "https://owner.vault.azure.net/", "https://owner.azconfig.io");
-        public Dictionary<string, (HttpStatusCode Status, string Json)> AppResponses { get; } = new()
-        {
-            ["/app"] = (HttpStatusCode.OK, """{"id":7,"slug":"dsf-owner","permissions":{"issues":"write","contents":"read","metadata":"read"}}"""),
-            ["/app/installations/42"] = (HttpStatusCode.OK, """
+        ["/app"] = (HttpStatusCode.OK, """{"id":7,"slug":"dsf-owner","permissions":{"issues":"write","contents":"read","metadata":"read"}}"""),
+        ["/app/installations/42"] = (HttpStatusCode.OK, """
                 {"id":42,"app_id":7,"account":{"id":81,"login":"acme","type":"Organization"},
                  "repository_selection":"selected","suspended_at":null,
                  "permissions":{"issues":"write","contents":"read","metadata":"read"}}
                 """),
-            ["/repos/acme/renamed/installation"] = (HttpStatusCode.OK, """{"id":42}"""),
-        };
-        public List<HttpMethod> AppMethods { get; } = [];
-        public List<string> OwnerReads { get; } = [];
-        public IOwnerCredentialReader? OwnerReader { get; set; }
-        public Exception? OwnerFailure { get; set; }
-        public Dictionary<string, GhInvocationResult> Responses { get; } = new()
-        {
-            ["user"] = new(0, """{"id":12,"login":"reviewer"}""", ""),
-            ["repos/acme/old-name"] = new(0, """
+        ["/repos/acme/renamed/installation"] = (HttpStatusCode.OK, """{"id":42}"""),
+    };
+    public List<HttpMethod> AppMethods { get; } = [];
+    public List<string> OwnerReads { get; } = [];
+    public IOwnerCredentialReader? OwnerReader { get; set; }
+    public IAzureCliRunner? BoundaryAzureRunner { get; set; }
+    public Exception? OwnerFailure { get; set; }
+    public Dictionary<string, GhInvocationResult> Responses { get; } = new()
+    {
+        ["user"] = new(0, """{"id":12,"login":"reviewer"}""", ""),
+        ["repos/acme/old-name"] = new(0, """
                 {"id":913,"owner":{"id":81,"login":"acme"},"name":"renamed","default_branch":"release/2026",
                  "visibility":"private","archived":false,"disabled":false,"has_issues":true}
                 """, ""),
-            ["repos/acme/renamed"] = new(0, """
+        ["repos/acme/renamed"] = new(0, """
                 {"id":913,"owner":{"id":81,"login":"acme"},"name":"renamed","default_branch":"release/2026",
                  "visibility":"private","archived":false,"disabled":false,"has_issues":true}
                 """, ""),
-            ["repos/acme/renamed/labels/dsf%3Aproposal"] = new(1, "HTTP/2.0 404 Not Found\r\n\r\n{}", ""),
-            ["repos/acme/renamed/labels/dsf-outcome%3Aapproved"] = new(1, "HTTP/2.0 404 Not Found\r\n\r\n{}", ""),
-            ["repos/acme/renamed/labels/dsf-outcome%3Arejected"] = new(1, "HTTP/2.0 404 Not Found\r\n\r\n{}", ""),
-            ["repos/acme/renamed/labels/dsf-outcome%3Achanges-requested"] = new(1, "HTTP/2.0 404 Not Found\r\n\r\n{}", ""),
-            ["repos/acme/renamed/actions/workflows?per_page=100&page=1"] = new(0, """{"total_count":0,"workflows":[]}""", ""),
-            ["repos/acme/renamed/hooks?per_page=100&page=1"] = new(0, "[]", ""),
-        };
-        public List<IReadOnlyList<string>> Invocations { get; } = [];
-        private readonly RecordingGitHubProvisioningClient github = new();
-        private readonly RecordingAzureProvisioningClient azure = new();
-        private readonly RecordingCharterRepositoryClient charter = new(null);
-        private readonly RecordingAppConfigurationClient configuration = new()
-        {
-            OnWrite = _ => Assert.Fail("Read-only review wrote App Configuration."),
-        };
+        ["repos/acme/renamed/labels/dsf%3Aproposal"] = new(1, "HTTP/2.0 404 Not Found\r\n\r\n{}", ""),
+        ["repos/acme/renamed/labels/dsf-outcome%3Aapproved"] = new(1, "HTTP/2.0 404 Not Found\r\n\r\n{}", ""),
+        ["repos/acme/renamed/labels/dsf-outcome%3Arejected"] = new(1, "HTTP/2.0 404 Not Found\r\n\r\n{}", ""),
+        ["repos/acme/renamed/labels/dsf-outcome%3Achanges-requested"] = new(1, "HTTP/2.0 404 Not Found\r\n\r\n{}", ""),
+        ["repos/acme/renamed/actions/workflows?per_page=100&page=1"] = new(0, """{"total_count":0,"workflows":[]}""", ""),
+        ["repos/acme/renamed/hooks?per_page=100&page=1"] = new(0, "[]", ""),
+    };
+    public List<IReadOnlyList<string>> Invocations { get; } = [];
+    private readonly RecordingGitHubProvisioningClient github = new();
+    private readonly RecordingAzureProvisioningClient azure = new();
+    private readonly RecordingCharterRepositoryClient charter = new(null);
+    private readonly RecordingAppConfigurationClient configuration = new()
+    {
+        OnWrite = _ => Assert.Fail("Read-only review wrote App Configuration."),
+    };
 
-        public void SetWorkflow(string source)
-        {
-            Responses["repos/acme/renamed/actions/workflows?per_page=100&page=1"] = new(0,
-                """{"total_count":1,"workflows":[{"id":90,"path":".github/workflows/dispatch.yml","state":"active"}]}""", "");
-            Responses["repos/acme/renamed/contents/.github/workflows/dispatch.yml?ref=release%2F2026"] = new(0,
-                JsonSerializer.Serialize(new
-                {
-                    type = "file",
-                    sha = "workflow-sha",
-                    encoding = "base64",
-                    content = Convert.ToBase64String(Encoding.UTF8.GetBytes(source)),
-                }), "");
-        }
-
-        public GhInvocationResult Run(IReadOnlyList<string> arguments, CancellationToken cancellationToken)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            Invocations.Add(arguments.ToArray());
-            var response = Responses[arguments[^1]];
-            return arguments.Contains("--include") && response.ExitCode == 0
-                ? response with { StandardOutput = "HTTP/2.0 200 OK\r\n\r\n" + response.StandardOutput }
-                : response;
-        }
-
-        public Task<OwnerGitHubIdentity?> ReadIdentityFromStatusAsync(string endpoint, CancellationToken cancellationToken)
-        {
-            OwnerReads.Add(endpoint);
-            if (OwnerFailure is not null)
+    public void SetWorkflow(string source)
+    {
+        Responses["repos/acme/renamed/actions/workflows?per_page=100&page=1"] = new(0,
+            """{"total_count":1,"workflows":[{"id":90,"path":".github/workflows/dispatch.yml","state":"active"}]}""", "");
+        Responses["repos/acme/renamed/contents/.github/workflows/dispatch.yml?ref=release%2F2026"] = new(0,
+            JsonSerializer.Serialize(new
             {
-                return Task.FromException<OwnerGitHubIdentity?>(OwnerFailure);
-            }
+                type = "file",
+                sha = "workflow-sha",
+                encoding = "base64",
+                content = Convert.ToBase64String(Encoding.UTF8.GetBytes(source)),
+            }), "");
+    }
 
-            return Task.FromResult(OwnerIdentity);
-        }
+    public GhInvocationResult Run(IReadOnlyList<string> arguments, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        Invocations.Add(arguments.ToArray());
+        var response = Responses[arguments[^1]];
+        return arguments.Contains("--include") && response.ExitCode == 0
+            ? response with { StandardOutput = "HTTP/2.0 200 OK\r\n\r\n" + response.StandardOutput }
+            : response;
+    }
 
-        public Task<OwnerGitHubCredentials> ReadAsync(string vault, bool includePrivateKey, CancellationToken cancellationToken)
+    public Task<OwnerGitHubIdentity?> ReadIdentityFromStatusAsync(string endpoint, CancellationToken cancellationToken)
+    {
+        OwnerReads.Add(endpoint);
+        if (OwnerFailure is not null)
         {
-            OwnerReads.Add(vault);
-            return Task.FromResult(new OwnerGitHubCredentials("7", "42", includePrivateKey ? PrivateKey : ""));
+            return Task.FromException<OwnerGitHubIdentity?>(OwnerFailure);
         }
 
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-        {
-            AppMethods.Add(request.Method);
-            Assert.Equal("Bearer", request.Headers.Authorization?.Scheme);
-            var response = AppResponses[request.RequestUri!.AbsolutePath];
-            return Task.FromResult(new HttpResponseMessage(response.Status) { Content = new StringContent(response.Json) });
-        }
+        return Task.FromResult(OwnerIdentity);
+    }
 
-        public async Task<(int Exit, ScriptedTerminal Terminal)> InvokeAsync(params string[] extra)
-        {
-            var terminal = new ScriptedTerminal(new(false, false, false), []);
-            string[] ownerArguments = extra.Contains("--owner-appconfig-endpoint") ? []
-                : ["--owner-appconfig-endpoint", "", "--owner-keyvault-uri", ""];
-            var exit = await InvokeCommandAsync(terminal,
-                ["onboard", "decide", "review", "--repo", "acme/old-name", "--json", .. ownerArguments, .. extra],
-                CancellationToken.None);
-            return (exit, terminal);
-        }
+    public Task<OwnerGitHubCredentials> ReadAsync(string vault, bool includePrivateKey, CancellationToken cancellationToken)
+    {
+        OwnerReads.Add(vault);
+        return Task.FromResult(new OwnerGitHubCredentials("7", "42", includePrivateKey ? PrivateKey : ""));
+    }
 
-        public async Task<int> InvokeCommandAsync(ScriptedTerminal terminal, string[] arguments, CancellationToken cancellationToken = default)
-        {
-            using var client = new HttpClient(this, disposeHandler: false) { BaseAddress = new Uri("https://api.github.com/") };
-            return await CliApplication.InvokeAsync(arguments,
-                cancellationToken, terminal, github, azure, configuration, charter, new RecordingCharterStore(),
-                new RepositoryAttachmentReviewer(this, OwnerReader ?? this, client));
-        }
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        AppMethods.Add(request.Method);
+        Assert.Equal("Bearer", request.Headers.Authorization?.Scheme);
+        var response = AppResponses[request.RequestUri!.AbsolutePath];
+        return Task.FromResult(new HttpResponseMessage(response.Status) { Content = new StringContent(response.Json) });
+    }
 
-        public void AssertReadOnly()
-        {
-            Assert.Empty(github.Requests);
-            Assert.Empty(azure.Requests);
-            Assert.Empty(charter.InitialPullRequests);
-            Assert.Empty(charter.FilePullRequests);
-            Assert.Empty(charter.Issues);
-            Assert.All(AppMethods, method => Assert.Equal(HttpMethod.Get, method));
-            Assert.All(OwnerReads, endpoint => Assert.Contains("owner.", endpoint));
-            Assert.All(Invocations, invocation =>
-            {
-                Assert.Equal("api", invocation[0]);
-                Assert.Contains("GET", invocation);
-                Assert.Contains("github.com", invocation);
-            });
-        }
+    public async Task<(int Exit, ScriptedTerminal Terminal)> InvokeAsync(params string[] extra)
+    {
+        var terminal = new ScriptedTerminal(new(false, false, false), []);
+        string[] ownerArguments = extra.Contains("--owner-appconfig-endpoint") ? []
+            : ["--owner-appconfig-endpoint", "", "--owner-keyvault-uri", ""];
+        var exit = await InvokeCommandAsync(terminal,
+            ["onboard", "decide", "review", "--repo", "acme/old-name", "--json", .. ownerArguments, .. extra],
+            CancellationToken.None);
+        return (exit, terminal);
+    }
 
-        private static string CreatePrivateKey()
+    public async Task<int> InvokeCommandAsync(ScriptedTerminal terminal, string[] arguments, CancellationToken cancellationToken = default)
+    {
+        using var client = new HttpClient(this, disposeHandler: false) { BaseAddress = new Uri("https://api.github.com/") };
+        return await CliApplication.InvokeAsync(arguments,
+            cancellationToken, terminal, github, azure, configuration, charter, new RecordingCharterStore(),
+            new RepositoryAttachmentReviewer(this, OwnerReader ?? this, client), BoundaryAzureRunner);
+    }
+
+    public void AssertReadOnly()
+    {
+        Assert.Empty(github.Requests);
+        Assert.Empty(azure.Requests);
+        Assert.Empty(charter.InitialPullRequests);
+        Assert.Empty(charter.FilePullRequests);
+        Assert.Empty(charter.Issues);
+        Assert.All(AppMethods, method => Assert.Equal(HttpMethod.Get, method));
+        Assert.All(OwnerReads, endpoint => Assert.Contains("owner.", endpoint));
+        Assert.All(Invocations, invocation =>
         {
-            using var rsa = RSA.Create(2048);
-            return rsa.ExportRSAPrivateKeyPem();
-        }
+            Assert.Equal("api", invocation[0]);
+            Assert.Contains("GET", invocation);
+            Assert.Contains("github.com", invocation);
+        });
+    }
+
+    private static string CreatePrivateKey()
+    {
+        using var rsa = RSA.Create(2048);
+        return rsa.ExportRSAPrivateKeyPem();
     }
 }
