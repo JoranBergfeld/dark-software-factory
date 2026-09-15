@@ -30,6 +30,7 @@ internal sealed class BoundaryPlanFixture : IAzureCliRunner
     public string? InputTextOverride { get; set; }
     public Func<string>? OwnerEntries { get; set; }
     public string? AppConfigActor { get; set; }
+    public string DefaultOutput { get; set; } = "json";
     public JsonObject Input { get; } = new()
     {
         ["schemaVersion"] = 1, ["repository"] = "acme/old-name",
@@ -91,6 +92,13 @@ internal sealed class BoundaryPlanFixture : IAzureCliRunner
     {
         token.ThrowIfCancellationRequested();
         Calls.Add(args.ToArray());
+        var outputIndex = args.ToList().FindIndex(argument => argument is "--output" or "-o");
+        var output = outputIndex >= 0 ? args[outputIndex + 1] : DefaultOutput;
+        if (output != "json")
+            return Task.FromResult(new AzureCliInvocationResult(0, output == "yaml"
+                ? "accessToken: fixture-output-token-do-not-print\nsubscription: " + Subscription
+                : "AccessToken                         Subscription\n----------------------------------  ------------------------------------\n"
+                    + "fixture-output-token-do-not-print   " + Subscription, ""));
         var operation = string.Join(' ', args.Take(2));
         var key = operation == "rest --method" ? args[args.IndexOf("--url") + 1] : operation;
         if (operation == "appconfig kv" && OwnerEntries is not null)

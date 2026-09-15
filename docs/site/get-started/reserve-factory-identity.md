@@ -107,15 +107,19 @@ The product anchor is an atomic **conditional create**, not a fictional prior
 write-ahead entry. Once confirmed, every non-anchor write has a durable anchor
 intent (stable step, exact key/label and value digest) **before dispatch**.
 Steps upload plan chunks, claim the durable repository, then claim canonical
-application/evidence resource IDs. Each confirmation advances the anchor through
-ETag comparison. The final conditional anchor update records `Reserved`.
+application/evidence resource IDs. Non-product claim steps use ordinal key/label
+order both before initial dispatch and after remote reconstruction, independent
+of resource-ID or serialized-array ordering. A mismatching pending intent remains
+blocked; it is never retargeted to another claim. Each confirmation advances the
+anchor through ETag comparison. The final conditional anchor update records `Reserved`.
 
 The Azure SDK uses `AddConfigurationSettingAsync` (`If-None-Match: *`) and
 `SetConfigurationSettingAsync(..., onlyIfUnchanged: true)` (opaque `If-Match`
 ETag). Automatic retries are disabled. Registry credentials come only from
-`az account get-access-token --subscription ... --resource https://azconfig.io`,
+`az account get-access-token --subscription ... --resource https://azconfig.io --output json`,
 with tenant/subscription/object-ID checks; writes bind the reviewed Azure actor.
-There is no default-credential chain.
+Explicit JSON output works regardless of the operator's Azure CLI table/YAML
+default, without changing that setting. There is no default-credential chain.
 
 This is **per-key+label conditional admission, not a cross-key transaction**.
 Partial product/claim records stay held by their recorded operation. Unacquired

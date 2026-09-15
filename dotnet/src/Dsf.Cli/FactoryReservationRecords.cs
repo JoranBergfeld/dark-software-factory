@@ -109,7 +109,8 @@ internal static class FactoryReservationRecords
             steps.Add((ProductConfigurationKeys.OwnerReservationPlanChunk(anchor.Identity.FactoryId, index),
                 Serialize(new FactoryReservationPlanChunk(1, ChunkKind, anchor.Identity, index,
                     Convert.ToBase64String(plan.AsSpan(index * ChunkBytes, Math.Min(ChunkBytes, plan.Length - index * ChunkBytes)))))));
-        foreach (var claim in reviewed.OwnerAdmission!.ProposedClaims.Where(c => c.Kind != "product"))
+        foreach (var claim in reviewed.OwnerAdmission!.ProposedClaims.Where(c => c.Kind != "product")
+                     .OrderBy(c => c.Key, StringComparer.Ordinal).ThenBy(c => c.Label, StringComparer.Ordinal))
             steps.Add((claim.Key, Serialize(new FactoryReservationClaim(1, ClaimKind, anchor.Identity, claim))));
         foreach (var step in steps) OwnerReservationStore.CheckSize(step.Key, ProductConfigurationKeys.NoLabel, step.Value);
         return steps;

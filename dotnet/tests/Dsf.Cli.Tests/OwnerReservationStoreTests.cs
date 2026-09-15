@@ -10,6 +10,28 @@ namespace Dsf.Cli.Tests;
 
 public sealed class OwnerReservationStoreTests
 {
+    [Fact]
+    public async Task Registry_adapter_explicitly_requests_JSON_for_the_selected_operator_token()
+    {
+        var azure = new BoundaryPlanFixture();
+        using var http = new HttpClient(new ContractHandler(request =>
+        {
+            Assert.Equal(HttpMethod.Get, request.Method);
+            Assert.Equal("Bearer", request.Headers.Authorization?.Scheme);
+            return Reply(HttpStatusCode.NotFound, "{}");
+        }));
+        var store = new OwnerReservationStore("https://owner.azconfig.io", BoundaryPlanFixture.Tenant,
+            BoundaryPlanFixture.Subscription, azure, http, BoundaryPlanFixture.Principal);
+
+        var record = await store.ReadAsync("key", CancellationToken.None);
+
+        Assert.Null(record);
+        Assert.Equal(
+            ["account", "get-access-token", "--subscription", BoundaryPlanFixture.Subscription,
+                "--resource", "https://azconfig.io", "--output", "json"],
+            Assert.Single(azure.Calls));
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

@@ -10,6 +10,54 @@ namespace Dsf.Cli.Tests;
 public sealed class FactoryReservationTests
 {
     [Theory]
+    [InlineData("reserve", "table")]
+    [InlineData("reserve", "yaml")]
+    [InlineData("status", "table")]
+    [InlineData("status", "yaml")]
+    [InlineData("resume", "table")]
+    [InlineData("resume", "yaml")]
+    public async Task Valid_operator_can_reserve_inspect_and_resume_with_non_json_Azure_CLI_defaults(string action, string defaultOutput)
+    {
+        var machine = new ReservationMachine(new ReservationTestStore());
+        var reviewed = await machine.Boundary.ReviewAsync();
+        Assert.Equal(0, reviewed.Exit);
+        var target = machine;
+        string? factoryId = null;
+        string? operationId = null;
+        if (action != "reserve")
+        {
+            if (action == "resume") machine.Store.LoseResponseForKey = "dsf/onboarding/repositories/913";
+            var (admissionExit, admitted, _) = await machine.ReserveAsync((string)reviewed.Plan["fingerprint"]!);
+            Assert.Equal(action == "resume" ? 1 : 0, admissionExit);
+            factoryId = (string)admitted["factoryId"]!;
+            operationId = (string)admitted["operationId"]!;
+            target = new ReservationMachine(ReservationTestStore.Restore(machine.Store.Export()));
+        }
+        target.Boundary.DefaultOutput = defaultOutput;
+
+        var (exit, result, terminal) = action == "reserve"
+            ? await target.ReserveAsync((string)reviewed.Plan["fingerprint"]!)
+            : await target.InvokeAsync(action);
+
+        Assert.True(exit == 0, terminal.Output + terminal.Error);
+        Assert.Equal("Reserved", (string?)result["state"]);
+        Assert.False((bool)result["isProvisioned"]!);
+        if (factoryId is not null)
+        {
+            Assert.Equal(factoryId, (string?)result["factoryId"]);
+            Assert.Equal(operationId, (string?)result["operationId"]);
+        }
+        if (action == "status") Assert.Empty(target.Store.Writes);
+        var requests = target.Boundary.Calls.Where(args => args.Contains("https://azconfig.io")).ToArray();
+        Assert.NotEmpty(requests);
+        Assert.All(requests, args => Assert.Equal("json", args[args.IndexOf("--output") + 1]));
+        Assert.DoesNotContain("fixture-output-token-do-not-print", terminal.Output + terminal.Error + target.Store.Export());
+        Assert.DoesNotContain(".signature", terminal.Output + terminal.Error + target.Store.Export());
+        machine.Boundary.AssertReadOnly();
+        target.Boundary.AssertReadOnly();
+    }
+
+    [Theory]
     [InlineData("product")]
     [InlineData("tenant")]
     [InlineData("digest")]
@@ -631,6 +679,91 @@ public sealed class FactoryReservationTests
         Assert.Equal(interrupted["operationId"]!.ToJsonString(), resumed["operationId"]!.ToJsonString());
         Assert.DoesNotContain(replacement.Store.Writes, w => w.Key == "dsf/onboarding/repositories/913" || w.Key.StartsWith("dsf/onboarding/plans/"));
         Assert.Equal(5, (int?)resumed["confirmedClaims"]);
+        replacement.Boundary.AssertReadOnly();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task First_resource_claim_lost_response_recovers_with_stable_steps_despite_resource_and_hash_order_inversion(bool committed)
+    {
+        const string resourcePrefix = "dsf/onboarding/resources/";
+        const string apiKey = resourcePrefix + "745a407aaca9f9fbe55457f6ebb9949e0a123276a78baad891729c6d751600c0";
+        const string dataKey = resourcePrefix + "14406275b036284866acd0ab65bcb72093443b8016affef9231eee7bc06df13f";
+        const string rootKey = "dsf/onboarding/products/widget";
+        var store = new ReservationTestStore();
+        if (committed)
+            store.LoseResponseWhen = (key, _) => key.StartsWith(resourcePrefix, StringComparison.Ordinal);
+        else
+            store.BeforePut = (key, _) =>
+            {
+                if (key.StartsWith(resourcePrefix, StringComparison.Ordinal)) store.LoseBeforeCommit = true;
+                return Task.CompletedTask;
+            };
+        var machine = new ReservationMachine(store);
+        var reviewed = await machine.Boundary.ReviewAsync();
+        Assert.Equal(0, reviewed.Exit);
+        var claims = reviewed.Plan["ownerAdmission"]!["proposedClaims"]!.AsArray()
+            .Where(c => (string?)c!["kind"] == "resource").ToArray();
+        Assert.Equal(BoundaryPlanFixture.Api.ToLowerInvariant(), (string?)claims[0]!["target"]);
+        Assert.Equal(BoundaryPlanFixture.Data.ToLowerInvariant(), (string?)claims[1]!["target"]);
+        Assert.Equal(apiKey, (string?)claims[0]!["key"]);
+        Assert.Equal(dataKey, (string?)claims[1]!["key"]);
+        Assert.True(StringComparer.Ordinal.Compare((string?)claims[0]!["target"], (string?)claims[1]!["target"]) < 0);
+        Assert.True(StringComparer.Ordinal.Compare(apiKey, dataKey) > 0);
+
+        var (exit, interrupted, _) = await machine.ReserveAsync((string)reviewed.Plan["fingerprint"]!);
+
+        Assert.Equal(1, exit);
+        Assert.Equal("Unknown", (string?)interrupted["state"]);
+        var attempt = Assert.Single(store.Writes, w => w.Key.StartsWith(resourcePrefix, StringComparison.Ordinal));
+        var persisted = store.Export();
+        var before = JsonNode.Parse(persisted)!.AsObject();
+        Assert.Equal(committed, before.ContainsKey(attempt.Key));
+        var root = JsonNode.Parse((string)JsonNode.Parse((string)before[rootKey]!)!["value"]!)!;
+        var intent = root["intent"]!;
+        Assert.Equal(attempt.Key, (string?)intent["key"]);
+        Assert.Equal("\0", (string?)intent["label"]);
+        Assert.Equal(Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(attempt.Value))),
+            (string?)intent["valueSha256"]);
+        Assert.Equal((int)root["planChunks"]! + 1, (int?)intent["step"]);
+
+        var replacement = new ReservationMachine(ReservationTestStore.Restore(persisted));
+        replacement.Store.BeforePut = (key, _) =>
+        {
+            if (key == attempt.Key)
+            {
+                var current = JsonNode.Parse(replacement.Store.Export())!;
+                var currentRoot = JsonNode.Parse((string)JsonNode.Parse((string)current[rootKey]!)!["value"]!)!;
+                Assert.True(JsonNode.DeepEquals(intent, currentRoot["intent"]), "The pending intent must remain unchanged before redispatch.");
+            }
+            return Task.CompletedTask;
+        };
+
+        var (resumedExit, resumed, terminal) = await replacement.InvokeAsync("resume");
+
+        Assert.True(resumedExit == 0, terminal.Output + terminal.Error);
+        Assert.Equal("Reserved", (string?)resumed["state"]);
+        Assert.False((bool)resumed["isProvisioned"]!);
+        Assert.Equal(interrupted["factoryId"]!.ToJsonString(), resumed["factoryId"]!.ToJsonString());
+        Assert.Equal(interrupted["operationId"]!.ToJsonString(), resumed["operationId"]!.ToJsonString());
+        Assert.Equal(5, (int?)resumed["confirmedClaims"]);
+        Assert.Equal(dataKey, attempt.Key);
+        Assert.Equal(committed ? 0 : 1, replacement.Store.Writes.Count(w => w.Key == attempt.Key));
+        Assert.DoesNotContain(replacement.Store.Writes,
+            w => w.Key == rootKey && w.IfNoneMatch == "*" || w.Key.StartsWith("dsf/onboarding/plans/", StringComparison.Ordinal)
+                || w.Key == "dsf/onboarding/repositories/913");
+        var after = JsonNode.Parse(replacement.Store.Export())!.AsObject();
+        foreach (var record in before.Where(r => r.Key != rootKey))
+            Assert.Equal((string?)record.Value, (string?)after[record.Key]);
+        foreach (var write in replacement.Store.Writes.Where(w => w.Key != rootKey))
+        {
+            Assert.Equal("*", write.IfNoneMatch);
+            var owner = JsonNode.Parse(write.Value)!["identity"]!;
+            Assert.Equal(interrupted["factoryId"]!.ToJsonString(), owner["factoryId"]!.ToJsonString());
+            Assert.Equal(interrupted["operationId"]!.ToJsonString(), owner["operationId"]!.ToJsonString());
+        }
+        machine.Boundary.AssertReadOnly();
         replacement.Boundary.AssertReadOnly();
     }
 

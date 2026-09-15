@@ -92,7 +92,7 @@ internal sealed class OwnerReservationStore
         public override async ValueTask<AccessToken> GetTokenAsync(TokenRequestContext requestContext, CancellationToken cancellationToken)
         {
             var result = await azure.RunAsync(["account", "get-access-token", "--subscription", subscription,
-                "--resource", "https://azconfig.io"], cancellationToken);
+                "--resource", "https://azconfig.io", "--output", "json"], cancellationToken);
             if (result.ExitCode != 0) throw new AuthenticationFailedException();
             try
             {
