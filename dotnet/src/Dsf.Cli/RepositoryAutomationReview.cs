@@ -38,6 +38,7 @@ internal sealed partial class RepositoryAttachmentReviewer
                 + "Neither a declaration nor visible inventory proves the absence of every bot, webhook, reusable workflow or organization automation.",
                 state is RepositoryReviewState.Confirmed ? null : request.AutomationOwner ?? "repository / external automation owner",
                 state is RepositoryReviewState.Confirmed ? null
+                    : !complete ? $"Reconcile {mutation} inventory and downstream effects outside DSF, then rerun review. Repeating a declaration cannot resolve opaque effects; unresolved inspection remains Unknown. No override or automatic repair."
                     : $"Review {mutation} consumers and delivery/coding-agent triggers outside DSF. Supply a per-class declaration only after owner review; no override or automatic repair."));
         }
 
@@ -141,17 +142,21 @@ internal sealed partial class RepositoryAttachmentReviewer
                     throw new InvalidOperationException();
                 }
 
-                var events = EventNames(on).ToArray();
-                var affected = events.SelectMany(AffectedMutations).Distinct().ToArray();
-                var known = mapping.Children.TryGetValue(new YamlScalarNode("jobs"), out var jobs)
-                    && ScalarValues(jobs).Any(value => Regex.IsMatch(value,
-                        @"@copilot|copilot-swe-agent|gh\s+agent-task|\b(deploy|deployment|publish)\b|kubectl\s+apply|terraform\s+apply|gh\s+(pr\s+merge|workflow\s+run)",
-                        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant));
-                foreach (var mutation in affected)
+                var events = WorkflowEvents(on).ToArray();
+                var known = HasKnownDeliveryStep(mapping);
+                foreach (var subscription in events)
                 {
-                    evidence[mutation].Add($"Workflow {path}@{sha} subscribes to {string.Join(", ", events)}; "
-                        + (known ? "delivery/coding-agent instruction observed." : "transitive/scripted effects cannot be established."));
-                    (known ? blocked : unknown).Add(mutation);
+                    foreach (var mutation in AffectedMutations(subscription.Name))
+                    {
+                        evidence[mutation].Add($"Workflow {path}@{sha} subscribes to {subscription.Name} (types: {subscription.Activities}); "
+                            + (subscription.CausedByMutation is false ? "activity filter excludes this mutation."
+                                : subscription.CausedByMutation is null ? "event/activity filter is unsupported or malformed; trigger relevance is unknown."
+                                : known ? "delivery/coding-agent instruction observed." : "transitive/scripted effects cannot be established."));
+                        if (subscription.CausedByMutation is not false)
+                        {
+                            (subscription.CausedByMutation is true && known ? blocked : unknown).Add(mutation);
+                        }
+                    }
                 }
             }
             catch (Exception exception) when (exception is JsonException or InvalidOperationException
@@ -208,17 +213,93 @@ internal sealed partial class RepositoryAttachmentReviewer
         }
     }
 
-    private static IEnumerable<string> EventNames(YamlNode node)
+    private sealed record WorkflowEvent(string Name, string Activities, bool? CausedByMutation);
+
+    private static IEnumerable<WorkflowEvent> WorkflowEvents(YamlNode node)
     {
-        var nodes = node switch
+        if (node is YamlMappingNode mapping)
         {
-            YamlScalarNode => [node],
-            YamlSequenceNode sequence => sequence.Children.AsEnumerable(),
-            YamlMappingNode mapping => mapping.Children.Keys,
-            _ => throw new InvalidOperationException("Unsupported workflow trigger syntax."),
+            if (mapping.Children.Count == 0)
+            {
+                throw new InvalidOperationException("Empty workflow events.");
+            }
+
+            foreach (var (name, configuration) in mapping.Children)
+            {
+                yield return ReadWorkflowEvent(EventName(name), configuration);
+            }
+        }
+        else if (node is YamlSequenceNode sequence)
+        {
+            if (sequence.Children.Count == 0)
+            {
+                throw new InvalidOperationException("Empty workflow events.");
+            }
+
+            foreach (var name in sequence.Children)
+            {
+                yield return ReadWorkflowEvent(EventName(name), null);
+            }
+        }
+        else
+        {
+            yield return ReadWorkflowEvent(EventName(node), null);
+        }
+
+        static string EventName(YamlNode name) => name is YamlScalarNode { Value.Length: > 0 } scalar
+            ? scalar.Value : throw new InvalidOperationException("Unsupported workflow event.");
+    }
+
+    private static WorkflowEvent ReadWorkflowEvent(string name, YamlNode? configuration)
+    {
+        (string[] Supported, string[] Caused)? activities = name switch
+        {
+            "issues" => (["opened", "edited", "deleted", "transferred", "pinned", "unpinned", "closed", "reopened",
+                "assigned", "unassigned", "labeled", "unlabeled", "locked", "unlocked", "milestoned", "demilestoned",
+                "typed", "untyped", "field_added", "field_removed"], ["opened", "labeled"]),
+            "pull_request" or "pull_request_target" => (["assigned", "unassigned", "labeled", "unlabeled", "opened",
+                "edited", "closed", "reopened", "synchronize", "converted_to_draft", "locked", "unlocked", "enqueued",
+                "dequeued", "milestoned", "demilestoned", "ready_for_review", "review_requested", "review_request_removed",
+                "auto_merge_enabled", "auto_merge_disabled"], ["opened"]),
+            "label" => (["created", "edited", "deleted"], ["created"]),
+            "issue_comment" or "pull_request_review_comment" => (["created", "edited", "deleted"], []),
+            "pull_request_review" => (["submitted", "edited", "dismissed"], []),
+            _ => null,
         };
-        return nodes.Select(item => item is YamlScalarNode { Value.Length: > 0 } scalar
-            ? scalar.Value : throw new InvalidOperationException("Unsupported workflow event."));
+        if (activities is null && name is not ("push" or "create" or "workflow_dispatch" or "repository_dispatch" or "schedule" or "workflow_call"))
+        {
+            return new(name, "unknown", null);
+        }
+
+        var defaultRelevance = activities is not { Caused.Length: 0 };
+        if (configuration is null || configuration is YamlScalarNode
+            {
+                Style: ScalarStyle.Plain,
+                Value: null or "" or "~" or "null" or "Null" or "NULL",
+            })
+        {
+            return new(name, "default", defaultRelevance);
+        }
+
+        if (configuration is not YamlMappingNode options)
+        {
+            return new(name, "unknown", null);
+        }
+
+        if (!options.Children.TryGetValue(new YamlScalarNode("types"), out var types))
+        {
+            return new(name, "default", options.Children.Count == 0 ? defaultRelevance : null);
+        }
+
+        if (activities is not { } contract || types is not YamlSequenceNode { Children.Count: > 0 } sequence
+            || sequence.Children.Any(item => item is not YamlScalarNode { Value: { } value } || !contract.Supported.Contains(value)))
+        {
+            return new(name, "unknown", null);
+        }
+
+        var selected = sequence.Children.Cast<YamlScalarNode>().Select(item => item.Value!).ToArray();
+        return new(name, string.Join(", ", selected),
+            options.Children.Count != 1 ? null : selected.Intersect(contract.Caused).Any());
     }
 
     private static IEnumerable<RepositoryMutationClass> AffectedMutations(string eventName) => eventName switch
@@ -232,28 +313,101 @@ internal sealed partial class RepositoryAttachmentReviewer
         _ => Enum.GetValues<RepositoryMutationClass>(),
     };
 
-    private static IEnumerable<string> ScalarValues(YamlNode root)
+    private static bool HasKnownDeliveryStep(YamlMappingNode workflow)
     {
-        var pending = new Stack<YamlNode>();
-        var visited = new HashSet<YamlNode>(ReferenceEqualityComparer.Instance);
-        pending.Push(root);
-        while (pending.TryPop(out var node))
+        if (!workflow.Children.TryGetValue(new YamlScalarNode("jobs"), out var jobs) || jobs is not YamlMappingNode jobMapping)
         {
-            if (!visited.Add(node))
+            return false;
+        }
+
+        foreach (var job in jobMapping.Children.Values.OfType<YamlMappingNode>())
+        {
+            if (!job.Children.TryGetValue(new YamlScalarNode("steps"), out var steps) || steps is not YamlSequenceNode sequence)
             {
                 continue;
             }
 
-            switch (node)
+            foreach (var step in sequence.Children.OfType<YamlMappingNode>())
             {
-                case YamlScalarNode { Value: { } value }: yield return value; break;
-                case YamlMappingNode mapping:
-                    foreach (var value in mapping.Children.Values) { pending.Push(value); }
-                    break;
-                case YamlSequenceNode sequence:
-                    foreach (var value in sequence.Children) { pending.Push(value); }
-                    break;
+                if (step.Children.TryGetValue(new YamlScalarNode("run"), out var run)
+                    && run is YamlScalarNode { Value: { } command }
+                    && HasStandardShell(step, job, workflow) && IsKnownDeliveryCommand(command))
+                {
+                    return true;
+                }
             }
         }
+
+        return false;
+    }
+
+    private static bool HasStandardShell(YamlMappingNode step, YamlMappingNode job, YamlMappingNode workflow)
+    {
+        if (step.Children.TryGetValue(new YamlScalarNode("shell"), out var shell))
+        {
+            return Standard(shell);
+        }
+
+        foreach (var scope in new[] { job, workflow })
+        {
+            if (!scope.Children.TryGetValue(new YamlScalarNode("defaults"), out var defaults))
+            {
+                continue;
+            }
+
+            if (defaults is not YamlMappingNode mapping) { return false; }
+            if (!mapping.Children.TryGetValue(new YamlScalarNode("run"), out var run)) { continue; }
+            if (run is not YamlMappingNode settings) { return false; }
+            if (settings.Children.TryGetValue(new YamlScalarNode("shell"), out shell)) { return Standard(shell); }
+        }
+
+        return true;
+
+        static bool Standard(YamlNode shell) => shell is YamlScalarNode { Value: "bash" or "sh" or "pwsh" or "powershell" };
+    }
+
+    private static bool IsKnownDeliveryCommand(string source)
+    {
+        // Only recognize a simple command, not prose, arguments to echo, or opaque shell programs.
+        var command = source.Trim();
+        if (command.IndexOfAny(['\r', '\n', ';', '|', '&', '<', '>', '`', '\\']) >= 0 || command.Contains("$(", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var tokens = new List<string>();
+        var end = 0;
+        foreach (Match match in Regex.Matches(command, """\G[ \t]*(?:'([^']*)'|"([^"]*)"|([^\s'"]+))(?=[ \t]|\z)"""))
+        {
+            tokens.Add(match.Groups.Cast<Group>().Skip(1).First(group => group.Success).Value);
+            end = match.Index + match.Length;
+        }
+
+        if (end != command.Length || tokens.Any(token => token is "--help" or "-h" or "--dry-run"
+            || token.StartsWith("--dry-run=", StringComparison.Ordinal)))
+        {
+            return false;
+        }
+
+        var arguments = tokens.ToArray();
+        return arguments is ["gh", "agent-task", "create", ..] or ["gh", "pr", "merge", ..]
+            or ["npm", "publish", ..] or ["kubectl", "apply", ..] or ["terraform", "apply", ..]
+            || IsCopilotAssignment(arguments);
+    }
+
+    private static bool IsCopilotAssignment(string[] arguments)
+    {
+        if (arguments is not ["gh", "issue", "edit", _, ..]) { return false; }
+        var assignment = false;
+        for (var index = 4; index < arguments.Length; index++)
+        {
+            var option = arguments[index].Split('=', 2);
+            if (option[0] is not ("--add-assignee" or "--body" or "--title" or "--repo" or "-R")) { return false; }
+            var value = option.Length == 2 ? option[1] : ++index < arguments.Length ? arguments[index] : null;
+            if (value is null) { return false; }
+            assignment |= option[0] == "--add-assignee" && value == "@copilot";
+        }
+
+        return assignment;
     }
 }

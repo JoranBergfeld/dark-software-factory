@@ -97,13 +97,31 @@ withheld. Inventory is paginated, capped at 1,000 workflows/hooks, with a bounde
 workflow-file read. Truncation, inaccessible inventory, malformed data, and
 unresolved relevant webhook or transitive/scripted effects remain unknown.
 
-Known delivery/coding-agent instructions in relevant event handlers block the
-affected mutation class. A `clear` declaration cannot override a known trigger,
-incomplete inspection, or unknown downstream effects. Generic CI handlers can
-therefore remain unknown: the scanner does not prove arbitrary scripts or reusable
-actions harmless. The external owner must reconcile the finding outside DSF.
-There is no force option and no automatic repair. Even a confirmed assessment is
-only a current, limited review, not exhaustive technical proof or permission to mutate.
+Workflow activity filters are retained in evidence, including YAML flow and block
+forms. Review considers proposal issue `opened`/`labeled` events (the issue is
+created unassigned with `dsf:proposal`), charter PR `opened` events and its branch
+`create`/`push` events, and label-definition `created` events. Default subscriptions
+include the applicable creation events. Filters limited to later human activities,
+such as closing or assigning an issue, closing a PR, or editing/deleting a label,
+do not block creation. Comments and reviews are not part of these DSF mutations.
+Unknown activities, malformed filters, and unsupported event/filter combinations
+remain explicitly unknown rather than being ignored or called known triggers.
+
+Directly recognized delivery/coding-agent commands in relevant workflow `run`
+steps block the affected mutation class. Workflow/job/step names, descriptive
+values, and printed literals are not executable delivery evidence. Recognition is
+deliberately limited to simple commands in standard shells; custom shells,
+compound scripts, reusable actions/workflows, and downstream dispatch can remain
+unknown. Other event filters, such as branch/path constraints, are not proved by
+this activity-filter review.
+
+A `clear` declaration cannot override a known trigger, incomplete inspection, or
+unknown downstream effects. Generic CI handlers can therefore remain unknown:
+the scanner does not prove arbitrary scripts or reusable actions harmless.
+The external owner must reconcile the finding outside DSF; if the visible effects
+remain opaque, repeating a declaration does not clear the assessment. There is no
+force option and no automatic repair. Even a confirmed assessment is only a current,
+limited review, not exhaustive technical proof or permission to mutate.
 
 ## Labels: inspect, never change
 
@@ -117,11 +135,15 @@ Only these four names are read:
 | `dsf-outcome:changes-requested` | DSF proposal requiring human-requested changes. |
 
 Absent labels are recorded without creation. Existing IDs, colors, and descriptions
-are preserved. This first review uses conservative description matching:
-case-insensitive canonical descriptions establish compatibility; missing descriptions
-remain unknown, and other descriptions block automatic reuse pending external
-semantic reconciliation. A matching description does not clear conflicting
-automation. Review offers no label-edit or semantic-override option.
+are preserved. Conservative description matching ignores case, whitespace,
+sentence punctuation (`.`, `,`, `;`, `:`), and hyphenation; presentation-only
+variations of the required meaning establish compatibility without rewriting the
+description. Missing descriptions and unrecognized wording remain `Unknown`, not
+asserted semantic conflicts. Recognized affirmative delivery/assignment meanings
+are `Blocked`. Both unresolved meanings and known conflicts prevent reuse pending
+external reconciliation; no model guesses at arbitrary wording. A compatible
+description does not clear conflicting automation. Review offers no label-edit or
+semantic-override option.
 
 ## Outcomes and reuse
 

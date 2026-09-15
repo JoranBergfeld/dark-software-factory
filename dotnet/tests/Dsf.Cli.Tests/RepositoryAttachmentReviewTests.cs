@@ -265,6 +265,200 @@ public sealed class RepositoryAttachmentReviewTests
         fixture.AssertReadOnly();
     }
 
+    [Theory]
+    [InlineData("name: Deployment unit tests\nsteps:\n  - run: echo harmless")]
+    [InlineData("steps:\n  - name: Publish deployment tests\n    run: echo harmless")]
+    [InlineData("env:\n  DESCRIPTION: Assign @copilot and deploy\nsteps:\n  - run: echo harmless")]
+    [InlineData("steps:\n  - run: echo '@copilot deployment unit tests'")]
+    [InlineData("steps:\n  - run: echo 'kubectl apply -f deployment.yml'")]
+    [InlineData("steps:\n  - run: printf '%s' 'npm publish'")]
+    [InlineData("steps:\n  - shell: python\n    run: print('deployment')")]
+    [InlineData("steps:\n  - shell: echo {0}\n    run: npm publish")]
+    [InlineData("defaults:\n  run:\n    shell: echo {0}\nsteps:\n  - run: npm publish")]
+    [InlineData("steps:\n  - run: |\n      cat <<'EXAMPLE'\n      kubectl apply -f deployment.yml\n      EXAMPLE")]
+    public async Task Workflow_metadata_and_harmless_literals_are_not_known_delivery_instructions(string job)
+    {
+        var fixture = new ReviewFixture();
+        fixture.SetWorkflow("name: Deployment unit tests\non: [pull_request]\njobs:\n  tests:\n    runs-on: ubuntu-latest\n"
+            + string.Join('\n', job.Split('\n').Select(line => "    " + line)));
+
+        var (exit, terminal) = await fixture.InvokeAsync([.. ReviewFixture.OwnerArguments, .. ReviewFixture.ClearAutomationArguments]);
+
+        Assert.Equal(1, exit);
+        using var document = JsonDocument.Parse(terminal.Output);
+        Assert.All(document.RootElement.GetProperty("automation").EnumerateArray(), review =>
+            Assert.Equal(review.GetProperty("mutation").GetString() == "CharterPullRequest" ? "Unknown" : "Confirmed",
+                review.GetProperty("state").GetString()));
+        Assert.DoesNotContain("instruction observed", terminal.Output);
+        var finding = Assert.Single(document.RootElement.GetProperty("findings").EnumerateArray(),
+            item => item.GetProperty("check").GetString() == "automation:CharterPullRequest");
+        Assert.Contains("Repeating a declaration cannot resolve", finding.GetProperty("nextAction").GetString());
+        fixture.AssertReadOnly();
+    }
+
+    [Theory]
+    [InlineData("gh issue edit \"$ISSUE\" --add-assignee '@copilot'", "Blocked")]
+    [InlineData("gh issue edit \"$ISSUE\" --add-assignee=@copilot", "Blocked")]
+    [InlineData("gh issue edit \"$ISSUE\" --body \"--add-assignee @copilot\"", "Unknown")]
+    [InlineData("gh issue edit \"$ISSUE\" --body='--add-assignee' '@copilot'", "Unknown")]
+    [InlineData("gh issue edit \"$ISSUE\" --body '--add-assignee' '@copilot'", "Unknown")]
+    [InlineData("gh issue edit \"$ISSUE\" --body '--add-assignee=@copilot'", "Unknown")]
+    [InlineData("gh issue edit \"$ISSUE\" --body 'Human review' --add-assignee '@copilot'", "Blocked")]
+    [InlineData("gh agent-task create", "Blocked")]
+    [InlineData("gh agent-task list", "Unknown")]
+    [InlineData("gh pr merge \"$PR\"", "Blocked")]
+    [InlineData("gh pr merge --help", "Unknown")]
+    [InlineData("npm publish", "Blocked")]
+    [InlineData("npm publish --dry-run", "Unknown")]
+    [InlineData("npm publish --dry-run=true", "Unknown")]
+    [InlineData("kubectl apply -f manifest.yml", "Blocked")]
+    [InlineData("terraform apply -auto-approve", "Blocked")]
+    [InlineData("gh workflow run tests.yml", "Unknown")]
+    [InlineData("bash scripts/deploy.sh", "Unknown")]
+    public async Task Delivery_commands_are_distinguished_from_arguments_and_opaque_dispatch(string command, string state)
+    {
+        var fixture = new ReviewFixture();
+        fixture.SetWorkflow($"""
+            on: [pull_request]
+            jobs:
+              tests:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: {command}
+            """);
+
+        var (exit, terminal) = await fixture.InvokeAsync([.. ReviewFixture.OwnerArguments, .. ReviewFixture.ClearAutomationArguments]);
+
+        Assert.Equal(1, exit);
+        using var document = JsonDocument.Parse(terminal.Output);
+        Assert.All(document.RootElement.GetProperty("automation").EnumerateArray(), review =>
+            Assert.Equal(review.GetProperty("mutation").GetString() == "CharterPullRequest" ? state : "Confirmed",
+                review.GetProperty("state").GetString()));
+        Assert.Equal(state == "Blocked", terminal.Output.Contains("instruction observed", StringComparison.Ordinal));
+        fixture.AssertReadOnly();
+    }
+
+    public static TheoryData<string, string, string, string> WorkflowActivityFilterCases
+    {
+        get
+        {
+            var cases = new TheoryData<string, string, string, string>();
+            (string Event, string Activity, string Mutation, string State)[] activities =
+            [
+                ("issues", "opened", "ProposalIssue", "Blocked"),
+                ("issues", "labeled", "ProposalIssue", "Blocked"),
+                ("issues", "closed", "ProposalIssue", "Confirmed"),
+                ("issues", "assigned", "ProposalIssue", "Confirmed"),
+                ("issues", "edited", "ProposalIssue", "Confirmed"),
+                ("issues", "unlabeled", "ProposalIssue", "Confirmed"),
+                ("pull_request", "opened", "CharterPullRequest", "Blocked"),
+                ("pull_request", "closed", "CharterPullRequest", "Confirmed"),
+                ("pull_request", "labeled", "CharterPullRequest", "Confirmed"),
+                ("pull_request_target", "opened", "CharterPullRequest", "Blocked"),
+                ("pull_request_target", "closed", "CharterPullRequest", "Confirmed"),
+                ("label", "created", "LabelCreation", "Blocked"),
+                ("label", "edited", "LabelCreation", "Confirmed"),
+                ("label", "deleted", "LabelCreation", "Confirmed"),
+            ];
+            foreach (var (eventName, activity, mutation, state) in activities)
+            {
+                cases.Add($"on: {{{eventName}: {{types: [{activity}]}}}}", activity, mutation, state);
+                cases.Add($"on:\n  {eventName}:\n    types:\n      - {activity}", activity, mutation, state);
+            }
+
+            return cases;
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(WorkflowActivityFilterCases))]
+    public async Task Workflow_activity_filters_block_only_events_caused_by_the_reviewed_mutation(
+        string trigger, string activity, string mutation, string state)
+    {
+        var fixture = new ReviewFixture();
+        fixture.SetWorkflow(trigger + """
+
+            jobs:
+              dispatch:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: gh issue edit "$ISSUE" --add-assignee '@copilot'
+            """);
+
+        var (exit, terminal) = await fixture.InvokeAsync([.. ReviewFixture.OwnerArguments, .. ReviewFixture.ClearAutomationArguments]);
+
+        Assert.Equal(state == "Blocked" ? 1 : 0, exit);
+        using var document = JsonDocument.Parse(terminal.Output);
+        Assert.All(document.RootElement.GetProperty("automation").EnumerateArray(), review =>
+            Assert.Equal(review.GetProperty("mutation").GetString() == mutation ? state : "Confirmed",
+                review.GetProperty("state").GetString()));
+        Assert.Contains($"types: {activity}", terminal.Output);
+        Assert.Equal(state == "Blocked", terminal.Output.Contains("instruction observed", StringComparison.Ordinal));
+        fixture.AssertReadOnly();
+    }
+
+    [Theory]
+    [InlineData("on: issues", "Blocked", "Confirmed", "Confirmed")]
+    [InlineData("on: [issues]", "Blocked", "Confirmed", "Confirmed")]
+    [InlineData("on:\n  issues:", "Blocked", "Confirmed", "Confirmed")]
+    [InlineData("on: {issues: {}}", "Blocked", "Confirmed", "Confirmed")]
+    [InlineData("on: {issues: null}", "Blocked", "Confirmed", "Confirmed")]
+    [InlineData("on: {issues: ~}", "Blocked", "Confirmed", "Confirmed")]
+    [InlineData("on: pull_request", "Confirmed", "Blocked", "Confirmed")]
+    [InlineData("on: {pull_request_target: {}}", "Confirmed", "Blocked", "Confirmed")]
+    [InlineData("on: label", "Confirmed", "Confirmed", "Blocked")]
+    [InlineData("on: [push, create]", "Confirmed", "Blocked", "Confirmed")]
+    [InlineData("on: {issues: {types: [closed, opened]}}", "Blocked", "Confirmed", "Confirmed")]
+    [InlineData("on:\n  issues:\n    types:\n      - closed\n      - labeled", "Blocked", "Confirmed", "Confirmed")]
+    [InlineData("on: issue_comment", "Confirmed", "Confirmed", "Confirmed")]
+    [InlineData("on: {issue_comment: {types: [created]}}", "Confirmed", "Confirmed", "Confirmed")]
+    [InlineData("on: {pull_request_review: {types: [submitted]}}", "Confirmed", "Confirmed", "Confirmed")]
+    [InlineData("on: {pull_request_review_comment: {types: [created]}}", "Confirmed", "Confirmed", "Confirmed")]
+    [InlineData("on: {issues: {types: []}}", "Unknown", "Confirmed", "Confirmed")]
+    [InlineData("on: {issues: {types: null}}", "Unknown", "Confirmed", "Confirmed")]
+    [InlineData("on: {issues: {types: opened}}", "Unknown", "Confirmed", "Confirmed")]
+    [InlineData("on:\n  issues:\n    types:\n      closed: true", "Unknown", "Confirmed", "Confirmed")]
+    [InlineData("on: {issues: {types: [closed, unknown_activity]}}", "Unknown", "Confirmed", "Confirmed")]
+    [InlineData("on:\n  issues:\n    types:\n      - closed\n      - unknown_activity", "Unknown", "Confirmed", "Confirmed")]
+    [InlineData("on: {issues: {types: [closed, {}]}}", "Unknown", "Confirmed", "Confirmed")]
+    [InlineData("on: {issues: [closed]}", "Unknown", "Confirmed", "Confirmed")]
+    [InlineData("on: {issues: {type: [closed]}}", "Unknown", "Confirmed", "Confirmed")]
+    [InlineData("on: {issues: {types: [closed], unknown_filter: true}}", "Unknown", "Confirmed", "Confirmed")]
+    [InlineData("on: {pull_request: {types: [opend]}}", "Confirmed", "Unknown", "Confirmed")]
+    [InlineData("on:\n  label:\n    types: created", "Confirmed", "Confirmed", "Unknown")]
+    [InlineData("on: {label: {types: [opened]}}", "Confirmed", "Confirmed", "Unknown")]
+    [InlineData("on: {issues: 'null'}", "Unknown", "Confirmed", "Confirmed")]
+    [InlineData("on: future_event", "Unknown", "Unknown", "Unknown")]
+    [InlineData("on: {future_event: {types: [opened]}}", "Unknown", "Unknown", "Unknown")]
+    [InlineData("on: [{issues: {types: [closed]}}]", "Unknown", "Unknown", "Unknown")]
+    [InlineData("on: []", "Unknown", "Unknown", "Unknown")]
+    [InlineData("on: {}", "Unknown", "Unknown", "Unknown")]
+    public async Task Workflow_event_defaults_and_uncertain_filters_never_silently_clear_or_block_mutations(
+        string trigger, string issueState, string prState, string labelState)
+    {
+        var fixture = new ReviewFixture();
+        fixture.SetWorkflow(trigger + """
+
+            jobs:
+              dispatch:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: gh issue edit "$ISSUE" --add-assignee '@copilot'
+            """);
+
+        var (exit, terminal) = await fixture.InvokeAsync([.. ReviewFixture.OwnerArguments, .. ReviewFixture.ClearAutomationArguments]);
+
+        string[] states = [issueState, prState, labelState];
+        Assert.Equal(states.All(state => state == "Confirmed") ? 0 : 1, exit);
+        using var document = JsonDocument.Parse(terminal.Output);
+        var automation = document.RootElement.GetProperty("automation");
+        Assert.Equal(states, automation.EnumerateArray().Select(review => review.GetProperty("state").GetString()));
+        Assert.Equal(states.Select(state => state != "Unknown"),
+            automation.EnumerateArray().Select(review => review.GetProperty("visibleInventoryComplete").GetBoolean()));
+        Assert.Empty(terminal.Error);
+        fixture.AssertReadOnly();
+    }
+
     [Fact]
     public async Task Missing_external_automation_review_remains_pending_even_when_visible_inventory_is_empty()
     {
@@ -303,6 +497,67 @@ public sealed class RepositoryAttachmentReviewTests
         Assert.Equal("ff0000", proposal.GetProperty("color").GetString());
         Assert.Equal("Blocked", proposal.GetProperty("semanticState").GetString());
         Assert.Contains("coding agent", proposal.GetProperty("description").GetString());
+        fixture.AssertReadOnly();
+    }
+
+    [Theory]
+    [InlineData("dsf:proposal", "DSF proposal for human consideration; not a delivery assignment")]
+    [InlineData("dsf:proposal", "  dsf PROPOSAL for human consideration; not a delivery assignment.  ")]
+    [InlineData("dsf:proposal", "DSF proposal for human consideration ;  not a delivery assignment.")]
+    [InlineData("dsf:proposal", "DSF proposal for human consideration. Not a delivery assignment.")]
+    [InlineData("dsf-outcome:approved", "Human-approved DSF proposal; not a delivery assignment")]
+    [InlineData("dsf-outcome:approved", "Human approved DSF proposal; not a delivery assignment.")]
+    [InlineData("dsf-outcome:rejected", "Human-rejected DSF proposal")]
+    [InlineData("dsf-outcome:changes-requested", "DSF proposal requiring human-requested changes")]
+    public async Task Presentation_only_label_variations_preserve_compatible_existing_definitions(string name, string description)
+    {
+        var fixture = new ReviewFixture();
+        fixture.Responses[$"repos/acme/renamed/labels/{Uri.EscapeDataString(name)}"] = new(0,
+            JsonSerializer.Serialize(new { id = 502, name, color = "ff0000", description }), "");
+
+        var (exit, terminal) = await fixture.InvokeAsync([.. ReviewFixture.OwnerArguments, .. ReviewFixture.ClearAutomationArguments]);
+
+        Assert.Equal(0, exit);
+        using var document = JsonDocument.Parse(terminal.Output);
+        var label = Assert.Single(document.RootElement.GetProperty("labels").EnumerateArray(),
+            item => item.GetProperty("name").GetString() == name);
+        Assert.Equal("Confirmed", label.GetProperty("semanticState").GetString());
+        Assert.Equal(502, label.GetProperty("id").GetInt64());
+        Assert.Equal("ff0000", label.GetProperty("color").GetString());
+        Assert.Equal(description, label.GetProperty("description").GetString());
+        fixture.AssertReadOnly();
+    }
+
+    [Theory]
+    [InlineData(null, "Unknown")]
+    [InlineData("", "Unknown")]
+    [InlineData("Product council queue", "Unknown")]
+    [InlineData("DSF suggestion for people to consider", "Unknown")]
+    [InlineData("Do not assign a coding agent or deploy this issue", "Unknown")]
+    [InlineData("Assignment and deployment policy needs owner review", "Unknown")]
+    [InlineData("DSF proposal for human consideration; a delivery assignment.", "Blocked")]
+    [InlineData("Automatically assign this issue to @copilot.", "Blocked")]
+    [InlineData("Assign a coding agent and deploy this issue", "Blocked")]
+    [InlineData("Deploy this issue to production.", "Blocked")]
+    [InlineData("Accepted for delivery.", "Blocked")]
+    public async Task Label_meaning_distinguishes_uncertainty_from_delivery_assignment_conflicts(string? description, string state)
+    {
+        var fixture = new ReviewFixture();
+        fixture.Responses["repos/acme/renamed/labels/dsf%3Aproposal"] = new(0,
+            JsonSerializer.Serialize(new { id = 502, name = "dsf:proposal", color = "ff0000", description }), "");
+
+        var (exit, terminal) = await fixture.InvokeAsync([.. ReviewFixture.OwnerArguments, .. ReviewFixture.ClearAutomationArguments]);
+
+        Assert.Equal(1, exit);
+        using var document = JsonDocument.Parse(terminal.Output);
+        Assert.Equal(state, document.RootElement.GetProperty("state").GetString());
+        var label = document.RootElement.GetProperty("labels")[0];
+        Assert.Equal(state, label.GetProperty("semanticState").GetString());
+        Assert.Equal(description, label.GetProperty("description").GetString());
+        var finding = Assert.Single(document.RootElement.GetProperty("findings").EnumerateArray(),
+            item => item.GetProperty("check").GetString() == "label:dsf:proposal");
+        Assert.False(string.IsNullOrWhiteSpace(finding.GetProperty("nextActor").GetString()));
+        Assert.Contains("outside DSF", finding.GetProperty("nextAction").GetString());
         fixture.AssertReadOnly();
     }
 
@@ -492,6 +747,20 @@ public sealed class RepositoryAttachmentReviewTests
         {
             OnWrite = _ => Assert.Fail("Read-only review wrote App Configuration."),
         };
+
+        public void SetWorkflow(string source)
+        {
+            Responses["repos/acme/renamed/actions/workflows?per_page=100&page=1"] = new(0,
+                """{"total_count":1,"workflows":[{"id":90,"path":".github/workflows/dispatch.yml","state":"active"}]}""", "");
+            Responses["repos/acme/renamed/contents/.github/workflows/dispatch.yml?ref=release%2F2026"] = new(0,
+                JsonSerializer.Serialize(new
+                {
+                    type = "file",
+                    sha = "workflow-sha",
+                    encoding = "base64",
+                    content = Convert.ToBase64String(Encoding.UTF8.GetBytes(source)),
+                }), "");
+        }
 
         public GhInvocationResult Run(IReadOnlyList<string> arguments, CancellationToken cancellationToken)
         {

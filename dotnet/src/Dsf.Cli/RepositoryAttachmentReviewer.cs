@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Dsf.Core.Onboarding;
 
 namespace Dsf.Cli;
@@ -160,9 +161,10 @@ internal sealed partial class RepositoryAttachmentReviewer(IGhCliRunner gh, IOwn
             {
                 var observedName = RequiredText(label, "name");
                 var description = label.GetProperty("description").GetString();
-                var matches = string.Equals(description, meaning, StringComparison.OrdinalIgnoreCase);
+                var matches = string.Equals(NormalizeLabelDescription(description), NormalizeLabelDescription(meaning),
+                    StringComparison.OrdinalIgnoreCase);
                 var state = matches ? RepositoryReviewState.Confirmed
-                    : string.IsNullOrWhiteSpace(description) ? RepositoryReviewState.Unknown : RepositoryReviewState.Blocked;
+                    : HasDeliveryAssignmentMeaning(description) ? RepositoryReviewState.Blocked : RepositoryReviewState.Unknown;
                 if (!string.Equals(name, observedName, StringComparison.OrdinalIgnoreCase))
                 {
                     throw new InvalidOperationException();
@@ -171,7 +173,9 @@ internal sealed partial class RepositoryAttachmentReviewer(IGhCliRunner gh, IOwn
                 labels.Add(new(observedName, label.GetProperty("id").GetInt64(), RequiredText(label, "color"), description, meaning, state));
                 findings.Add(new($"label:{name}", state,
                     $"Required meaning: {meaning} Observed description: {description ?? "(none)"}. "
-                    + (matches ? "Existing identity/color/description remain unchanged." : "Existing meaning is not established as compatible; no label changes or reuse are authorized."),
+                    + (matches ? "Existing identity/color/description remain unchanged."
+                        : state is RepositoryReviewState.Blocked ? "Explicit delivery/assignment meaning conflicts with proposal-only use; no label changes or reuse are authorized."
+                        : "Existing meaning is unresolved; no label changes or reuse are authorized."),
                     matches ? null : "repository label / automation owner",
                     matches ? null : "Reconcile this label's meaning and consumers outside DSF; review cannot override a semantic conflict."));
             }
@@ -184,6 +188,21 @@ internal sealed partial class RepositoryAttachmentReviewer(IGhCliRunner gh, IOwn
 
         return labels;
     }
+
+    private static string NormalizeLabelDescription(string? description) =>
+        Regex.Replace(description ?? "", @"[\s.,;:\-]+", " ").Trim();
+
+    private static bool HasDeliveryAssignmentMeaning(string? description) =>
+        Regex.Split(description ?? "", @"[.;:\r\n]+").Any(clause =>
+        {
+            var text = NormalizeLabelDescription(clause);
+            const RegexOptions options = RegexOptions.IgnoreCase | RegexOptions.CultureInvariant;
+            return !Regex.IsMatch(text, @"\b(not|never|without|don['\u2019]t)\b", options)
+                && Regex.IsMatch(text,
+                    @"^(?:(?:automatically )?(?:assign\b.*(?:coding agent|@copilot)\b|deploy\b)"
+                    + @"|(?:a )?delivery assignment\b|(?:accepted|approved|ready) for (?:delivery|deployment)\b)",
+                    options);
+        });
 
     private GitHubRead ReadGitHub(string path, CancellationToken cancellationToken)
     {
