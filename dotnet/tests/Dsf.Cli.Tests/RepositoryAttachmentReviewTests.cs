@@ -963,6 +963,8 @@ internal sealed class RepositoryReviewFixture : HttpMessageHandler, IGhCliRunner
     public List<string> OwnerReads { get; } = [];
     public IOwnerCredentialReader? OwnerReader { get; set; }
     public IAzureCliRunner? BoundaryAzureRunner { get; set; }
+    public HttpClient? ReservationHttp { get; set; }
+    public TimeProvider? ReservationClock { get; set; }
     public Exception? OwnerFailure { get; set; }
     public Dictionary<string, GhInvocationResult> Responses { get; } = new()
     {
@@ -1056,7 +1058,7 @@ internal sealed class RepositoryReviewFixture : HttpMessageHandler, IGhCliRunner
         using var client = new HttpClient(this, disposeHandler: false) { BaseAddress = new Uri("https://api.github.com/") };
         return await CliApplication.InvokeAsync(arguments,
             cancellationToken, terminal, github, azure, configuration, charter, new RecordingCharterStore(),
-            new RepositoryAttachmentReviewer(this, OwnerReader ?? this, client), BoundaryAzureRunner);
+            new RepositoryAttachmentReviewer(this, OwnerReader ?? this, client), BoundaryAzureRunner, ReservationHttp, ReservationClock);
     }
 
     public void AssertReadOnly()

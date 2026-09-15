@@ -18,6 +18,8 @@ public static class ProductConfigurationKeys
     public static string OwnerRepositoryClaim(long repositoryId) => OwnerOnboardingPrefix + "repositories/" + repositoryId.ToString(System.Globalization.CultureInfo.InvariantCulture);
     public static string OwnerResourceClaim(string canonicalResourceId) => OwnerOnboardingPrefix + "resources/"
         + Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(canonicalResourceId)));
+    public static string OwnerReservationPlanChunk(Guid factoryId, int index) =>
+        OwnerOnboardingPrefix + "plans/" + factoryId.ToString("D") + "/" + index.ToString("D4", System.Globalization.CultureInfo.InvariantCulture);
 
     public static string OwnerBootstrapStatus(string appName) =>
         $"dsf/owner/bootstrap/{(appName ?? string.Empty).Trim().ToLowerInvariant()}/status";

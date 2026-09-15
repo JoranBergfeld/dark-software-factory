@@ -57,6 +57,17 @@ try
     Require(incompleteReview.ExitCode == 1 && incompleteReview.Output.Contains("--repo is required", StringComparison.Ordinal),
         $"Redirected attachment review did not require an explicit repository: {incompleteReview.Output}");
 
+    foreach (var action in new[] { "plan", "reserve", "status", "resume" })
+    {
+        var help = await Run("onboard", "decide", action, "--help");
+        var required = action is "plan" or "reserve" ? "--reviewed-fingerprint" : "--owner-appconfig-endpoint";
+        Require(help.ExitCode == 0 && help.Output.Contains(required, StringComparison.Ordinal),
+            $"Installed onboarding command is unavailable: {help.Output}");
+        var incomplete = await Run("onboard", "decide", action, "--json");
+        Require(incomplete.ExitCode == 1 && incomplete.Output.Contains("\"state\": \"Failed\"", StringComparison.Ordinal),
+            $"Installed onboarding command accepted incomplete explicit inputs: {incomplete.Output}");
+    }
+
     foreach (var verb in new[] { "run", "sweep", "serve-orchestrator", "serve-agent", "poll-outcomes" })
     {
         var result = await Run(verb, "--product", "packaging-smoke");
@@ -113,7 +124,7 @@ try
         File.WriteAllBytes(missing, bytes);
     }
 
-    Console.WriteLine("Installed payload smoke passed: repository review, five runtime verbs, ARM dependency closure, provisioning preview, bootstrap, preflight.");
+    Console.WriteLine("Installed payload smoke passed: repository review, boundary plan, reservation/status/resume, five runtime verbs, ARM dependency closure, provisioning preview, bootstrap, preflight.");
     return 0;
 }
 finally

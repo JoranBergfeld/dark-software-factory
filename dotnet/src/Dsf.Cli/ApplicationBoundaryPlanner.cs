@@ -5,7 +5,8 @@ namespace Dsf.Cli;
 internal sealed class ApplicationBoundaryPlanner(RepositoryAttachmentReviewer? repositoryReviewer, AzureBoundaryReader azure)
 {
     public async Task<ApplicationBoundaryPlan> PlanAsync(
-        ApplicationBoundarySelection selection, CancellationToken cancellationToken, string? reviewedFingerprint = null)
+        ApplicationBoundarySelection selection, CancellationToken cancellationToken, string? reviewedFingerprint = null,
+        ReservationAdmissionProof? reservationProof = null)
     {
         selection = BoundarySelectionInput.Normalize(selection);
         var reviewer = repositoryReviewer ?? RepositoryAttachmentReviewer.Create(azure.ForSubscription(selection.SubscriptionId));
@@ -16,7 +17,7 @@ internal sealed class ApplicationBoundaryPlanner(RepositoryAttachmentReviewer? r
                 AutomationDeclarations = selection.AutomationDeclarations,
             }, cancellationToken);
         var discovery = await azure.InspectAsync(selection, cancellationToken);
-        var admission = await new OwnerAdmissionReader(azure, reviewer).InspectAsync(selection, repository.Repository, cancellationToken);
+        var admission = await new OwnerAdmissionReader(azure, reviewer).InspectAsync(selection, repository.Repository, cancellationToken, reservationProof);
         var categories = BoundaryPlanCategoriesBuilder.Build(selection, repository, admission);
         var selectionFingerprint = BoundaryPlanFingerprint.Hash(new
         {

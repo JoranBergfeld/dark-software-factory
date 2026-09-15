@@ -72,20 +72,22 @@ internal static class BoundarySelectionInput
             if (ids is null) Invalid(field + " must be an explicit array (empty only for model prerequisites)");
             return ids!.Select(id => Id(id, field)).Distinct().Order(StringComparer.Ordinal).ToArray();
         }
-        string Id(string? id, string field)
-        {
-            var canonical = Text(id, field).TrimEnd('/').ToLowerInvariant();
-            if (!Regex.IsMatch(canonical,
-                    @"^/subscriptions/[0-9a-f-]{36}/resourcegroups/[a-z0-9_.()-]+/providers/[a-z0-9.]+(?:/[a-z0-9_.()-]+/[a-z0-9_.()-]+)+$")
-                || !canonical.StartsWith("/subscriptions/" + subscription + "/", StringComparison.Ordinal))
-                Invalid(field + " must contain individual ARM resource IDs in the selected subscription, never groups, URLs or another subscription");
-            return canonical;
-        }
+        string Id(string? id, string field) => ResourceId(id, subscription, field);
     }
 
-    private static string GuidValue(string? value, string field) => Guid.TryParse(value?.Trim(), out var id) && id != Guid.Empty
+    internal static string ResourceId(string? id, string subscription, string field)
+    {
+        var canonical = Text(id, field).TrimEnd('/').ToLowerInvariant();
+        if (!Regex.IsMatch(canonical,
+                @"^/subscriptions/[0-9a-f-]{36}/resourcegroups/[a-z0-9_.()-]+/providers/[a-z0-9.]+(?:/[a-z0-9_.()-]+/[a-z0-9_.()-]+)+$")
+            || !canonical.StartsWith("/subscriptions/" + subscription + "/", StringComparison.Ordinal))
+            Invalid(field + " must contain individual ARM resource IDs in the selected subscription, never groups, URLs or another subscription");
+        return canonical;
+    }
+
+    internal static string GuidValue(string? value, string field) => Guid.TryParse(value?.Trim(), out var id) && id != Guid.Empty
         ? id.ToString() : throw new BoundaryInputException($"Invalid planning input: {field} must be an explicit nonempty GUID.");
-    private static string Name(string? value, string field)
+    internal static string Name(string? value, string field)
     {
         var name = Text(value, field).ToLowerInvariant();
         if (!Regex.IsMatch(name, @"^[a-z0-9][a-z0-9_-]{0,89}$")) Invalid(field + " must be an explicit name using letters, digits, hyphens or underscores");

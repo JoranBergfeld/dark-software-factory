@@ -228,8 +228,9 @@ unlabelled keys and the owner endpoint. Model prerequisites are not resource cla
 `ProductConfigurationKeys` owns the `dsf/onboarding/` key catalog; resource claim
 keys hash canonical ARM IDs.
 
-These are read-only projections, not a claim store, trusted manifest, reservation,
-global factory ID or execution approval. A later reservation operation must recheck
-fresh authority/state and perform its own conditional, bounded per-key writes and
-partial-outcome recovery. This command has no reserve/provision/activate/status
-placeholder handlers, and it never falls back to greenfield behavior.
+These remain read-only projections, not a claim store, trusted manifest,
+reservation, global factory ID or execution approval. After reviewing the exact
+plan, use [reserve durable factory identity](reserve-factory-identity.md) for
+conditional, bounded owner admission and pre-provisioning status/resume.
+The separate reservation records do not change this plan's null factory ID or
+read-only semantics. Planning never falls back to greenfield behavior.

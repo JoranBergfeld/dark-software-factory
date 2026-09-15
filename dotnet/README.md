@@ -91,6 +91,14 @@ symbolic factory identities require later binding checks. No extra runtime or
 provisioning asset is needed for this read-only capability. See
 [boundary planning](../docs/site/get-started/preview-application-boundary.md).
 
+`dsf onboard decide reserve --input selection.json --reviewed-fingerprint <hash>`
+adds conditional owner admission, not provisioning. `status` and `resume` require
+explicit `--owner-appconfig-endpoint`, `--product`, `--tenant`, and `--subscription`.
+They recover the same identity from bounded remote plan/claim records; local
+reports are not authority. All three support `--json`; incomplete upload repair
+may supply the original `--input` to `resume`. No new asset or runtime verb is
+needed. See [reservation and recovery](../docs/site/get-started/reserve-factory-identity.md).
+
 ## Runtime host
 
 `src/Dsf.Runtime` (`dsf-runtime`) is the deployed runtime entrypoint. The `dsf` front door

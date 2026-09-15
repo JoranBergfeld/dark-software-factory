@@ -9,7 +9,8 @@ namespace Dsf.Cli;
 internal sealed class OwnerAdmissionReader(AzureBoundaryReader azure, RepositoryAttachmentReviewer repositoryReader)
 {
     public async Task<OwnerAdmissionSnapshot> InspectAsync(
-        ApplicationBoundarySelection selection, ReviewedGitHubRepository? repository, CancellationToken cancellationToken)
+        ApplicationBoundarySelection selection, ReviewedGitHubRepository? repository, CancellationToken cancellationToken,
+        ReservationAdmissionProof? reservationProof = null)
     {
         var claims = new List<ProposedObservationClaim>
         {
@@ -38,6 +39,7 @@ internal sealed class OwnerAdmissionReader(AzureBoundaryReader azure, Repository
                     var label = AzureBoundaryReader.Parse("owner admission label", () => entry.GetProperty("label").GetString());
                     var value = AzureBoundaryReader.Parse("owner admission value", () => AzureBoundaryReader.Text(entry, "value"));
                     var etag = AzureBoundaryReader.Parse("owner admission revision", () => AzureBoundaryReader.Text(entry, "etag"));
+                    if (reservationProof?.Matches(key, label, value, etag) == true) continue;
                     var observation = new OwnerAdmissionObservation(key, label, etag,
                         Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(value))));
                     if (seen.TryGetValue((key, label), out var earlier))
@@ -71,7 +73,11 @@ internal sealed class OwnerAdmissionReader(AzureBoundaryReader azure, Repository
                             p.Name.Equals("productKey", StringComparison.OrdinalIgnoreCase) && p.Value.ValueKind == JsonValueKind.String
                             && p.Value.GetString()?.Equals(selection.ProductKey, StringComparison.OrdinalIgnoreCase) == true
                             || p.Name.Equals("repositoryId", StringComparison.OrdinalIgnoreCase) && p.Value.ToString() == repository?.Id.ToString(System.Globalization.CultureInfo.InvariantCulture));
-                        if (!conflict)
+                        var recognized = FactoryReservationRecords.TryIdentify(key, label, value, out var identity)
+                            && identity!.OwnerEndpoint == selection.OwnerAppConfigEndpoint;
+                        if (recognized)
+                            conflict |= identity!.ProductKey == selection.ProductKey || identity.RepositoryId == repository?.Id;
+                        if (!conflict && !recognized)
                             findings.Add(AzureBoundaryReader.Unavailable("owner-admission",
                                 "An existing onboarding record has no proven non-overlap with the requested product/repository/resources. "
                                 + "Unknown record kinds and partial reservations are not unclaimed; reconcile trusted owner state."));

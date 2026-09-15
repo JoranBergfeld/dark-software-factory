@@ -28,6 +28,8 @@ internal sealed class BoundaryPlanFixture : IAzureCliRunner
     };
     public Dictionary<string, AzureCliInvocationResult> Overrides { get; } = [];
     public string? InputTextOverride { get; set; }
+    public Func<string>? OwnerEntries { get; set; }
+    public string? AppConfigActor { get; set; }
     public JsonObject Input { get; } = new()
     {
         ["schemaVersion"] = 1, ["repository"] = "acme/old-name",
@@ -91,6 +93,8 @@ internal sealed class BoundaryPlanFixture : IAzureCliRunner
         Calls.Add(args.ToArray());
         var operation = string.Join(' ', args.Take(2));
         var key = operation == "rest --method" ? args[args.IndexOf("--url") + 1] : operation;
+        if (operation == "appconfig kv" && OwnerEntries is not null)
+            return Task.FromResult(new AzureCliInvocationResult(0, OwnerEntries(), ""));
         if (Overrides.TryGetValue(key, out var response))
         {
             return Task.FromResult(response);
@@ -103,7 +107,11 @@ internal sealed class BoundaryPlanFixture : IAzureCliRunner
             {
                 tenant = Tenant, subscription = Subscription,
                 accessToken = "header." + Convert.ToBase64String(Encoding.UTF8.GetBytes(
-                    JsonSerializer.Serialize(new { oid = Principal, tid = Tenant }))).TrimEnd('=').Replace('+', '-').Replace('/', '_') + ".signature",
+                    JsonSerializer.Serialize(new
+                    {
+                        oid = args.Contains("https://azconfig.io") ? AppConfigActor ?? Principal : Principal,
+                        tid = Tenant, exp = DateTimeOffset.UtcNow.AddHours(1).ToUnixTimeSeconds(),
+                    }))).TrimEnd('=').Replace('+', '-').Replace('/', '_') + ".signature",
             },
             "resource list" => Resources.Values.Select(resource => new
             {
