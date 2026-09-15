@@ -62,6 +62,7 @@ nav:
   - Get started:
       - Quickstart: get-started/quickstart.md
       - Bootstrap the owner: get-started/bootstrap.md
+      - Review existing repository attachment: get-started/review-repository-attachment.md
       - Provision a factory: get-started/provision-a-factory.md
       - Implement the application: get-started/implement-application.md
       - Operate it: get-started/operate.md

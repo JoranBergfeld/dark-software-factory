@@ -20,6 +20,11 @@ prepare the machinery; the third starts the work that produces the application.
 
 ## Prerequisites
 
+For an **existing application**, start with
+[`dsf onboard decide review`](review-repository-attachment.md), a read-only repository
+assessment using effective `gh` authentication and the prepared owner control plane.
+It does not run the greenfield commands below or complete onboarding.
+
 - A GitHub API token that can create repositories under the selected owner:
 
   ```bash

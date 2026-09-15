@@ -10,7 +10,7 @@ using Dsf.Core.Runtime;
 
 namespace Dsf.Cli;
 
-public static class CliApplication
+public static partial class CliApplication
 {
     private const int Success = 0;
     private const int Failure = 1;
@@ -131,7 +131,8 @@ public static class CliApplication
         IAzureProvisioningClient azure,
         IAppConfigurationClient appConfig,
         ICharterRepositoryClient charterRepository,
-        ICharterStore charterStore)
+        ICharterStore charterStore,
+        RepositoryAttachmentReviewer? repositoryReviewer = null)
     {
         if (cancellationToken.IsCancellationRequested)
         {
@@ -143,7 +144,7 @@ public static class CliApplication
             .Select(arg => arg.Split('=', 2)[0])
             .ToHashSet();
         var root = BuildRootCommand(
-            terminal, providedOptions, github, azure, appConfig, charterRepository, charterStore);
+            terminal, providedOptions, github, azure, appConfig, charterRepository, charterStore, repositoryReviewer);
         var parseResult = root.Parse(args);
         return await InvokeAsync(parseResult, terminal, cancellationToken);
     }
@@ -187,7 +188,8 @@ public static class CliApplication
         IAzureProvisioningClient azure,
         IAppConfigurationClient appConfig,
         ICharterRepositoryClient charterRepository,
-        ICharterStore charterStore)
+        ICharterStore charterStore,
+        RepositoryAttachmentReviewer? repositoryReviewer = null)
     {
         var root = new RootCommand("Dark Software Factory — factory CLI (create product instances)");
         root.Options.Remove(root.Options.Single(option => option.Name == "--version"));
@@ -197,6 +199,7 @@ public static class CliApplication
         helpOption.Aliases.Remove("/h");
 
         root.Subcommands.Add(BuildNewCommand(terminal, providedOptions, github, azure, appConfig));
+        root.Subcommands.Add(BuildOnboardCommand(terminal, providedOptions, repositoryReviewer));
         root.Subcommands.Add(BuildListCommand(terminal, appConfig));
         root.Subcommands.Add(BuildOffboardCommand());
         root.Subcommands.Add(BuildBootstrapCommand(terminal));

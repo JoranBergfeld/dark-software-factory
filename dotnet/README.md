@@ -70,6 +70,17 @@ Offline installation checks (no Azure/GitHub writes):
 ./eng/smoke-test-release-archive.sh <archive.tar.gz> linux-x64
 ```
 
+## Existing repository attachment review
+
+The installed CLI includes `dsf onboard decide review --repo OWNER/REPO`.
+It uses effective GitHub CLI authentication plus the prepared owner App
+Configuration and Key Vault to return read-only, typed repository/access/label/
+automation facts. `--json` provides explicit-input output without prompts.
+No checkout, factory credentials, provisioning assets, remote mutations, or new
+runtime verb are required for this review. Confirmation is not completed onboarding
+or authorization to publish. See the
+[operator guide](../docs/site/get-started/review-repository-attachment.md).
+
 ## Runtime host
 
 `src/Dsf.Runtime` (`dsf-runtime`) is the deployed runtime entrypoint. The `dsf` front door

@@ -97,7 +97,8 @@
         "type": "Project",
         "dependencies": {
           "Dsf.Core": "[0.0.1, )",
-          "System.CommandLine": "[2.0.11, )"
+          "System.CommandLine": "[2.0.11, )",
+          "YamlDotNet": "[16.3.0, )"
         }
       },
       "dsf.core": {
@@ -108,6 +109,12 @@
         "requested": "[2.0.11, )",
         "resolved": "2.0.11",
         "contentHash": "Pmg3/T0M37ZS3ovwPHtfBNTCdqNpnxo+tnZMg8JDHVR0qD8KwcPUKlheEiZysb1En8IyH7yDoa9QDq97Ny/vhQ=="
+      },
+      "YamlDotNet": {
+        "type": "CentralTransitive",
+        "requested": "[16.3.0, )",
+        "resolved": "16.3.0",
+        "contentHash": "SgMOdxbz8X65z8hraIs6hOEdnkH6hESTAIUa7viEngHOYaH+6q5XJmwr1+yb9vJpNQ19hCQY69xbFsLtXpobQA=="
       }
     }
   }

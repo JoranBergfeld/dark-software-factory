@@ -49,6 +49,14 @@ try
         Require(nested >= minimumNestedDeployments, $"Missing compiled modules: {template}");
     }
 
+    var reviewHelp = await Run("onboard", "decide", "review", "--help");
+    Require(reviewHelp.ExitCode == 0 && reviewHelp.Output.Contains("--issue-automation", StringComparison.Ordinal)
+        && reviewHelp.Output.Contains("--owner-appconfig-endpoint", StringComparison.Ordinal),
+        $"Installed attachment review is unavailable: {reviewHelp.Output}");
+    var incompleteReview = await Run("onboard", "decide", "review", "--json");
+    Require(incompleteReview.ExitCode == 1 && incompleteReview.Output.Contains("--repo is required", StringComparison.Ordinal),
+        $"Redirected attachment review did not require an explicit repository: {incompleteReview.Output}");
+
     foreach (var verb in new[] { "run", "sweep", "serve-orchestrator", "serve-agent", "poll-outcomes" })
     {
         var result = await Run(verb, "--product", "packaging-smoke");
@@ -105,7 +113,7 @@ try
         File.WriteAllBytes(missing, bytes);
     }
 
-    Console.WriteLine("Installed payload smoke passed: five runtime verbs, ARM dependency closure, provisioning preview, bootstrap, preflight.");
+    Console.WriteLine("Installed payload smoke passed: repository review, five runtime verbs, ARM dependency closure, provisioning preview, bootstrap, preflight.");
     return 0;
 }
 finally

@@ -10,6 +10,7 @@ public static class ProductConfigurationKeys
 
     public const string OwnerIndexGitHubRepository = "GITHUB_REPOSITORY";
     public const string OwnerIndexAppConfigEndpoint = "AZURE_APPCONFIG_ENDPOINT";
+    public const string OwnerBootstrapStatusFilter = "dsf/owner/bootstrap/*";
 
     public static string OwnerBootstrapStatus(string appName) =>
         $"dsf/owner/bootstrap/{(appName ?? string.Empty).Trim().ToLowerInvariant()}/status";
