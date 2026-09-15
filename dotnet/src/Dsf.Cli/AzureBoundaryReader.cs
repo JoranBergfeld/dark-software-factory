@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Dsf.Core.Onboarding;
 
 namespace Dsf.Cli;
@@ -236,7 +237,7 @@ internal sealed class AzureBoundaryReader(IAzureCliRunner runner)
         }
         return new(Text(item, "id").TrimEnd('/').ToLowerInvariant(), Text(item, "type").ToLowerInvariant(),
             Text(item, "location").ToLowerInvariant(), signals,
-            Optional(properties, "customerId"), Optional(properties, "WorkspaceResourceId")?.ToLowerInvariant(),
+            Optional(properties, "customerId"), WorkspaceResourceId(properties),
             (Optional(properties, "serverFarmId") ?? Optional(properties, "managedEnvironmentId"))?.ToLowerInvariant())
         {
             NetworkConfiguration = network,
@@ -245,6 +246,25 @@ internal sealed class AzureBoundaryReader(IAzureCliRunner runner)
 
     internal static string Text(JsonElement item, string name) =>
         item.GetProperty(name).GetString() is { Length: > 0 } value ? value : throw new FormatException();
+    private static string? WorkspaceResourceId(JsonElement properties)
+    {
+        if (properties.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null) return null;
+        var links = properties.EnumerateObject()
+            .Where(p => p.Name.Equals("WorkspaceResourceId", StringComparison.OrdinalIgnoreCase)).ToArray();
+        if (links.Length == 0) return null;
+        if (links.Length != 1) throw new FormatException();
+        var value = links[0].Value;
+        if (value.ValueKind == JsonValueKind.Null) return null;
+        if (value.ValueKind != JsonValueKind.String) throw new FormatException();
+        var id = value.GetString()!.Trim().TrimEnd('/').ToLowerInvariant();
+        var match = Regex.Match(id,
+            @"^/subscriptions/(?<subscription>[0-9a-f-]{36})/resourcegroups/[\p{L}\p{Nd}_.()-]+/providers/microsoft\.operationalinsights/workspaces/[a-z0-9][a-z0-9-]*$",
+            RegexOptions.CultureInvariant);
+        if (!match.Success || !Guid.TryParseExact(match.Groups["subscription"].Value, "D", out var subscription)
+            || subscription == Guid.Empty)
+            throw new FormatException();
+        return id;
+    }
     private static string? Optional(JsonElement item, string name) => item.ValueKind == JsonValueKind.Object
         && item.EnumerateObject().FirstOrDefault(p => p.Name.Equals(name, StringComparison.OrdinalIgnoreCase)).Value is var value
         && value.ValueKind == JsonValueKind.String ? value.GetString() : null;

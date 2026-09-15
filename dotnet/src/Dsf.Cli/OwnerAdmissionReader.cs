@@ -6,7 +6,7 @@ using Dsf.Core.Runtime;
 
 namespace Dsf.Cli;
 
-internal sealed class OwnerAdmissionReader(AzureBoundaryReader azure)
+internal sealed class OwnerAdmissionReader(AzureBoundaryReader azure, RepositoryAttachmentReviewer repositoryReader)
 {
     public async Task<OwnerAdmissionSnapshot> InspectAsync(
         ApplicationBoundarySelection selection, ReviewedGitHubRepository? repository, CancellationToken cancellationToken)
@@ -51,9 +51,17 @@ internal sealed class OwnerAdmissionReader(AzureBoundaryReader azure)
                         || string.Equals(label, selection.ProductKey, StringComparison.OrdinalIgnoreCase);
                     if (key == ProductConfigurationKeys.OwnerIndexGitHubRepository)
                     {
-                        var name = value.Trim().Trim('"');
-                        conflict |= name.Equals(selection.Repository, StringComparison.OrdinalIgnoreCase)
-                            || name.Equals($"{repository?.Owner}/{repository?.Name}", StringComparison.OrdinalIgnoreCase);
+                        var identity = repositoryReader.ReadRepositoryIdentity(value, cancellationToken);
+                        observations[^1] = observation with { CurrentRepository = identity.Repository };
+                        if (identity.Repository is { } current && current.Id == repository?.Id)
+                            conflict = true;
+                        else
+                            findings.Add(new("owner-admission-repository", BoundaryPlanState.Unknown,
+                                identity.Repository is null ? identity.Finding.Detail
+                                    : $"Legacy name currently resolves to repository ID {identity.Repository.Id}. "
+                                      + "Historical registration identity remains unverified: repository names may be reused; this is not proof of non-overlap.",
+                                "owner registry / repository administrator",
+                                "Reconcile the original registration's durable repository identity; do not assume unclaimed state or backfill/adopt from current names."));
                     }
                     if (key.StartsWith(ProductConfigurationKeys.OwnerOnboardingPrefix, StringComparison.Ordinal))
                     {

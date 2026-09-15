@@ -150,6 +150,12 @@ plan. Existing groups cannot be adopted as new factory groups. Known Application
 Insights links to an unselected workspace block; a selected workspace backing an
 unselected component is shared, even if the chosen component has its own metadata
 or resource-context access setting. No backing resource is automatically added.
+Present component workspace links must be strings containing a well-formed workspace
+ARM resource ID, not another resource type or a workspace child. Malformed link types
+or IDs remain `Unknown` before relevance filtering. An absent or null link on an
+unselected classic component does not invent a backing workspace or block unrelated
+selection; a selected classic component still lacks the required conventional
+workspace route.
 
 Initial routes are direct Log Analytics workspace queries using selected Analytics
 tables: `AppRequests`, `AppExceptions`, `AppTraces`, `AppDependencies`, `AppEvents`,
@@ -166,6 +172,14 @@ establish attribution, confinement, schema, freshness and actual workload access
 
 Owner inspection reads all labels of `dsf/onboarding/*`, `GITHUB_REPOSITORY` and
 `AZURE_APPCONFIG_ENDPOINT` through App Configuration login authentication.
+Legacy repository references are resolved through operator `gh` read access and
+compared by current durable repository ID, including renames and transfers. These
+lookups reuse repository identity parsing without another App/automation review.
+The nonsecret `currentRepository` observation is included in the plan fingerprint,
+not written back into the registry. Missing, unauthorized or malformed resolution
+remains `Unknown`. A name resolving today to a different ID does not prove the
+original registration was different: names may have been reused. Historical
+identity requires external reconciliation, not automatic backfill or adoption.
 Matching registrations/claims block adoption; unreadable or unfamiliar partial
 records do not mean unclaimed. Raw record values are withheld. Existing Azure tags,
 including matching or partial legacy DSF tags, are only conflict signals.

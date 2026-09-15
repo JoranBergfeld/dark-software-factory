@@ -46,6 +46,26 @@ internal sealed class BoundaryPlanFixture : IAzureCliRunner
         ["boundaryReview"] = null,
     };
 
+    public void SetLegacyRegistration(string repository, string product = "other")
+    {
+        Overrides["appconfig kv"] = new(0, JsonSerializer.Serialize(new[]
+        {
+            new { key = "GITHUB_REPOSITORY", label = product, etag = "repository-revision", value = repository },
+            new { key = "AZURE_APPCONFIG_ENDPOINT", label = product, etag = "endpoint-revision", value = "https://other.azconfig.io" },
+        }), "");
+    }
+
+    public async Task<(int Exit, JsonNode Plan, ScriptedTerminal Terminal)> ReviewAsync()
+    {
+        var (_, draft, _) = await PlanAsync();
+        Input["boundaryReview"] = new JsonObject
+        {
+            ["selectionFingerprint"] = (string)draft["selectionFingerprint"]!,
+            ["accountableOwner"] = "acme/platform", ["dedicated"] = true, ["crossOwnerExclusive"] = true,
+        };
+        return await PlanAsync();
+    }
+
     public async Task<(int Exit, JsonNode Plan, ScriptedTerminal Terminal)> PlanAsync(params string[] extra)
     {
         Repository.BoundaryAzureRunner = this;
@@ -85,7 +105,10 @@ internal sealed class BoundaryPlanFixture : IAzureCliRunner
                 accessToken = "header." + Convert.ToBase64String(Encoding.UTF8.GetBytes(
                     JsonSerializer.Serialize(new { oid = Principal, tid = Tenant }))).TrimEnd('=').Replace('+', '-').Replace('/', '_') + ".signature",
             },
-            "resource list" => Resources.Values.ToArray(),
+            "resource list" => Resources.Values.Select(resource => new
+            {
+                id = resource["id"], type = resource["type"], location = resource["location"], tags = resource["tags"],
+            }).ToArray(),
             "resource show" => Resources[args[args.IndexOf("--ids") + 1]],
             "group list" => Array.Empty<object>(),
             "appconfig kv" => Array.Empty<object>(),

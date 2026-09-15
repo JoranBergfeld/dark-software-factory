@@ -36,6 +36,8 @@ internal sealed record RepositoryAttachmentReviewRequest(
     }
 }
 
+internal sealed record RepositoryIdentityRead(ReviewedGitHubRepository? Repository, RepositoryReviewFinding Finding);
+
 internal sealed partial class RepositoryAttachmentReviewer(IGhCliRunner gh, IOwnerCredentialReader owner, HttpClient appHttp)
 {
     private static readonly HttpClient AppHttp = new(new HttpClientHandler { AllowAutoRedirect = false })
@@ -45,6 +47,40 @@ internal sealed partial class RepositoryAttachmentReviewer(IGhCliRunner gh, IOwn
 
     public static RepositoryAttachmentReviewer Create(IAzureCliRunner? azure = null) => new(
         new SystemGhCliRunner(), new AzureCliOwnerBootstrapClient(azure ?? new SystemAzureCliRunner()), AppHttp);
+
+    public RepositoryIdentityRead ReadRepositoryIdentity(string reference, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var name = reference.Trim();
+        try
+        {
+            if (name.StartsWith('"'))
+                name = JsonSerializer.Deserialize<string>(name)?.Trim() ?? "";
+        }
+        catch (JsonException)
+        {
+            return new(null, Incomplete("repository-reference", "Legacy repository reference is malformed."));
+        }
+        if (!Regex.IsMatch(name, @"^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_.-]+$")
+            || name.Split('/')[1] is "." or "..")
+            return new(null, Incomplete("repository-reference", "Legacy repository reference is not a supported OWNER/REPO identity."));
+
+        var response = ReadGitHub($"repos/{name}", cancellationToken);
+        if (response.Body is not { } body)
+            return new(null, Incomplete("repository-reference",
+                $"Legacy repository identity could not be resolved with operator GitHub CLI access (HTTP {response.Status}); it is not assumed different or unclaimed."));
+        try
+        {
+            var repository = ReadRepository(body);
+            return new(repository, new("repository-reference", RepositoryReviewState.Confirmed,
+                $"Reference currently resolves to repository ID {repository.Id}; current name resolution is not proof of historical registration identity."));
+        }
+        catch (Exception exception) when (InvalidData(exception))
+        {
+            return new(null, Incomplete("repository-reference",
+                "Legacy repository reference or returned identity metadata is malformed; it is not assumed different or unclaimed."));
+        }
+    }
 
     public async Task<RepositoryAttachmentReview> ReviewAsync(RepositoryAttachmentReviewRequest request, CancellationToken cancellationToken)
     {

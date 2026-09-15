@@ -8,14 +8,15 @@ internal sealed class ApplicationBoundaryPlanner(RepositoryAttachmentReviewer? r
         ApplicationBoundarySelection selection, CancellationToken cancellationToken, string? reviewedFingerprint = null)
     {
         selection = BoundarySelectionInput.Normalize(selection);
-        var repository = await (repositoryReviewer ?? RepositoryAttachmentReviewer.Create(azure.ForSubscription(selection.SubscriptionId))).ReviewAsync(
+        var reviewer = repositoryReviewer ?? RepositoryAttachmentReviewer.Create(azure.ForSubscription(selection.SubscriptionId));
+        var repository = await reviewer.ReviewAsync(
             new(selection.Repository, selection.OwnerAppConfigEndpoint, selection.OwnerKeyVaultUri)
             {
                 AutomationOwner = selection.AutomationOwner,
                 AutomationDeclarations = selection.AutomationDeclarations,
             }, cancellationToken);
         var discovery = await azure.InspectAsync(selection, cancellationToken);
-        var admission = await new OwnerAdmissionReader(azure).InspectAsync(selection, repository.Repository, cancellationToken);
+        var admission = await new OwnerAdmissionReader(azure, reviewer).InspectAsync(selection, repository.Repository, cancellationToken);
         var categories = BoundaryPlanCategoriesBuilder.Build(selection, repository, admission);
         var selectionFingerprint = BoundaryPlanFingerprint.Hash(new
         {

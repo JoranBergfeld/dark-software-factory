@@ -68,7 +68,10 @@ public sealed record AzureBoundaryDiscovery(
 public sealed record EvidenceTableObservation(string BackendResourceId, string Name, string Plan);
 
 public sealed record ProposedObservationClaim(string Kind, string Target, string Key, string Label);
-public sealed record OwnerAdmissionObservation(string Key, string? Label, string ETag, string ValueFingerprint);
+public sealed record OwnerAdmissionObservation(string Key, string? Label, string ETag, string ValueFingerprint)
+{
+    public ReviewedGitHubRepository? CurrentRepository { get; init; }
+}
 public sealed record OwnerAdmissionSnapshot(
     string OwnerEndpoint, IReadOnlyList<OwnerAdmissionObservation> Observations,
     IReadOnlyList<ProposedObservationClaim> ProposedClaims, IReadOnlyList<BoundaryPlanFinding> Findings);

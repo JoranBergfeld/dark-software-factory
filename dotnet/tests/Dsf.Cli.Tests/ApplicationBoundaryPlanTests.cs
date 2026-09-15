@@ -8,6 +8,199 @@ namespace Dsf.Cli.Tests;
 
 public sealed class ApplicationBoundaryPlanTests
 {
+    [Theory]
+    [InlineData("number")]
+    [InlineData("object")]
+    [InlineData("invalid-id")]
+    [InlineData("wrong-resource-type")]
+    [InlineData("child-resource")]
+    [InlineData("invalid-subscription")]
+    [InlineData("empty")]
+    public async Task Malformed_unselected_component_workspace_link_is_unknown_before_relevance_filtering(string scenario)
+    {
+        var fixture = new BoundaryPlanFixture();
+        var component = BoundaryPlanFixture.Root + "/resourceGroups/other/providers/Microsoft.Insights/components/other";
+        fixture.Resources[component] = BoundaryPlanFixture.Resource(component, "Microsoft.Insights/components");
+        fixture.Resources[component]["properties"]!["WorkspaceResourceId"] = scenario switch
+        {
+            "number" => System.Text.Json.Nodes.JsonValue.Create(42),
+            "object" => new System.Text.Json.Nodes.JsonObject { ["id"] = BoundaryPlanFixture.Logs },
+            "invalid-id" => System.Text.Json.Nodes.JsonValue.Create("secret-invalid-id-do-not-print"),
+            "wrong-resource-type" => System.Text.Json.Nodes.JsonValue.Create(BoundaryPlanFixture.Api),
+            "child-resource" => System.Text.Json.Nodes.JsonValue.Create(BoundaryPlanFixture.Logs + "/tables/AppRequests"),
+            "invalid-subscription" => System.Text.Json.Nodes.JsonValue.Create(BoundaryPlanFixture.Logs.Replace(BoundaryPlanFixture.Subscription, "not-a-guid")),
+            _ => System.Text.Json.Nodes.JsonValue.Create(""),
+        };
+
+        var (exit, plan, terminal) = await fixture.ReviewAsync();
+
+        Assert.Equal(1, exit);
+        Assert.Equal("Unknown", (string?)plan["state"]);
+        Assert.Contains("workspace-topology", plan["findings"]!.ToJsonString());
+        Assert.Equal(2, plan["selection"]!["applicationResourceIds"]!.AsArray().Count);
+        Assert.Single(plan["selection"]!["evidenceBackends"]!.AsArray());
+        Assert.DoesNotContain("secret-invalid-id-do-not-print", terminal.Output + terminal.Error);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task Classic_component_absent_or_null_workspace_does_not_invent_a_backing_link(bool selected, bool explicitNull)
+    {
+        var fixture = new BoundaryPlanFixture();
+        var component = BoundaryPlanFixture.Root + "/resourceGroups/other/providers/Microsoft.Insights/components/classic";
+        fixture.Resources[component] = BoundaryPlanFixture.Resource(component, "Microsoft.Insights/components");
+        if (explicitNull)
+            fixture.Resources[component]["properties"]!["WorkspaceResourceId"] = null;
+        if (selected)
+            fixture.Input["applicationResourceIds"]!.AsArray().Add(component);
+
+        var (exit, plan, _) = await fixture.ReviewAsync();
+
+        Assert.Equal(selected ? 1 : 0, exit);
+        Assert.Equal(selected ? "Unknown" : "Reviewed", (string?)plan["state"]);
+        Assert.DoesNotContain("workspace-topology", plan["findings"]!.ToJsonString());
+        Assert.Single(plan["selection"]!["evidenceBackends"]!.AsArray());
+        if (selected)
+        {
+            var resource = Assert.Single(plan["azure"]!["resources"]!.AsArray(),
+                r => (string?)r!["id"] == component.ToLowerInvariant());
+            Assert.Null(resource!["backingWorkspaceResourceId"]);
+            Assert.Contains("backing-workspace", plan["findings"]!.ToJsonString());
+        }
+        else
+        {
+            Assert.Empty(plan["azure"]!["inspectedTopology"]!.AsArray());
+        }
+    }
+
+    [Fact]
+    public async Task Valid_workspace_link_is_canonicalized_before_checking_unselected_component_overlap()
+    {
+        var fixture = new BoundaryPlanFixture();
+        var component = BoundaryPlanFixture.Root + "/resourceGroups/other/providers/Microsoft.Insights/components/other";
+        fixture.Resources[component] = BoundaryPlanFixture.Resource(component, "Microsoft.Insights/components");
+        fixture.Resources[component]["properties"]!["WorkspaceResourceId"] = BoundaryPlanFixture.Logs.ToUpperInvariant() + "/";
+
+        var (exit, plan, _) = await fixture.ReviewAsync();
+
+        Assert.Equal(1, exit);
+        Assert.Equal("Blocked", (string?)plan["state"]);
+        Assert.Contains("shared-workspace", plan["findings"]!.ToJsonString());
+        Assert.Equal(BoundaryPlanFixture.Logs.ToLowerInvariant(),
+            (string?)Assert.Single(plan["azure"]!["inspectedTopology"]!.AsArray())!["backingWorkspaceResourceId"]);
+    }
+
+    [Theory]
+    [InlineData("acme/old-name")]
+    [InlineData("previous-owner/old-name")]
+    public async Task Legacy_registration_blocks_the_same_durable_repository_after_rename_or_transfer(string legacyReference)
+    {
+        var fixture = new BoundaryPlanFixture();
+        fixture.Input["repository"] = "acme/renamed";
+        fixture.SetLegacyRegistration(legacyReference);
+        fixture.Repository.Responses["repos/" + legacyReference] = fixture.Repository.Responses["repos/acme/renamed"];
+
+        var (exit, plan, _) = await fixture.ReviewAsync();
+
+        Assert.Equal(1, exit);
+        Assert.Equal("Blocked", (string?)plan["state"]);
+        Assert.Contains("owner-admission", plan["findings"]!.ToJsonString());
+        var observation = Assert.Single(plan["ownerAdmission"]!["observations"]!.AsArray(),
+            o => (string?)o!["key"] == "GITHUB_REPOSITORY");
+        Assert.Equal(913, (long?)observation!["currentRepository"]?["id"]);
+        Assert.Contains(fixture.Repository.Invocations, args => args[^1] == "repos/" + legacyReference);
+        Assert.DoesNotContain(fixture.Repository.Invocations,
+            args => args[^1].StartsWith("repos/" + legacyReference + "/", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("unauthorized")]
+    [InlineData("forbidden")]
+    [InlineData("malformed-response")]
+    [InlineData("invalid-id")]
+    [InlineData("malformed-reference")]
+    [InlineData("malformed-json-reference")]
+    public async Task Unresolved_legacy_repository_identity_remains_unknown_without_adoption_or_provider_disclosure(string scenario)
+    {
+        var fixture = new BoundaryPlanFixture();
+        fixture.Input["repository"] = "acme/renamed";
+        fixture.SetLegacyRegistration(scenario switch
+        {
+            "malformed-reference" => "https://secret-do-not-print@example.test/acme/old-name",
+            "malformed-json-reference" => "\"acme/old-name",
+            _ => "acme/old-name",
+        });
+        fixture.Repository.Responses["repos/acme/old-name"] = scenario switch
+        {
+            "unauthorized" => new(1, "HTTP/2.0 401 Unauthorized\r\n\r\n{}", "secret-do-not-print"),
+            "forbidden" => new(1, "HTTP/2.0 403 Forbidden\r\n\r\n{}", "secret-do-not-print"),
+            "malformed-response" => new(0, """{"id":913,"secret":"secret-do-not-print"}""", ""),
+            "invalid-id" => new(0, fixture.Repository.Responses["repos/acme/renamed"].StandardOutput.Replace("\"id\":913", "\"id\":0"), ""),
+            _ => new(1, "HTTP/2.0 404 Not Found\r\n\r\n{}", "secret-do-not-print"),
+        };
+
+        var (exit, plan, terminal) = await fixture.ReviewAsync();
+
+        Assert.Equal(1, exit);
+        Assert.Equal("Unknown", (string?)plan["state"]);
+        Assert.Contains("owner-admission-repository", plan["findings"]!.ToJsonString());
+        Assert.Contains("do not assume unclaimed state", terminal.Output);
+        Assert.Null(Assert.Single(plan["ownerAdmission"]!["observations"]!.AsArray(),
+            o => (string?)o!["key"] == "GITHUB_REPOSITORY")!["currentRepository"]);
+        Assert.DoesNotContain("secret-do-not-print", terminal.Output + terminal.Error);
+        if (scenario is "malformed-reference" or "malformed-json-reference")
+            Assert.DoesNotContain(fixture.Repository.Invocations, args => args[^1] == "repos/acme/old-name");
+    }
+
+    [Fact]
+    public async Task Current_product_collision_stays_blocked_when_legacy_repository_reference_is_unreadable()
+    {
+        var fixture = new BoundaryPlanFixture();
+        fixture.SetLegacyRegistration("acme/unavailable", "widget");
+        fixture.Repository.Responses["repos/acme/unavailable"] = new(1, "HTTP/2.0 403 Forbidden\r\n\r\n{}", "");
+
+        var (exit, plan, _) = await fixture.ReviewAsync();
+
+        Assert.Equal(1, exit);
+        Assert.Equal("Blocked", (string?)plan["state"]);
+        Assert.Contains(plan["findings"]!.AsArray(),
+            f => (string?)f!["check"] == "owner-admission" && (string?)f!["state"] == "Blocked");
+    }
+
+    [Fact]
+    public async Task Reused_legacy_name_resolves_current_identity_but_cannot_prove_historical_non_overlap()
+    {
+        var fixture = new BoundaryPlanFixture();
+        fixture.Input["repository"] = "acme/renamed";
+        fixture.SetLegacyRegistration("acme/old-name");
+        fixture.Repository.Responses["repos/acme/old-name"] = new(0, """
+            {"id":914,"owner":{"id":81,"login":"acme"},"name":"old-name","default_branch":"main",
+             "visibility":"private","archived":false,"disabled":false,"has_issues":true}
+            """, "");
+
+        var (exit, plan, terminal) = await fixture.ReviewAsync();
+
+        Assert.Equal(1, exit);
+        Assert.Equal("Unknown", (string?)plan["state"]);
+        var current = Assert.Single(plan["ownerAdmission"]!["observations"]!.AsArray(),
+            o => (string?)o!["key"] == "GITHUB_REPOSITORY")!["currentRepository"]!;
+        Assert.Equal(914, (long?)current["id"]);
+        Assert.Contains("Historical registration identity remains unverified", terminal.Output);
+        Assert.Contains("not proof of non-overlap", terminal.Output);
+        var fingerprint = (string)plan["selectionFingerprint"]!;
+        fixture.Repository.Responses["repos/acme/old-name"] =
+            fixture.Repository.Responses["repos/acme/old-name"] with
+            {
+                StandardOutput = fixture.Repository.Responses["repos/acme/old-name"].StandardOutput.Replace("\"id\":914", "\"id\":915"),
+            };
+        var (_, changed, _) = await fixture.ReviewAsync();
+        Assert.NotEqual(fingerprint, (string?)changed["selectionFingerprint"]);
+    }
+
     [Fact]
     public async Task Legacy_DSF_tag_values_are_conflict_fingerprints_not_copied_into_preview()
     {
@@ -317,6 +510,7 @@ public sealed class ApplicationBoundaryPlanTests
     public async Task Owner_admission_signals_never_authorize_name_based_adoption(string scenario, string state)
     {
         var fixture = new BoundaryPlanFixture();
+        fixture.Repository.Responses["repos/acme/other"] = new(1, "HTTP/2.0 404 Not Found\r\n\r\n{}", "");
         fixture.Overrides["appconfig kv"] = scenario switch
         {
             "unreadable" => new(1, "", "secret-owner-response"),
