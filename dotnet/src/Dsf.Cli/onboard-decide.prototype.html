@@ -1,0 +1,661 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; img-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>DSF Decide onboarding - throwaway walkthrough</title>
+  <style>
+    :root { color-scheme: dark; --bg: #0d1420; --panel: #141e2e; --line: #304058; --text: #e6edf7; --muted: #a9b8cc; --accent: #8dbdff; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.55 system-ui, sans-serif; }
+    main { max-width: 1240px; margin: auto; padding: 30px 24px 60px; }
+    h1 { margin: 8px 0; font-size: clamp(24px, 4vw, 36px); letter-spacing: -.025em; }
+    h2 { margin: 0 0 12px; font-size: 18px; }
+    h3 { margin: 14px 0 6px; font-size: 15px; }
+    p { margin: 8px 0 14px; }
+    a { color: var(--accent); }
+    code, pre, .eyebrow { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .eyebrow { color: var(--accent); font-size: 12px; letter-spacing: .06em; }
+    .muted, small { color: var(--muted); }
+    .disclaimer { border-left: 3px solid var(--accent); padding: 8px 14px; margin: 18px 0 22px; background: var(--panel); }
+    .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 18px; margin-bottom: 18px; min-width: 0; }
+    .state-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+    .state-grid dt, .facts dt { color: var(--muted); font-size: 12px; margin-bottom: 4px; }
+    .state-grid dd, .facts dd { margin: 0; overflow-wrap: anywhere; }
+    dl { margin: 0; }
+    .state-grid dd { font-weight: 600; }
+    .facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 28px; }
+    details { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 10px; }
+    summary { cursor: pointer; color: var(--accent); padding: 3px 0; }
+    .columns { display: grid; grid-template-columns: 1fr 1.2fr; gap: 18px; }
+    .buttons { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 0; }
+    button { border: 1px solid var(--line); border-radius: 5px; padding: 8px 11px; background: #1b293e; color: var(--text); cursor: pointer; font: inherit; text-align: left; }
+    button:hover { border-color: var(--accent); }
+    button:focus-visible, summary:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+    button[aria-selected="true"], .primary { background: #254675; border-color: var(--accent); }
+    button:disabled { opacity: .45; cursor: default; }
+    .notice { padding: 13px 16px; border-left: 3px solid var(--accent); background: #17263b; margin: 16px 0; }
+    .notice.blocked { border-color: #e5b87c; background: #2b251e; }
+    .notice strong { display: block; font-size: 12px; margin-bottom: 3px; letter-spacing: .06em; }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; line-height: 1.65; max-height: 430px; overflow: auto; margin: 0; }
+    .prompt { border-top: 1px solid var(--line); padding-top: 12px; margin-top: 12px; }
+    .tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 15px; }
+    .steps { position: relative; padding-left: 25px; max-height: 360px; overflow: auto; }
+    .steps li { padding: 5px 0; }
+    .steps button { width: 100%; }
+    .steps .done { color: var(--muted); }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); padding: 10px 8px; overflow-wrap: anywhere; }
+    th { width: 23%; color: var(--muted); font-weight: 500; }
+    .bar { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+    .small { font-size: 13px; }
+    footer { color: var(--muted); font-size: 13px; margin-top: 25px; }
+    @media (max-width: 800px) { .columns { grid-template-columns: 1fr; gap: 0; } .state-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    @media (max-width: 480px) { main { padding: 18px 12px; } .facts { grid-template-columns: 1fr; } .bar { align-items: flex-start; flex-direction: column; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="eyebrow">DSF / DECIDE / THROWAWAY PROTOTYPE</div>
+    <h1>Attach a council. Keep your application.</h1>
+    <p>Can an operator distinguish selection, permission, readiness, activation, uncertain work, and safe detachment without mistaking any of them for application ownership?</p>
+    <div class="disclaimer">
+      <strong>Everything here is simulated.</strong> Fictional repository, resources, identities, evidence, approvals, and receipts.
+      No network requests, credentials, persistence, or real CLI execution. Reloading resets the demo.
+      This is a state/interaction walkthrough, not a proposed production web interface or implemented command syntax.
+    </div>
+    <p class="small"><a href="#walkthrough-title">Start a guided walkthrough</a> &nbsp; / &nbsp; <a href="#free-title">Explore freely</a> &nbsp; / &nbsp; <a href="#plan-title">Inspect planned changes</a></p>
+  </header>
+
+  <section class="panel" aria-labelledby="state-title">
+    <div class="bar"><h2 id="state-title">Current state</h2><button id="reset">Reset everything</button></div>
+    <dl id="state-grid" class="state-grid"></dl>
+    <details><summary>Full context, evidence, and authority</summary><dl id="full-state" class="facts"></dl></details>
+  </section>
+  <div id="notice" class="notice" role="status" aria-live="polite"></div>
+
+  <div class="columns">
+    <section class="panel" aria-labelledby="free-title">
+      <h2 id="free-title">Free play</h2>
+      <p class="muted small">Try actions in any order. Illegal actions explain the blocker instead of changing the factory. Free play leaves the guided sequence.</p>
+      <div id="actions"></div>
+    </section>
+    <section class="panel" aria-labelledby="terminal-title">
+      <h2 id="terminal-title">Wizard transcript</h2>
+      <pre id="transcript" aria-label="Simulated CLI transcript"></pre>
+      <div class="prompt"><strong>Next operator decision</strong><p id="prompt"></p></div>
+    </section>
+  </div>
+
+  <section class="panel" aria-labelledby="walkthrough-title">
+    <h2 id="walkthrough-title">Guided walkthroughs</h2>
+    <p class="muted small">Each tab resets to an explicitly simulated starting state. Press the ordered steps; deliberate rejection steps are part of the walkthrough.</p>
+    <div id="tabs" class="tabs" role="tablist" aria-label="Walkthrough scenarios"></div>
+    <div id="walkthrough" role="tabpanel"></div>
+  </section>
+
+  <section class="panel" aria-labelledby="plan-title">
+    <h2 id="plan-title">The review screen</h2>
+    <p id="plan-version" class="muted small"></p>
+    <table><tbody id="plan"></tbody></table>
+    <details><summary>What still needs human feedback?</summary>
+      <p>Does this expose the decisions without overwhelming you? Are the administrator handoffs actionable?
+      Is "complete but currently blocked" understandable? Do detach, retained costs, and purge feel distinct?</p>
+      <p><strong>Proposed replay UX, not yet a decision:</strong> require exact selections and a reviewed plan revision;
+      refuse incomplete/stale input. Replay does not manufacture App consent, charter adoption, readiness, or activation approval.</p>
+    </details>
+  </section>
+  <footer>
+    Primary question: <a href="https://github.com/JoranBergfeld/dark-software-factory/issues/195">Prototype the resource-selection and confirmation wizard</a>.
+    Governing contract: <a href="https://github.com/JoranBergfeld/dark-software-factory/issues/193#issuecomment-5683093053">Define safe retry, completion, and offboarding</a>.
+    No production behavior is validated by this demo.
+  </footer>
+</main>
+
+<script id="model">
+const WizardModel = (() => {
+  const resources = {
+    api: { name: "api-prod", group: "rg-fielddesk-app", kind: "application", dedicated: true, environment: "production", type: "Microsoft.App/containerApps" },
+    worker: { name: "worker-prod", group: "rg-fielddesk-jobs", kind: "application", dedicated: true, environment: "production", type: "Microsoft.App/containerApps" },
+    sharedHost: { name: "shared-host", group: "rg-shared", kind: "application", dedicated: false, environment: "production", type: "Microsoft.Web/serverfarms" },
+    logs: { name: "logs-prod", group: "rg-fielddesk-observe", kind: "backend", dedicated: true, environment: "production", type: "Microsoft.OperationalInsights/workspaces" },
+    sharedLogs: { name: "logs-shared", group: "rg-shared", kind: "backend", dedicated: false, environment: "production", type: "Microsoft.OperationalInsights/workspaces" },
+    stagingLogs: { name: "logs-staging", group: "rg-fielddesk-test", kind: "backend", dedicated: true, environment: "staging", type: "Microsoft.OperationalInsights/workspaces" }
+  };
+  const resourceId = key => {
+    const item = resources[key];
+    return `/subscriptions/sub-demo/resourceGroups/${item.group}/providers/${item.type}/${item.name}`;
+  };
+  const actions = {
+    repo: ["1. Select", "Select sample/fielddesk", "select repository"],
+    subscription: ["1. Select", "Select demo subscription", "select Azure subscription"],
+    api: ["1. Select", "Toggle api-prod", "select application resource"],
+    worker: ["1. Select", "Toggle worker-prod", "select application resource"],
+    sharedHost: ["1. Select", "Try shared application host", "select shared-host"],
+    logs: ["1. Select", "Toggle dedicated logs-prod", "select evidence backend"],
+    sharedLogs: ["1. Select", "Try shared telemetry backend", "select logs-shared"],
+    stagingLogs: ["1. Select", "Try staging telemetry", "select logs-staging"],
+    dedication: ["1. Select", "Declare dedicated environment", "confirm dedication"],
+    crossOwner: ["1. Select", "Confirm cross-owner review", "confirm external exclusivity review"],
+    app: ["2. Access and review", "Administrator confirms App access", "verify App installation consent"],
+    repoWrites: ["2. Access and review", "Review allowed repository writes", "approve labels and automation compatibility"],
+    grantor: ["2. Access and review", "Grantor confirms exact Azure scopes", "verify grant authority"],
+    network: ["2. Access and review", "Administrator resolves connectivity", "verify runtime network path"],
+    automationConflict: ["2. Access and review", "Discover delivery-triggering automation", "record automation conflict"],
+    automationResolved: ["2. Access and review", "Owner resolves automation externally", "recheck external automation"],
+    review: ["2. Access and review", "Inspect exact change plan", "preview plan"],
+    reserve: ["2. Access and review", "Approve plan and reserve identity", "approve reviewed plan"],
+    provision: ["3. Provision and recover", "Start factory provisioning", "provision factory"],
+    completeProvision: ["3. Provision and recover", "Provider confirms provisioning complete", "reconcile deployment receipt"],
+    cancel: ["3. Provision and recover", "Cancel local work", "request cancellation"],
+    loseAzure: ["3. Provision and recover", "Lose deployment response", "simulate lost ARM response"],
+    expireLease: ["3. Provision and recover", "Coordinator lease expires", "observe stale coordinator"],
+    stopOld: ["3. Provision and recover", "Verify old operator cannot dispatch", "record external quiescence proof"],
+    resume: ["3. Provision and recover", "Resume from another machine", "resume trusted remote operation"],
+    analyze: ["4. Intent and evidence", "Finish complete source analysis", "reconcile pinned source inventory"],
+    analysisGap: ["4. Intent and evidence", "Discover unread application source", "record incomplete analysis"],
+    draft: ["4. Intent and evidence", "Agent drafts evidence-linked charter", "draft charter from analyzed code"],
+    publishPr: ["4. Intent and evidence", "Operator publishes charter PR", "approve charter-only PR publication"],
+    uncertainPr: ["4. Intent and evidence", "Lose charter-PR creation response", "simulate uncertain PR creation"],
+    reconcilePr: ["4. Intent and evidence", "Recover trusted PR receipt", "reconcile exact PR identity"],
+    merge: ["4. Intent and evidence", "Human merges charter PR", "observe external human merge"],
+    adopt: ["4. Intent and evidence", "Adopt merged charter version", "adopt exact charter revision"],
+    adoptExisting: ["4. Intent and evidence", "Review and adopt unchanged charter", "adopt reviewed existing charter"],
+    telemetry: ["4. Intent and evidence", "Verify fresh application telemetry", "query with source workload identity"],
+    emptyTelemetry: ["4. Intent and evidence", "Query returns no application records", "observe empty telemetry"],
+    staleTelemetry: ["4. Intent and evidence", "Telemetry becomes stale", "observe freshness failure"],
+    revokeSource: ["4. Intent and evidence", "Source access is revoked", "observe runtime authorization failure"],
+    models: ["4. Intent and evidence", "Verify synthesis, embeddings, three jurors", "verify actual model paths"],
+    modelFailure: ["4. Intent and evidence", "One required juror becomes unavailable", "observe model failure"],
+    previewGo: ["5. Preview and activate", "Fully evaluate a go preview", "supervised preview: unanimous go"],
+    previewSplit: ["5. Preview and activate", "Fully evaluate a split preview", "supervised preview: split"],
+    previewNoGo: ["5. Preview and activate", "Fully evaluate a no-go preview", "supervised preview: unanimous no-go"],
+    emptyPreview: ["5. Preview and activate", "Run produces no evaluated candidate", "supervised preview: empty"],
+    activate: ["5. Preview and activate", "Approve activation of current revision", "approve activation"],
+    staleApprove: ["5. Preview and activate", "Submit approval for an old revision", "reject stale activation approval"],
+    publish: ["6. Publication", "Publish a new unanimous-go proposal", "publish qualifying proposal"],
+    uncertainIssue: ["6. Publication", "Lose proposal creation response", "simulate uncertain issue creation"],
+    reconcileIssue: ["6. Publication", "Recover trusted creation receipt", "reconcile repository and issue IDs"],
+    fakeMarker: ["6. Publication", "Try ownership from a copied marker", "inspect untrusted search match"],
+    editIssue: ["6. Publication", "Try editing the published proposal", "attempt automatic issue update"],
+    internalDraft: ["6. Publication", "Keep proposal revision inside factory", "retain internal proposal draft"],
+    refreshCode: ["7. Change and pause", "Default-branch code changes", "refresh complete repository inventory"],
+    intentConflict: ["7. Change and pause", "Analysis conflicts with adopted intent", "record material intent conflict"],
+    stageChange: ["7. Change and pause", "Stage worker selection change", "prepare boundary diff"],
+    reviewChange: ["7. Change and pause", "Review staged boundary diff", "review reconfiguration"],
+    applyChange: ["7. Change and pause", "Apply reviewed boundary change", "apply reconfiguration"],
+    pause: ["7. Change and pause", "Deliberately pause council", "request council pause"],
+    unpause: ["7. Change and pause", "Explicitly resume paused council", "resume deliberately paused council"],
+    offboard: ["8. Detach and purge", "Request council offboarding", "review and request detach"],
+    ownershipConflict: ["8. Detach and purge", "Find a human-modified factory asset", "record cleanup ownership conflict"],
+    ownershipResolved: ["8. Detach and purge", "Resolve cleanup ownership externally", "record verified cleanup disposition"],
+    finishOffboard: ["8. Detach and purge", "Finish proven detach steps", "reconcile scoped detach"],
+    exportAudit: ["8. Detach and purge", "Verify private audit export", "verify readable reference-closed export"],
+    expiry: ["8. Detach and purge", "Approved audit retention expiry is reached", "verify approved expiry eligibility"],
+    expireAnalysis: ["8. Detach and purge", "Expire unused 90-day analysis", "sweep unreferenced history"],
+    purge: ["8. Detach and purge", "Approve and purge owned infrastructure", "purge reviewed factory assets"],
+    foreignClaim: ["8. Detach and purge", "Another factory claims the application", "observe competing registry claim"],
+    releaseForeign: ["8. Detach and purge", "External owner confirms claim released", "recheck competing claim"],
+    reattach: ["8. Detach and purge", "Review and reattach retained factory", "reattach same factory identity"],
+    replayMissing: ["9. Replay proposal", "Replay with missing selections", "replay incomplete saved input"],
+    replayStale: ["9. Replay proposal", "Replay an outdated plan", "replay stale plan revision"],
+    replayExact: ["9. Replay proposal", "Replay this exact approved plan", "replay exact reviewed input"]
+  };
+  function initial() {
+    return {
+      repo: false, subscription: false, apps: [], backends: [], dedicated: false, crossOwner: false,
+      appApproved: false, writesApproved: false, grantor: false, network: false, automationConflict: false,
+      planVersion: 1, reviewedPlan: null, factoryId: null, claims: "none", configRevision: 0,
+      provision: "not started", interrupted: false, coordinator: "current", oldWriterStopped: false,
+      coverage: "not analyzed", snapshot: 1, analyzedSnapshot: null, draft: false, pr: "none",
+      prAdopted: false, charterVersion: 0, intentConflict: false, telemetry: "not checked",
+      runtimeAccess: false, models: false, preview: null, previewRevision: null, approval: null,
+      approvalCount: 0, completed: false, paused: false, stagedApps: null, changeReviewed: false,
+      publication: "not attempted", internalDrafts: 0, offboard: "not requested", detached: false,
+      retired: false, ownershipConflict: false, foreignClaim: false, grants: "none", keyCopy: "none",
+      audit: "retain protected records", analysisExpired: false,
+      notice: { blocked: false, text: "Select a walkthrough or explore freely. All observations and approvals are fictional." },
+      history: ["$ dsf onboard decide  [SIMULATION ONLY]"]
+    };
+  }
+  const effectsUnknown = s => ["in flight", "unknown"].includes(s.provision) || s.pr === "unknown" || s.publication === "unknown";
+  function selectionProblems(s) {
+    return [
+      !s.repo && "Select a durable repository identity.",
+      !s.subscription && "Select one subscription.",
+      !s.apps.length && "Select dedicated application resources.",
+      !s.backends.length && "Select a dedicated production evidence backend.",
+      !s.dedicated && "Declare dedication for the current selections.",
+      !s.crossOwner && "Review cross-owner exclusivity; this is not a global lock.",
+      !s.appApproved && "GitHub administrator must confirm installation/repository consent.",
+      (!s.writesApproved || s.automationConflict) && "Owner must review label compatibility and external automation.",
+      !s.grantor && "Grantor must approve exact principal/role/scope bindings.",
+      !s.network && "Administrator must establish runtime-path connectivity.",
+      s.foreignClaim && "A competing claim blocks this boundary."
+    ].filter(Boolean);
+  }
+  function readinessProblems(s, includePreview = true) {
+    return [
+      s.provision !== "complete" && "Factory provisioning is not confirmed complete.",
+      s.claims !== "held" && "Factory observation claims are not held.",
+      s.foreignClaim && "A competing observation claim requires external reconciliation.",
+      (!s.appApproved || !s.writesApproved || s.automationConflict) && "Repository access/write compatibility is unresolved.",
+      (!s.runtimeAccess || !s.network) && "Actual source identity/network access is unproven.",
+      (s.coverage !== "complete" || s.analyzedSnapshot !== s.snapshot) && "Complete current source analysis is missing.",
+      !s.charterVersion && "No exact human-reviewed charter has been adopted.",
+      s.intentConflict && "Material intent conflict requires reviewed charter reconciliation.",
+      s.telemetry !== "fresh" && "No usable, attributable application record inside the reviewed 24-hour window.",
+      !s.models && "Synthesis, embedding, and all three juror paths must work.",
+      includePreview && (!s.preview || s.previewRevision !== s.configRevision) && "A fully evaluated preview for this configuration is missing."
+    ].filter(Boolean);
+  }
+  function liveProblems(s) {
+    return [
+      ...readinessProblems(s),
+      s.approval !== s.configRevision && "Current configuration lacks explicit activation approval.",
+      s.paused && "The operator deliberately paused this factory.",
+      s.interrupted && "Interrupted work requires verified resume.",
+      s.coordinator !== "current" && "Stale coordinator requires proven-safe recovery.",
+      s.offboard !== "not requested" && "Offboarding closes new live-work admission.",
+      s.detached && "Factory is detached.",
+      s.retired && "Factory identity is retired."
+    ].filter(Boolean);
+  }
+  function status(s) {
+    if (s.retired) return "Purged / identity retired";
+    if (s.detached) return "Detached / infrastructure retained";
+    if (s.offboard === "requested") return effectsUnknown(s) || s.ownershipConflict ? "Offboarding blocked / partial" : "Offboarding / ready to detach";
+    if (s.paused && effectsUnknown(s)) return "Stop requested / effects unresolved";
+    if (s.paused) return "Deliberately paused";
+    if (s.interrupted || s.coordinator !== "current") return "Recovery required";
+    if (s.provision === "in flight" || s.provision === "unknown") return `Provisioning / ${s.provision}`;
+    if (!s.factoryId) return "Plan only / no remote changes";
+    if (s.provision !== "complete") return "Identity reserved / not provisioned";
+    if (s.approval === s.configRevision) return liveProblems(s).length ? "Activated / currently blocked" : "Activated / live proposals permitted";
+    return readinessProblems(s).length ? "Provisioned / not ready" : "Ready / awaiting activation";
+  }
+  function transition(current, action) {
+    if (!actions[action]) throw new Error(`Unknown prototype action: ${action}`);
+    const s = structuredClone(current);
+    const done = (text, blocked = false) => {
+      s.notice = { text, blocked };
+      s.history = [...current.history, `> ${actions[action][2]}\n${blocked ? "BLOCKED" : "SIMULATED"}: ${text}`].slice(-14);
+      return s;
+    };
+    const requireFactory = () => s.provision === "complete" && !s.detached && !s.retired;
+    const invalidateSelection = () => { s.planVersion++; s.reviewedPlan = null; s.dedicated = false; s.crossOwner = false; };
+    if (s.retired) return done("This identity is retired. Read its audit pointer; new onboarding needs a new identity. Reset starts a different fictional exercise.", true);
+    const processing = ["provision", "analyze", "draft", "publishPr", "uncertainPr", "adopt", "adoptExisting", "telemetry", "emptyTelemetry", "models", "previewGo", "previewSplit", "previewNoGo", "activate", "publish", "uncertainIssue", "stageChange", "reviewChange", "applyChange", "refreshCode", "internalDraft"];
+    if (processing.includes(action) && (s.offboard !== "not requested" || s.detached || s.interrupted || s.coordinator !== "current")) {
+      return done("New processing is stopped by offboarding or interrupted/stale coordination. Reconcile effects and use the appropriate explicit recovery/reattachment path.", true);
+    }
+    if (["repo", "subscription", ...Object.keys(resources)].includes(action)) {
+      if (s.factoryId) return done("Identity/boundary already reserved. Use a reviewed reconfiguration; do not mutate local selections to retarget it.", true);
+      if (action === "repo") { s.repo = true; invalidateSelection(); return done("Selected repository ID 41001: sample/fielddesk, actual default branch trunk. No repository setting changed."); }
+      if (action === "subscription") { s.subscription = true; invalidateSelection(); return done("Selected sub-demo / tenant-demo. Multiple resource groups are discoverable, not automatically selected."); }
+      const resource = resources[action];
+      if (!s.subscription) return done("Select a subscription before choosing its resources.", true);
+      if (!resource.dedicated || resource.environment !== "production") return done("This resource is shared or belongs to staging. Do not broaden the application boundary, query filters, or permissions to accept it.", true);
+      const target = resource.kind === "application" ? "apps" : "backends";
+      s[target] = s[target].includes(action) ? s[target].filter(key => key !== action) : [...s[target], action];
+      invalidateSelection();
+      return done(`${resource.name} selection changed. Group siblings were not added. Reconfirm dedication and the revised plan.`);
+    }
+    switch (action) {
+      case "dedication":
+        if (!s.apps.length || !s.backends.length) return done("Select application resources and a separate evidence backend first.", true);
+        s.dedicated = true; return done("Operator declares these exact resources/backends dedicated to one production environment. Selection is not ownership.");
+      case "crossOwner":
+        if (!s.dedicated) return done("Confirm the selected boundary before its cross-owner review.", true);
+        s.crossOwner = true; return done("Cross-owner exclusivity reviewed by operator. DSF only coordinates claims inside this owner authority.");
+      case "app":
+        if (!s.repo) return done("Select the repository first; CLI visibility is not installation consent.", true);
+        s.appApproved = true; return done("Administrator confirms intended App, installation, selected repository, granted permissions, and suspension status. Broad shared signing authority is disclosed.");
+      case "repoWrites":
+        if (!s.repo || s.automationConflict) return done("Known delivery-triggering automation blocks affected writes. Owner must resolve it externally; no override.", true);
+        s.writesApproved = true; return done("Owner reviews the four allowed labels and visible/external automation. No conflicting delivery trigger is declared; inspection is not proof of every external bot.");
+      case "grantor":
+        if (!s.backends.length) return done("Choose an exact evidence backend before reviewing a grant scope.", true);
+        s.grantor = true; return done("Grantor verifies source-mi-demo / Log Analytics Reader at the selected workspace only. Creating a binding is not evidence that runtime access works.");
+      case "network": s.network = true; return done("Administrator confirms prerequisites for the factory workload path. No existing application DNS, peering, or public-access policy was modified.");
+      case "automationConflict": s.automationConflict = true; s.writesApproved = false; return done("Discovered bot starts delivery on every new issue. Publication is blocked until owner resolves the bot externally.");
+      case "automationResolved": s.automationConflict = false; return done("External owner reports the bot resolved. Review repository-write compatibility again before resuming.");
+      case "review": s.reviewedPlan = s.planVersion; return done(`Inspected plan p${s.planVersion}; see the categorized review screen below. Missing prerequisites remain blockers. Preview created nothing.`);
+      case "reserve":
+      case "replayExact": {
+        if (s.factoryId) return done(`Existing reservation ${s.factoryId}; use verified resume. Do not create another identity.`, true);
+        const problems = selectionProblems(s);
+        if (s.reviewedPlan !== s.planVersion) problems.unshift("Inspect this exact plan revision first.");
+        if (problems.length) return done(problems.join(" "), true);
+        s.factoryId = "factory-demo-001"; s.claims = "held";
+        return done(`Approved exact plan p${s.planVersion}; owner authority durably reserves factory-demo-001 and scoped registry claims before provisioning. No Azure tags changed. Activation remains separate.`);
+      }
+      case "replayMissing": return done("Replay lacks exact repository/resource identities and approval input. Refuse; do not infer from product name or resource group.", true);
+      case "replayStale": return done("Saved plan revision differs from remote reviewed state. Refuse and show a new diff; --yes is not authority to accept drift.", true);
+      case "provision":
+        if (!s.factoryId || s.claims !== "held" || s.interrupted || s.coordinator !== "current") return done("Need a verified reservation/current coordinator and resolved interruptions before dispatch.", true);
+        if (s.provision !== "not started") return done("A deployment was already dispatched. Reconcile its recorded identity/outcome instead of submitting another.", true);
+        s.provision = "in flight"; return done("Recorded deployment intent before dispatch. Factory resources are being created; council live filing remains disabled.");
+      case "loseAzure":
+        if (s.provision !== "in flight") return done("There is no in-flight deployment response to lose.", true);
+        s.provision = "unknown"; s.interrupted = true; return done("Deployment response lost. Remote creation may continue. Unknown is neither failure nor permission to replay.");
+      case "completeProvision":
+        if (!["in flight", "unknown"].includes(s.provision)) return done("No dispatched deployment awaits this receipt.", true);
+        s.provision = "complete"; s.configRevision = 1; s.grants = "factory-specific"; s.keyCopy = "factory vault copy";
+        return done("Trusted provider receipt and exact ownership records confirm completion. Product manifest r1 is authoritative. Source access/readiness are still unproven; interrupted sessions still need verified resume.");
+      case "cancel": s.interrupted = true; return done(effectsUnknown(s) ? "Stopped new local work. Remote effects remain unresolved; no rollback or completed stop is claimed." : "Stopped local work. Recorded resources/reservations remain; no automatic cleanup.");
+      case "expireLease": s.coordinator = "stale"; s.oldWriterStopped = false; return done("Lease expired. This does not fence an old process or a submitted Azure/GitHub request.");
+      case "stopOld":
+        if (!s.factoryId) return done("No factory coordinator exists to recover.", true);
+        s.oldWriterStopped = true; s.coordinator = "stale"; s.interrupted = true;
+        return done("Simulated external proof: previous operator can no longer dispatch. Already-issued effects still require reconciliation.");
+      case "resume":
+        if (s.detached || s.offboard !== "not requested") return done("Offboarding is not transient recovery. Finish detach or use explicit reattachment.", true);
+        if (!s.factoryId || effectsUnknown(s) || !s.oldWriterStopped) return done("Cannot safely take over: need trusted remote identity, reconciled effects, and proof the previous actor cannot dispatch. An active holder or lease age alone is insufficient.", true);
+        s.interrupted = false; s.coordinator = "current"; s.oldWriterStopped = false;
+        return done(`Another machine resumes ${s.factoryId} from authoritative remote records. No local manifest adoption, duplicate identity, or automatic unpause. Old quiescence proof cannot authorize another takeover.`);
+      case "analyze":
+        if (!requireFactory()) return done("Provision the isolated code-intent workload first.", true);
+        s.coverage = "complete"; s.analyzedSnapshot = s.snapshot; return done(`Complete pinned snapshot demo-commit-${s.snapshot}: every relevant first-party path/chunk accounted for. Exclusions and cited uncertainties retained; temporary raw copies disposed. Existing material conflicts are not silently cleared.`);
+      case "analysisGap": s.coverage = "incomplete"; return done("A relevant source chunk is unread. A high coverage percentage is not completeness; live publication is blocked.");
+      case "draft":
+        if (s.coverage !== "complete" || s.analyzedSnapshot !== s.snapshot) return done("Complete the current source inventory/analysis before drafting governing intent.", true);
+        if (["pending", "unknown"].includes(s.pr)) return done("An existing or uncertain charter PR must be reconciled; do not overwrite or create another.", true);
+        s.draft = true; s.pr = "none"; s.prAdopted = false;
+        return done("Agent draft: help dispatchers coordinate field visits; goal: schedule visits and record completion. Cited code supports behavior, not deployed use. Business success metric and deployed SHA remain explicitly unknown.");
+      case "publishPr":
+      case "uncertainPr":
+        if (!s.draft || s.pr !== "none" || !s.appApproved || !s.writesApproved || s.automationConflict) return done("Need reviewed charter draft, compatible repository writes, and no existing/uncertain publication. Operator approves each charter-only PR.", true);
+        s.pr = action === "publishPr" ? "pending" : "unknown";
+        return done(s.pr === "pending" ? "Operator uses existing gh identity to publish only .dsf/charter.md on a proposal branch against trunk. Await human review/merge; no activation." : "PR creation may have succeeded. Quarantined operation; no automatic repeat, branch overwrite, or inferred adoption.");
+      case "reconcilePr":
+        if (s.pr !== "unknown") return done("No uncertain charter PR to reconcile.", true);
+        s.pr = "pending"; return done("Simulated trusted receipt identifies the original repository, branch/content, and PR. No second PR created.");
+      case "merge":
+        if (s.pr !== "pending") return done("Need an identified pending charter PR. The factory cannot merge or bypass review.", true);
+        s.pr = "merged"; return done("External human review/merge observed on trunk. The factory did not merge; exact adoption and activation are still separate.");
+      case "adopt":
+      case "adoptExisting":
+        if (s.coverage !== "complete" || s.analyzedSnapshot !== s.snapshot) return done("Reconcile current source coverage before adopting intent.", true);
+        if (action === "adopt" && s.pr !== "merged") return done("Draft/unmerged intent is not governing authority.", true);
+        if (action === "adoptExisting" && s.intentConflict) return done("An unchanged charter does not resolve this material conflict. Use a reviewed charter amendment.", true);
+        if (action === "adopt" && s.prAdopted) return done("That exact merged charter is already adopted; no duplicate adoption or new approval manufactured.");
+        if (s.charterVersion && action === "adopt") { s.configRevision++; s.approval = null; s.preview = null; }
+        if (!s.charterVersion || action === "adopt") s.charterVersion++;
+        if (action === "adopt") { s.prAdopted = true; s.intentConflict = false; }
+        return done(`Human-reviewed charter c${s.charterVersion} adopted with analysis/limitations. No empty PR required for unchanged existing content; adoption is not activation.`);
+      case "telemetry":
+      case "emptyTelemetry":
+        if (!requireFactory() || !s.grantor || !s.network) return done("Need deployed source identity, exact grant, selected backend, and real runtime-path connectivity.", true);
+        s.runtimeAccess = true; s.telemetry = action === "telemetry" ? "fresh" : "empty";
+        return done(s.telemetry === "fresh" ? "Simulated workload query: source-mi-demo -> logs-prod / AppRequests; complete, attributable production record, age 2 hours inside reviewed 24-hour window. One record does not prove every component was observed." : "Simulated valid query returned zero application records. Not ready; no fake records or diagnostic changes. A quiet application is not automatically unhealthy.");
+      case "staleTelemetry": s.telemetry = "stale"; return done("Application evidence aged beyond 24 hours. Retain approval as history, but block live processing until current evidence is usable.");
+      case "revokeSource": s.runtimeAccess = false; s.telemetry = "access revoked"; return done("Required source access revoked. Do not silently disable the selected source or treat cached evidence as current authorization.");
+      case "models":
+        if (!requireFactory()) return done("Provision the factory before checking actual model paths.", true);
+        s.models = true; return done("Simulated synthesis + embedding calls and three distinct-family juror paths verified. Existing juror providers are explicit prerequisites, not three aliases for one model.");
+      case "modelFailure": s.models = false; return done("One required juror is unavailable. No single-model fallback; retained approval does not make the council ready.");
+      case "previewGo":
+      case "previewSplit":
+      case "previewNoGo": {
+        const problems = readinessProblems(s, false);
+        if (problems.length) return done(problems.join(" "), true);
+        s.preview = { previewGo: "unanimous go", previewSplit: "split", previewNoGo: "unanimous no-go" }[action];
+        s.previewRevision = s.configRevision;
+        return done(`One genuine candidate fully synthesized, grounded, deliberated, and evaluated by all three jurors: ${s.preview}. Any valid verdict proves evaluation; no issue was filed.`);
+      }
+      case "emptyPreview": s.preview = null; s.previewRevision = null; return done("No candidate completed evaluation. Empty/early-stopped runs do not prove readiness; no fabricated candidate or test issue.");
+      case "staleApprove": return done("Approval references an earlier reviewed revision. Conditional governance transition rejected; a stale screen cannot activate changed inputs.", true);
+      case "activate": {
+        const problems = readinessProblems(s);
+        if (s.detached || s.offboard !== "not requested" || s.interrupted || s.coordinator !== "current" || effectsUnknown(s)) problems.push("Resolve lifecycle interruptions, pending effects, and deliberate detachment first.");
+        if (problems.length) return done(problems.join(" "), true);
+        s.approval = s.configRevision; s.approvalCount++; s.completed = true; s.paused = false;
+        return done(`Operator approves exact r${s.configRevision}/charter c${s.charterVersion}/preview/evidence references. Onboarding complete; first successful live filing remains a separate event.`);
+      }
+      case "publish":
+      case "uncertainIssue": {
+        if (s.publication !== "not attempted") return done(s.publication === "unknown" ? "Original creation is uncertain. Quarantine this logical proposal; no blind second POST or success claim." : "This logical proposal already has a verified issue. Reuse its provenance; do not create a replacement or edit it.", true);
+        const problems = liveProblems(s);
+        if (problems.length) return done(problems.join(" "), true);
+        s.publication = action === "publish" ? "filed" : "unknown";
+        return done(s.publication === "filed" ? "A separate live run receives unanimous go. Recorded intent before POST and trusted issue ID demo-issue-101 after response; unassigned dsf:proposal only. No delivery handoff." : "Qualifying create dispatched after durable intent; response lost. It may exist remotely. Quarantine this operation; other readiness facts are not proof of its outcome.");
+      }
+      case "reconcileIssue":
+        if (s.publication !== "unknown") return done("No uncertain issue creation to reconcile.", true);
+        s.publication = "filed"; return done("Simulated trusted creation receipt proves the original factory/repository/issue identity. No search-based adoption or second issue.");
+      case "fakeMarker": return done("A copied marker, matching label/title, or shared-App author does not prove this factory created an issue.", true);
+      case "editIssue": return done("Create-once publication: no automatic title/body edit, comment, or replacement issue. Preserve human changes even if a GET still matches.", true);
+      case "internalDraft":
+        if (s.publication !== "filed") return done("First need a verified original proposal; uncertain publication is not ownership.", true);
+        s.internalDrafts++; return done("Revision retained inside the factory for human inspection/application. No GitHub mutation.");
+      case "refreshCode":
+        if (!requireFactory()) return done("Need an attached provisioned factory to refresh code evidence.", true);
+        s.snapshot++; s.coverage = "incomplete";
+        return done("New default-branch snapshot requires full inventory reconciliation and affected-source analysis. Approved intent/configuration unchanged; publication waits for complete consistent evidence.");
+      case "intentConflict": s.intentConflict = true; return done("New descriptive evidence materially conflicts with adopted intent. Do not silently rewrite the charter; human-reviewed reconciliation is required.");
+      case "stageChange":
+        if (!requireFactory() || effectsUnknown(s)) return done("Need attached factory and reconciled effects before staging this boundary change.", true);
+        s.stagedApps = s.apps.includes("worker") ? s.apps.filter(key => key !== "worker") : [...s.apps, "worker"];
+        s.changeReviewed = false; return done("Staged same-environment worker add/remove as a read-only diff. Current active configuration has not changed.");
+      case "reviewChange":
+        if (!s.stagedApps) return done("Stage a concrete boundary diff first.", true);
+        s.changeReviewed = true; return done("Reviewed exact worker membership/registry-claim diff and evidence implications. Existing application tags/configuration remain untouched.");
+      case "applyChange":
+        if (!s.stagedApps || !s.changeReviewed || effectsUnknown(s) || s.foreignClaim || s.coordinator !== "current") return done("Need current reviewed diff, non-conflicting claims, safe coordinator, and reconciled effects.", true);
+        s.paused = true; s.apps = s.stagedApps; s.stagedApps = null; s.changeReviewed = false;
+        s.configRevision++; s.approval = null; s.preview = null; s.telemetry = "not checked";
+        return done(`Quiesced old work; simulated reviewed claim/access reconciliation commits r${s.configRevision}. Current activation invalidated; repeat evidence, preview, and explicit approval. No automatic rollback/resume.`);
+      case "pause": s.paused = true; return done(effectsUnknown(s) ? "New admission closed. Already-issued effects are unresolved: stop requested, not a completed pause." : "Operator deliberately paused the council. Dependency recovery alone cannot restart it.");
+      case "unpause":
+        if (!s.paused || s.offboard !== "not requested" || s.detached || effectsUnknown(s) || s.interrupted || s.coordinator !== "current" || s.approval !== s.configRevision || readinessProblems(s).length) return done("Explicit resume requires unchanged approved configuration, current readiness, and reconciled effects; detachment/reconfiguration cannot be bypassed.", true);
+        s.paused = false; return done("Operator explicitly resumes the unchanged, currently ready approved factory.");
+      case "offboard":
+        if (!s.factoryId || s.detached) return done("Need an attached or partially provisioned factory with trusted ownership records.", true);
+        s.offboard = "requested"; s.paused = true; return done("Scoped detach requested; no new live work. Reconcile issued effects, then remove only proven factory-specific access/registry claims. This is not infrastructure deletion.");
+      case "ownershipConflict": s.ownershipConflict = true; return done("A factory asset was changed by a human or its ownership/incarnation is uncertain. Affected cleanup must stop; selection/name/tag is not proof.");
+      case "ownershipResolved": s.ownershipConflict = false; return done("Simulated external reconciliation proves the exact permitted cleanup disposition; not a force-delete override.");
+      case "finishOffboard":
+        if (s.offboard !== "requested" || effectsUnknown(s) || s.ownershipConflict || (s.coordinator === "stale" && !s.oldWriterStopped)) return done("Detach incomplete: need scoped request, quiescence, resolved remote effects, and proven ownership. Keep remaining cleanup visible; do not claim success.", true);
+        s.detached = true; s.offboard = "complete"; s.claims = "released"; s.grants = "removed"; s.keyCopy = "managed access/copy removed"; s.approval = null;
+        return done("Detached; identity/registration, disabled infrastructure, and audit retained. Azure costs continue. App/repository/shared assets untouched; other key copies and existing tokens are not globally revoked.");
+      case "exportAudit":
+        if (!s.detached) return done("This purge-disposition step applies to a detached factory; do not erase active evidence.", true);
+        s.audit = "verified private export"; return done("Simulated private export verified readable with identifiers, provenance/redactions, and closed internal references. No secrets or raw-source archive.");
+      case "expiry":
+        if (!s.detached) return done("Active/referenced audit evidence is protected.", true);
+        s.audit = "approved expiry reached"; return done("Simulated explicit retention policy has reached expiry and authorizes consistent disposal; no still-required references remain. Approval alone before expiry would not suffice.");
+      case "expireAnalysis":
+        if (!s.factoryId || s.coverage === "not analyzed") return done("No historical analysis exists to expire.", true);
+        s.analysisExpired = true; return done("Simulated 90-day sweep removes only otherwise-unused analysis. Active/approved context and evidence referenced by retained runs remain protected.");
+      case "purge":
+        if (!s.detached || s.ownershipConflict || !["verified private export", "approved expiry reached"].includes(s.audit)) return done("Purge requires completed detach, fresh ownership/cascade checks, separate approval, and verified private export or reached approved expiry. Never delete a group containing unowned assets.", true);
+        s.retired = true; s.provision = "purged"; s.keyCopy = "removed with owned assets";
+        return done("Separately approved simulated purge removed only owned infrastructure. Owner retains nonsecret retirement/audit pointer. This factory ID cannot return.");
+      case "foreignClaim": s.foreignClaim = true; return done("A competing owner-registry claim is observed. Reattachment or new claims must not overwrite it.");
+      case "releaseForeign": s.foreignClaim = false; return done("External owner has released the competing claim; this factory did not remove another factory's record.");
+      case "reattach":
+        if (!s.detached || s.foreignClaim || s.ownershipConflict) return done("Need retained identity, reviewed same-boundary reattachment, and no competing/uncertain ownership. Purged factories cannot return.", true);
+        s.detached = false; s.offboard = "not requested"; s.claims = "held";
+        s.grants = s.provision === "complete" ? "factory-specific" : "none"; s.keyCopy = s.provision === "complete" ? "factory vault copy" : "none";
+        s.interrupted = false; s.coordinator = "current"; s.oldWriterStopped = false; s.paused = true;
+        s.coverage = "incomplete"; s.telemetry = "not checked"; s.runtimeAccess = false; s.models = false; s.preview = null; s.approval = null; s.audit = "retain protected records";
+        return done("Reviewed same-identity reattachment reacquires eligible claims/access after drift review. Recheck analysis, readiness, preview, and explicit activation; no automatic resurrection.");
+      default: throw new Error(`Unimplemented prototype action: ${action}`);
+    }
+  }
+  const selection = ["repo", "subscription", "api", "logs", "dedication", "crossOwner", "app", "repoWrites", "grantor", "network", "review"];
+  const provisioned = [...selection, "reserve", "provision", "completeProvision"];
+  const ready = [...provisioned, "analyze", "adoptExisting", "telemetry", "models", "previewSplit"];
+  const active = [...ready, "activate"];
+  const detached = [...active, "offboard", "finishOffboard"];
+  const scenarios = [
+    { id: "first", title: "First onboarding", setup: [], intro: "Start with nothing selected. Notice separate evidence backends, administrator authority, human adoption, and activation. A split preview still qualifies.", steps: [...selection.slice(0, 3), "worker", ...selection.slice(3), "reserve", "provision", "completeProvision", "analyze", "draft", "publishPr", "merge", "adopt", "telemetry", "models", "previewSplit", "activate", "publish"] },
+    { id: "boundary", title: "Wrong boundary", setup: ["repo", "subscription"], intro: "Repository/subscription are selected. Try shared and staging resources; no resource-group expansion or tag changes should rescue the selection.", steps: ["sharedHost", "sharedLogs", "stagingLogs", "api", "logs", "dedication", "crossOwner", "review", "reserve", "app", "repoWrites", "grantor", "network", "reserve"] },
+    { id: "readiness", title: "Not ready yet", setup: provisioned, intro: "Fictional factory is provisioned, not activated. Unread source, pending PRs, empty telemetry, and empty previews are not readiness. A valid no-go preview is.", steps: ["analysisGap", "draft", "analyze", "draft", "publishPr", "activate", "merge", "adopt", "emptyTelemetry", "models", "previewGo", "telemetry", "emptyPreview", "activate", "previewNoGo", "activate"] },
+    { id: "recovery", title: "Interrupted deployment", setup: [...selection, "reserve"], intro: "Owner reservation exists before product App Configuration. Lose a response and the operator machine; lease expiry alone must not permit another deployment.", steps: ["provision", "loseAzure", "cancel", "expireLease", "resume", "provision", "completeProvision", "resume", "stopOld", "resume"] },
+    { id: "publication", title: "Unknown publication", setup: active, intro: "Fictional active factory. An issue may already exist. Refuse duplicate creates, copied-marker ownership, unsafe edits, and premature detach.", steps: ["uncertainIssue", "publish", "fakeMarker", "editIssue", "pause", "offboard", "finishOffboard", "reconcileIssue", "finishOffboard"] },
+    { id: "revision", title: "Approval and pause", setup: active, intro: "Fictional active r1. A boundary change invalidates approval; an old approval cannot win. Transient recovery and ordinary code refresh must not silently unpause.", steps: ["stageChange", "reviewChange", "applyChange", "staleApprove", "unpause", "telemetry", "previewGo", "activate", "pause", "staleTelemetry", "telemetry", "publish", "unpause", "refreshCode", "publish", "analyze", "publish"] },
+    { id: "cleanup", title: "Detach is not purge", setup: [...active, "publish"], intro: "Fictional active factory with a published proposal. Human-modified assets block cleanup. Detach retains costs; purge needs a separate audit disposition and retires identity.", steps: ["offboard", "ownershipConflict", "finishOffboard", "ownershipResolved", "finishOffboard", "activate", "purge", "expireAnalysis", "exportAudit", "purge", "reattach"] },
+    { id: "reattach", title: "Return before purge", setup: detached, intro: "Fictional detached factory. Reuse its identity, not its old permission to publish. Conflicting claims must first be released externally.", steps: ["foreignClaim", "reattach", "releaseForeign", "reattach", "activate", "analyze", "adoptExisting", "telemetry", "models", "previewNoGo", "activate"] },
+    { id: "replay", title: "Non-interactive replay", setup: selection, intro: "Proposed UX, still for human feedback: a complete reviewed fictional plan exists. Replay refuses missing/stale input and never implies activation.", steps: ["replayMissing", "replayStale", "replayExact", "activate"] }
+  ];
+  return { resources, resourceId, actions, initial, transition, effectsUnknown, selectionProblems, readinessProblems, liveProblems, status, scenarios };
+})();
+</script>
+
+<script id="view">
+const M = WizardModel;
+let state = M.initial();
+let selectedScenario = null;
+let stepIndex = 0;
+const escapeHtml = value => String(value).replace(/[&<>"]/g, character => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[character]);
+const byId = id => document.getElementById(id);
+const field = (label, value) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`;
+const names = keys => keys.length ? keys.map(key => M.resources[key].name).join(", ") : "Not selected";
+const yesNo = value => value ? "Confirmed (simulated)" : "Not confirmed";
+
+function nextPrompt(s) {
+  if (s.retired) return "Read retained audit/retirement context. A new factory needs a new onboarding, not resume.";
+  if (s.detached) return "Keep disabled infrastructure (costs continue), review reattachment, or approve audit disposition before a separate purge.";
+  if (s.offboard === "requested") return "Resolve uncertain effects and ownership conflicts. Do not describe partial detach as completed offboarding.";
+  if (s.interrupted || s.coordinator !== "current") return "Inspect trusted remote operation records; reconcile provider effects and stale actor quiescence before same-identity recovery.";
+  if (!s.repo) return "Which existing repository? sample/fielddesk | durable ID 41001 | observed default branch trunk. CLI visibility is not App consent.";
+  if (!s.subscription || !s.apps.length || !s.backends.length) return "Choose exact application resources and a separate dedicated telemetry backend in one subscription/environment; never select a whole group implicitly.";
+  if (!s.factoryId) return M.selectionProblems(s).join(" ") || "Inspect the categorized change plan, then explicitly approve this revision before reserving identity.";
+  if (s.provision !== "complete") return "Track provisioning by its durable operation identity. Cancellation is not rollback; provisioned is not ready.";
+  if (!s.charterVersion) return "Review complete source accounting and the agent's grounded charter draft. Publish a charter-only PR, await human merge, then adopt the exact revision.";
+  if (s.publication === "unknown") return "This proposal's create response is uncertain. Reconcile trusted creation evidence; no duplicate POST or marker-based adoption.";
+  if (s.paused) return "Paused intentionally. Use explicit resume only if the unchanged approval still applies; changed configuration needs fresh approval.";
+  const readiness = M.readinessProblems(s);
+  if (readiness.length) return readiness.join(" ");
+  if (s.approval !== s.configRevision) return "Review the complete evidence/preview and explicitly approve activation of this configuration; charter merge alone does not activate.";
+  return "Onboarding is complete and current gates pass. Only a new qualifying unanimous-go result may create a proposal; published proposals stay create-once.";
+}
+
+function render() {
+  const s = state;
+  byId("state-grid").innerHTML = [
+    field("Lifecycle", M.status(s)),
+    field("Factory identity", s.factoryId || "Not reserved"),
+    field("Manifest / activation", s.configRevision ? `r${s.configRevision} / ${s.approval === s.configRevision ? "approved" : "not approved"}` : "Not created"),
+    field("Current council readiness", M.readinessProblems(s).length ? `${M.readinessProblems(s).length} unmet conditions` : "Ready; activation still separate"),
+    field("Historical onboarding completion", s.completed ? "Completed once" : "Not completed"),
+    field("Remote effects", M.effectsUnknown(s) ? "In flight / uncertain; reconcile" : "No unresolved effects recorded"),
+    field("Observation claims", `${s.claims}; owner records only`),
+    field("Charter / source coverage", `c${s.charterVersion || "none"} / ${s.coverage}`),
+    field("Application telemetry", `${s.telemetry}; window 24 hours`),
+    field("Preview verdict", s.preview ? `${s.preview} (r${s.previewRevision})` : "No qualifying preview"),
+    field("First logical proposal", s.publication),
+    field("Infrastructure / costs", s.retired ? "Owned infrastructure purged" : s.provision === "not started" ? "Not provisioned" : s.detached ? "Retained; charges continue" : "Factory resources may incur charges")
+  ].join("");
+  byId("full-state").innerHTML = [
+    field("Product / environment", "fielddesk / production"),
+    field("Repository", s.repo ? "sample/fielddesk; durable ID 41001; default branch trunk" : "Not selected"),
+    field("Azure context", s.subscription ? "tenant-demo / sub-demo" : "Not selected"),
+    field("Application membership", names(s.apps)), field("Separate evidence backends", names(s.backends)),
+    field("Dedication declaration", yesNo(s.dedicated)), field("Cross-owner review", yesNo(s.crossOwner)),
+    field("App installation consent", yesNo(s.appApproved)),
+    field("Repository writes / automation", s.automationConflict ? "Known delivery trigger: blocked" : yesNo(s.writesApproved)),
+    field("Grantor authority", yesNo(s.grantor)), field("Runtime network path", yesNo(s.network)),
+    field("Effective source identity access", yesNo(s.runtimeAccess)),
+    field("Plan / reviewed plan", `p${s.planVersion} / ${s.reviewedPlan ? `p${s.reviewedPlan}` : "none"}`),
+    field("Provisioning outcome", s.provision),
+    field("Coordinator / old writer quiescence", `${s.coordinator} / ${yesNo(s.oldWriterStopped)}`),
+    field("Local interruption / deliberate pause", `${s.interrupted ? "interrupted" : "not interrupted"} / ${s.paused ? "paused" : "not paused"}`),
+    field("Source snapshot / analysis", `demo-commit-${s.snapshot} / ${s.analyzedSnapshot ? `demo-commit-${s.analyzedSnapshot}` : "none"}`),
+    field("Source coverage / raw copies", `${s.coverage}; complete means all relevant paths/chunks, not a search sample; raw copies temporary`),
+    field("Inferred intent", s.draft ? "Dispatchers coordinate field visits; schedule visits and record completion. Inference, not production observation." : "No generated draft"),
+    field("Unknowns / provenance", "Business success metric and deployed SHA unknown. Fictional references: src/Visits.cs:20-62, src/Schedule.cs:11-45. No real source analyzed."),
+    field("Charter PR / adoption", `${s.pr} / ${s.charterVersion ? `c${s.charterVersion}; merged PR adopted: ${s.prAdopted}` : "not adopted"}`),
+    field("Material intent conflict", s.intentConflict ? "Unresolved; review required" : "None recorded"),
+    field("Telemetry proof", s.telemetry === "fresh" ? "Simulated source-mi-demo -> logs-prod / AppRequests; record age 2h, complete query, approved production attribution; not all components proven" : "No current qualifying application record"),
+    field("Model proof", s.models ? "Synthesis + embedding + three distinct-family jurors verified (simulated)" : "Incomplete / unavailable"),
+    field("Activation history", `${s.approvalCount} explicit approval(s); approval never substitutes for current readiness`),
+    field("Staged application diff", s.stagedApps ? `${names(s.apps)} -> ${names(s.stagedApps)}; reviewed: ${s.changeReviewed}` : "None"),
+    field("Proposal provenance / internal revisions", `${s.publication === "filed" ? "Trusted simulated receipt: demo-issue-101" : "No confirmed issue receipt"}; ${s.internalDrafts} internal revision(s)`),
+    field("Cleanup / ownership", `${s.offboard}; ${s.ownershipConflict ? "conflict blocks affected removal" : "no recorded ownership conflict"}`),
+    field("Competing registry claim", s.foreignClaim ? "Observed; do not overwrite" : "None observed; not a global guarantee"),
+    field("Factory grants / App-key custody", `${s.grants} / ${s.keyCopy}; shared owner App/key/installation untouched`),
+    field("Audit disposition", s.audit),
+    field("Unused analysis", s.analysisExpired ? "Simulated 90-day expiry; protected reference graph retained" : "90-day expiry only when otherwise unused"),
+    field("Detached / retired", `${s.detached} / ${s.retired}`)
+  ].join("");
+  const notice = byId("notice");
+  notice.className = `notice${s.notice.blocked ? " blocked" : ""}`;
+  notice.innerHTML = `<strong>${s.notice.blocked ? "BLOCKED, NOT SILENTLY SKIPPED" : "SIMULATED OBSERVATION"}</strong>${escapeHtml(s.notice.text)}`;
+  byId("transcript").textContent = s.history.join("\n\n");
+  byId("transcript").scrollTop = byId("transcript").scrollHeight;
+  byId("prompt").textContent = nextPrompt(s);
+  byId("plan-version").textContent = `Plan p${s.planVersion}; ${s.reviewedPlan === s.planVersion ? "this revision has been inspected" : "not yet reviewed / selections changed"}. Approval is explicit; a read-only preview creates nothing.`;
+  const rows = [
+    ["Preserved", "Application resources, configuration, diagnostics, ALL existing tags, delivery/operations ownership, repository visibility/default branch/workflows/protections, shared owner/model/network assets."],
+    ["Application boundary", s.apps.length ? s.apps.map(M.resourceId).join("\n") : "No resources selected; resource-group membership never expands this list."],
+    ["Evidence boundary", s.backends.length ? s.backends.map(M.resourceId).join("\n") : "Choose a separate dedicated production backend. Shared/staging backends rejected."],
+    ["New factory infrastructure", "Dedicated rg-dsf-fielddesk; Container Apps environment, council, Azure Monitor source, code-intent workload; product App Configuration, Key Vault, Cosmos, factory-only telemetry; synthesis and embedding deployments. No SRE, Creation executor, or new Control Center."],
+    ["Reused prerequisites", "Prepared owner App Configuration / Key Vault / DSF App; three explicitly configured, distinct-family juror providers. Missing prerequisites require administrator handoff."],
+    ["Azure access", "Separate council/source/code-intent managed identities. source-mi-demo: Log Analytics Reader only at selected logs-prod. Exact model/store/secret scopes reviewed separately; no inherited broad permission is hidden by a narrow grant."],
+    ["GitHub authority", "Shared owner App private-key copy in factory vault, readable only by GitHub-auth component. Normal tokens downscoped to durable repo ID 41001 and required rights. Signing key still carries broader App authority; downscoping is not containment."],
+    ["Repository additions", "Only approved compatible labels: dsf:proposal, dsf-outcome:approved, dsf-outcome:rejected, dsf-outcome:changes-requested. Operator-published charter-only PR; human merge. Live proposals create once, unassigned; no edits/comments/replacements or delivery labels."],
+    ["Observation claims", "Owner-authority reservation records for exact selections; product manifest records desired boundary. No Azure tag writes/removals. Cross-owner exclusivity is an explicit operator prerequisite, not a global lock."],
+    ["Sources and evidence", "Azure Monitor conventional Analytics route; selected workspace dedicated to this environment. Factory telemetry is NOT application evidence. FoundryIQ/WebIQ are not selected in this fixture; they cannot replace application telemetry."],
+    ["Administrator handoff", "Who: GitHub installation administrator, Azure grantor, or network owner. What: exact repository/principal/scope/role/endpoint and failed operation. No request for subscription Owner or application/network repair as a fallback."],
+    ["Detach / purge", "Detach stops/drains and removes proven factory-specific access/claims; keeps disabled infrastructure and audit, with ongoing charges. Purge separately approves exact owned assets after verified private export or eligible approved expiry; no unowned deletion cascade."]
+  ];
+  byId("plan").innerHTML = rows.map(([label, value]) => `<tr><th scope="row">${escapeHtml(label)}</th><td style="white-space:pre-line">${escapeHtml(value)}</td></tr>`).join("");
+  renderWalkthrough();
+}
+
+function startScenario(id) {
+  selectedScenario = M.scenarios.find(scenario => scenario.id === id);
+  state = selectedScenario.setup.reduce(M.transition, M.initial());
+  stepIndex = 0;
+  state.notice = { blocked: false, text: `Starting fixture: ${selectedScenario.intro} This setup does not grant any real authority.` };
+  render();
+}
+function renderWalkthrough() {
+  for (const tab of byId("tabs").querySelectorAll("button")) tab.setAttribute("aria-selected", String(tab.dataset.scenario === selectedScenario?.id));
+  if (!selectedScenario) {
+    byId("walkthrough").innerHTML = "<p>Free-play mode. Choose a tab to reset into a guided scenario.</p>";
+    byId("walkthrough").removeAttribute("aria-labelledby");
+    return;
+  }
+  byId("walkthrough").setAttribute("aria-labelledby", `tab-${selectedScenario.id}`);
+  const finished = stepIndex === selectedScenario.steps.length;
+  byId("walkthrough").innerHTML = `<p>${escapeHtml(selectedScenario.intro)}</p>
+    <div class="bar"><strong>${finished ? "Walkthrough finished - inspect the resulting state." : `Step ${stepIndex + 1} of ${selectedScenario.steps.length}`}</strong>
+    <button data-restart="${selectedScenario.id}">Restart this scenario</button></div>
+    <div class="notice${state.notice.blocked ? " blocked" : ""}"><strong>${escapeHtml(M.status(state))}</strong>${escapeHtml(state.notice.text)}
+    <p class="small">Claims: ${escapeHtml(state.claims)}. Activation: ${state.approval === state.configRevision && state.approval !== null ? "current revision approved" : "not approved"}.
+    Effects: ${M.effectsUnknown(state) ? "unresolved" : "no unresolved effects recorded"}. <a href="#state-title">Inspect full state</a>.</p></div>
+    <ol class="steps">${selectedScenario.steps.map((key, index) => `<li class="${index < stepIndex ? "done" : ""}">
+      <button data-step="${index}" ${index === stepIndex ? 'class="primary"' : "disabled"}>${index < stepIndex ? "Done: " : ""}${escapeHtml(M.actions[key][1])}</button>
+    </li>`).join("")}</ol>`;
+  const currentButton = byId("walkthrough").querySelector(`[data-step="${stepIndex}"]`);
+  if (currentButton) byId("walkthrough").querySelector(".steps").scrollTop = Math.max(0, currentButton.offsetTop - 40);
+}
+
+const groups = [...new Set(Object.values(M.actions).map(action => action[0]))];
+byId("actions").innerHTML = groups.map((group, index) => `<details ${index === 0 ? "open" : ""}><summary>${escapeHtml(group)}</summary><div class="buttons">${
+  Object.entries(M.actions).filter(([, action]) => action[0] === group).map(([key, action]) => `<button data-action="${key}">${escapeHtml(action[1])}</button>`).join("")
+}</div></details>`).join("");
+byId("tabs").innerHTML = M.scenarios.map(scenario => `<button role="tab" id="tab-${scenario.id}" data-scenario="${scenario.id}" aria-controls="walkthrough" aria-selected="false">${escapeHtml(scenario.title)}</button>`).join("");
+document.addEventListener("click", event => {
+  const button = event.target.closest("button");
+  if (!button || button.disabled) return;
+  if (button.id === "reset") { state = M.initial(); selectedScenario = null; stepIndex = 0; render(); }
+  else if (button.dataset.action) { selectedScenario = null; state = M.transition(state, button.dataset.action); render(); }
+  else if (button.dataset.scenario) startScenario(button.dataset.scenario);
+  else if (button.dataset.restart) startScenario(button.dataset.restart);
+  else if (button.dataset.step !== undefined && selectedScenario) {
+    state = M.transition(state, selectedScenario.steps[stepIndex]);
+    stepIndex++;
+    render();
+  }
+});
+render();
+</script>
+</body>
+</html>
