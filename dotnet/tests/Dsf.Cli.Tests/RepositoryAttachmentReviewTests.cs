@@ -265,6 +265,100 @@ public sealed class RepositoryAttachmentReviewTests
         fixture.AssertReadOnly();
     }
 
+    public static TheoryData<string, string, string> WorkflowGuardCases
+    {
+        get
+        {
+            var cases = new TheoryData<string, string, string>();
+            (string Condition, string IssueState, string PrState)[] conditions =
+            [
+                ("true", "Blocked", "Blocked"),
+                ("false", "Unknown", "Unknown"),
+                ("github.event_name == 'pull_request'", "Unknown", "Blocked"),
+                ("github.event_name == 'issues'", "Blocked", "Unknown"),
+                ("github.event_name != 'issues'", "Unknown", "Blocked"),
+                ("${{ true }}", "Blocked", "Blocked"),
+                ("${{ false }}", "Unknown", "Unknown"),
+                ("${{ github.event_name == 'pull_request' }}", "Unknown", "Blocked"),
+                ("${{ github.event_name != 'pull_request' }}", "Blocked", "Unknown"),
+                ("${{ github.event_name == 'PULL_REQUEST' }}", "Unknown", "Blocked"),
+                ("contains(github.event_name, 'pull')", "Unknown", "Unknown"),
+                ("${{ env.DELIVERY_ENABLED }}", "Unknown", "Unknown"),
+                ("${{ 'false' }}", "Unknown", "Unknown"),
+                ("[]", "Unknown", "Unknown"),
+            ];
+            foreach (var (condition, issueState, prState) in conditions)
+            {
+                cases.Add($"if: {condition}\nsteps:\n  - run: npm publish", issueState, prState);
+                cases.Add($"steps:\n  - if: {condition}\n    run: npm publish", issueState, prState);
+            }
+
+            cases.Add("if: github.event_name == 'pull_request'\nsteps:\n  - if: github.event_name == 'issues'\n    run: npm publish",
+                "Unknown", "Unknown");
+            return cases;
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(WorkflowGuardCases))]
+    public async Task Delivery_guards_require_eligible_jobs_and_steps_for_each_workflow_event(
+        string job, string issueState, string prState)
+    {
+        var fixture = new ReviewFixture();
+        fixture.SetWorkflow("on: [issues, pull_request]\njobs:\n  publish:\n    runs-on: ubuntu-latest\n"
+            + string.Join('\n', job.Split('\n').Select(line => "    " + line)));
+
+        var (exit, terminal) = await fixture.InvokeAsync([.. ReviewFixture.OwnerArguments, .. ReviewFixture.ClearAutomationArguments]);
+
+        Assert.Equal(1, exit);
+        using var document = JsonDocument.Parse(terminal.Output);
+        var automation = document.RootElement.GetProperty("automation").EnumerateArray().ToArray();
+        Assert.Equal([issueState, prState, "Confirmed"], automation.Select(review => review.GetProperty("state").GetString()));
+        Assert.All(automation, review =>
+            Assert.Equal(review.GetProperty("state").GetString() == "Blocked",
+                review.GetProperty("evidence").EnumerateArray().Any(value => value.GetString()!.Contains("instruction observed", StringComparison.Ordinal))));
+        Assert.DoesNotContain("DELIVERY_ENABLED", terminal.Output + terminal.Error);
+        fixture.AssertReadOnly();
+    }
+
+    [Theory]
+    [InlineData("on: [issues, pull_request]", "Unknown", "Blocked")]
+    [InlineData("on: {issues: {types: [closed]}, pull_request: {types: [opened]}}", "Confirmed", "Blocked")]
+    [InlineData("on:\n  issues:\n    types: [opened]\n  pull_request:\n    types: [closed]", "Unknown", "Confirmed")]
+    public async Task Eligible_delivery_in_another_job_still_blocks_only_its_event_and_activity(
+        string trigger, string issueState, string prState)
+    {
+        var fixture = new ReviewFixture();
+        fixture.SetWorkflow(trigger + """
+
+            jobs:
+              disabled:
+                if: false
+                runs-on: ubuntu-latest
+                steps:
+                  - run: npm publish
+              uncertain:
+                if: ${{ env.DELIVERY_ENABLED }}
+                runs-on: ubuntu-latest
+                steps:
+                  - run: npm publish
+              pull_request_only:
+                if: ${{ github.event_name == 'pull_request' }}
+                runs-on: ubuntu-latest
+                steps:
+                  - if: true
+                    run: npm publish
+            """);
+
+        var (exit, terminal) = await fixture.InvokeAsync([.. ReviewFixture.OwnerArguments, .. ReviewFixture.ClearAutomationArguments]);
+
+        Assert.Equal(1, exit);
+        using var document = JsonDocument.Parse(terminal.Output);
+        Assert.Equal([issueState, prState, "Confirmed"],
+            document.RootElement.GetProperty("automation").EnumerateArray().Select(review => review.GetProperty("state").GetString()));
+        fixture.AssertReadOnly();
+    }
+
     [Theory]
     [InlineData("name: Deployment unit tests\nsteps:\n  - run: echo harmless")]
     [InlineData("steps:\n  - name: Publish deployment tests\n    run: echo harmless")]
@@ -378,6 +472,55 @@ public sealed class RepositoryAttachmentReviewTests
             Assert.Equal(review.GetProperty("mutation").GetString() == "CharterPullRequest" ? state : "Confirmed",
                 review.GetProperty("state").GetString()));
         Assert.Equal(state == "Blocked", terminal.Output.Contains("instruction observed", StringComparison.Ordinal));
+        fixture.AssertReadOnly();
+    }
+
+    [Theory]
+    [InlineData("\"$PR\"", "Blocked")]
+    [InlineData("\"$PR\" --disable-auto", "Unknown")]
+    [InlineData("\"$PR\" --disable-auto=true", "Unknown")]
+    [InlineData("\"$PR\" --disable-auto=false", "Blocked")]
+    [InlineData("\"$PR\" --disable-auto=0", "Blocked")]
+    [InlineData("\"$PR\" --disable-auto=1", "Unknown")]
+    [InlineData("\"$PR\" --disable-auto=False", "Blocked")]
+    [InlineData("\"$PR\" --disable-auto=TRUE", "Unknown")]
+    [InlineData("\"$PR\" --disable-auto=FaLsE", "Unknown")]
+    [InlineData("\"$PR\" --disable-auto=$DISABLE_AUTO", "Unknown")]
+    [InlineData("\"$PR\" --disable-auto=maybe", "Unknown")]
+    [InlineData("\"$PR\" --disable-auto=true --disable-auto=false", "Blocked")]
+    [InlineData("\"$PR\" --disable-auto=false --disable-auto", "Unknown")]
+    [InlineData("\"$PR\" --disable-auto false", "Unknown")]
+    [InlineData("--disable-auto false", "Unknown")]
+    [InlineData("--disable-auto false --disable-auto=false", "Blocked")]
+    [InlineData("\"$PR\" --disable-auto false --disable-auto=false", "Unknown")]
+    [InlineData("\"$PR\" --body '--disable-auto'", "Blocked")]
+    [InlineData("\"$PR\" --body '--disable-auto=true'", "Blocked")]
+    [InlineData("\"$PR\" --squash --disable-auto=false", "Blocked")]
+    [InlineData("\"$PR\" --squash --disable-auto=true", "Unknown")]
+    [InlineData("\"$PR\" --opaque-option", "Unknown")]
+    [InlineData("\"$PR\" --disable-auto= --squash", "Unknown")]
+    public async Task Disabling_auto_merge_is_not_delivery_but_explicit_false_preserves_known_merges(
+        string arguments, string state)
+    {
+        var fixture = new ReviewFixture();
+        fixture.SetWorkflow($"""
+            on: [pull_request]
+            jobs:
+              merge:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: gh pr merge {arguments}
+            """);
+
+        var (exit, terminal) = await fixture.InvokeAsync([.. ReviewFixture.OwnerArguments, .. ReviewFixture.ClearAutomationArguments]);
+
+        Assert.Equal(1, exit);
+        using var document = JsonDocument.Parse(terminal.Output);
+        Assert.All(document.RootElement.GetProperty("automation").EnumerateArray(), review =>
+            Assert.Equal(review.GetProperty("mutation").GetString() == "CharterPullRequest" ? state : "Confirmed",
+                review.GetProperty("state").GetString()));
+        Assert.Equal(state == "Blocked", terminal.Output.Contains("instruction observed", StringComparison.Ordinal));
+        Assert.DoesNotContain("DISABLE_AUTO", terminal.Output + terminal.Error);
         fixture.AssertReadOnly();
     }
 

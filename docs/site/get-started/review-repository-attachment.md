@@ -115,10 +115,26 @@ compound scripts, reusable actions/workflows, and downstream dispatch can remain
 unknown. Other event filters, such as branch/path constraints, are not proved by
 this activity-filter review.
 
+Delivery-step eligibility is checked separately for each subscribed event. Both
+job and step `if` guards must be absent or established true. The bounded guard
+reader understands constant `true`/`false` and `github.event_name` equality or
+inequality against a literal event name, including `${{ ... }}` wrappers.
+False or unproven guards do not establish known delivery; unsupported expressions
+are never evaluated. Excluding a command does not prove all workflow effects safe:
+without an eligible known instruction, the applicable review can remain `Unknown`.
+
 For `npm publish`, explicit `--dry-run=false` (or `--dry-run false`) disables dry
 run and retains the known publishing block. Recognized boolean flags, including
 `--no-dry-run`, apply in order. Enabled dry runs and unrecognized flag values or
 expressions remain `Unknown`, not proof that arbitrary workflow effects are harmless.
+
+For `gh pr merge`, enabled `--disable-auto` disables auto-merge rather than merging,
+so it does not establish known delivery. Explicit `--disable-auto=false` retains
+the known merge instruction. GitHub CLI boolean literals and repeated flags are
+handled separately from npm: bare `--disable-auto` is true, and a following
+`false` is a positional argument, not its value. Unsupported arguments or boolean
+values remain `Unknown`; disabling auto-merge is not claimed to be read-only or
+proof that the workflow has no other effects.
 
 A `clear` declaration cannot override a known trigger, incomplete inspection, or
 unknown downstream effects. Generic CI handlers can therefore remain unknown:

@@ -143,15 +143,16 @@ internal sealed partial class RepositoryAttachmentReviewer
                 }
 
                 var events = WorkflowEvents(on).ToArray();
-                var known = HasKnownDeliveryStep(mapping);
                 foreach (var subscription in events)
                 {
+                    var known = HasKnownDeliveryStep(mapping, subscription.Name);
                     foreach (var mutation in AffectedMutations(subscription.Name))
                     {
                         evidence[mutation].Add($"Workflow {path}@{sha} subscribes to {subscription.Name} (types: {subscription.Activities}); "
                             + (subscription.CausedByMutation is false ? "activity filter excludes this mutation."
                                 : subscription.CausedByMutation is null ? "event/activity filter is unsupported or malformed; trigger relevance is unknown."
-                                : known ? "delivery/coding-agent instruction observed." : "transitive/scripted effects cannot be established."));
+                                : known ? "eligible delivery/coding-agent instruction observed."
+                                : "no eligible delivery instruction established; conditions or transitive/scripted effects remain unproven."));
                         if (subscription.CausedByMutation is not false)
                         {
                             (subscription.CausedByMutation is true && known ? blocked : unknown).Add(mutation);
@@ -313,7 +314,7 @@ internal sealed partial class RepositoryAttachmentReviewer
         _ => Enum.GetValues<RepositoryMutationClass>(),
     };
 
-    private static bool HasKnownDeliveryStep(YamlMappingNode workflow)
+    private static bool HasKnownDeliveryStep(YamlMappingNode workflow, string eventName)
     {
         if (!workflow.Children.TryGetValue(new YamlScalarNode("jobs"), out var jobs) || jobs is not YamlMappingNode jobMapping)
         {
@@ -322,14 +323,16 @@ internal sealed partial class RepositoryAttachmentReviewer
 
         foreach (var job in jobMapping.Children.Values.OfType<YamlMappingNode>())
         {
-            if (!job.Children.TryGetValue(new YamlScalarNode("steps"), out var steps) || steps is not YamlSequenceNode sequence)
+            if (GuardAllowsEvent(job, eventName) is not true
+                || !job.Children.TryGetValue(new YamlScalarNode("steps"), out var steps) || steps is not YamlSequenceNode sequence)
             {
                 continue;
             }
 
             foreach (var step in sequence.Children.OfType<YamlMappingNode>())
             {
-                if (step.Children.TryGetValue(new YamlScalarNode("run"), out var run)
+                if (GuardAllowsEvent(step, eventName) is true
+                    && step.Children.TryGetValue(new YamlScalarNode("run"), out var run)
                     && run is YamlScalarNode { Value: { } command }
                     && HasStandardShell(step, job, workflow) && IsKnownDeliveryCommand(command))
                 {
@@ -339,6 +342,39 @@ internal sealed partial class RepositoryAttachmentReviewer
         }
 
         return false;
+    }
+
+    private static bool? GuardAllowsEvent(YamlMappingNode scope, string eventName)
+    {
+        if (!scope.Children.TryGetValue(new YamlScalarNode("if"), out var condition))
+        {
+            return true;
+        }
+
+        if (condition is not YamlScalarNode { Value: { } value })
+        {
+            return null;
+        }
+
+        var expression = value.Trim();
+        if (expression.StartsWith("${{", StringComparison.Ordinal) && expression.EndsWith("}}", StringComparison.Ordinal))
+        {
+            expression = expression[3..^2].Trim();
+        }
+
+        if (expression is "true" or "false")
+        {
+            return expression == "true";
+        }
+
+        var comparison = Regex.Match(expression, @"\Agithub\.event_name\s*(==|!=)\s*'([A-Za-z_]+)'\z");
+        if (!comparison.Success)
+        {
+            return null;
+        }
+
+        var matches = string.Equals(eventName, comparison.Groups[2].Value, StringComparison.OrdinalIgnoreCase);
+        return comparison.Groups[1].Value == "==" ? matches : !matches;
     }
 
     private static bool HasStandardShell(YamlMappingNode step, YamlMappingNode job, YamlMappingNode workflow)
@@ -399,9 +435,57 @@ internal sealed partial class RepositoryAttachmentReviewer
             return false;
         }
 
-        return arguments is ["gh", "agent-task", "create", ..] or ["gh", "pr", "merge", ..]
+        if (arguments is ["gh", "pr", "merge", ..])
+        {
+            return IsKnownPullRequestMerge(arguments);
+        }
+
+        return arguments is ["gh", "agent-task", "create", ..]
             or ["kubectl", "apply", ..] or ["terraform", "apply", ..]
             || IsCopilotAssignment(arguments);
+    }
+
+    private static bool IsKnownPullRequestMerge(string[] arguments)
+    {
+        var disableAuto = false;
+        var selectors = 0;
+        for (var index = 3; index < arguments.Length; index++)
+        {
+            var argument = arguments[index];
+            if (!argument.StartsWith("-", StringComparison.Ordinal))
+            {
+                if (++selectors > 1) { return false; }
+                continue;
+            }
+
+            var option = argument.Split('=', 2);
+            if (option[0] is "--disable-auto" or "--auto" or "--admin" or "--delete-branch" or "-d"
+                or "--merge" or "-m" or "--squash" or "-s" or "--rebase" or "-r")
+            {
+                // pflag's bare boolean is true; a following token is not its boolean value.
+                var enabled = option.Length == 1 ? true : BooleanValue(option[1]);
+                if (enabled is null) { return false; }
+                if (option[0] == "--disable-auto") { disableAuto = enabled.Value; }
+            }
+            else if (option[0] is "--body" or "-b" or "--body-file" or "-F" or "--subject" or "-t"
+                or "--author-email" or "-A" or "--match-head-commit" or "--repo" or "-R")
+            {
+                if (option.Length == 1 && ++index >= arguments.Length) { return false; }
+            }
+            else
+            {
+                return false;
+            }
+        }
+
+        return !disableAuto;
+
+        static bool? BooleanValue(string value) => value switch
+        {
+            "1" or "t" or "T" or "TRUE" or "true" or "True" => true,
+            "0" or "f" or "F" or "FALSE" or "false" or "False" => false,
+            _ => null,
+        };
     }
 
     private static bool? NpmDryRunEnabled(string[] arguments)
