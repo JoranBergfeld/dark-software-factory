@@ -338,6 +338,49 @@ public sealed class RepositoryAttachmentReviewTests
         fixture.AssertReadOnly();
     }
 
+    [Theory]
+    [InlineData("", "Blocked")]
+    [InlineData(" --dry-run", "Unknown")]
+    [InlineData(" --dry-run=true", "Unknown")]
+    [InlineData(" --dry-run=false", "Blocked")]
+    [InlineData(" --dry-run false", "Blocked")]
+    [InlineData(" --dry-run true", "Unknown")]
+    [InlineData(" '--dry-run=false'", "Blocked")]
+    [InlineData(" --dry-run=true --dry-run=false", "Blocked")]
+    [InlineData(" --dry-run --dry-run=false", "Blocked")]
+    [InlineData(" --dry-run=false --dry-run=true", "Unknown")]
+    [InlineData(" --dry-run=$PREVIEW", "Unknown")]
+    [InlineData(" --dry-run=maybe", "Unknown")]
+    [InlineData(" --dry-run=$PREVIEW --dry-run=false", "Unknown")]
+    [InlineData(" --dry-run ''", "Unknown")]
+    [InlineData(" --dry-run FALSE", "Unknown")]
+    [InlineData(" --no-dry-run", "Blocked")]
+    [InlineData(" --dry-run --no-dry-run", "Blocked")]
+    [InlineData(" --no-dry-run --dry-run", "Unknown")]
+    [InlineData(" --dry-run=false --help", "Unknown")]
+    public async Task Npm_publish_dry_run_flags_preserve_known_delivery_when_explicitly_disabled(string arguments, string state)
+    {
+        var fixture = new ReviewFixture();
+        fixture.SetWorkflow($"""
+            on: [pull_request]
+            jobs:
+              publish:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: npm publish{arguments}
+            """);
+
+        var (exit, terminal) = await fixture.InvokeAsync([.. ReviewFixture.OwnerArguments, .. ReviewFixture.ClearAutomationArguments]);
+
+        Assert.Equal(1, exit);
+        using var document = JsonDocument.Parse(terminal.Output);
+        Assert.All(document.RootElement.GetProperty("automation").EnumerateArray(), review =>
+            Assert.Equal(review.GetProperty("mutation").GetString() == "CharterPullRequest" ? state : "Confirmed",
+                review.GetProperty("state").GetString()));
+        Assert.Equal(state == "Blocked", terminal.Output.Contains("instruction observed", StringComparison.Ordinal));
+        fixture.AssertReadOnly();
+    }
+
     public static TheoryData<string, string, string, string> WorkflowActivityFilterCases
     {
         get
@@ -525,6 +568,59 @@ public sealed class RepositoryAttachmentReviewTests
         Assert.Equal(502, label.GetProperty("id").GetInt64());
         Assert.Equal("ff0000", label.GetProperty("color").GetString());
         Assert.Equal(description, label.GetProperty("description").GetString());
+        fixture.AssertReadOnly();
+    }
+
+    public static TheoryData<string, string, string> CanonicalLabelMeaningCases
+    {
+        get
+        {
+            var cases = new TheoryData<string, string, string>();
+            (string Name, string Description)[] labels =
+            [
+                ("dsf:proposal", "DSF proposal for human consideration; not a delivery assignment."),
+                ("dsf-outcome:approved", "Human-approved DSF proposal; not a delivery assignment."),
+                ("dsf-outcome:rejected", "Human-rejected DSF proposal."),
+                ("dsf-outcome:changes-requested", "DSF proposal requiring human-requested changes."),
+            ];
+            foreach (var target in labels)
+            {
+                foreach (var observed in labels)
+                {
+                    cases.Add(target.Name, observed.Description, target.Name == observed.Name ? "Confirmed" : "Blocked");
+                }
+
+                cases.Add(target.Name, "Human-approved or human-rejected DSF proposal; decision pending.", "Unknown");
+            }
+
+            cases.Add("dsf-outcome:approved", "  HUMAN rejected DSF proposal  ", "Blocked");
+            return cases;
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(CanonicalLabelMeaningCases))]
+    public async Task Canonical_label_meanings_conflict_when_used_for_a_different_allowed_label(
+        string name, string description, string state)
+    {
+        var fixture = new ReviewFixture();
+        fixture.Responses[$"repos/acme/renamed/labels/{Uri.EscapeDataString(name)}"] = new(0,
+            JsonSerializer.Serialize(new { id = 502, name, color = "ff0000", description }), "");
+
+        var (exit, terminal) = await fixture.InvokeAsync([.. ReviewFixture.OwnerArguments, .. ReviewFixture.ClearAutomationArguments]);
+
+        Assert.Equal(state == "Confirmed" ? 0 : 1, exit);
+        using var document = JsonDocument.Parse(terminal.Output);
+        Assert.Equal(state, document.RootElement.GetProperty("state").GetString());
+        var label = Assert.Single(document.RootElement.GetProperty("labels").EnumerateArray(),
+            item => item.GetProperty("name").GetString() == name);
+        Assert.Equal(state, label.GetProperty("semanticState").GetString());
+        Assert.Equal(502, label.GetProperty("id").GetInt64());
+        Assert.Equal("ff0000", label.GetProperty("color").GetString());
+        Assert.Equal(description, label.GetProperty("description").GetString());
+        var finding = Assert.Single(document.RootElement.GetProperty("findings").EnumerateArray(),
+            item => item.GetProperty("check").GetString() == $"label:{name}");
+        Assert.DoesNotContain("Explicit delivery/assignment", finding.GetProperty("detail").GetString());
         fixture.AssertReadOnly();
     }
 

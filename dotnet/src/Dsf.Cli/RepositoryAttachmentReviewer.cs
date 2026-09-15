@@ -161,10 +161,13 @@ internal sealed partial class RepositoryAttachmentReviewer(IGhCliRunner gh, IOwn
             {
                 var observedName = RequiredText(label, "name");
                 var description = label.GetProperty("description").GetString();
-                var matches = string.Equals(NormalizeLabelDescription(description), NormalizeLabelDescription(meaning),
+                var normalizedDescription = NormalizeLabelDescription(description);
+                var matches = string.Equals(normalizedDescription, NormalizeLabelDescription(meaning),
                     StringComparison.OrdinalIgnoreCase);
+                var conflictingMeaning = DecideRepositoryLabels.Meanings.Any(other => other.Key != name
+                    && string.Equals(normalizedDescription, NormalizeLabelDescription(other.Value), StringComparison.OrdinalIgnoreCase));
                 var state = matches ? RepositoryReviewState.Confirmed
-                    : HasDeliveryAssignmentMeaning(description) ? RepositoryReviewState.Blocked : RepositoryReviewState.Unknown;
+                    : conflictingMeaning || HasDeliveryAssignmentMeaning(description) ? RepositoryReviewState.Blocked : RepositoryReviewState.Unknown;
                 if (!string.Equals(name, observedName, StringComparison.OrdinalIgnoreCase))
                 {
                     throw new InvalidOperationException();
@@ -174,7 +177,7 @@ internal sealed partial class RepositoryAttachmentReviewer(IGhCliRunner gh, IOwn
                 findings.Add(new($"label:{name}", state,
                     $"Required meaning: {meaning} Observed description: {description ?? "(none)"}. "
                     + (matches ? "Existing identity/color/description remain unchanged."
-                        : state is RepositoryReviewState.Blocked ? "Explicit delivery/assignment meaning conflicts with proposal-only use; no label changes or reuse are authorized."
+                        : state is RepositoryReviewState.Blocked ? "Recognized label meaning conflicts with the required meaning; no label changes or reuse are authorized."
                         : "Existing meaning is unresolved; no label changes or reuse are authorized."),
                     matches ? null : "repository label / automation owner",
                     matches ? null : "Reconcile this label's meaning and consumers outside DSF; review cannot override a semantic conflict."));

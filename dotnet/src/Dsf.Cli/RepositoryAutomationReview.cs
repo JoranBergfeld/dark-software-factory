@@ -383,16 +383,57 @@ internal sealed partial class RepositoryAttachmentReviewer
             end = match.Index + match.Length;
         }
 
-        if (end != command.Length || tokens.Any(token => token is "--help" or "-h" or "--dry-run"
-            || token.StartsWith("--dry-run=", StringComparison.Ordinal)))
+        if (end != command.Length || tokens.Any(token => token is "--help" or "-h"))
         {
             return false;
         }
 
         var arguments = tokens.ToArray();
+        if (arguments is ["npm", "publish", ..])
+        {
+            return NpmDryRunEnabled(arguments) is false;
+        }
+
+        if (tokens.Any(token => token == "--dry-run" || token.StartsWith("--dry-run=", StringComparison.Ordinal)))
+        {
+            return false;
+        }
+
         return arguments is ["gh", "agent-task", "create", ..] or ["gh", "pr", "merge", ..]
-            or ["npm", "publish", ..] or ["kubectl", "apply", ..] or ["terraform", "apply", ..]
+            or ["kubectl", "apply", ..] or ["terraform", "apply", ..]
             || IsCopilotAssignment(arguments);
+    }
+
+    private static bool? NpmDryRunEnabled(string[] arguments)
+    {
+        var enabled = false;
+        for (var index = 2; index < arguments.Length; index++)
+        {
+            var argument = arguments[index];
+            if (argument == "--no-dry-run")
+            {
+                enabled = false;
+                continue;
+            }
+
+            if (argument != "--dry-run" && !argument.StartsWith("--dry-run=", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var value = argument == "--dry-run"
+                ? index + 1 < arguments.Length && !arguments[index + 1].StartsWith("-", StringComparison.Ordinal)
+                    ? arguments[++index] : "true"
+                : argument["--dry-run=".Length..];
+            if (value is not ("true" or "false"))
+            {
+                return null;
+            }
+
+            enabled = value == "true";
+        }
+
+        return enabled;
     }
 
     private static bool IsCopilotAssignment(string[] arguments)

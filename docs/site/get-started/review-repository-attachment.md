@@ -115,6 +115,11 @@ compound scripts, reusable actions/workflows, and downstream dispatch can remain
 unknown. Other event filters, such as branch/path constraints, are not proved by
 this activity-filter review.
 
+For `npm publish`, explicit `--dry-run=false` (or `--dry-run false`) disables dry
+run and retains the known publishing block. Recognized boolean flags, including
+`--no-dry-run`, apply in order. Enabled dry runs and unrecognized flag values or
+expressions remain `Unknown`, not proof that arbitrary workflow effects are harmless.
+
 A `clear` declaration cannot override a known trigger, incomplete inspection, or
 unknown downstream effects. Generic CI handlers can therefore remain unknown:
 the scanner does not prove arbitrary scripts or reusable actions harmless.
@@ -139,8 +144,10 @@ are preserved. Conservative description matching ignores case, whitespace,
 sentence punctuation (`.`, `,`, `;`, `:`), and hyphenation; presentation-only
 variations of the required meaning establish compatibility without rewriting the
 description. Missing descriptions and unrecognized wording remain `Unknown`, not
-asserted semantic conflicts. Recognized affirmative delivery/assignment meanings
-are `Blocked`. Both unresolved meanings and known conflicts prevent reuse pending
+asserted semantic conflicts. Descriptions matching a different allowed label's
+canonical meaning, including presentation-only variants, are known conflicts and
+are `Blocked`, as are recognized affirmative delivery/assignment meanings.
+Both unresolved meanings and known conflicts prevent reuse pending
 external reconciliation; no model guesses at arbitrary wording. A compatible
 description does not clear conflicting automation. Review offers no label-edit or
 semantic-override option.
