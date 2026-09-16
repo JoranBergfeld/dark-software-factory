@@ -230,6 +230,9 @@ public static partial class CliApplication
         var sourceHost = new Command("serve-source", "serve isolated inactive pinned source acquisition (runtime)");
         sourceHost.SetAction((_, token) => RuntimeShell(["serve-source"], token));
         root.Subcommands.Add(sourceHost);
+        var supplementalHost = new Command("serve-supplemental", "serve isolated optional evidence proof (runtime)");
+        supplementalHost.SetAction((_, token) => RuntimeShell(["serve-supplemental"], token));
+        root.Subcommands.Add(supplementalHost);
         root.Subcommands.Add(BuildCharterCommand(terminal, appConfig, charterRepository, charterStore));
 
         return root;

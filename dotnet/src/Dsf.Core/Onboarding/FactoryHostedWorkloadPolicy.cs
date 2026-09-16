@@ -4,7 +4,13 @@ namespace Dsf.Core.Onboarding;
 
 public static class FactoryHostedWorkloadPolicy
 {
-    public static ModelResourceObservation ObserveModelHost(JsonElement resource, string target)
+    public static ModelResourceObservation ObserveModelHost(JsonElement resource, string target) =>
+        ObserveHost(resource, target, FactoryModelsValidation.Hash);
+
+    public static ModelResourceObservation ObserveExactHost(JsonElement resource, string target) =>
+        ObserveHost(resource, target, snapshot => FactoryTelemetryValidation.Hash(JsonSerializer.SerializeToElement(snapshot)));
+
+    private static ModelResourceObservation ObserveHost(JsonElement resource, string target, Func<object, string> hash)
     {
         var system = resource.GetProperty("systemData");
         var created = system.GetProperty("createdAt").GetDateTimeOffset();
@@ -12,7 +18,7 @@ public static class FactoryHostedWorkloadPolicy
             || system.GetProperty("lastModifiedAt").GetDateTimeOffset() != created) throw new JsonException();
         var properties = resource.GetProperty("properties");
         var policy = target.EndsWith("/authconfigs/current", StringComparison.Ordinal);
-        return new(target, FactoryModelsValidation.Hash(new
+        return new(target, hash(new
         {
             target, created,
             policy = policy ? properties : default(JsonElement?),
@@ -24,7 +30,8 @@ public static class FactoryHostedWorkloadPolicy
     }
 
     public static string Validate(JsonElement host, JsonElement auth, FoundationOperation identity, FoundationOperation hosting,
-        string image, string verb, string product, string endpoint, string pin, string tenant, string audience, IReadOnlyList<string> callers)
+        string image, string verb, string product, string endpoint, string pin, string tenant, string audience, IReadOnlyList<string> callers,
+        IReadOnlyDictionary<string, string>? additionalEnvironment = null)
     {
         var nativeIdentity = host.GetProperty("identity");
         var properties = host.GetProperty("properties");
@@ -37,6 +44,8 @@ public static class FactoryHostedWorkloadPolicy
             ["DSF_PRODUCT"] = product, ["AZURE_APPCONFIG_ENDPOINT"] = endpoint,
             ["DSF_FACTORY_PROFILE_PIN"] = pin, ["AZURE_CLIENT_ID"] = identity.ClientId!,
         };
+        if (additionalEnvironment is not null)
+            foreach (var entry in additionalEnvironment) env.Add(entry.Key, entry.Value);
         if (nativeIdentity.GetProperty("type").GetString() != "UserAssigned"
             || !nativeIdentity.GetProperty("userAssignedIdentities").EnumerateObject().Select(p => p.Name).SequenceEqual([identity.Target], StringComparer.OrdinalIgnoreCase)
             || !string.Equals(properties.GetProperty("managedEnvironmentId").GetString(), hosting.Target, StringComparison.OrdinalIgnoreCase)

@@ -23,6 +23,9 @@ public static class ProductConfigurationKeys
     public const string FactoryTelemetry = "dsf/factory/telemetry";
     public const string FactoryModels = "dsf/factory/models";
     public const string FactorySource = "dsf/factory/source";
+    public const string FactorySupplemental = "dsf/factory/supplemental";
+    public static string SupplementalOperation(Guid operation, int index) => $"dsf/factory/supplemental-operations/{operation:D}/{index:D4}";
+    public static string SupplementalProof(Guid operation, Guid check, string kind) => $"dsf/factory/supplemental-proofs/{operation:D}/{check:D}/{kind}";
     public static string SourceOperation(Guid operationId, int index) => $"dsf/factory/source-operations/{operationId:D}/{index:D4}";
     public static string ModelRoute(Guid operationId, int index) => $"dsf/factory/model-routes/{operationId:D}/{index:D4}";
     public static string ModelBinding(Guid operationId, string name) => $"dsf/factory/model-bindings/{operationId:D}/{name}";

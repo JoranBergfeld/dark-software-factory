@@ -54,6 +54,10 @@ public sealed record FactoryManifest(
     public string? ModelsApprovalFingerprint { get; init; }
     public Guid? SourceOperationId { get; init; }
     public string? SourceApprovalFingerprint { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? SupplementalOperationId { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? SupplementalApprovalFingerprint { get; init; }
 }
 
 public sealed record FactoryFoundationResult(

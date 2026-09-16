@@ -18,6 +18,7 @@ internal sealed class ProvisioningAssets
         "onboard-telemetry.json",
         "onboard-models.json",
         "onboard-source.json",
+        "onboard-supplemental.json",
     };
 
     private readonly string directory;

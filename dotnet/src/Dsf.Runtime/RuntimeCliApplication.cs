@@ -133,6 +133,29 @@ public static class RuntimeCliApplication
             }
         });
         root.Subcommands.Add(source);
+        var supplemental = new Command("serve-supplemental", "serve isolated optional evidence proof; no governance or private source-store access");
+        supplemental.SetAction(async (_, token) =>
+        {
+            try
+            {
+                var settings = FactoryHostSettings.Read(env, "Supplemental source");
+                var raw = env.GetValueOrDefault("DSF_SUPPLEMENTAL_CONFIG");
+                if (string.IsNullOrWhiteSpace(raw) || System.Text.Encoding.UTF8.GetByteCount(raw) > 8192)
+                    throw new RuntimeVerbException("Supplemental source requires bounded DSF_SUPPLEMENTAL_CONFIG; no environment API key fallback.");
+                var configuration = System.Text.Json.JsonSerializer.Deserialize<Dsf.Core.Onboarding.SupplementalHostConfiguration>(
+                    raw, Dsf.Core.Onboarding.FactoryGitHubJson.Options) ?? throw new System.Text.Json.JsonException();
+                await using var host = RuntimeVerbs.BuildSupplementalHost(settings, configuration, dependencies);
+                await dependencies.WebHostRunner.RunAsync(host, token);
+                return Success;
+            }
+            catch (Exception e) when (e is RuntimeVerbException or System.Text.Json.JsonException)
+            {
+                await stderr.WriteLineAsync("Supplemental source blocked: complete DSF_SUPPLEMENTAL_CONFIG, DSF_PRODUCT, AZURE_APPCONFIG_ENDPOINT, "
+                    + "DSF_FACTORY_PROFILE_PIN and explicit AZURE_CLIENT_ID required; details withheld.");
+                return Failure;
+            }
+        });
+        root.Subcommands.Add(supplemental);
         return root;
     }
 

@@ -4,8 +4,11 @@ using Dsf.Core.Onboarding;
 
 namespace Dsf.Runtime;
 
-internal sealed class FactoryWorkloadCredential(TokenCredential inner, string tenant, FoundationOperation binding, TimeProvider clock) : TokenCredential
+internal sealed class FactoryWorkloadCredential(TokenCredential inner, string tenant, string? principalId, string? clientId, string? resourceId,
+    TimeProvider clock, bool requireGuidV2Audience = false) : TokenCredential
 {
+    internal FactoryWorkloadCredential(TokenCredential inner, string tenant, FoundationOperation binding, TimeProvider clock)
+        : this(inner, tenant, binding.PrincipalId, binding.ClientId, binding.ResourceId, clock) { }
     public override AccessToken GetToken(TokenRequestContext context, CancellationToken token) => GetTokenAsync(context, token).AsTask().GetAwaiter().GetResult();
     public override async ValueTask<AccessToken> GetTokenAsync(TokenRequestContext context, CancellationToken token)
     {
@@ -20,11 +23,12 @@ internal sealed class FactoryWorkloadCredential(TokenCredential inner, string te
             var version = claims.GetProperty("ver").GetString();
             var clientClaim = version switch { "1.0" => "appid", "2.0" => "azp", _ => throw new JsonException() };
             var clients = claims.EnumerateObject().Where(p => p.Name is "appid" or "azp").ToArray();
-            if (claims.GetProperty("oid").GetString() != binding.PrincipalId || claims.GetProperty("tid").GetString() != tenant
-                || clients.Length != 1 || clients[0].Name != clientClaim || clients[0].Value.GetString() != binding.ClientId
-                || !string.Equals(claims.GetProperty("xms_mirid").GetString(), binding.ResourceId, StringComparison.OrdinalIgnoreCase)
+            if (claims.GetProperty("oid").GetString() != principalId || claims.GetProperty("tid").GetString() != tenant
+                || clients.Length != 1 || clients[0].Name != clientClaim || clients[0].Value.GetString() != clientId
+                || !string.Equals(claims.GetProperty("xms_mirid").GetString(), resourceId, StringComparison.OrdinalIgnoreCase)
                 || access.ExpiresOn <= now || claims.GetProperty("exp").GetInt64() <= now.ToUnixTimeSeconds()
                 || claims.GetProperty("nbf").GetInt64() > now.ToUnixTimeSeconds()
+                || requireGuidV2Audience && version == "2.0" && !Guid.TryParseExact(claims.GetProperty("aud").GetString(), "D", out _)
                 || !AudienceMatches(claims.GetProperty("aud").GetString(), context.Scopes.Single(), version))
                 throw new JsonException();
         }

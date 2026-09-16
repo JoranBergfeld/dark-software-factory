@@ -7,7 +7,7 @@ This directory is the active Dark Software Factory implementation.
 - `src/Dsf.Core` — shared domain, contracts, runtime settings, product records, and charters.
 - `src/Dsf.FeatureCouncil` — Feature Council conveyor and stations.
 - `src/Dsf.Cli` — packaged `dsf` global tool; factory provisioning, charter commands, runtime forwarding.
-- `src/Dsf.Runtime` — deployed runtime host for `run`, `sweep`, `serve-orchestrator`, `serve-agent`, `poll-outcomes`, and isolated `serve-github-auth`, `serve-telemetry`, `serve-models`, `serve-source`.
+- `src/Dsf.Runtime` — deployed runtime host for `run`, `sweep`, `serve-orchestrator`, `serve-agent`, `poll-outcomes`, and isolated `serve-github-auth`, `serve-telemetry`, `serve-models`, `serve-source`, `serve-supplemental`.
 - `src/Dsf.ControlCenter` — governance web process (`dsf-control-center`).
 - `src/Dsf.AgentHost` — reusable source-agent host.
 - `src/Dsf.Testing` — deterministic test helpers; production projects must not reference it.
@@ -59,7 +59,7 @@ executables and require neither the SDK nor a separately installed .NET runtime.
 The CLI's build-only runtime dependency builds the matching runtime automatically,
 including for `dotnet run --project src/Dsf.Cli -- sweep --product <product>`.
 `eng/CliBundle.targets` publishes its dependency closure into `runtime/` and compiles
-the eleven provisioning entrypoints into self-contained ARM JSON under `assets/infra/`.
+the twelve provisioning entrypoints into self-contained ARM JSON under `assets/infra/`.
 Use one `-p:Version=<version>` for build, pack, and publish; when using `--no-build`,
 the configuration and version must match the preceding build.
 
@@ -71,6 +71,15 @@ Offline installation checks (no Azure/GitHub writes):
 ```
 
 ## Existing repository attachment review
+
+`dsf onboard decide supplemental --input selection.json` previews explicit
+FoundryIQ/WebIQ opt-in; `--approve <fingerprint>` prepares distinct source identities,
+narrow grants and actual `serve-supplemental` hosts from `onboard-supplemental.json`.
+`--verify-only` rechecks every selected source without creation retries. Azure-only
+needs none of these resources, and supplemental evidence never replaces fresh
+dedicated application telemetry. See
+[optional evidence sources](../docs/site/get-started/enable-optional-evidence-sources.md)
+for complete interactive/redirected workflows and source-administrator handoffs.
 
 The installed CLI includes `dsf onboard decide review --repo OWNER/REPO`.
 It uses effective GitHub CLI authentication plus the prepared owner App

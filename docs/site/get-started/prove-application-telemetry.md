@@ -7,6 +7,10 @@ creation, operator workspace access and successful role assignments are not proo
 The factory stays **Inactive**; this capability cannot gather through the conveyor,
 publish, activate, alter application diagnostics or supply synthetic evidence.
 
+[Optional FoundryIQ/WebIQ sources](enable-optional-evidence-sources.md) are checked
+separately. Their empty or plentiful results never replace this mandatory fresh
+application-telemetry gate.
+
 ## Supported boundary and prerequisites
 
 The immutable reviewed application boundary must explicitly include workspace-based

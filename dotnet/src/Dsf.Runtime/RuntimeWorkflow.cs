@@ -11,6 +11,9 @@ namespace Dsf.Runtime;
 /// </summary>
 internal static class RuntimeWorkflow
 {
+    internal static Task<SupplementalEvidence> ObserveSupplementalAsync(IFactorySupplementalEvidenceSource source,
+        SupplementalProofRequest request, CancellationToken token) => source.ReadAsync(request, token);
+
     internal static async Task<CharterEvidence> ReviewCharterAsync(FactorySourceAccess source, HttpClient http,
         TimeProvider clock, CancellationToken token)
     {

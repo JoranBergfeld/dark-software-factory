@@ -332,6 +332,7 @@ internal sealed partial class FactoryFoundationService(IAzureCliRunner azure, Ht
             result = await FactoryGitHubAuthorityService.InspectAsync(result, product, token);
             result = await FactoryTelemetryService.InspectAsync(result, product, clock, token);
             result = await FactoryModelsService.InspectAsync(result, product, clock, token);
+            result = await FactorySupplementalService.InspectAsync(result, product, token);
             return await FactorySourceService.InspectAsync(result, product, token);
         }
         catch (Exception e) when (e is ReservationStoreException or JsonException or InvalidOperationException)
