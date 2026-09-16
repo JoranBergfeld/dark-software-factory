@@ -11,19 +11,14 @@ internal sealed class FactoryManifestStore(OwnerReservationStore store)
         FactoryReservationIdentity identity, FactoryFoundationPointer pointer, string admittedPlanSha256, CancellationToken token)
     {
         var manifestValue = await RequiredAsync(ProductConfigurationKeys.FactoryManifest, token);
-        var manifest = FactoryReservationRecords.Parse<FactoryManifest>(manifestValue);
-        if (manifest.SchemaVersion != 1 || manifest.Kind != "decide-factory-manifest"
-            || manifest.Authority != "product-app-configuration" || manifest.Publication != "Inactive"
-            || manifest.Identity != identity || manifest.ProfilePin != pointer.ProfilePin
+        var profileValue = await RequiredAsync(ProductConfigurationKeys.FactoryProfile, token);
+        var manifest = FactoryGovernance.ReadInactiveManifest(
+            manifestValue, profileValue, identity.ProductKey, pointer.ProductEndpoint ?? throw new JsonException(),
+            pointer.ProfilePin ?? throw new JsonException());
+        if (manifest.Identity != identity
             || manifest.ReviewedPlanSha256 != admittedPlanSha256
             || manifest.PlanBytes is <= 0 or > FactoryReservationRecords.MaxPlanBytes
             || manifest.PlanChunks != (manifest.PlanBytes + FactoryReservationRecords.ChunkBytes - 1) / FactoryReservationRecords.ChunkBytes)
-            throw new JsonException();
-        var profileValue = await RequiredAsync(ProductConfigurationKeys.FactoryProfile, token);
-        var profile = FactoryReservationRecords.Parse<FactoryOnboardingProfile>(profileValue);
-        if (FactoryReservationRecords.Hash(profileValue) != pointer.ProfilePin || profile.SchemaVersion != 1
-            || profile.Profile != "onboard-decide-inactive-v1" || profile.FactoryId != identity.FactoryId
-            || profile.PlanFingerprint != identity.PlanFingerprint || profile.AllowedRepositoryMutations.Count != 0)
             throw new JsonException();
         using var stream = new MemoryStream();
         for (var i = 0; i < manifest.PlanChunks; i++)

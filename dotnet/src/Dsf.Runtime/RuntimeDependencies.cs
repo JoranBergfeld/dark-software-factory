@@ -40,6 +40,8 @@ public sealed record RuntimeDependencies(
     Func<RuntimeSettings, ISweepControlStore>? SweepControlStoreFactory = null,
     Func<RuntimeSettings, ISweepLease>? SweepLeaseFactory = null)
 {
+    internal IConfigurationSettingsGateway ConfigurationSettingsGateway { get; init; } = new AzureConfigurationSettingsGateway();
+
     /// <summary>Production dependencies resolved from the real process environment.</summary>
     public static RuntimeDependencies Production() => Production(CurrentEnvironment());
 

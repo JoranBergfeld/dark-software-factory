@@ -98,6 +98,7 @@ try
         ["AZURE_OPENAI_ENDPOINT"] = "https://unused.openai.azure.com",
         ["AZURE_OPENAI_DEPLOYMENT"] = "unused",
         ["AZURE_OPENAI_EMBEDDING_DEPLOYMENT"] = "unused",
+        ["AZURE_TOKEN_CREDENTIALS"] = "AzureCliCredential",
         ["DSF_CONFIRM_LIVE_FILING"] = "true",
     };
     foreach (var arguments in new[]
@@ -106,14 +107,21 @@ try
         new[] { "sweep", "--product", "packaging-smoke" },
         new[] { "poll-outcomes", "--product", "packaging-smoke", "--dry-run" },
         new[] { "serve-orchestrator", "--product", "packaging-smoke", "--loop" },
+        new[] { "sweep", "resume", "--product", "packaging-smoke" },
+        new[] { "sweep", "interval", "1", "--product", "packaging-smoke" },
+        new[] { "sweep", "pause", "--product", "packaging-smoke" },
     })
     {
-        var inactive = await RunWithEnvironment(inactiveEnvironment, arguments);
-        Require(inactive.ExitCode == 1 && inactive.Output.Contains("Onboarding factory is inactive", StringComparison.Ordinal),
-            $"Installed runtime did not enforce inactive admission: {inactive.Output}");
+        var inactive = arguments is ["sweep", "resume" or "interval" or "pause", ..]
+            ? await RunRuntimeWithEnvironment(inactiveEnvironment, arguments)
+            : await RunWithEnvironment(inactiveEnvironment, arguments);
+        Require(inactive.ExitCode == 1 && inactive.Output.Contains("Runtime admission denied:", StringComparison.Ordinal)
+            && inactive.Output.Contains("unreadable", StringComparison.Ordinal),
+            $"Installed runtime did not fail closed on unreadable governance: {inactive.Output}");
     }
-    Require(File.ReadAllText(Path.Combine(scratch.FullName, "azure.log")).Length == 0,
-        "Inactive installed runtime reached Azure authentication.");
+    var admissionReads = File.ReadAllLines(Path.Combine(scratch.FullName, "azure.log"));
+    Require(admissionReads.Length >= 7 && admissionReads.All(line => line.Contains("account get-access-token", StringComparison.Ordinal)),
+        "Installed admission must reach only the offline credential transport, never a resource operation.");
 
     foreach (var verb in new[] { "run", "sweep", "serve-orchestrator", "serve-agent", "poll-outcomes" })
     {
@@ -182,9 +190,21 @@ finally
 Task<(int ExitCode, string Output)> Run(params string[] arguments) =>
     RunWithEnvironment(new Dictionary<string, string>(), arguments);
 
-async Task<(int ExitCode, string Output)> RunWithEnvironment(IReadOnlyDictionary<string, string> environment, params string[] arguments)
+Task<(int ExitCode, string Output)> RunWithEnvironment(IReadOnlyDictionary<string, string> environment, params string[] arguments) =>
+    RunExecutable(cli, environment, arguments);
+
+Task<(int ExitCode, string Output)> RunRuntimeWithEnvironment(IReadOnlyDictionary<string, string> environment, params string[] arguments)
 {
-    var start = new ProcessStartInfo(cli)
+    var runtimeHost = Path.Combine(payload, "runtime", OperatingSystem.IsWindows() ? "dsf-runtime.exe" : "dsf-runtime");
+    return File.Exists(runtimeHost)
+        ? RunExecutable(runtimeHost, environment, arguments)
+        : RunExecutable("dotnet", environment, [Path.Combine(payload, "runtime", "dsf-runtime.dll"), .. arguments]);
+}
+
+async Task<(int ExitCode, string Output)> RunExecutable(
+    string executable, IReadOnlyDictionary<string, string> environment, string[] arguments)
+{
+    var start = new ProcessStartInfo(executable)
     {
         WorkingDirectory = scratch.FullName,
         UseShellExecute = false,
@@ -210,7 +230,7 @@ async Task<(int ExitCode, string Output)> RunWithEnvironment(IReadOnlyDictionary
     start.Environment["USERPROFILE"] = scratch.FullName;
     start.Environment["DSF_SMOKE_ASSET_ROOT"] = Path.Combine(payload, "assets", "infra");
     foreach (var (key, value) in environment) start.Environment[key] = value;
-    using var process = Process.Start(start) ?? throw new InvalidOperationException($"Could not launch {cli}");
+    using var process = Process.Start(start) ?? throw new InvalidOperationException($"Could not launch {executable}");
     using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
     var stdout = process.StandardOutput.ReadToEndAsync(timeout.Token);
     var stderr = process.StandardError.ReadToEndAsync(timeout.Token);
@@ -245,6 +265,11 @@ static int FakeAzure(string[] arguments)
     {
         Console.WriteLine("00000000-0000-0000-0000-000000000001");
         return 0;
+    }
+    if (command.StartsWith("account get-access-token", StringComparison.Ordinal))
+    {
+        Console.Error.WriteLine("Offline governance credential denied; no Azure access token is returned.");
+        return 1;
     }
     if (command.StartsWith("group create", StringComparison.Ordinal)
         || command.StartsWith("appconfig create", StringComparison.Ordinal))

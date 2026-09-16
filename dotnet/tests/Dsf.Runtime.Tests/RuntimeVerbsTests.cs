@@ -151,12 +151,14 @@ public sealed class RuntimeVerbsTests
     [Fact]
     public async Task A_running_scheduled_host_cannot_bypass_onboarding_admission_on_later_ticks()
     {
+        var configuration = RuntimeAdmissionTests.Onboarding();
         var controls = new ObservedAdmissionControls();
         var lease = new ScriptedSweepLease();
         var store = new RecordingRunStore();
         var filer = new RecordingIssueFiler();
-        var settings = Settings with { AppConfigEndpoint = "https://dsfo-11111111111111111111111111111111.azconfig.io" };
+        var settings = Settings with { AppConfigEndpoint = "https://dsfo-11111111111111111111111111111111.azconfig.io." };
         var dependencies = TestDependencies.Build(runStore: store, issueFiler: filer,
+            configurationSettingsGateway: configuration,
             sweepControlStoreFactory: _ => controls, sweepLeaseFactory: _ => lease,
             sourceAgentRosterReader: new RosterReader(["azuremonitor"]),
             evidenceGatherers: [new ScriptedEvidenceGatherer("azuremonitor", new EvidenceItem("azuremonitor", "incident-1", "checkout failures"))]);
@@ -171,6 +173,8 @@ public sealed class RuntimeVerbsTests
             Assert.Empty(filer.Filed);
         }
         finally { await host.StopAsync(); }
+        Assert.NotEmpty(configuration.Reads);
+        Assert.Empty(configuration.Writes);
     }
 
     private static async Task<string> WriteSignalAsync(string json)

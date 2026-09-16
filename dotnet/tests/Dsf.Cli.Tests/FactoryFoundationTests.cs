@@ -9,6 +9,72 @@ namespace Dsf.Cli.Tests;
 
 public sealed class FactoryFoundationTests
 {
+    [Theory]
+    [InlineData("missing-app-id")]
+    [InlineData("invalid-app-id")]
+    [InlineData("null-app-id")]
+    [InlineData("missing-date")]
+    [InlineData("invalid-date")]
+    [InlineData("old-date")]
+    [InlineData("future-date")]
+    [InlineData("contradictory-system-data")]
+    [InlineData("wrong-workspace")]
+    [InlineData("wrong-target")]
+    [InlineData("wrong-type")]
+    [InlineData("wrong-state")]
+    [InlineData("public-ingestion")]
+    public async Task Unproven_AppInsights_native_evidence_stays_unknown_without_reissue_or_secret_receipts(string damage)
+    {
+        var machine = new ReservationMachine(new ReservationTestStore());
+        var reviewed = await machine.Boundary.ReviewAsync();
+        var fingerprint = (string)reviewed.Plan["fingerprint"]!;
+        await machine.ReserveAsync(fingerprint);
+        var arm = new FoundationTransport(machine.Store)
+        { CompleteCreates = true, CompleteDeployment = true, InsightsDamage = damage, EnforceCorrelation = true };
+        machine.Boundary.Repository.ReservationHttp = new HttpClient(arm);
+
+        var (exit, result, terminal) = await machine.InvokeAsync("provision", "--reviewed-fingerprint", fingerprint);
+
+        Assert.Equal(1, exit);
+        Assert.Equal("Unknown", (string?)result["foundation"]?["state"]);
+        var operation = Assert.Single(result["foundation"]!["operations"]!.AsArray(),
+            o => ((string)o!["target"]!).Contains("/microsoft.insights/components/", StringComparison.Ordinal));
+        Assert.NotEqual("Completed", (string?)operation!["state"]);
+        Assert.NotEqual("Created", (string?)operation["disposition"]);
+        Assert.DoesNotContain("not-for-receipts", terminal.Output + machine.Store.Export());
+        Assert.DoesNotContain("secret-provider-detail", terminal.Output + machine.Store.Export());
+        var before = machine.Store.Export();
+        await machine.InvokeAsync("resume");
+        Assert.Equal(before, machine.Store.Export());
+        Assert.Equal(3, arm.Writes.Count);
+    }
+
+    [Fact]
+    public async Task AppInsights_native_200_creation_records_its_incarnation_without_claiming_telemetry_readiness()
+    {
+        var machine = new ReservationMachine(new ReservationTestStore());
+        var reviewed = await machine.Boundary.ReviewAsync();
+        var fingerprint = (string)reviewed.Plan["fingerprint"]!;
+        await machine.ReserveAsync(fingerprint);
+        var arm = new FoundationTransport(machine.Store)
+        { CompleteCreates = true, CompleteDeployment = true, EnforceCorrelation = true };
+        machine.Boundary.Repository.ReservationHttp = new HttpClient(arm);
+
+        var (exit, result, terminal) = await machine.InvokeAsync("provision", "--reviewed-fingerprint", fingerprint);
+
+        Assert.Equal(0, exit);
+        var operation = Assert.Single(result["foundation"]!["operations"]!.AsArray(),
+            o => ((string)o!["target"]!).Contains("/microsoft.insights/components/", StringComparison.Ordinal));
+        Assert.Equal(200, (int?)operation!["httpStatus"]);
+        Assert.Equal("Created", (string?)operation["disposition"]);
+        Assert.StartsWith("appinsights-app-id:887f4bfd-b5fd-40d7-9fc3-123456789abc;created:", (string?)operation["incarnation"]);
+        Assert.False(string.IsNullOrEmpty((string?)operation["providerRequestId"]));
+        Assert.False(string.IsNullOrEmpty((string?)operation["providerOperationId"]));
+        Assert.False(string.IsNullOrEmpty((string?)operation["providerCorrelationId"]));
+        Assert.Contains("factory telemetry connectivity", terminal.Output);
+        Assert.DoesNotContain("InstrumentationKey", terminal.Output + machine.Store.Export());
+    }
+
     [Fact]
     public async Task Concurrent_provisioners_dispatch_once_and_do_not_claim_rejected_local_operation_ids()
     {
@@ -623,6 +689,7 @@ public sealed class FactoryFoundationTests
         public string ResourceStatusCode { get; init; } = "Created";
         public bool CosmosNativeReceipts { get; init; }
         public bool DeploymentFails { get; init; }
+        public string? InsightsDamage { get; init; }
         private readonly Dictionary<string, JsonNode> created = new(StringComparer.OrdinalIgnoreCase);
         public List<string> Writes { get; } = [];
 
@@ -672,7 +739,8 @@ public sealed class FactoryFoundationTests
                             {
                                 ["provisioningOperation"] = "Create",
                                 ["provisioningState"] = DeploymentFails && ((string)record["target"]!).Contains("/components/", StringComparison.Ordinal) ? "Failed" : "Succeeded",
-                                ["statusCode"] = ResourceStatusCode,
+                                ["statusCode"] = ((string)record["target"]!).Contains("/microsoft.insights/components/", StringComparison.Ordinal)
+                                    ? "OK" : ResourceStatusCode,
                                 ["trackingId"] = ResourceDamage == "invalid-tracking-id" ? "secret-provider-detail" : Guid.NewGuid().ToString(),
                                 ["targetResource"] = new JsonObject { ["id"] = (string)record["target"]! },
                             },
@@ -734,6 +802,42 @@ public sealed class FactoryFoundationTests
                             ["_rid"] = Convert.ToBase64String(Guid.NewGuid().ToByteArray()),
                             ["_ts"] = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
                         };
+                    }
+                    if (target.Contains("/microsoft.insights/components/", StringComparison.Ordinal))
+                    {
+                        // Components_CreateOrUpdate 2020-02-02 returns 200 and native properties, not systemData.
+                        created[target] = new JsonObject
+                        {
+                            ["id"] = target,
+                            ["type"] = "Microsoft.Insights/components",
+                            ["kind"] = "web",
+                            ["properties"] = new JsonObject
+                            {
+                                ["AppId"] = "887f4bfd-b5fd-40d7-9fc3-123456789abc",
+                                ["CreationDate"] = "2026-09-15T23:00:00Z",
+                                ["provisioningState"] = "Succeeded",
+                                ["WorkspaceResourceId"] = target.Replace("/microsoft.insights/components/", "/microsoft.operationalinsights/workspaces/", StringComparison.Ordinal)
+                                    .Replace("-insights", "-logs", StringComparison.Ordinal),
+                                ["InstrumentationKey"] = "not-for-receipts",
+                                ["publicNetworkAccessForIngestion"] = "Disabled",
+                                ["publicNetworkAccessForQuery"] = "Disabled",
+                            },
+                        };
+                        var native = created[target]["properties"]!.AsObject();
+                        if (InsightsDamage == "missing-app-id") native.Remove("AppId");
+                        if (InsightsDamage == "invalid-app-id") native["AppId"] = "secret-provider-detail";
+                        if (InsightsDamage == "null-app-id") native["AppId"] = null;
+                        if (InsightsDamage == "missing-date") native.Remove("CreationDate");
+                        if (InsightsDamage == "invalid-date") native["CreationDate"] = new JsonObject { ["secret-provider-detail"] = true };
+                        if (InsightsDamage == "old-date") native["CreationDate"] = "2000-01-01T00:00:00Z";
+                        if (InsightsDamage == "future-date") native["CreationDate"] = "2099-01-01T00:00:00Z";
+                        if (InsightsDamage == "contradictory-system-data")
+                            created[target]["systemData"] = new JsonObject { ["createdAt"] = "2000-01-01T00:00:00Z" };
+                        if (InsightsDamage == "wrong-workspace") native["WorkspaceResourceId"] = "/subscriptions/other/resourcegroups/application";
+                        if (InsightsDamage == "wrong-target") created[target]["id"] = "/subscriptions/other/resourcegroups/application";
+                        if (InsightsDamage == "wrong-type") created[target]["type"] = "Microsoft.Other/components";
+                        if (InsightsDamage == "wrong-state") native["provisioningState"] = "Updating";
+                        if (InsightsDamage == "public-ingestion") native["publicNetworkAccessForIngestion"] = "Enabled";
                     }
                 }
                 return JsonReply(HttpStatusCode.Created, new JsonObject

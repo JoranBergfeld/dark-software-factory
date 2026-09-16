@@ -337,6 +337,7 @@ public sealed class VendorSourceProtocolTests
         var runner = new SourceHostRunner();
         var dependencies = RuntimeDependencies.Production(env) with
         {
+            ConfigurationSettingsGateway = TestDependencies.PersistedRuntimeConfiguration.Greenfield(),
             WebHostRunner = runner,
             SourceIntegrationRegistry = new SourceIntegrationRegistry(new Dictionary<string, ISourceIntegration>
             {

@@ -107,6 +107,11 @@ SDK writes with the recorded client request ID.
 Receipts distinguish actual creation, rejection and unproven outcomes. Fresh
 provider incarnation metadata, creation receipts, principal IDs and Cosmos
 resource IDs are used where available; tags and matching names never suffice.
+For AppInsights API `2020-02-02`, the native HTTP 200 receipt uses `AppId`
+and fresh `CreationDate`, bound to the recorded deployment operation, exact
+resource and approved factory workspace. Missing, malformed, older or contradictory
+evidence remains unknown; native HTTP 200 is not general adoption permission.
+No instrumentation keys or connection strings enter these ownership receipts.
 Unsupported or incomplete evidence remains `Unknown`. Initial ARM responses
 accepted asynchronously are recorded before read-only polling; no PUT is retried.
 Incomplete/paginated deployment evidence stays held for richer recovery rather
@@ -140,11 +145,28 @@ runs, acquiring sweep leases, composing mutation-capable services or polling
 outcomes. HTTP run/gather requests receive 403. Even dry runs are denied in this
 foundation-only release; later supervised previews need their own approved gates.
 
-The reserved `dsfo-<factory-id>.azconfig.io` endpoint namespace is a denial-only
-backstop when a pin is removed. It never proves ownership or grants permissions.
-Deleting/corrupting profile data or setting a manual live-filing flag cannot
-downgrade this foundation to greenfield behavior. Existing greenfield gates remain
-unchanged.
+Every admission reads current unlabelled product configuration using the runtime
+identity's authenticated Azure SDK connection. The product manifest is the trusted
+registration: its factory/product/endpoint binding and pinned inactive profile
+must agree, including version, publication policy and empty mutation permissions.
+An environment pin can constrain that registration, never replace it. Missing,
+malformed, unreadable or inconsistent authority denies work; nothing is cached as
+continuing authorization. Equivalent DNS spellings resolve to the same store.
+
+Greenfield compatibility requires the **complete existing product record**
+published by `dsf new`: repository, taxonomy, all four source scopes and the
+product-keyed threshold, read successfully from that product's authenticated store.
+Repository configuration must match when supplied. Empty stores, endpoint names
+and absent optional markers are not greenfield registration. Any factory governance
+record, configured pin or reserved endpoint hint forbids this legacy fallback;
+onboarding never seeds the legacy registration as an escape path. Existing
+registered greenfield factories retain their manual filing gates and behavior.
+
+The source host rechecks admission on every gather; periodic ticks and resumed
+runs use the same gate. Legacy `dsf-runtime sweep pause|resume|interval|status` also require
+admission before accessing their control store. For inactive foundation status,
+use `onboard decide status`, not the legacy sweep controls. No grants are added
+to make a failed governance read succeed.
 
 Installed packages include `assets/infra/onboard-foundation.json` and the matching
 runtime bundle. Neither a checkout nor Bicep is needed on the operator machine.

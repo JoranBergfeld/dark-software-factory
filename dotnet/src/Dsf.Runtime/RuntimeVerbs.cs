@@ -75,7 +75,7 @@ public static class RuntimeVerbs
         ArgumentNullException.ThrowIfNull(signal);
         ArgumentNullException.ThrowIfNull(dependencies);
 
-        RuntimeWorkflow.EnsureWorkAdmitted(settings, env);
+        await RuntimeWorkflow.EnsureWorkAdmittedAsync(settings, dependencies, cancellationToken, env);
         RuntimeWorkflow.EnsureLiveFilingConfirmed(signal.DryRun, env);
 
         var services = ComposeServices(settings, dependencies);
@@ -104,7 +104,7 @@ public static class RuntimeVerbs
         ArgumentNullException.ThrowIfNull(settings);
         ArgumentNullException.ThrowIfNull(dependencies);
 
-        RuntimeWorkflow.EnsureWorkAdmitted(settings, env);
+        await RuntimeWorkflow.EnsureWorkAdmittedAsync(settings, dependencies, cancellationToken, env);
         RuntimeWorkflow.EnsureLiveFilingConfirmed(dryRun, env);
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -211,7 +211,7 @@ public static class RuntimeVerbs
         ArgumentNullException.ThrowIfNull(settings);
         ArgumentNullException.ThrowIfNull(env);
         ArgumentNullException.ThrowIfNull(dependencies);
-        RuntimeWorkflow.EnsureWorkAdmitted(settings, env);
+        await RuntimeWorkflow.EnsureWorkAdmittedAsync(settings, dependencies, cancellationToken, env);
 
         if (dryRun && live)
         {
@@ -413,7 +413,7 @@ public static class RuntimeVerbs
         {
             try
             {
-                RuntimeWorkflow.EnsureWorkAdmitted(settings);
+                await RuntimeWorkflow.EnsureWorkAdmittedAsync(settings, dependencies, cancellationToken);
                 var evidence = await integration.GatherAsync(card.Kind, settings.Product, cancellationToken);
                 return Results.Ok(new { kind = card.Kind, product = settings.Product, evidence });
             }
@@ -450,7 +450,7 @@ public static class RuntimeVerbs
     /// exits the process non-zero, instead of letting the loop swallow it forever
     /// as a per-tick failure and keep the process running anyway.
     /// </summary>
-    public static Task ServeOrchestratorAsync(
+    public static async Task ServeOrchestratorAsync(
         RuntimeSettings settings,
         RuntimeDependencies dependencies,
         string host,
@@ -462,12 +462,12 @@ public static class RuntimeVerbs
         ArgumentNullException.ThrowIfNull(dependencies);
         if (sweepInterval is not null)
         {
-            RuntimeWorkflow.EnsureWorkAdmitted(settings, env);
+            await RuntimeWorkflow.EnsureWorkAdmittedAsync(settings, dependencies, cancellationToken, env);
             RuntimeWorkflow.EnsureLiveFilingConfirmed(dryRun: false, env);
         }
 
         var app = BuildOrchestratorHost(settings, dependencies, host, port, sweepInterval, env);
-        return dependencies.WebHostRunner.RunAsync(app, cancellationToken);
+        await dependencies.WebHostRunner.RunAsync(app, cancellationToken);
     }
 
     /// <summary>Builds and serves the source agent host until cancelled.</summary>

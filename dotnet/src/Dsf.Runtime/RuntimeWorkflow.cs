@@ -1,3 +1,5 @@
+using System.Text.Json;
+using Dsf.Core.Onboarding;
 using Dsf.Core.Runtime;
 using Dsf.FeatureCouncil.Conveyor;
 
@@ -9,20 +11,81 @@ namespace Dsf.Runtime;
 /// </summary>
 internal static class RuntimeWorkflow
 {
-    public static void EnsureWorkAdmitted(RuntimeSettings settings, IReadOnlyDictionary<string, string?>? env = null)
+    private static readonly JsonSerializerOptions RegistrationJson = new() { AllowDuplicateProperties = false };
+
+    public static async Task EnsureWorkAdmittedAsync(
+        RuntimeSettings settings, RuntimeDependencies dependencies, CancellationToken cancellationToken,
+        IReadOnlyDictionary<string, string?>? env = null)
     {
-        // The reserved endpoint namespace is a denial-only backstop if a pin is removed.
-        // Neither an endpoint name nor an operator live flag can establish ownership or readiness.
-        if (settings.IntegrationSettings.ContainsKey(RuntimeIntegrationSettings.FactoryProfilePin)
-            || env?.ContainsKey(RuntimeIntegrationSettings.FactoryProfilePin) == true
-            || Uri.TryCreate(settings.AppConfigEndpoint, UriKind.Absolute, out var endpoint)
-                && endpoint.Host.Length == 49
-                && endpoint.Host.StartsWith("dsfo-", StringComparison.OrdinalIgnoreCase)
-                && endpoint.Host.EndsWith(".azconfig.io", StringComparison.OrdinalIgnoreCase)
-                && Guid.TryParseExact(endpoint.Host.AsSpan(5, 32), "N", out _))
+        cancellationToken.ThrowIfCancellationRequested();
+        var values = new Dictionary<string, string>(StringComparer.Ordinal);
+        string endpoint;
+        try
+        {
+            endpoint = FactoryGovernance.NormalizeEndpoint(settings.AppConfigEndpoint);
+            await foreach (var (key, value) in dependencies.ConfigurationSettingsGateway.ListAsync(
+                endpoint, ProductConfigurationKeys.NoLabel, cancellationToken))
+                if (!values.TryAdd(key, value)) throw new JsonException();
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
             throw new RuntimeVerbException(
-                "Onboarding factory is inactive. Runtime work, including dry-run repository side effects, is not admitted. "
-                + "A missing, invalid or unreadable profile never grants greenfield permissions; manual live flags cannot activate it.");
+                "Runtime admission denied: required product registration/profile governance is unreadable or invalid. Provider details withheld.");
+        }
+        var configuredPin = settings.IntegrationSettings.GetValueOrDefault(RuntimeIntegrationSettings.FactoryProfilePin);
+        var hasPin = settings.IntegrationSettings.ContainsKey(RuntimeIntegrationSettings.FactoryProfilePin)
+            || env?.ContainsKey(RuntimeIntegrationSettings.FactoryProfilePin) == true;
+        var envPin = env?.GetValueOrDefault(RuntimeIntegrationSettings.FactoryProfilePin);
+        if (values.Keys.Any(key => key.StartsWith("dsf/factory/", StringComparison.Ordinal)))
+        {
+            try
+            {
+                var manifest = FactoryGovernance.ReadInactiveManifest(
+                    values[ProductConfigurationKeys.FactoryManifest], values[ProductConfigurationKeys.FactoryProfile],
+                    settings.Product, endpoint, configuredPin);
+                if (settings.IntegrationSettings.ContainsKey(RuntimeIntegrationSettings.FactoryProfilePin) && configuredPin != manifest.ProfilePin
+                    || env?.ContainsKey(RuntimeIntegrationSettings.FactoryProfilePin) == true && envPin != manifest.ProfilePin)
+                    throw new JsonException();
+            }
+            catch (Exception exception) when (exception is JsonException or KeyNotFoundException or InvalidOperationException)
+            {
+                throw new RuntimeVerbException(
+                    "Onboarding admission denied: required product manifest/profile governance is missing, invalid or inconsistent. No legacy fallback.");
+            }
+            throw new RuntimeVerbException("Onboarding factory is inactive. Verified product governance denies runtime work, including dry-run side effects.");
+        }
+        // Hints can only remove permissions. A successful authenticated legacy registration read is still required.
+        var host = new Uri(endpoint).Host;
+        if (hasPin || host.Length == 49 && host.StartsWith("dsfo-", StringComparison.Ordinal)
+            && host.EndsWith(".azconfig.io", StringComparison.Ordinal) && Guid.TryParseExact(host.AsSpan(5, 32), "N", out _))
+            throw new RuntimeVerbException("Onboarding factory is inactive: required product manifest/profile governance is missing. No legacy fallback.");
+        try
+        {
+            var repository = Read<string>(ProductConfigurationKeys.GitHubRepository);
+            if (repository.Split('/') is not [ { Length: > 0 }, { Length: > 0 } ]
+                || !string.IsNullOrEmpty(settings.GitHubRepository)
+                    && !repository.Equals(settings.GitHubRepository, StringComparison.OrdinalIgnoreCase))
+                throw new JsonException();
+            var taxonomy = Read<Dictionary<string, string?[]?>>(ProductConfigurationKeys.LabelTaxonomy);
+            if (taxonomy.Any(pair => string.IsNullOrWhiteSpace(pair.Key)
+                || pair.Value is null || pair.Value.Any(string.IsNullOrWhiteSpace)))
+                throw new JsonException();
+            _ = Read<string>(ProductConfigurationKeys.FoundryIqScope);
+            if (Read<string?[]>(ProductConfigurationKeys.SentryProjects).Any(string.IsNullOrWhiteSpace)
+                || Read<string?[]>(ProductConfigurationKeys.GrafanaDashboards).Any(string.IsNullOrWhiteSpace))
+                throw new JsonException();
+            _ = Read<string>(ProductConfigurationKeys.AzureMonitorScope);
+            var threshold = Read<double>(ProductConfigurationKeys.Threshold(settings.Product));
+            if (!double.IsFinite(threshold) || threshold is < 0 or > 1) throw new JsonException();
+        }
+        catch (Exception exception) when (exception is JsonException or KeyNotFoundException or InvalidOperationException)
+        {
+            throw new RuntimeVerbException(
+                "Runtime admission denied: no complete trusted legacy product registration or onboarding governance. No default greenfield permissions.");
+        }
+
+        T Read<T>(string key) => string.IsNullOrWhiteSpace(values[key]) ? throw new JsonException()
+            : JsonSerializer.Deserialize<T>(values[key], RegistrationJson) ?? throw new JsonException();
     }
 
     public static void EnsureLiveFilingConfirmed(bool dryRun, IReadOnlyDictionary<string, string?>? env)

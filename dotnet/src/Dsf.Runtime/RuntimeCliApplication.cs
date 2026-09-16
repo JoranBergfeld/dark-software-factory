@@ -469,7 +469,13 @@ public static class RuntimeCliApplication
         string message;
         try
         {
+            await RuntimeWorkflow.EnsureWorkAdmittedAsync(settings, dependencies, cancellationToken, env);
             message = await operation(settings, dependencies.SweepControlStoreFor(settings), cancellationToken);
+        }
+        catch (RuntimeVerbException exception)
+        {
+            stderr.WriteLine($"[dsf] error: {exception.Message}");
+            return Failure;
         }
         catch (RuntimeConfigurationException exception)
         {

@@ -116,7 +116,28 @@ internal sealed partial class FactoryFoundationService
             if (!string.Equals(resource.GetProperty("id").GetString(), intent.Target, StringComparison.OrdinalIgnoreCase))
                 throw new JsonException();
             string? incarnation = null;
-            if (resource.TryGetProperty("systemData", out var systemData))
+            if (intent.ApiVersion == "2020-02-02"
+                && intent.Target.Contains("/providers/microsoft.insights/components/", StringComparison.Ordinal))
+            {
+                var native = resource.GetProperty("properties");
+                if (!Guid.TryParse(native.GetProperty("AppId").GetString(), out var appId)) throw new JsonException();
+                var createdAt = native.GetProperty("CreationDate").GetDateTimeOffset();
+                if (appId == Guid.Empty || createdAt < intent.StartedAt || createdAt > clock.GetUtcNow()
+                    || resource.GetProperty("type").GetString() != "Microsoft.Insights/components"
+                    || native.GetProperty("provisioningState").GetString() != "Succeeded"
+                    || !string.Equals(native.GetProperty("WorkspaceResourceId").GetString(),
+                        assets.Group + "/providers/microsoft.operationalinsights/workspaces/" + assets.Prefix + "-logs",
+                        StringComparison.OrdinalIgnoreCase)
+                    || native.GetProperty("publicNetworkAccessForIngestion").GetString() != "Disabled"
+                    || native.GetProperty("publicNetworkAccessForQuery").GetString() != "Disabled"
+                    || resource.TryGetProperty("systemData", out var supplemental)
+                        && (supplemental.GetProperty("createdAt").GetDateTimeOffset() != createdAt
+                            || supplemental.TryGetProperty("lastModifiedAt", out var changed) && changed.GetDateTimeOffset() != createdAt))
+                    throw new ReservationStoreException(FactoryReservationState.Unknown,
+                        "AppInsights native creation evidence is contradictory; no ownership adoption or telemetry readiness.");
+                incarnation = "appinsights-app-id:" + appId.ToString("D") + ";created:" + createdAt.ToUniversalTime().ToString("O");
+            }
+            else if (resource.TryGetProperty("systemData", out var systemData))
             {
                 var createdAt = systemData.GetProperty("createdAt").GetDateTimeOffset();
                 if (createdAt < intent.StartedAt
