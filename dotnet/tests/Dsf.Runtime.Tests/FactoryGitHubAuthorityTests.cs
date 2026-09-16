@@ -14,6 +14,56 @@ namespace Dsf.Runtime.Tests;
 public sealed class FactoryGitHubAuthorityTests
 {
     [Theory]
+    [InlineData("Partial")]
+    [InlineData("Unknown")]
+    [InlineData("Blocked")]
+    [InlineData("Canceled")]
+    [InlineData("missing-receipt")]
+    public async Task Reverification_hold_during_GitHub_access_prevents_releasing_an_inflight_or_subsequent_token(string outcome)
+    {
+        using var transport = new AuthorityTransport();
+        using var http = new HttpClient(transport);
+        var (configuration, manifest) = AuthorityConfiguration(transport);
+        await using var app = RuntimeVerbs.BuildGitHubAuthenticationHost(Settings(manifest, transport),
+            TestDependencies.Build() with { GitHubAuthorityHttp = http,
+                GitHubAuthorityCredential = new SyntheticCredential(), GitHubAuthorityClock = new AuthorityClock() }, "127.0.0.1", 0);
+        await app.StartAsync();
+        try
+        {
+            using var client = new HttpClient { BaseAddress = new Uri(app.Urls.Single()) };
+            CodeHeaders(client.DefaultRequestHeaders, transport, manifest);
+            using var before = await client.PostAsync("/tokens/contents", null);
+            Assert.True(before.IsSuccessStatusCode, await before.Content.ReadAsStringAsync());
+            var history = JsonNode.Parse(configuration.Values[ProductConfigurationKeys.FactoryGitHubAuthority])!["proof"]!.DeepClone();
+            transport.OnRepositoryRead = () =>
+            {
+                transport.OnRepositoryRead = null;
+                var current = JsonNode.Parse(configuration.Values[ProductConfigurationKeys.FactoryGitHubAuthority])!;
+                if (outcome == "missing-receipt")
+                    configuration.Values.Remove(configuration.Values.Keys.Single(k =>
+                        k.Contains("/github-operations/", StringComparison.Ordinal) && k.EndsWith("/0001", StringComparison.Ordinal)));
+                else
+                {
+                    current["state"] = outcome;
+                    current["stage"] = "host-verification";
+                }
+                configuration.Values[ProductConfigurationKeys.FactoryGitHubAuthority] = current.ToJsonString();
+            };
+
+            using var inflight = await client.PostAsync("/tokens/contents", null);
+            Assert.Equal(HttpStatusCode.Forbidden, inflight.StatusCode);
+            Assert.DoesNotContain(AuthorityTransport.InstallationToken, await inflight.Content.ReadAsStringAsync());
+            Assert.Contains("no token released", await inflight.Content.ReadAsStringAsync());
+            transport.Paths.Clear();
+            using var subsequent = await client.PostAsync("/tokens/contents", null);
+            Assert.Equal(HttpStatusCode.Forbidden, subsequent.StatusCode);
+            Assert.All(transport.Paths, path => Assert.Equal("/kv", path));
+            Assert.True(JsonNode.DeepEquals(history, JsonNode.Parse(configuration.Values[ProductConfigurationKeys.FactoryGitHubAuthority])!["proof"]));
+        }
+        finally { await app.StopAsync(); }
+    }
+
+    [Theory]
     [InlineData("binding-delete")]
     [InlineData("binding-client")]
     [InlineData("grant-corrupt")]
@@ -456,6 +506,7 @@ internal sealed class AuthorityTransport : HttpMessageHandler
     public bool BroaderRequestedPermissions { get; init; }
     public string RepositoryName { get; init; } = "acme/renamed";
     public string DefaultBranch { get; init; } = "trunk";
+    public Action? OnRepositoryRead { get; set; }
     public List<string> Paths { get; } = [];
     public IReadOnlyDictionary<string, string> Configuration { get; set; } = new Dictionary<string, string>();
     public static Dictionary<string, string> ReadFixture() => JsonSerializer.Deserialize<Dictionary<string, string>>(
@@ -488,6 +539,7 @@ internal sealed class AuthorityTransport : HttpMessageHandler
                 id = (string)Authority["destinationSecretUri"]!, attributes = new { enabled = true } });
         }
         Assert.Equal("api.github.com", request.RequestUri.Host);
+        if (path == "/repositories/913") OnRepositoryRead?.Invoke();
         var installation = new { id = 42, app_id = 7, account = new { id = 81, login = "acme", type = "Organization" },
             repository_selection = "selected", suspended_at = (string?)null,
             permissions = new { metadata = "read", contents = "read", issues = "write" } };

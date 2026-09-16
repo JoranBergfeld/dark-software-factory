@@ -40,18 +40,8 @@ public static partial class RuntimeVerbs
                     throw new JsonException();
                 var credential = dependencies.GitHubAuthorityCredential
                     ?? new ManagedIdentityCredential(ManagedIdentityId.FromUserAssignedClientId(settings.ManagedIdentityClientId));
-                var values = new Dictionary<string, string>(StringComparer.Ordinal);
                 var configuration = new AzureConfigurationSettingsGateway(credential, dependencies.GitHubAuthorityHttp);
-                await foreach (var (key, value) in configuration.ListAsync(
-                    settings.ProductEndpoint, ProductConfigurationKeys.NoLabel, context.RequestAborted))
-                    if (!values.TryAdd(key, value)) throw new JsonException();
-                var manifest = FactoryGovernance.ReadInactiveManifest(
-                    values.GetValueOrDefault(ProductConfigurationKeys.FactoryManifest),
-                    values.GetValueOrDefault(ProductConfigurationKeys.FactoryProfile),
-                    settings.Product, settings.ProductEndpoint, settings.ProfilePin);
-                var authority = FactoryGitHubAuthorityValidation.ReadPreparation(manifest, values);
-                if (authority.AuthClientId != settings.ManagedIdentityClientId) throw new JsonException();
-                FactoryGitHubAuthorityValidation.ValidateObservation(authority);
+                var (manifest, authority, values) = await ReadPreparationAsync(configuration, context.RequestAborted);
                 if (issueReadToken)
                 {
                     FactoryGitHubAuthorityValidation.ReadCompletedEffects(authority, values);
@@ -71,6 +61,12 @@ public static partial class RuntimeVerbs
                 var (proof, access) = await verifier.AcquireReadTokenAsync(authority, context.RequestAborted);
                 if (issueReadToken && access is not null)
                 {
+                    var (currentManifest, current, currentValues) = await ReadPreparationAsync(configuration, context.RequestAborted);
+                    FactoryGitHubAuthorityValidation.ReadCompletedEffects(current, currentValues);
+                    FactoryGitHubAuthorityValidation.ValidateVerified(current);
+                    if (JsonSerializer.Serialize(current, FactoryGitHubJson.Options) != JsonSerializer.Serialize(authority, FactoryGitHubJson.Options)
+                        || JsonSerializer.Serialize(currentManifest, FactoryGitHubJson.Options) != JsonSerializer.Serialize(manifest, FactoryGitHubJson.Options))
+                        throw new JsonException("Authority changed while acquiring access.");
                     context.Response.Headers.CacheControl = "no-store";
                     return Results.Json(new { token = access, expires_at = proof.TokenExpiresAt,
                         repository_ids = new[] { authority.RepositoryId }, permissions = proof.EffectivePermissions });
@@ -82,8 +78,24 @@ public static partial class RuntimeVerbs
                 or Azure.Identity.AuthenticationFailedException or ArgumentException)
             {
                 return Results.Json(new { state = "Blocked", operation = "product-governance", responsibleAdmin = "factory operator",
-                    detail = "Current pinned inactive governance is unavailable or invalid; no GitHub access." }, statusCode: 403);
+                    detail = "Current pinned inactive governance is unavailable or invalid; no token released." }, statusCode: 403);
             }
+        }
+
+        async Task<(FactoryManifest Manifest, FactoryGitHubAuthority Authority, Dictionary<string, string> Values)> ReadPreparationAsync(
+            AzureConfigurationSettingsGateway configuration, CancellationToken token)
+        {
+            var values = new Dictionary<string, string>(StringComparer.Ordinal);
+            await foreach (var (key, value) in configuration.ListAsync(settings.ProductEndpoint, ProductConfigurationKeys.NoLabel, token))
+                if (!values.TryAdd(key, value)) throw new JsonException();
+            var manifest = FactoryGovernance.ReadInactiveManifest(
+                values.GetValueOrDefault(ProductConfigurationKeys.FactoryManifest),
+                values.GetValueOrDefault(ProductConfigurationKeys.FactoryProfile),
+                settings.Product, settings.ProductEndpoint, settings.ProfilePin);
+            var authority = FactoryGitHubAuthorityValidation.ReadPreparation(manifest, values);
+            if (authority.AuthClientId != settings.ManagedIdentityClientId) throw new JsonException();
+            FactoryGitHubAuthorityValidation.ValidateObservation(authority);
+            return (manifest, authority, values);
         }
     }
 

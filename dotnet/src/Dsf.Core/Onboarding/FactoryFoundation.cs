@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Dsf.Core.Onboarding;
 
 public enum FactoryFoundationState { Inactive, Partial, Blocked, Failed, Canceled, Unknown }
@@ -29,6 +31,8 @@ public sealed record FoundationOperation(
     public string? RoleDefinitionId { get; init; }
     public string? RoleScope { get; init; }
     public string? Condition { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ConditionVersion { get; init; }
 }
 
 public sealed record FactoryOnboardingProfile(

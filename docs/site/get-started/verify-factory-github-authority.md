@@ -164,6 +164,11 @@ observe access without complete effect receipts, but returns no token and writes
 no readiness state. The CLI re-reads and validates complete provenance before
 publishing `Verified`; incomplete recovery observation is not token readiness.
 Older incomplete records stay held, without automatic backfill or replacement.
+The runtime repeats current governance and complete-provenance validation after
+GitHub access checks, immediately before releasing a read token. A persisted hold
+or changed/missing receipt during those checks prevents token release, even when
+GitHub access itself still succeeds. Already-issued tokens retain their GitHub
+expiry; this is not a distributed lock or token-revocation transaction.
 
 The owner registry and archived admission plan remain unchanged. There is no
 cross-store/ARM transaction or universal create-only ARM fencing. Names and
@@ -186,7 +191,25 @@ dsf onboard decide github --verify-only \
   --subscription 22222222-2222-2222-2222-222222222222 --json
 ```
 
-This rechecks the same bindings, native policy and host incarnation, obtains
+Before external verification, the CLI conditionally writes a non-authorizing
+`Partial` / `host-verification` state while retaining the previous proof as
+history. Only confirmation of that exact pending write permits checks to start.
+Cancellation or a rejected final-outcome write therefore leaves the confirmed
+hold in place, not the old `Verified` authorization. If the initial hold cannot
+be confirmed, verification does not start and no revocation is asserted:
+the factory App Configuration administrator must reconcile access/current state.
+
+Both original role-assignment IDs are read directly using
+[ARM Get By ID, API 2022-04-01](https://learn.microsoft.com/en-us/rest/api/authorization/role-assignments/get-by-id?view=rest-authorization-2022-04-01).
+Current principal/type, role definition, scope, condition, condition version,
+creator and creation incarnation must match the recorded bindings. Nullable
+`conditionVersion` is captured in grant receipts; omitted null values preserve
+existing receipt hashes. Missing or changed/recreated grants block; denied,
+unreadable or malformed evidence remains `Unknown`, naming the exact GET and
+factory Azure RBAC grantor. Inherited or replacement grants that still allow
+key/configuration access are not substitutes, and no grant is recreated/adopted.
+
+Verification also rechecks the same base bindings, native policy and host incarnation, obtains
 deployed durable-ID evidence, reviews current automation/labels, and only then
 updates proof conditionally. It issues no infrastructure writes
 or repository mutations; it does mint a fresh restricted token. It cannot repair

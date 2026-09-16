@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -8,6 +9,51 @@ namespace Dsf.Cli;
 
 internal sealed partial class FactoryGitHubAuthorityService
 {
+    private async Task VerifyCurrentGrantsAsync(FactoryReservationIdentity identity, CancellationToken token)
+    {
+        var failures = new List<ReservationStoreException>();
+        foreach (var grant in operations.Where(o => o.RoleScope is not null))
+        {
+            var operation = $"GET {grant.Target}?api-version={grant.ApiVersion}";
+            const string recovery = " Responsible administrator: factory Azure RBAC grantor. Historical receipts/access are not current binding proof; no adoption or recreation.";
+            try
+            {
+                using var response = await ArmAsync(HttpMethod.Get, grant.Target, grant.ApiVersion, null, identity, null, token);
+                if (response.StatusCode == HttpStatusCode.NotFound)
+                    throw new ReservationStoreException(FactoryReservationState.Blocked, operation + ": approved assignment is missing." + recovery);
+                if (response.StatusCode != HttpStatusCode.OK) throw new JsonException();
+                using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(token));
+                var current = document.RootElement;
+                var properties = current.GetProperty("properties");
+                if (!string.Equals(current.GetProperty("id").GetString(), grant.ResourceId, StringComparison.OrdinalIgnoreCase)
+                    || !string.Equals(properties.GetProperty("principalId").GetString(), grant.PrincipalId, StringComparison.OrdinalIgnoreCase)
+                    || properties.GetProperty("principalType").GetString() != "ServicePrincipal"
+                    || !string.Equals(properties.GetProperty("roleDefinitionId").GetString(), grant.RoleDefinitionId, StringComparison.OrdinalIgnoreCase)
+                    || !string.Equals(properties.GetProperty("scope").GetString(), grant.RoleScope, StringComparison.OrdinalIgnoreCase)
+                    || properties.GetProperty("createdBy").GetString() != identity.AzureActorId
+                    || properties.GetProperty("createdOn").GetDateTimeOffset()
+                        != DateTimeOffset.Parse(grant.Incarnation!, CultureInfo.InvariantCulture)
+                    || OptionalString(properties, "condition") != grant.Condition
+                    || OptionalString(properties, "conditionVersion") != grant.ConditionVersion)
+                    throw new ReservationStoreException(FactoryReservationState.Blocked, operation + ": approved assignment was recreated or its binding changed." + recovery);
+            }
+            catch (ReservationStoreException e) { failures.Add(e); }
+            catch (Exception e) when (e is JsonException or InvalidOperationException or FormatException or KeyNotFoundException
+                or HttpRequestException or OwnerReservationStore.AuthenticationFailedException
+                || e is OperationCanceledException && !token.IsCancellationRequested)
+            {
+                failures.Add(new ReservationStoreException(FactoryReservationState.Unknown,
+                    operation + ": current assignment evidence is unavailable or malformed." + recovery));
+            }
+        }
+        if (failures.Count != 0)
+            throw new ReservationStoreException(failures.Any(f => f.State == FactoryReservationState.Unknown)
+                ? FactoryReservationState.Unknown : FactoryReservationState.Blocked, string.Join(" ", failures.Select(f => f.Message)));
+    }
+
+    private static string? OptionalString(JsonElement value, string name) =>
+        value.TryGetProperty(name, out var property) && property.ValueKind != JsonValueKind.Null ? property.GetString() : null;
+
     private async Task VerifyKeyIsolationAsync(FactoryReservationIdentity identity, FactoryGitHubAuthority preview, CancellationToken token)
     {
         var scope = preview.DestinationVaultId + "/secrets/github-app-private-key";
@@ -274,6 +320,7 @@ internal sealed partial class FactoryGitHubAuthorityService
         using var receipt = JsonDocument.Parse(await response.Content.ReadAsStringAsync(token));
         var actual = receipt.RootElement.GetProperty("properties");
         var created = actual.GetProperty("createdOn").GetDateTimeOffset();
+        var conditionVersion = OptionalString(actual, "conditionVersion");
         if (!string.Equals(receipt.RootElement.GetProperty("id").GetString(), target, StringComparison.OrdinalIgnoreCase)
             || !string.Equals(actual.GetProperty("roleDefinitionId").GetString(), definition, StringComparison.OrdinalIgnoreCase)
             || !string.Equals(actual.GetProperty("scope").GetString(), scope, StringComparison.OrdinalIgnoreCase)
@@ -281,10 +328,11 @@ internal sealed partial class FactoryGitHubAuthorityService
             || actual.GetProperty("principalType").GetString() != "ServicePrincipal"
             || actual.GetProperty("createdBy").GetString() != identity.AzureActorId
             || created < operation.StartedAt || created > clock.GetUtcNow()
+            || conditionVersion is not (null or "2.0")
             || actual.TryGetProperty("condition", out var condition) && condition.ValueKind != JsonValueKind.Null)
             throw new JsonException();
         operation = operation with { State = FoundationOperationState.Completed, Disposition = FoundationResourceDisposition.Created,
-            ResourceId = target, Incarnation = created.ToString("O"), HttpStatus = 201,
+            ResourceId = target, Incarnation = created.ToString("O"), ConditionVersion = conditionVersion, HttpStatus = 201,
             ProviderRequestId = HeaderId("x-ms-request-id"), ProviderCorrelationId = HeaderId("x-ms-correlation-request-id"),
             ResponseDate = response.Headers.Date };
         await store.WriteAsync(record.Key, FactoryReservationRecords.Serialize(operation), record.ETag, token);

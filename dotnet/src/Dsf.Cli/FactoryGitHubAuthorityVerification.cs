@@ -27,6 +27,17 @@ internal sealed partial class FactoryGitHubAuthorityService
             var completed = FactoryGitHubAuthorityValidation.ReadCompletedEffects(authority, values);
             manifestIntentConfirmed = true;
             operations.AddRange(completed);
+            authority = authority with { State = GitHubAuthorityState.Partial, Stage = "host-verification",
+                Detail = "Re-verification pending; previous proof is historical and does not authorize workload tokens. " + Risk };
+            try { await SaveAsync(store, token); }
+            catch (ReservationStoreException)
+            {
+                return Result(admission, token.IsCancellationRequested ? GitHubAuthorityState.Canceled : GitHubAuthorityState.Unknown,
+                    "PUT " + admission.Foundation!.ProductEndpoint + "/kv/" + Uri.EscapeDataString(ProductConfigurationKeys.FactoryGitHubAuthority)
+                    + ": Hold not confirmed; no external verification started and no revocation asserted. "
+                    + "Factory App Configuration administrator must reconcile the conditional write; inspect current authority before retrying.");
+            }
+            await VerifyCurrentGrantsAsync(admission.Identity!, token);
             await VerifyBaseBindingsAsync(admission, authority, token);
             await VerifyKeyIsolationAsync(admission.Identity!, authority, token);
             await VerifyNativeHostPolicyAsync(admission.Identity!, authority.HostResourceId!, token);

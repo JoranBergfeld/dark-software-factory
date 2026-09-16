@@ -8,6 +8,190 @@ namespace Dsf.Cli.Tests;
 
 public sealed class FactoryGitHubAuthorityWorkflowTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Unconfirmed_reverification_hold_never_starts_provider_checks_or_claims_revocation(bool responseLost)
+    {
+        var (machine, arm) = await FoundationAsync();
+        var preview = await machine.InvokeAsync("github", Preparation);
+        using var transport = new AuthorityWorkflowTransport(arm) { Complete = true };
+        machine.Boundary.Repository.ReservationHttp = new HttpClient(transport);
+        Assert.Equal(0, (await machine.InvokeAsync("github", [.. Preparation, "--approve",
+            (string)preview.Result["gitHubAuthority"]!["approvalFingerprint"]!])).Exit);
+        var before = arm.Product.Writes.Count;
+        if (responseLost) arm.Product.LoseResponseForKey = "dsf/factory/github-authority";
+        else arm.Product.RejectKey = "dsf/factory/github-authority";
+
+        var result = await machine.InvokeAsync("github", "--verify-only");
+        var current = await machine.InvokeAsync("status");
+
+        Assert.Equal("Unknown", (string?)result.Result["state"]);
+        Assert.Contains("Hold not confirmed", result.Terminal.Output);
+        Assert.Contains("no revocation asserted", result.Terminal.Output);
+        Assert.Equal(responseLost ? "Partial" : "Verified", (string?)current.Result["gitHubAuthority"]!["state"]);
+        Assert.Equal(before + 1, arm.Product.Writes.Count);
+        Assert.Empty(transport.GrantReads);
+        Assert.Equal(1, transport.Verifications);
+    }
+
+    [Fact]
+    public async Task Canceled_reverification_keeps_the_confirmed_pending_hold_and_historical_proof()
+    {
+        var (machine, arm) = await FoundationAsync();
+        var preview = await machine.InvokeAsync("github", Preparation);
+        using var transport = new AuthorityWorkflowTransport(arm) { Complete = true };
+        using var http = new HttpClient(transport);
+        machine.Boundary.Repository.ReservationHttp = http;
+        var initial = await machine.InvokeAsync("github", [.. Preparation, "--approve",
+            (string)preview.Result["gitHubAuthority"]!["approvalFingerprint"]!]);
+        Assert.Equal(0, initial.Exit);
+        using var cancellation = new CancellationTokenSource();
+        var caller = new ReservationMachine(machine.Store) { Token = cancellation.Token };
+        caller.Boundary.Repository.ReservationHttp = http;
+        transport.OnGrantRead = cancellation.Cancel;
+
+        var result = await caller.InvokeAsync("github", "--verify-only");
+        var current = await machine.InvokeAsync("status");
+
+        Assert.Equal(130, result.Exit);
+        Assert.Equal("Canceled", (string?)result.Result["state"]);
+        Assert.Equal("Partial", (string?)current.Result["gitHubAuthority"]!["state"]);
+        Assert.True(JsonNode.DeepEquals(initial.Result["gitHubAuthority"]!["proof"], current.Result["gitHubAuthority"]!["proof"]));
+        Assert.Equal(2, transport.Grants.Count);
+    }
+
+    [Theory]
+    [InlineData("unchanged", 1, "Verified")]
+    [InlineData("unchanged-time-format", 1, "Verified")]
+    [InlineData("unchanged-version", 2, "Verified")]
+    [InlineData("missing", 1, "Blocked")]
+    [InlineData("missing", 2, "Blocked")]
+    [InlineData("recreated", 1, "Blocked")]
+    [InlineData("principal", 1, "Blocked")]
+    [InlineData("principal-type", 2, "Blocked")]
+    [InlineData("role", 2, "Blocked")]
+    [InlineData("scope", 2, "Blocked")]
+    [InlineData("condition", 1, "Blocked")]
+    [InlineData("condition-version", 2, "Blocked")]
+    [InlineData("creator", 1, "Blocked")]
+    [InlineData("missing-incarnation", 2, "Unknown")]
+    [InlineData("malformed-incarnation", 1, "Unknown")]
+    [InlineData("denied", 2, "Unknown")]
+    [InlineData("malformed", 1, "Unknown")]
+    public async Task Reverification_requires_current_exact_grant_bindings_and_original_incarnations(string damage, int index, string state)
+    {
+        var (machine, arm) = await FoundationAsync();
+        var preview = await machine.InvokeAsync("github", Preparation);
+        using var transport = new AuthorityWorkflowTransport(arm)
+        { Complete = true, GrantConditionVersion = damage == "unchanged-version" ? "2.0" : null };
+        machine.Boundary.Repository.ReservationHttp = new HttpClient(transport);
+        var initial = await machine.InvokeAsync("github", [.. Preparation, "--approve",
+            (string)preview.Result["gitHubAuthority"]!["approvalFingerprint"]!]);
+        Assert.Equal(0, initial.Exit);
+        var grant = initial.Result["gitHubOperations"]![index]!;
+        var id = (string)grant["target"]!;
+        if (damage == "unchanged-version") Assert.Equal("2.0", (string?)grant["conditionVersion"]);
+        if (damage == "missing") transport.RemoveResource(id);
+        else if (damage is "denied" or "malformed")
+            transport.GrantReplies[id] = (damage == "denied" ? HttpStatusCode.Forbidden : HttpStatusCode.OK, "{secret-provider-detail");
+        else transport.ChangeResource(id, value =>
+        {
+            var properties = value["properties"]!;
+            if (damage == "unchanged-time-format") properties["createdOn"] = "2026-09-16T01:00:00+02:00";
+            if (damage == "recreated") properties["createdOn"] = "2026-09-15T23:00:01Z";
+            if (damage == "principal") properties["principalId"] = "ffffffff-ffff-ffff-ffff-ffffffffffff";
+            if (damage == "principal-type") properties["principalType"] = "Group";
+            if (damage == "role") properties["roleDefinitionId"] = "/subscriptions/" + BoundaryPlanFixture.Subscription
+                + "/providers/microsoft.authorization/roledefinitions/ffffffff-ffff-ffff-ffff-ffffffffffff";
+            if (damage == "scope") properties["scope"] = "/subscriptions/" + BoundaryPlanFixture.Subscription;
+            if (damage == "condition") properties["condition"] = "unapproved condition";
+            if (damage == "condition-version") properties["conditionVersion"] = "2.0";
+            if (damage == "creator") properties["createdBy"] = "ffffffff-ffff-ffff-ffff-ffffffffffff";
+            if (damage == "missing-incarnation") properties.AsObject().Remove("createdOn");
+            if (damage == "malformed-incarnation") properties["createdOn"] = "unverifiable";
+        });
+        var before = machine.Store.Export();
+
+        var result = await machine.InvokeAsync("github", "--verify-only");
+        var inspected = await machine.InvokeAsync("status");
+
+        Assert.Equal(state, (string?)result.Result["gitHubAuthority"]!["state"]);
+        Assert.Equal(state, (string?)inspected.Result["gitHubAuthority"]!["state"]);
+        Assert.Equal(2, transport.GrantReads.Count);
+        if (state != "Verified")
+        {
+            Assert.Contains("GET " + id, result.Terminal.Output);
+            Assert.Contains("factory Azure RBAC grantor", result.Terminal.Output);
+            Assert.True(JsonNode.DeepEquals(initial.Result["gitHubAuthority"]!["proof"], inspected.Result["gitHubAuthority"]!["proof"]));
+            Assert.Equal(1, transport.Verifications);
+        }
+        Assert.DoesNotContain("secret-provider-detail", result.Terminal.Output + arm.Product.Export());
+        Assert.Equal(before, machine.Store.Export());
+        Assert.Equal(2, transport.Grants.Count);
+        Assert.Equal(2, transport.Deployments.Count);
+        Assert.Single(transport.Copies);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Reverification_holds_old_authority_when_the_final_outcome_cannot_be_persisted(bool missingGrants)
+    {
+        var (machine, arm) = await FoundationAsync();
+        var preview = await machine.InvokeAsync("github", Preparation);
+        using var transport = new AuthorityWorkflowTransport(arm) { Complete = true };
+        machine.Boundary.Repository.ReservationHttp = new HttpClient(transport);
+        var initial = await machine.InvokeAsync("github", [.. Preparation, "--approve",
+            (string)preview.Result["gitHubAuthority"]!["approvalFingerprint"]!]);
+        Assert.Equal(0, initial.Exit);
+        if (missingGrants)
+            foreach (var grant in initial.Result["gitHubOperations"]!.AsArray().Where(o => o!["roleScope"] is not null))
+                transport.RemoveResource((string)grant!["target"]!);
+        transport.OnGrantRead = () => arm.Product.RejectKey = "dsf/factory/github-authority";
+
+        var result = await machine.InvokeAsync("github", "--verify-only");
+        var current = await machine.InvokeAsync("status");
+
+        Assert.Equal("Unknown", (string?)result.Result["state"]);
+        Assert.Equal("Partial", (string?)current.Result["gitHubAuthority"]!["state"]);
+        Assert.Equal("host-verification", (string?)current.Result["gitHubAuthority"]!["stage"]);
+        Assert.True(JsonNode.DeepEquals(initial.Result["gitHubAuthority"]!["proof"], current.Result["gitHubAuthority"]!["proof"]));
+        Assert.Contains("GitHub authentication", current.Result["foundation"]!["pendingStages"]!.ToJsonString());
+        Assert.Equal(2, transport.Grants.Count);
+        Assert.Single(transport.Copies);
+    }
+
+    [Fact]
+    public async Task Missing_current_authentication_grants_block_reverification_despite_working_deployed_access()
+    {
+        var (machine, arm) = await FoundationAsync();
+        var preview = await machine.InvokeAsync("github", Preparation);
+        using var transport = new AuthorityWorkflowTransport(arm) { Complete = true };
+        machine.Boundary.Repository.ReservationHttp = new HttpClient(transport);
+        var initial = await machine.InvokeAsync("github", [.. Preparation, "--approve",
+            (string)preview.Result["gitHubAuthority"]!["approvalFingerprint"]!]);
+        Assert.Equal(0, initial.Exit);
+        var grants = initial.Result["gitHubOperations"]!.AsArray().Where(o => o!["roleScope"] is not null)
+            .Select(o => (string)o!["target"]!).ToArray();
+        Assert.Equal(2, grants.Length);
+        foreach (var id in grants) transport.RemoveResource(id);
+        var ownerBefore = machine.Store.Export();
+
+        var result = await machine.InvokeAsync("github", "--verify-only");
+
+        Assert.Equal("Blocked", (string?)result.Result["gitHubAuthority"]!["state"]);
+        Assert.Equal(1, result.Exit);
+        Assert.All(grants, id => Assert.Contains(id, transport.GrantReads));
+        Assert.All(grants, id => Assert.Contains(id, result.Terminal.Output));
+        Assert.Equal("Verified", (string?)result.Result["gitHubAuthority"]!["proof"]!["state"]);
+        Assert.Equal("Blocked", (string?)(await machine.InvokeAsync("status")).Result["gitHubAuthority"]!["state"]);
+        Assert.Single(transport.Copies);
+        Assert.Equal(2, transport.Grants.Count);
+        Assert.Equal(2, transport.Deployments.Count);
+        Assert.Equal(ownerBefore, machine.Store.Export());
+    }
+
     [Fact]
     public async Task Lost_receipt_visibility_during_observation_does_not_promote_authority()
     {
@@ -697,10 +881,24 @@ public sealed class FactoryGitHubAuthorityWorkflowTests
         public List<JsonNode> Copies { get; } = [];
         public List<JsonNode> Deployments { get; } = [];
         public List<JsonNode> Grants { get; } = [];
+        public List<string> GrantReads { get; } = [];
+        public Action? OnGrantRead { get; set; }
+        public string? GrantConditionVersion { get; init; }
+        public Dictionary<string, (HttpStatusCode Status, string Body)> GrantReplies { get; } = [];
         private readonly Dictionary<string, JsonNode> resources = [];
+        public void RemoveResource(string id) => Assert.True(resources.Remove(id));
+        public void ChangeResource(string id, Action<JsonNode> change) => change(resources[id]);
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
         {
             var path = request.RequestUri!.AbsolutePath;
+            if (request.Method == HttpMethod.Get && path.Contains("/providers/microsoft.authorization/roleassignments/", StringComparison.Ordinal))
+            {
+                GrantReads.Add(path);
+                OnGrantRead?.Invoke();
+                token.ThrowIfCancellationRequested();
+                if (GrantReplies.TryGetValue(path, out var reply))
+                    return new(reply.Status) { Content = new StringContent(reply.Body, Encoding.UTF8, "application/json") };
+            }
             if (HideCopyReceipt && request.Method == HttpMethod.Get && Uri.UnescapeDataString(path).Contains("/github-operations/", StringComparison.Ordinal)
                 && Uri.UnescapeDataString(path).EndsWith("/0000", StringComparison.Ordinal))
                 return new(HttpStatusCode.NotFound);
@@ -795,6 +993,7 @@ public sealed class FactoryGitHubAuthorityWorkflowTests
                 grant["id"] = path;
                 grant["properties"]!["createdOn"] = "2026-09-15T23:00:00Z";
                 grant["properties"]!["createdBy"] = BoundaryPlanFixture.Principal;
+                grant["properties"]!["conditionVersion"] = GrantConditionVersion;
                 grant["properties"]!["scope"] = Fault == "role-wrong-scope" ? "/subscriptions/unapproved"
                     : path.Split("/providers/microsoft.authorization/roleassignments/")[0];
                 resources[path] = grant;

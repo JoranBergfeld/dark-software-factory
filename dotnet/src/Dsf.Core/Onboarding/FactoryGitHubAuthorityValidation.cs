@@ -132,6 +132,7 @@ public static class FactoryGitHubAuthorityValidation
         {
             var role = operations[index];
             if (role.RoleScope != scope || role.RoleDefinitionId != roles + definition || role.Condition is not null
+                || role.ConditionVersion is not (null or "2.0")
                 || role.PrincipalId != authority.AuthPrincipalId || role.LogicalIdentity != "factory:github-auth"
                 || role.ResourceId != role.Target || !role.Target.StartsWith(scope + "/providers/microsoft.authorization/roleassignments/", StringComparison.Ordinal)
                 || !IsGuid(role.Target.Split('/').Last()) || !DateTimeOffset.TryParse(role.Incarnation, CultureInfo.InvariantCulture, DateTimeStyles.None, out var created)
