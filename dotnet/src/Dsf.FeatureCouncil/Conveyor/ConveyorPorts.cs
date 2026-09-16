@@ -96,6 +96,10 @@ public interface IConfidenceThresholdReader
 /// factory without a configured learning store still synthesizes proposals
 /// exactly as before, just blind to any prior verdict its own recurring intents
 /// have already received.
+/// <paramref name="EvaluationModels"/> is required only for the explicit
+/// onboarding-preview profile: embedding, synthesis/grounding/lenses and three
+/// independently configured native jurors use its observed workload results,
+/// never the greenfield model client or validation-juror roster.
 /// </summary>
 public sealed record ConveyorServices(
     string Product,
@@ -112,7 +116,8 @@ public sealed record ConveyorServices(
     string ProductMaturity = "high",
     int DeliberationRounds = 2,
     TimeSpan? JuryTimeout = null,
-    IProblemIdentityResolver? ProblemIdentityResolver = null)
+    IProblemIdentityResolver? ProblemIdentityResolver = null,
+    Dsf.Core.Onboarding.IFactoryModelWorkloads? EvaluationModels = null)
 {
     public IRunStore RunStore { get; } = RunStore ?? throw new ArgumentNullException(nameof(RunStore));
 
@@ -144,8 +149,8 @@ public sealed record ConveyorServices(
         DeliberationLenses ?? ModelDeliberationLens.Default();
 
     /// <summary>
-    /// The explicitly configured independent jury. An absent roster fails S5;
-    /// the deliberation model never substitutes for an unconfigured juror.
+    /// The greenfield independent jury. An absent roster fails S5; onboarding
+    /// instead composes its real jurors from the evaluation context's model routes.
     /// </summary>
     public IReadOnlyList<IValidationJuror> ValidationJurors { get; } =
         ValidationJurors ?? [];

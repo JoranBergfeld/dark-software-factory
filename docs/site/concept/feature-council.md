@@ -19,14 +19,15 @@ it drops is logged with a reason.
 ## Responsibilities
 
 The Council runs as a seven-station line (the conveyor). Each station has one
-job and hands the run to the next:
+job and hands the run to the next. These defaults describe greenfield operation;
+the explicit onboarding evaluation profile below does not authorize delivery.
 
 - **S1 Triage** normalizes a sweep into a scoped run and debounces duplicates.
   The orchestrator's in-process loop owns scheduled intake; there is no inbound
   signal queue in the .NET runtime.
-- **S2 Investigation** dispatches the product's enabled source agents in
-  parallel and collects their structured evidence. A source that is down or
-  disabled contributes nothing and says so. Coverage is never invented.
+- **S2 Investigation** collects structured evidence from every selected source.
+  A missing or failed selected source fails investigation, rather than silently
+  contributing nothing. An available source can honestly return no observations.
 - **S3 Synthesis** clusters related evidence across source kinds into candidate
   proposals, retaining contributing evidence references and source kinds.
   It does not decide whether a proposal is worth building.
@@ -185,6 +186,58 @@ that three different model families judged a real proposal, or that production
 filed an issue. [Issue #183](https://github.com/JoranBergfeld/dark-software-factory/issues/183)
 requires a separate live/staging manual sweep, an observed autonomous tick, and
 the resulting GitHub issue. See [Operate it](../get-started/operate.md).
+
+## Proposal-only onboarding evaluation interface
+
+`ConveyorLine.RunAsync` also accepts the explicit `OnboardingPreview` profile,
+with `DryRun = true` and a required `CouncilEvaluationContext`. This library
+interface is not a runtime admission capability, a readiness proof, or a CLI
+onboarding-completion command. The default `Greenfield` profile is unchanged.
+
+The context carries the adopted charter, complete source analysis and unknowns,
+selected application scope, original observation provenance, five reviewed model
+routes, and intended lens/round/threshold configuration. The line pins its exact
+hash as `EvaluationRevision` and rejects missing or changed inputs. Callers remain
+responsible for current authenticated source, charter, telemetry, supplemental,
+model and storage authority; structural context validation is not authorization.
+
+The profile uses the existing `IFactoryModelWorkloads` interface, supplied through
+`ConveyorServices.EvaluationModels`. S3 asynchronously embeds every supplied
+observation, rejects omitted/duplicated/invented groups, and consumes structured
+native synthesis into actual proposal title, body and cited claims. A model can
+honestly produce no candidate. S4 asks the model to check semantic support and
+counterevidence against original observations, retaining typed checks, verbatim
+excerpts and limitations. Citation existence alone cannot pass that gate.
+
+S5 runs every configured real lens and all three native-family jurors, retaining
+completed rounds and individual results through the existing run-store seam.
+All reasoning receives adopted intent and uncertainty. Unanimous GO, either
+split, and unanimous NO-GO remain distinct complete evaluations; Creation
+maturity does not override their proposal-only disposition.
+
+Every fully evaluated proposal carries `IntendedPublication`: synthesized
+title/body, supporting observations, semantic checks, uncertainty, deliberation,
+individual jury results and deterministic disposition. Its only intended label
+is `dsf:proposal`, with no assignee or delivery handoff. A GO reaches S6/S7 and
+also records that shape in `PreviewedIssues`, without calling a filer. Split and
+NO-GO stop after the saved S5 checkpoint and keep the shape on the proposal.
+No path activates a factory or creates a GitHub issue.
+
+Serialized run state retains the new context, model observations, synthesis,
+grounding, review and publication fields. Model observations bind workload route,
+configuration, actual response model and output hash; each call also records its
+input hash and evaluation step. Prompts are bounded to 32,768 characters, native
+text outputs to 8,192, supplied observations to 32, and rendered bodies to 60,000;
+overflow fails explicitly rather than truncating evidence.
+
+`Previewed` alone is not readiness: an empty run can reach that legacy terminal
+status without any candidate. Early triage termination, unsupported claims,
+incomplete judgments, provider failures and failed persistence must not qualify.
+Provider exception details are withheld from onboarding audits and typed errors.
+Continuation can retain durably completed rounds/jurors, but this interface does
+not establish safe replay of an in-flight or unconfirmed external call. Runtime
+composition must provide current authority, protected persistence, dispatch
+accounting and a separately validated revision-bound readiness proof.
 
 **See also:** the [loop overview](the-loop.md), the next phase
 [Creation phase](creation.md), and the decision-path redesign in

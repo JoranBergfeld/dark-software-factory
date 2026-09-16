@@ -22,7 +22,8 @@ public sealed class S5Council : IStation
                 throw new InvalidOperationException("S5 jury timeout must be positive and at most ten minutes");
             }
 
-            var jurors = services.ValidationJurors;
+            var jurors = run.Profile == ConveyorProfile.OnboardingPreview
+                ? OnboardingEvaluation.Jurors(run, services, run.Id) : services.ValidationJurors;
             if (jurors.Count != 3 || jurors.Any(juror => juror is null || string.IsNullOrWhiteSpace(juror.Name))
                 || jurors.Select(juror => juror.Name).Distinct(StringComparer.Ordinal).Count() != 3)
             {
@@ -30,6 +31,14 @@ public sealed class S5Council : IStation
             }
 
             var threshold = await services.ConfidenceThresholdReader.ReadThresholdAsync(cancellationToken);
+            if (run.Profile == ConveyorProfile.OnboardingPreview)
+            {
+                var intended = OnboardingEvaluation.Context(run).Judgment;
+                if (intended.Rounds != services.DeliberationRounds || intended.Threshold != threshold
+                    || !intended.Lenses.Select(l => (l.Name, l.Weight))
+                        .SequenceEqual(services.DeliberationLenses.Select(l => (l.Name, l.Weight))))
+                    throw new EvaluationException("IntendedJudgmentConfigurationChanged");
+            }
             foreach (var proposal in run.Proposals)
             {
                 try
@@ -38,7 +47,7 @@ public sealed class S5Council : IStation
                 }
                 catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
                 {
-                    RecordError(proposal, exception);
+                    RecordError(proposal, run, exception);
                     throw;
                 }
             }
@@ -51,7 +60,9 @@ public sealed class S5Council : IStation
             else if (run.Proposals.Any(proposal => proposal.Verdict == ProposalVerdict.Escalate))
             {
                 run.Status = RunStatus.Escalated;
-                run.Record(StationName, "escalated: low creation maturity or split jury requires human review.");
+                run.Record(StationName, run.Profile == ConveyorProfile.OnboardingPreview
+                    ? "escalated: split jury requires human review; no delivery handoff."
+                    : "escalated: low creation maturity or split jury requires human review.");
             }
 
             run.Record(StationName,
@@ -62,7 +73,7 @@ public sealed class S5Council : IStation
         {
             foreach (var proposal in run.Proposals.Where(proposal => proposal.Verdict == ProposalVerdict.Pending))
             {
-                RecordError(proposal, exception);
+                RecordError(proposal, run, exception);
             }
 
             run.Status = RunStatus.Error;
@@ -79,13 +90,18 @@ public sealed class S5Council : IStation
         Proposal proposal, ConveyorRun run, ConveyorServices services, double threshold, CancellationToken cancellationToken)
     {
         var lenses = services.DeliberationLenses;
+        var jurors = run.Profile == ConveyorProfile.OnboardingPreview
+            ? OnboardingEvaluation.Jurors(run, services, proposal.Id) : services.ValidationJurors;
+        if (run.Profile == ConveyorProfile.OnboardingPreview) SemanticGrounding.RequireSupported(proposal, run);
         var evidence = proposal.ClusterEvidence.Count > 0 ? proposal.ClusterEvidence
             : run.Evidence.Where(item => proposal.SourceKinds.Contains(item.SourceKind)
                 && proposal.EvidenceReferences.Contains(item.Reference)).ToArray();
-        var jurorNames = services.ValidationJurors.Select(juror => juror.Name).ToArray();
-        var models = services.ValidationJurors.Select(juror => juror.Model).OfType<Dsf.Core.Runtime.JurorModelSettings>().ToArray();
+        var jurorNames = jurors.Select(juror => juror.Name).ToArray();
+        var models = jurors.Select(juror => juror.Model).OfType<Dsf.Core.Runtime.JurorModelSettings>().ToArray();
         var review = proposal.CouncilReview ?? new CouncilReview
         {
+            Profile = run.Profile,
+            EvaluationRevision = run.Profile == ConveyorProfile.OnboardingPreview ? OnboardingEvaluation.Revision(run) : null,
             Evidence = evidence,
             Threshold = threshold,
             ProductMaturity = services.ProductMaturity,
@@ -95,10 +111,15 @@ public sealed class S5Council : IStation
         };
         proposal.CouncilReview = review;
         if (review.Evidence.Count == 0 || !review.Evidence.ToHashSet().SetEquals(evidence)
-            || !review.JurorNames.SequenceEqual(jurorNames) || !review.Models.SequenceEqual(models))
+            || !review.JurorNames.SequenceEqual(jurorNames) || !review.Models.SequenceEqual(models)
+            || review.Profile != run.Profile
+            || run.Profile == ConveyorProfile.OnboardingPreview && (review.EvaluationRevision != OnboardingEvaluation.Revision(run)
+                || review.Threshold != threshold || review.RoundsRequested != services.DeliberationRounds))
         {
             throw new InvalidOperationException("S5 checkpoint evidence or jury configuration is incomplete or changed");
         }
+        if (run.Profile == ConveyorProfile.OnboardingPreview)
+            OnboardingEvaluation.ValidateReview(run, review, requireComplete: false);
 
         if (review.JuryVerdicts.Count > 3
             || review.JuryVerdicts.Any(verdict => verdict is null || string.IsNullOrWhiteSpace(verdict.Rationale)
@@ -124,14 +145,16 @@ public sealed class S5Council : IStation
         {
             if (review.Outcome is not (ProposalVerdict.Proceed or ProposalVerdict.Escalate or ProposalVerdict.Kill)
                 || review.Rounds.Count != review.RoundsRequested || review.Recommendation is null
-                || review.Outcome != JuryVerdictRules.Decide(review.ProductMaturity, review.JuryVerdicts))
+                || review.Outcome != CouncilReview.Decide(run.Profile, review.ProductMaturity, review.JuryVerdicts))
             {
                 throw new InvalidOperationException("S5 checkpoint has no complete typed council outcome");
             }
 
             ValidateRecommendation(review);
-            proposal.Verdict = JuryVerdictRules.Decide(services.ProductMaturity, review.JuryVerdicts);
+            proposal.Verdict = CouncilReview.Decide(run.Profile, services.ProductMaturity, review.JuryVerdicts);
             proposal.CouncilReview = review with { Outcome = proposal.Verdict, ProductMaturity = services.ProductMaturity };
+            if (run.Profile == ConveyorProfile.OnboardingPreview)
+                proposal.IntendedPublication = OnboardingPublication.Preview(proposal, run);
             return;
         }
 
@@ -141,7 +164,10 @@ public sealed class S5Council : IStation
             var verdicts = new List<LensVerdict>();
             foreach (var lens in lenses)
             {
-                verdicts.Add(await lens.DeliberateAsync(proposal, run, prior, services.ModelClient, cancellationToken));
+                var model = run.Profile == ConveyorProfile.OnboardingPreview
+                    ? OnboardingEvaluation.Model(run, services, $"deliberation:{proposal.Id}:{round + 1}:{lens.Name}")
+                    : services.ModelClient;
+                verdicts.Add(await lens.DeliberateAsync(proposal, run, prior, model, cancellationToken));
             }
 
             ValidateRound(verdicts, lenses);
@@ -164,7 +190,7 @@ public sealed class S5Council : IStation
                 $"proposal '{proposal.Id}' lens '{verdict.LensName}' position={verdict.Position} rationale: {verdict.Rationale}");
         }
 
-        foreach (var juror in services.ValidationJurors)
+        foreach (var juror in jurors)
         {
             if (review.JuryVerdicts.Any(verdict => verdict.JurorName == juror.Name))
             {
@@ -180,7 +206,7 @@ public sealed class S5Council : IStation
             }
             catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
             {
-                throw new InvalidOperationException($"juror '{juror.Name}' failed: {exception.Message}", exception);
+                throw new InvalidOperationException($"juror '{juror.Name}' failed: {OnboardingEvaluation.ErrorDetail(run, exception)}", exception);
             }
 
             if (verdict is null || verdict.JurorName != juror.Name || string.IsNullOrWhiteSpace(verdict.Rationale)
@@ -196,8 +222,10 @@ public sealed class S5Council : IStation
                 $"proposal '{proposal.Id}' juror '{verdict.JurorName}' position={verdict.Position} rationale: {verdict.Rationale}");
         }
 
-        proposal.Verdict = JuryVerdictRules.Decide(services.ProductMaturity, review.JuryVerdicts);
+        proposal.Verdict = CouncilReview.Decide(run.Profile, services.ProductMaturity, review.JuryVerdicts);
         proposal.CouncilReview = review with { Outcome = proposal.Verdict, ProductMaturity = services.ProductMaturity };
+        if (run.Profile == ConveyorProfile.OnboardingPreview)
+            proposal.IntendedPublication = OnboardingPublication.Preview(proposal, run);
         run.Record(StationName,
             $"proposal '{proposal.Id}' confidence={proposal.Confidence:F2} verdict={proposal.Verdict}"
             + (synthesis.Disagreement ? " (lenses disagreed)" : "") + ".");
@@ -229,13 +257,13 @@ public sealed class S5Council : IStation
         }
     }
 
-    private static void RecordError(Proposal proposal, Exception exception)
+    private static void RecordError(Proposal proposal, ConveyorRun run, Exception exception)
     {
         proposal.Verdict = ProposalVerdict.Error;
         proposal.CouncilReview = (proposal.CouncilReview ?? new CouncilReview()) with
         {
             Outcome = ProposalVerdict.Error,
-            FailureReason = exception.Message,
+            FailureReason = OnboardingEvaluation.ErrorDetail(run, exception),
         };
     }
 }
