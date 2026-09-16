@@ -75,6 +75,7 @@ public static class RuntimeVerbs
         ArgumentNullException.ThrowIfNull(signal);
         ArgumentNullException.ThrowIfNull(dependencies);
 
+        RuntimeWorkflow.EnsureWorkAdmitted(settings, env);
         RuntimeWorkflow.EnsureLiveFilingConfirmed(signal.DryRun, env);
 
         var services = ComposeServices(settings, dependencies);
@@ -103,6 +104,7 @@ public static class RuntimeVerbs
         ArgumentNullException.ThrowIfNull(settings);
         ArgumentNullException.ThrowIfNull(dependencies);
 
+        RuntimeWorkflow.EnsureWorkAdmitted(settings, env);
         RuntimeWorkflow.EnsureLiveFilingConfirmed(dryRun, env);
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -209,6 +211,7 @@ public static class RuntimeVerbs
         ArgumentNullException.ThrowIfNull(settings);
         ArgumentNullException.ThrowIfNull(env);
         ArgumentNullException.ThrowIfNull(dependencies);
+        RuntimeWorkflow.EnsureWorkAdmitted(settings, env);
 
         if (dryRun && live)
         {
@@ -359,11 +362,18 @@ public static class RuntimeVerbs
                 return Results.BadRequest(new { error = exception.Message });
             }
 
-            var run = await RunSignalAsync(settings, signal, dependencies, cancellationToken);
-            var summary = RuntimeRunSummary.From(run);
-            return run.Status == RunStatus.Error
-                ? Results.Json(summary, statusCode: StatusCodes.Status500InternalServerError)
-                : Results.Ok(summary);
+            try
+            {
+                var run = await RunSignalAsync(settings, signal, dependencies, cancellationToken, env);
+                var summary = RuntimeRunSummary.From(run);
+                return run.Status == RunStatus.Error
+                    ? Results.Json(summary, statusCode: StatusCodes.Status500InternalServerError)
+                    : Results.Ok(summary);
+            }
+            catch (RuntimeVerbException exception)
+            {
+                return Results.Json(new { error = exception.Message }, statusCode: StatusCodes.Status403Forbidden);
+            }
         });
 
         return app;
@@ -403,8 +413,14 @@ public static class RuntimeVerbs
         {
             try
             {
+                RuntimeWorkflow.EnsureWorkAdmitted(settings);
                 var evidence = await integration.GatherAsync(card.Kind, settings.Product, cancellationToken);
                 return Results.Ok(new { kind = card.Kind, product = settings.Product, evidence });
+            }
+            catch (RuntimeVerbException exception)
+            {
+                return Results.Json(new { kind = card.Kind, error = exception.Message },
+                    statusCode: StatusCodes.Status403Forbidden);
             }
             catch (RuntimeConfigurationException exception)
             {
@@ -446,6 +462,7 @@ public static class RuntimeVerbs
         ArgumentNullException.ThrowIfNull(dependencies);
         if (sweepInterval is not null)
         {
+            RuntimeWorkflow.EnsureWorkAdmitted(settings, env);
             RuntimeWorkflow.EnsureLiveFilingConfirmed(dryRun: false, env);
         }
 

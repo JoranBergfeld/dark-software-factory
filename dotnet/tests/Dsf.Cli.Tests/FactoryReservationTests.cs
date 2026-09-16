@@ -396,7 +396,9 @@ public sealed class FactoryReservationTests
             var records = JsonNode.Parse(other.Store.ListJson())!.AsArray();
             records.Add(new JsonObject
             {
-                ["key"] = "dsf/onboarding/future/opaque", ["label"] = null, ["etag"] = "opaque-revision",
+                ["key"] = "dsf/onboarding/future/opaque",
+                ["label"] = null,
+                ["etag"] = "opaque-revision",
                 ["value"] = """{"schemaVersion":999,"secret":"secret-unknown-record"}""",
             });
             return records.ToJsonString();
@@ -1110,7 +1112,8 @@ internal sealed class ReservationTestStore
     {
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
-            Assert.Equal("owner.azconfig.io", request.RequestUri!.Host);
+            Assert.True(request.RequestUri!.Host == "owner.azconfig.io"
+                || request.RequestUri.Host.StartsWith("dsfo-", StringComparison.Ordinal) && request.RequestUri.Host.EndsWith(".azconfig.io", StringComparison.Ordinal));
             var key = Uri.UnescapeDataString(request.RequestUri.AbsolutePath["/kv/".Length..]);
             var body = request.Content is null ? null : await request.Content.ReadAsStringAsync(cancellationToken);
             if (request.Method == HttpMethod.Put && store.BeforePut is not null)
@@ -1136,10 +1139,14 @@ internal sealed class ReservationTestStore
                     return Reply(HttpStatusCode.PreconditionFailed, null);
                 var record = new JsonObject
                 {
-                    ["key"] = key, ["label"] = null, ["value"] = (string)incoming["value"]!,
+                    ["key"] = key,
+                    ["label"] = null,
+                    ["value"] = (string)incoming["value"]!,
                     ["content_type"] = (string?)incoming["content_type"],
-                    ["etag"] = "revision-" + ++store.revision, ["locked"] = false,
-                    ["last_modified"] = "2026-09-15T23:00:00Z", ["tags"] = new JsonObject(),
+                    ["etag"] = "revision-" + ++store.revision,
+                    ["locked"] = false,
+                    ["last_modified"] = "2026-09-15T23:00:00Z",
+                    ["tags"] = new JsonObject(),
                 };
                 store.records[key] = record.ToJsonString();
                 store.AfterPut?.Invoke(key, (string)incoming["value"]!);

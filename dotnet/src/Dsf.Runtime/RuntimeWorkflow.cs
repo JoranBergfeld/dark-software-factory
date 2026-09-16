@@ -9,6 +9,22 @@ namespace Dsf.Runtime;
 /// </summary>
 internal static class RuntimeWorkflow
 {
+    public static void EnsureWorkAdmitted(RuntimeSettings settings, IReadOnlyDictionary<string, string?>? env = null)
+    {
+        // The reserved endpoint namespace is a denial-only backstop if a pin is removed.
+        // Neither an endpoint name nor an operator live flag can establish ownership or readiness.
+        if (settings.IntegrationSettings.ContainsKey(RuntimeIntegrationSettings.FactoryProfilePin)
+            || env?.ContainsKey(RuntimeIntegrationSettings.FactoryProfilePin) == true
+            || Uri.TryCreate(settings.AppConfigEndpoint, UriKind.Absolute, out var endpoint)
+                && endpoint.Host.Length == 49
+                && endpoint.Host.StartsWith("dsfo-", StringComparison.OrdinalIgnoreCase)
+                && endpoint.Host.EndsWith(".azconfig.io", StringComparison.OrdinalIgnoreCase)
+                && Guid.TryParseExact(endpoint.Host.AsSpan(5, 32), "N", out _))
+            throw new RuntimeVerbException(
+                "Onboarding factory is inactive. Runtime work, including dry-run repository side effects, is not admitted. "
+                + "A missing, invalid or unreadable profile never grants greenfield permissions; manual live flags cannot activate it.");
+    }
+
     public static void EnsureLiveFilingConfirmed(bool dryRun, IReadOnlyDictionary<string, string?>? env)
     {
         if (dryRun)

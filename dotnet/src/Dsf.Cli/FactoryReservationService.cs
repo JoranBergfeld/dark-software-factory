@@ -37,7 +37,8 @@ internal sealed class FactoryReservationService(
         {
             return new(token.IsCancellationRequested ? FactoryReservationState.Canceled : e.State,
                 "Initial conditional admission was not confirmed. This first record is the bootstrap anchor; "
-                + "no earlier durable intent is claimed. " + e.Message, identity) { HasRegistryEffects = e.State == FactoryReservationState.Unknown };
+                + "no earlier durable intent is claimed. " + e.Message, identity)
+            { HasRegistryEffects = e.State == FactoryReservationState.Unknown };
         }
         return (await ContinueAsync(store, root, anchor, steps, token)) with { HasRegistryEffects = true };
     }
@@ -89,7 +90,8 @@ internal sealed class FactoryReservationService(
                             : anchor.Intent is null ? anchor.State : FactoryReservationState.Unknown,
                         "Immutable plan upload is incomplete; admission stays held. Resume --input may supply the exact original selection "
                         + "as repair data, never as authority. Missing approved bytes cannot be guessed.")
-                        with { ConfirmedPlanChunks = presentChunks.Count };
+                        with
+                    { ConfirmedPlanChunks = presentChunks.Count };
                 var reconstructed = await new ApplicationBoundaryPlanner(reviewer, new AzureBoundaryReader(azure))
                     .PlanAsync(repairInput, token, anchor.Identity.PlanFingerprint, proof);
                 if (reconstructed.State != BoundaryPlanState.Reviewed)
@@ -130,10 +132,16 @@ internal sealed class FactoryReservationService(
             if (anchor.State == FactoryReservationState.Reserved
                 && (anchor.CompletedSteps != steps.Count || anchor.Intent is not null || confirmedClaims != anchor.ClaimCount))
                 throw new JsonException();
+            if (anchor.Foundation is not null)
+                return await new FactoryFoundationService(azure, http, clock).InspectAsync(
+                    Result(anchor, root, anchor.State, "Foundation has started.") with
+                    { Plan = plan, ConfirmedClaims = confirmedClaims, ConfirmedPlanChunks = anchor.PlanChunks },
+                    anchor.Foundation, token);
             if (!resume)
                 return Result(anchor, root, anchor.Intent is not null && anchor.State == FactoryReservationState.Partial ? FactoryReservationState.Unknown : anchor.State,
                     "Verified owner reservation only; not provisioned. Approval is not App consent, access, readiness or activation.")
-                    with { Plan = plan, ConfirmedClaims = confirmedClaims, ConfirmedPlanChunks = anchor.PlanChunks };
+                    with
+                { Plan = plan, ConfirmedClaims = confirmedClaims, ConfirmedPlanChunks = anchor.PlanChunks };
             var current = await new ApplicationBoundaryPlanner(reviewer, new AzureBoundaryReader(azure))
                 .PlanAsync(plan.Selection, token, anchor.Identity.PlanFingerprint, proof);
             if (current.State != BoundaryPlanState.Reviewed)
@@ -201,7 +209,8 @@ internal sealed class FactoryReservationService(
                 catch (ReservationStoreException outcomeError)
                 {
                     return Result(anchor, root, FactoryReservationState.Unknown,
-                        "Step rejection was known, but its durable outcome update was not confirmed. " + outcomeError.Message) with { HasRegistryEffects = hasEffects };
+                        "Step rejection was known, but its durable outcome update was not confirmed. " + outcomeError.Message) with
+                    { HasRegistryEffects = hasEffects };
                 }
             }
             return Result(anchor, root, token.IsCancellationRequested ? FactoryReservationState.Canceled : e.State, e.Message) with { HasRegistryEffects = hasEffects };
@@ -215,7 +224,8 @@ internal sealed class FactoryReservationService(
     private static byte[] PlanBytes(ApplicationBoundaryPlan plan, DateTimeOffset admittedAt) =>
         Encoding.UTF8.GetBytes(BoundaryPlanFingerprint.Canonical(JsonSerializer.SerializeToElement(plan with
         {
-            ObservedAt = admittedAt, RepositoryReview = plan.RepositoryReview with { ObservedAt = admittedAt },
+            ObservedAt = admittedAt,
+            RepositoryReview = plan.RepositoryReview with { ObservedAt = admittedAt },
         }, FactoryReservationRecords.Json)));
     private static FactoryReservationState Map(BoundaryPlanState state) => Enum.Parse<FactoryReservationState>(state.ToString());
 
@@ -238,7 +248,8 @@ internal sealed class FactoryReservationService(
     private static FactoryReservationResult Result(FactoryReservationAnchor anchor, ConfigurationSetting root, FactoryReservationState state, string detail) =>
         new(state, detail, anchor.Identity)
         {
-            Revision = root.ETag.ToString(), PendingIntent = anchor.Intent,
+            Revision = root.ETag.ToString(),
+            PendingIntent = anchor.Intent,
             ConfirmedClaims = 1 + Math.Max(0, anchor.CompletedSteps - anchor.PlanChunks),
             ConfirmedPlanChunks = Math.Min(anchor.CompletedSteps, anchor.PlanChunks),
         };

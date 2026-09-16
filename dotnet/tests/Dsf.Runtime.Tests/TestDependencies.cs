@@ -210,6 +210,44 @@ internal sealed class RecordingRunStore : IRunStore
     public void Seed(ConveyorRun run) => documents[run.Id] = run;
 }
 
+internal sealed class SerializedAdmissionRunStore(string payload) : IRunStore
+{
+    public string Payload { get; private set; } = payload;
+    public int Writes { get; private set; }
+
+    public Task SaveAsync(ConveyorRun run, string station, CancellationToken cancellationToken)
+    {
+        Writes++;
+        Payload = System.Text.Json.JsonSerializer.Serialize(run);
+        return Task.CompletedTask;
+    }
+
+    public Task<ConveyorRun?> LoadAsync(string runId, CancellationToken cancellationToken)
+    {
+        var run = System.Text.Json.JsonSerializer.Deserialize<ConveyorRun>(Payload, new System.Text.Json.JsonSerializerOptions
+        { PreferredObjectCreationHandling = System.Text.Json.Serialization.JsonObjectCreationHandling.Populate });
+        return Task.FromResult(run?.Id == runId ? run : null);
+    }
+}
+
+internal sealed class ObservedAdmissionControls : ISweepControlStore
+{
+    private int reads;
+    public TaskCompletionSource RepeatedReads { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public Task<SweepControlState> ReadAsync(CancellationToken cancellationToken)
+    {
+        if (Interlocked.Increment(ref reads) >= 3) RepeatedReads.TrySetResult();
+        return Task.FromResult(SweepControlState.Unset);
+    }
+
+    public Task SetPausedAsync(bool paused, CancellationToken cancellationToken) =>
+        throw new InvalidOperationException("Admission test never writes sweep controls.");
+
+    public Task SetIntervalSecondsAsync(int seconds, CancellationToken cancellationToken) =>
+        throw new InvalidOperationException("Admission test never writes sweep controls.");
+}
+
 /// <summary>A run store whose backing store cannot be reached.</summary>
 internal sealed class UnreachableRunStore(string reason) : IRunStore
 {

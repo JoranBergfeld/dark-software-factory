@@ -37,6 +37,142 @@ public sealed class RuntimeVerbsTests
         [RuntimeIntegrationSettings.ConfirmLiveFiling] = "true",
     };
 
+    [Fact]
+    public async Task Greenfield_configuration_sharing_only_a_name_prefix_keeps_existing_live_behavior()
+    {
+        var filer = new RecordingIssueFiler();
+        var settings = Settings with { AppConfigEndpoint = "https://dsfo-existing.azconfig.io" };
+        var dependencies = TestDependencies.Build(issueFiler: filer, evidenceGatherers:
+            [new ScriptedEvidenceGatherer("azuremonitor", new EvidenceItem("azuremonitor", "incident-1", "checkout failures"))]);
+
+        var run = await RuntimeVerbs.RunSignalAsync(settings,
+            SignalReader.ReadFromJson("""{"product_hints":"acme","source_kinds":["azuremonitor"]}""", "test", false),
+            dependencies, CancellationToken.None, ConfirmedLiveFiling);
+
+        Assert.Equal(RunStatus.Filed, run.Status);
+        Assert.Single(filer.Filed);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Onboarding_profile_pin_cannot_be_bypassed_by_manual_live_confirmation_or_dry_run(bool dryRun)
+    {
+        var settings = Settings with
+        {
+            IntegrationSettings = new Dictionary<string, string?> { ["DSF_FACTORY_PROFILE_PIN"] = "invalid-or-corrupt" },
+        };
+        var filer = new RecordingIssueFiler();
+        var models = new RecordingModelClient();
+        var dependencies = TestDependencies.Build(issueFiler: filer, modelClient: models);
+        var error = await Assert.ThrowsAsync<RuntimeVerbException>(() => RuntimeVerbs.RunSignalAsync(
+            settings, SignalReader.ReadFromJson("""{"product_hints":"acme","source_kinds":["azuremonitor"]}""", "test", dryRun),
+            dependencies, CancellationToken.None, ConfirmedLiveFiling));
+        Assert.Contains("onboarding", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(filer.Filed);
+        Assert.Empty(models.Prompts);
+    }
+
+    [Theory]
+    [InlineData("sweep")]
+    [InlineData("outcomes")]
+    [InlineData("loop")]
+    [InlineData("http")]
+    [InlineData("agent")]
+    public async Task Inactive_onboarding_blocks_every_entry_even_after_the_profile_pin_is_removed(string entry)
+    {
+        var settings = Settings with { AppConfigEndpoint = "https://dsfo-11111111111111111111111111111111.azconfig.io" };
+        var runs = new RecordingRunStore();
+        var filer = new RecordingIssueFiler();
+        var lease = new ScriptedSweepLease();
+        var outcomes = new RecordingOutcomeSource();
+        var learning = new RecordingLearningStore();
+        var models = new RecordingModelClient();
+        var dependencies = TestDependencies.Build(runStore: runs, issueFiler: filer, modelClient: models,
+            learningComposer: new ScriptedLearningComposer(outcomes, learning), sweepLeaseFactory: _ => lease);
+        if (entry is "http" or "agent")
+        {
+            await using var host = entry == "http"
+                ? RuntimeVerbs.BuildOrchestratorHost(settings, dependencies, "127.0.0.1", 0, env: ConfirmedLiveFiling)
+                : RuntimeVerbs.BuildSourceAgentHost(settings, "azuremonitor", dependencies, "127.0.0.1", 0);
+            await host.StartAsync();
+            using var client = new HttpClient { BaseAddress = new Uri(BaseAddress(host)) };
+            using var response = await client.PostAsync(entry == "http" ? "/run" : SourceAgentCard.GatherRoute,
+                new StringContent("""{"product_hints":"acme","source_kinds":["azuremonitor"]}""", Encoding.UTF8, "application/json"));
+            Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+            Assert.Contains("inactive", await response.Content.ReadAsStringAsync(), StringComparison.OrdinalIgnoreCase);
+            await host.StopAsync();
+        }
+        else
+        {
+            var error = await Assert.ThrowsAsync<RuntimeVerbException>(async () =>
+            {
+                if (entry == "sweep") await RuntimeVerbs.SweepAsync(settings, false, dependencies, CancellationToken.None, ConfirmedLiveFiling);
+                else if (entry == "outcomes") await RuntimeVerbs.PollOutcomesAsync(settings, true, false, ConfirmedLiveFiling, dependencies, CancellationToken.None);
+                else await RuntimeVerbs.ServeOrchestratorAsync(settings, dependencies, "127.0.0.1", 0,
+                    TimeSpan.FromSeconds(1), CancellationToken.None, ConfirmedLiveFiling);
+            });
+            Assert.Contains("inactive", error.Message, StringComparison.OrdinalIgnoreCase);
+        }
+        Assert.Empty(runs.Saved);
+        Assert.Empty(filer.Filed);
+        Assert.Empty(models.Prompts);
+        Assert.Empty(lease.Requests);
+        Assert.Equal(0, outcomes.PollCount);
+        Assert.Empty(learning.Recorded);
+    }
+
+    [Fact]
+    public async Task Onboarding_resume_cannot_upgrade_a_serialized_open_preview_into_live_work()
+    {
+        var persisted = new ConveyorRun
+        {
+            Id = RunIdentity.Compute(TriggerKind.Signal, ["acme"], ["azuremonitor"]),
+            ProductHints = ["acme"],
+            SourceKinds = ["azuremonitor"],
+            DryRun = true,
+        };
+        persisted.Checkpoints.AddRange(ConveyorLine.StationNames.Take(6));
+        var store = new SerializedAdmissionRunStore(JsonSerializer.Serialize(persisted));
+        var original = store.Payload;
+        var filer = new RecordingIssueFiler();
+        var settings = Settings with { AppConfigEndpoint = "https://dsfo-11111111111111111111111111111111.azconfig.io" };
+        var dependencies = TestDependencies.Build(runStore: store, issueFiler: filer);
+
+        await Assert.ThrowsAsync<RuntimeVerbException>(() => RuntimeVerbs.RunSignalAsync(settings,
+            SignalReader.ReadFromJson("""{"product_hints":"acme","source_kinds":["azuremonitor"]}""", "test", false),
+            dependencies, CancellationToken.None, ConfirmedLiveFiling));
+
+        Assert.Equal(original, store.Payload);
+        Assert.Equal(0, store.Writes);
+        Assert.Empty(filer.Filed);
+    }
+
+    [Fact]
+    public async Task A_running_scheduled_host_cannot_bypass_onboarding_admission_on_later_ticks()
+    {
+        var controls = new ObservedAdmissionControls();
+        var lease = new ScriptedSweepLease();
+        var store = new RecordingRunStore();
+        var filer = new RecordingIssueFiler();
+        var settings = Settings with { AppConfigEndpoint = "https://dsfo-11111111111111111111111111111111.azconfig.io" };
+        var dependencies = TestDependencies.Build(runStore: store, issueFiler: filer,
+            sweepControlStoreFactory: _ => controls, sweepLeaseFactory: _ => lease,
+            sourceAgentRosterReader: new RosterReader(["azuremonitor"]),
+            evidenceGatherers: [new ScriptedEvidenceGatherer("azuremonitor", new EvidenceItem("azuremonitor", "incident-1", "checkout failures"))]);
+        await using var host = RuntimeVerbs.BuildOrchestratorHost(settings, dependencies, "127.0.0.1", 0,
+            TimeSpan.FromMilliseconds(10), ConfirmedLiveFiling);
+        await host.StartAsync();
+        try
+        {
+            await controls.RepeatedReads.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Empty(lease.Requests);
+            Assert.Empty(store.Saved);
+            Assert.Empty(filer.Filed);
+        }
+        finally { await host.StopAsync(); }
+    }
+
     private static async Task<string> WriteSignalAsync(string json)
     {
         var path = Path.Combine(Path.GetTempPath(), $"dsf-signal-{Guid.NewGuid():n}.json");

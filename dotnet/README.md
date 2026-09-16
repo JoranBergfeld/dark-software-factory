@@ -59,7 +59,7 @@ executables and require neither the SDK nor a separately installed .NET runtime.
 The CLI's build-only runtime dependency builds the matching runtime automatically,
 including for `dotnet run --project src/Dsf.Cli -- sweep --product <product>`.
 `eng/CliBundle.targets` publishes its dependency closure into `runtime/` and compiles
-the five provisioning entrypoints into self-contained ARM JSON under `assets/infra/`.
+the six provisioning entrypoints into self-contained ARM JSON under `assets/infra/`.
 Use one `-p:Version=<version>` for build, pack, and publish; when using `--no-build`,
 the configuration and version must match the preceding build.
 
@@ -98,6 +98,14 @@ They recover the same identity from bounded remote plan/claim records; local
 reports are not authority. All three support `--json`; incomplete upload repair
 may supply the original `--input` to `resume`. No new asset or runtime verb is
 needed. See [reservation and recovery](../docs/site/get-started/reserve-factory-identity.md).
+
+`dsf onboard decide provision` adds separately approved **inactive** foundation
+provisioning, durable ARM receipts and staged product-manifest authority.
+It uses the packaged `onboard-foundation.json`, never the greenfield template.
+No workers, grants, App key copy, application automation or activation are
+included. Onboarding runtime admission fails closed; after resource dispatch,
+`status`/`resume` inspect without retry or rollback. See
+[inactive foundation provisioning](../docs/site/get-started/provision-inactive-foundation.md).
 
 ## Runtime host
 

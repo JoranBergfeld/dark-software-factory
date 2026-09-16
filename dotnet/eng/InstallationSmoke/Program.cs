@@ -38,6 +38,7 @@ try
         ["main"] = 1,
         ["sre-agent"] = 5,
         ["copy-owner-secret"] = 1,
+        ["onboard-foundation"] = 0,
     };
     foreach (var (name, minimumNestedDeployments) in templates)
     {
@@ -57,7 +58,7 @@ try
     Require(incompleteReview.ExitCode == 1 && incompleteReview.Output.Contains("--repo is required", StringComparison.Ordinal),
         $"Redirected attachment review did not require an explicit repository: {incompleteReview.Output}");
 
-    foreach (var action in new[] { "plan", "reserve", "status", "resume" })
+    foreach (var action in new[] { "plan", "reserve", "provision", "status", "resume" })
     {
         var help = await Run("onboard", "decide", action, "--help");
         var required = action is "plan" or "reserve" ? "--reviewed-fingerprint" : "--owner-appconfig-endpoint";
@@ -67,6 +68,52 @@ try
         Require(incomplete.ExitCode == 1 && incomplete.Output.Contains("\"state\": \"Failed\"", StringComparison.Ordinal),
             $"Installed onboarding command accepted incomplete explicit inputs: {incomplete.Output}");
     }
+
+    var foundationAsset = Path.Combine(payload, "assets", "infra", "onboard-foundation.json");
+    var foundationBytes = File.ReadAllBytes(foundationAsset);
+    File.Delete(foundationAsset);
+    try
+    {
+        File.WriteAllText(Path.Combine(scratch.FullName, "azure.log"), "");
+        var missingFoundation = await Run("onboard", "decide", "provision", "--owner-appconfig-endpoint", "https://owner.azconfig.io",
+            "--product", "packaging-smoke", "--tenant", "11111111-1111-1111-1111-111111111111",
+            "--subscription", "22222222-2222-2222-2222-222222222222", "--reviewed-fingerprint", new string('a', 64), "--json");
+        Require(missingFoundation.ExitCode == 1 && missingFoundation.Output.Contains("onboard-foundation.json", StringComparison.Ordinal)
+            && missingFoundation.Output.Contains("\"state\": \"Failed\"", StringComparison.Ordinal),
+            "Installed foundation asset preflight did not fail explicitly before provider access.");
+        Require(File.ReadAllText(Path.Combine(scratch.FullName, "azure.log")).Length == 0,
+            "Foundation asset failure reached Azure authentication.");
+    }
+    finally
+    {
+        File.WriteAllBytes(foundationAsset, foundationBytes);
+    }
+
+    var signalPath = Path.Combine(scratch.FullName, "onboarding-signal.json");
+    File.WriteAllText(signalPath, """{"product_hints":"packaging-smoke","source_kinds":["azuremonitor"]}""");
+    var inactiveEnvironment = new Dictionary<string, string>
+    {
+        ["AZURE_APPCONFIG_ENDPOINT"] = "https://dsfo-11111111111111111111111111111111.azconfig.io",
+        ["AZURE_COSMOS_ENDPOINT"] = "https://unused.documents.azure.com",
+        ["AZURE_OPENAI_ENDPOINT"] = "https://unused.openai.azure.com",
+        ["AZURE_OPENAI_DEPLOYMENT"] = "unused",
+        ["AZURE_OPENAI_EMBEDDING_DEPLOYMENT"] = "unused",
+        ["DSF_CONFIRM_LIVE_FILING"] = "true",
+    };
+    foreach (var arguments in new[]
+    {
+        new[] { "run", "--product", "packaging-smoke", "--signal", signalPath },
+        new[] { "sweep", "--product", "packaging-smoke" },
+        new[] { "poll-outcomes", "--product", "packaging-smoke", "--dry-run" },
+        new[] { "serve-orchestrator", "--product", "packaging-smoke", "--loop" },
+    })
+    {
+        var inactive = await RunWithEnvironment(inactiveEnvironment, arguments);
+        Require(inactive.ExitCode == 1 && inactive.Output.Contains("Onboarding factory is inactive", StringComparison.Ordinal),
+            $"Installed runtime did not enforce inactive admission: {inactive.Output}");
+    }
+    Require(File.ReadAllText(Path.Combine(scratch.FullName, "azure.log")).Length == 0,
+        "Inactive installed runtime reached Azure authentication.");
 
     foreach (var verb in new[] { "run", "sweep", "serve-orchestrator", "serve-agent", "poll-outcomes" })
     {
@@ -124,7 +171,7 @@ try
         File.WriteAllBytes(missing, bytes);
     }
 
-    Console.WriteLine("Installed payload smoke passed: repository review, boundary plan, reservation/status/resume, five runtime verbs, ARM dependency closure, provisioning preview, bootstrap, preflight.");
+    Console.WriteLine("Installed payload smoke passed: repository review, boundary plan, reservation/foundation/status/resume, inactive runtime admission, five runtime verbs, ARM dependency closure, provisioning preview, bootstrap, preflight.");
     return 0;
 }
 finally
@@ -132,7 +179,10 @@ finally
     scratch.Delete(recursive: true);
 }
 
-async Task<(int ExitCode, string Output)> Run(params string[] arguments)
+Task<(int ExitCode, string Output)> Run(params string[] arguments) =>
+    RunWithEnvironment(new Dictionary<string, string>(), arguments);
+
+async Task<(int ExitCode, string Output)> RunWithEnvironment(IReadOnlyDictionary<string, string> environment, params string[] arguments)
 {
     var start = new ProcessStartInfo(cli)
     {
@@ -159,6 +209,7 @@ async Task<(int ExitCode, string Output)> Run(params string[] arguments)
     start.Environment["HOME"] = scratch.FullName;
     start.Environment["USERPROFILE"] = scratch.FullName;
     start.Environment["DSF_SMOKE_ASSET_ROOT"] = Path.Combine(payload, "assets", "infra");
+    foreach (var (key, value) in environment) start.Environment[key] = value;
     using var process = Process.Start(start) ?? throw new InvalidOperationException($"Could not launch {cli}");
     using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
     var stdout = process.StandardOutput.ReadToEndAsync(timeout.Token);

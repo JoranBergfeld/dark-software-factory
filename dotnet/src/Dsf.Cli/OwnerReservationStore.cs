@@ -20,12 +20,18 @@ internal sealed class OwnerReservationStore
     public const string ContentType = "application/vnd.dsf.reservation+json;version=1";
     public const int RecordLimit = 10 * 1024;
     private readonly ConfigurationClient client;
+    private readonly Func<Guid?, ConfigurationClient> createClient;
 
     public OwnerReservationStore(string endpoint, string tenant, string subscription, IAzureCliRunner azure, HttpClient? http, string? expectedActor = null)
     {
-        var options = new ConfigurationClientOptions { Retry = { MaxRetries = 0 } };
-        if (http is not null) options.Transport = new HttpClientTransport(http);
-        client = new ConfigurationClient(new Uri(endpoint), new OperatorCredential(azure, tenant, subscription, expectedActor), options);
+        createClient = correlation =>
+        {
+            var options = new ConfigurationClientOptions { Retry = { MaxRetries = 0 } };
+            if (http is not null) options.Transport = new HttpClientTransport(http);
+            if (correlation is not null) options.AddPolicy(new CorrelationPolicy(correlation.Value), HttpPipelinePosition.PerRetry);
+            return new ConfigurationClient(new Uri(endpoint), new OperatorCredential(azure, tenant, subscription, expectedActor), options);
+        };
+        client = createClient(null);
     }
 
     public async Task<ConfigurationSetting?> ReadAsync(string key, CancellationToken token)
@@ -44,16 +50,17 @@ internal sealed class OwnerReservationStore
         { throw new ReservationStoreException(FactoryReservationState.Unknown, "Owner reservation read unavailable; provider details withheld."); }
     }
 
-    public async Task<ConfigurationSetting> WriteAsync(string key, string value, ETag? revision, CancellationToken token)
+    public async Task<ConfigurationSetting> WriteAsync(string key, string value, ETag? revision, CancellationToken token, Guid? correlation = null)
     {
         CheckSize(key, ProductConfigurationKeys.NoLabel, value);
         var setting = new ConfigurationSetting(key, value, null, revision ?? default) { ContentType = ContentType };
         try
         {
             token.ThrowIfCancellationRequested();
+            var writer = correlation is null ? client : createClient(correlation);
             var record = revision is null
-                ? (await client.AddConfigurationSettingAsync(setting, token)).Value
-                : (await client.SetConfigurationSettingAsync(setting, onlyIfUnchanged: true, token)).Value;
+                ? (await writer.AddConfigurationSettingAsync(setting, token)).Value
+                : (await writer.SetConfigurationSettingAsync(setting, onlyIfUnchanged: true, token)).Value;
             VerifyRecord(record, key);
             if (record.Value != value)
                 throw new ReservationStoreException(FactoryReservationState.Unknown, "Owner response did not confirm the exact conditional value; reconcile remote state.");
@@ -84,9 +91,19 @@ internal sealed class OwnerReservationStore
             throw new ReservationStoreException(FactoryReservationState.Failed, "Reservation record exceeds the bounded 10 KB App Configuration budget; nothing was truncated.");
     }
 
-    private sealed class AuthenticationFailedException : Exception;
+    internal sealed class AuthenticationFailedException : Exception;
 
-    private sealed class OperatorCredential(IAzureCliRunner azure, string tenant, string subscription, string? expectedActor) : TokenCredential
+    private sealed class CorrelationPolicy(Guid correlation) : HttpPipelineSynchronousPolicy
+    {
+        public override void OnSendingRequest(HttpMessage message)
+        {
+            message.Request.ClientRequestId = correlation.ToString("D");
+            message.Request.Headers.SetValue("x-ms-client-request-id", correlation.ToString("D"));
+        }
+    }
+
+    internal sealed class OperatorCredential(IAzureCliRunner azure, string tenant, string subscription, string? expectedActor,
+        string resource = "https://azconfig.io") : TokenCredential
     {
         public override AccessToken GetToken(TokenRequestContext requestContext, CancellationToken cancellationToken) =>
             GetTokenAsync(requestContext, cancellationToken).AsTask().GetAwaiter().GetResult();
@@ -94,7 +111,7 @@ internal sealed class OwnerReservationStore
         public override async ValueTask<AccessToken> GetTokenAsync(TokenRequestContext requestContext, CancellationToken cancellationToken)
         {
             var result = await azure.RunAsync(["account", "get-access-token", "--subscription", subscription,
-                "--resource", "https://azconfig.io", "--output", "json"], cancellationToken);
+                "--resource", resource, "--output", "json"], cancellationToken);
             if (result.ExitCode != 0) throw new AuthenticationFailedException();
             try
             {

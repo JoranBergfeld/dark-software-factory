@@ -18,6 +18,7 @@ public sealed record FactoryReservationAnchor(
     public int CompletedSteps { get; init; }
     public ReservationWriteIntent? Intent { get; init; }
     public FactoryReservationState State { get; init; } = FactoryReservationState.Partial;
+    public FactoryFoundationPointer? Foundation { get; init; }
 }
 
 public sealed record FactoryReservationPlanChunk(
@@ -41,6 +42,9 @@ public sealed record FactoryReservationResult(
     public int ConfirmedPlanChunks { get; init; }
     public ReservationWriteIntent? PendingIntent { get; init; }
     public ApplicationBoundaryPlan? Plan { get; init; }
-    public string NextAction => "Inspect trusted owner status; resume only this pre-provisioning operation. "
+    public FactoryFoundationResult? Foundation { get; init; }
+    public string NextAction => Foundation is not null
+        ? "Inspect foundation receipts and product authority. Resume is inspection-only after foundation dispatch; never reissue an uncertain ARM operation. Access, readiness and activation remain unmet."
+        : "Inspect trusted owner status; resume only this pre-provisioning operation. "
         + "Do not release claims, replace identity or infer consent, workload access, readiness or activation.";
 }

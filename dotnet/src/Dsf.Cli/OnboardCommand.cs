@@ -148,10 +148,11 @@ public static partial class CliApplication
         var decide = new Command("decide", "assess attachment of an existing application to Decide");
         decide.Subcommands.Add(review);
         decide.Subcommands.Add(BuildBoundaryPlanCommand(terminal, reviewer, boundaryAzure));
+        decide.Subcommands.Add(BuildFoundationCommand(terminal, reviewer, boundaryAzure, reservationHttp, reservationClock));
         decide.Subcommands.Add(BuildReservationCommand("reserve", terminal, reviewer, boundaryAzure, reservationHttp, reservationClock));
         decide.Subcommands.Add(BuildReservationCommand("status", terminal, reviewer, boundaryAzure, reservationHttp, reservationClock));
         decide.Subcommands.Add(BuildReservationCommand("resume", terminal, reviewer, boundaryAzure, reservationHttp, reservationClock));
-        var onboard = new Command("onboard", "review existing application attachment without greenfield provisioning");
+        var onboard = new Command("onboard", "stage existing application attachment and inactive foundation without greenfield provisioning");
         onboard.Subcommands.Add(decide);
         return onboard;
     }

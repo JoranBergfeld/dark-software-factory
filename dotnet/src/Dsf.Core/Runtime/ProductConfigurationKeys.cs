@@ -13,6 +13,11 @@ public static class ProductConfigurationKeys
     public const string OwnerBootstrapStatusFilter = "dsf/owner/bootstrap/*";
     public const string OwnerOnboardingPrefix = "dsf/onboarding/";
     public const string OwnerOnboardingFilter = OwnerOnboardingPrefix + "*";
+    public static string FoundationOperation(Guid operationId, int index) =>
+        $"dsf/foundation/{operationId:D}/operations/{index:D4}";
+    public const string FactoryManifest = "dsf/factory/manifest";
+    public const string FactoryProfile = "dsf/factory/profile";
+    public static string FactoryPlanChunk(int index) => $"dsf/factory/reviewed-plan/{index:D4}";
 
     public static string OwnerProductClaim(string productKey) => OwnerOnboardingPrefix + "products/" + productKey;
     public static string OwnerRepositoryClaim(long repositoryId) => OwnerOnboardingPrefix + "repositories/" + repositoryId.ToString(System.Globalization.CultureInfo.InvariantCulture);

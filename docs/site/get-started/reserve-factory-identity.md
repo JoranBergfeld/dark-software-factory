@@ -60,6 +60,11 @@ remote plan chunks/claims, not just a cached count or local report. Its `plan` i
 the **admitted snapshot**, not a fresh boundary review. `Reserved` never promises
 current workload readiness.
 
+After [inactive foundation provisioning](provision-inactive-foundation.md), inspect
+the separate `foundation` result. Status verifies product manifest authority, not
+an owner-archive substitute. `resume` then inspects only; it never repeats ARM
+dispatch or repairs a foundation. The reservation flags remain false by design.
+
 `resume` loads that same immutable remote operation, verifies every present
 record, and revalidates the exact plan against current operator authority and
 decision inputs before dispatch. Same-operation records are excluded from fresh
@@ -163,7 +168,7 @@ without rewriting them.
 Cancellation does not roll back or release admission. A pending intent may still
 have applied, and elapsed time alone never proves that a writer stopped.
 
-The owner store currently owns **pre-provisioning admission/recovery**, not an
-editable active-product manifest or publication journal. Subsequent foundation
-work must consume this same identity and approved plan, recheck current authority,
-and preserve the owner admission pointer when product manifest authority moves.
+The owner store owns **admission/recovery**, not an editable product manifest.
+`provision` consumes the same identity and approved plan, rechecks current
+authority, and retains the owner discovery/recovery pointer while the reviewed
+product manifest becomes authoritative in product App Configuration.

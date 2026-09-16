@@ -17,11 +17,11 @@ public static partial class CliApplication
         var product = StringOption("--product", "owner-scoped product key");
         var tenant = StringOption("--tenant", "explicit owner reservation tenant ID");
         var subscription = StringOption("--subscription", "explicit owner reservation subscription ID");
-        var json = BoolOption("--json", "print nonsecret typed reservation state without prompts");
+        var json = BoolOption("--json", "print nonsecret typed reservation/foundation state without prompts");
         var command = new Command(action, action == "reserve"
             ? "reserve durable factory identity and owner-scoped claims; never provision"
-            : action == "resume" ? "resume the same approved pre-provisioning reservation from trusted remote state"
-            : "inspect trusted remote pre-provisioning reservation; read-only");
+            : action == "resume" ? "resume the reservation or inspect a dispatched foundation; never reissue ARM"
+            : "inspect trusted reservation and product foundation authority; read-only");
         if (action == "reserve") AddOptions(command, input, fingerprint, json);
         else AddOptions(command, endpoint, product, tenant, subscription, json);
         if (action == "resume") AddOptions(command, input);

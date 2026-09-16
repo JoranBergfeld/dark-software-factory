@@ -12,6 +12,7 @@ internal sealed class ProvisioningAssets
         "main.json",
         "sre-agent.json",
         "copy-owner-secret.json",
+        "onboard-foundation.json",
     };
 
     private readonly string directory;
