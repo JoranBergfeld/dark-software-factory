@@ -323,7 +323,9 @@ internal sealed class FactoryIntentWorkflow(FactorySourceAccess source, HttpClie
     private async Task CheckSourceAsync(CancellationToken token)
     {
         var current = await inventory.ReadAnalysisInventoryAsync(token);
-        if (current.State != SourceState.Acquired || current.Progress?.Snapshot != progress.Snapshot
+        if (current.State != SourceState.Acquired)
+            throw new SourceAcquisitionException(current.State, current.Detail);
+        if (current.Progress?.Snapshot != progress.Snapshot
             || current.Progress.IntegritySha256 != progress.SourceIntegritySha256)
             throw new IntentException(IntentState.Blocked, "AnalysisSourceChanged");
     }

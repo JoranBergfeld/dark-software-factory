@@ -12,6 +12,89 @@ namespace Dsf.Runtime.Tests;
 public sealed class FactoryIntentWorkflowTests
 {
     [Theory]
+    [InlineData("Unknown")]
+    [InlineData("Canceled")]
+    public async Task Source_uncertainty_after_model_response_preserves_dispatch_and_cannot_enable_replay(string state)
+    {
+        using var first = await IntentWorkflowTransport.CreateAsync();
+        await first.RunAsync("/acquire");
+        IntentProgress? dispatched = null;
+        first.BeforeModelResponse = () =>
+        {
+            dispatched = JsonSerializer.Deserialize<IntentProgress>(first.Source.Progress["intent/current"].Value, FactoryGitHubJson.Options)!;
+            var key = first.Source.Progress.Keys.Single(k => k.StartsWith("source/", StringComparison.Ordinal)
+                && k.EndsWith("/current", StringComparison.Ordinal));
+            var prior = first.Source.Progress[key];
+            var source = JsonNode.Parse(prior.Value)!;
+            source["state"] = state;
+            source["reason"] = "AcquisitionRequestUnconfirmed";
+            first.Source.Progress[key] = (source.ToJsonString(), prior.Revision + 1);
+            return Task.CompletedTask;
+        };
+        var result = await first.RunAsync("/infer");
+        var persisted = JsonSerializer.Deserialize<IntentProgress>(first.Source.Progress["intent/current"].Value, FactoryGitHubJson.Options)!;
+        Assert.Equal((state, IntentModelOutcome.Dispatched, true),
+            ((string?)JsonNode.Parse(result.Body)!["state"], persisted.ModelOutcome, persisted.Dispatch is not null));
+        Assert.Null(JsonNode.Parse(result.Body)!["draft"]);
+        Assert.NotNull(dispatched);
+        Assert.Equal(dispatched, persisted);
+        Assert.Single(first.AnalysisPrompts);
+        Assert.DoesNotContain(first.Source.Progress.Keys, k => k.Contains("/steps/", StringComparison.Ordinal));
+
+        using var second = await IntentWorkflowTransport.CreateAsync();
+        second.Source.ImportProgress(first.Source);
+        var before = second.Source.Progress.ToDictionary(p => p.Key, p => p.Value);
+        foreach (var path in new[] { "/infer", "/intent-status" })
+            Assert.Equal(state, (string?)JsonNode.Parse((await second.RunAsync(path)).Body)!["state"]);
+        Assert.Equal(before, second.Source.Progress);
+        Assert.Equal(HttpStatusCode.OK, (await second.RunAsync("/acquire")).Status);
+        var recovered = second.Source.Progress.ToDictionary(p => p.Key, p => p.Value);
+        foreach (var request in new[] { new IntentRequest(), new IntentRequest(NewAnalysis: true) })
+            Assert.Equal("Unknown", (string?)JsonNode.Parse((await second.RunAsync("/infer", request)).Body)!["state"]);
+        Assert.Equal(recovered, second.Source.Progress);
+        Assert.Empty(second.AnalysisPrompts);
+    }
+
+    [Theory]
+    [InlineData("Unknown")]
+    [InlineData("Canceled")]
+    public async Task Final_source_uncertainty_withholds_draft_without_reclassifying_confirmed_model_receipts(string state)
+    {
+        using var first = await IntentWorkflowTransport.CreateAsync();
+        await first.RunAsync("/acquire");
+        await first.RunAsync("/infer");
+        IntentProgress? confirmed = null;
+        first.Source.AfterWrite = (key, value) =>
+        {
+            if (key != "intent/current") return;
+            var progress = JsonSerializer.Deserialize<IntentProgress>(value, FactoryGitHubJson.Options)!;
+            if (progress.State != IntentState.DraftReady) return;
+            confirmed = progress;
+            var sourceKey = first.Source.Progress.Keys.Single(k => k.StartsWith("source/", StringComparison.Ordinal)
+                && k.EndsWith("/current", StringComparison.Ordinal));
+            var prior = first.Source.Progress[sourceKey];
+            var source = JsonNode.Parse(prior.Value)!;
+            source["state"] = state;
+            source["reason"] = "AcquisitionRequestUnconfirmed";
+            first.Source.Progress[sourceKey] = (source.ToJsonString(), prior.Revision + 1);
+        };
+        var result = await first.RunAsync("/infer");
+        Assert.Equal(state, (string?)JsonNode.Parse(result.Body)!["state"]);
+        Assert.Null(JsonNode.Parse(result.Body)!["draft"]);
+        Assert.NotNull(confirmed);
+        Assert.Equal(IntentModelOutcome.Confirmed, confirmed.ModelOutcome);
+        Assert.Null(confirmed.Dispatch);
+        Assert.Equal(confirmed, JsonSerializer.Deserialize<IntentProgress>(first.Source.Progress["intent/current"].Value, FactoryGitHubJson.Options));
+        using var second = await IntentWorkflowTransport.CreateAsync();
+        second.Source.ImportProgress(first.Source);
+        Assert.Equal(HttpStatusCode.OK, (await second.RunAsync("/acquire")).Status);
+        var before = second.Source.Progress.ToDictionary(p => p.Key, p => p.Value);
+        Assert.Equal(HttpStatusCode.OK, (await second.RunAsync("/infer")).Status);
+        Assert.Equal(before, second.Source.Progress);
+        Assert.Empty(second.AnalysisPrompts);
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task Final_native_authority_reread_withholds_draft_when_grant_changes_after_admission_or_model_response(bool duringModel)
@@ -459,8 +542,13 @@ public sealed class FactoryIntentWorkflowTests
         transport.Models.OnInference = () => transport.Source.Clock.Now += TimeSpan.FromSeconds(121);
         var result = await transport.RunAsync("/infer");
         Assert.Equal("Unknown", (string?)JsonNode.Parse(result.Body)!["state"]);
+        var before = transport.Source.Progress.ToDictionary(p => p.Key, p => p.Value);
+        var progress = JsonSerializer.Deserialize<IntentProgress>(transport.Source.Progress["intent/current"].Value, FactoryGitHubJson.Options)!;
+        Assert.Equal(IntentModelOutcome.Dispatched, progress.ModelOutcome);
+        Assert.NotNull(progress.Dispatch);
         var status = await transport.RunAsync("/intent-status");
         Assert.Equal("Unknown", (string?)JsonNode.Parse(status.Body)!["state"]);
+        Assert.Equal(before, transport.Source.Progress);
         Assert.Single(transport.AnalysisPrompts);
     }
 

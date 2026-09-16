@@ -135,6 +135,11 @@ reconciled on an independent worker without repeating the model call.
 An unresolved dispatch stays held: expiry, cancellation, a missing response,
 or `--new-analysis` cannot authorize another call. Unknown writes never assert
 that an old authorization was revoked.
+Source uncertainty after a model response retains the original unconfirmed
+dispatch and provenance, not a known model failure. Restoring source acquisition
+cannot authorize replay. If analysis receipts were already confirmed before a
+final source check becomes uncertain, those receipts stay confirmed but the
+draft is withheld until current source authority is re-established.
 
 Model configuration or source selection changes cannot mix with existing work.
 After resolving source acquisition and model proof for the new selection, use
