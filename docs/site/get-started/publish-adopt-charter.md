@@ -102,6 +102,9 @@ non-goals/measures with reasons, but requires substantive purpose, intended user
 and goals. Existing schema-1 charters remain supported under their unchanged
 strict parser, including required success metrics. No unknown placeholder becomes
 a goal or fabricated metric; no deterministic non-goal veto is introduced.
+Human prose may span lines, and LF/CRLF documents are parsed without rewriting
+them. Exact original content still determines review fingerprints, native blobs
+and adoption receipts. Machine-inferred draft formatting remains strict.
 
 ## Current source reconciliation
 

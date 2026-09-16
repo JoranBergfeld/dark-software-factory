@@ -9,10 +9,13 @@ public static class OnboardingCharterMarkdown
 
     public static GroundedCharterDraft Parse(string content, string product)
     {
-        if (!content.StartsWith(Marker + "\n", StringComparison.Ordinal))
+        if (content.Any(c => char.IsControl(c) && c is not ('\r' or '\n' or '\t')))
+            throw new CharterParseException(["Unsafe control character in human-owned charter."]);
+        var lines = content.ReplaceLineEndings("\n").Split('\n');
+        if (lines[0] != Marker)
         {
             var legacy = CharterMarkdown.Parse(content, product);
-            var draft = new GroundedCharterDraft(product, legacy.Vision, legacy.TargetUsers, legacy.Goals,
+            var draft = new GroundedCharterDraft(product, HumanProse(legacy.Vision), HumanProse(legacy.TargetUsers), legacy.Goals,
                 new(new(legacy.NonGoals.Count == 0 ? CharterKnowledgeState.Unknown : CharterKnowledgeState.Known,
                     "Existing human charter records these boundaries."), legacy.NonGoals),
                 new(new(CharterKnowledgeState.Known, "Existing human charter records these measures."), legacy.SuccessMetrics));
@@ -21,7 +24,7 @@ public static class OnboardingCharterMarkdown
         }
         var sections = new Dictionary<string, List<string>>(StringComparer.Ordinal);
         List<string>? current = null;
-        foreach (var line in content.Split('\n').Skip(1))
+        foreach (var line in lines.Skip(1))
         {
             if (line.StartsWith("## ", StringComparison.Ordinal))
             {
@@ -38,7 +41,7 @@ public static class OnboardingCharterMarkdown
         result.Validate();
         return result;
 
-        string Text(string name) => string.Join('\n', sections[name]).Trim();
+        string Text(string name) => HumanProse(string.Join('\n', sections[name]));
         string[] Items(string name) => sections[name].Where(l => l.Length > 0)
             .Select(l => l.StartsWith("- ", StringComparison.Ordinal) ? l[2..] : throw Invalid()).ToArray();
         CharterKnowledgeList Optional(string name) => Text(name).StartsWith("Unknown: ", StringComparison.Ordinal)
@@ -46,6 +49,10 @@ public static class OnboardingCharterMarkdown
             : new(new(CharterKnowledgeState.Known, "Existing human charter explicitly records these statements."), Items(name));
         static CharterParseException Invalid() => new(["Invalid explicit onboarding charter profile."]);
     }
+
+    // Fold Markdown prose only for semantic validation; callers retain original content and native blob identity.
+    private static string HumanProse(string text) =>
+        string.Join(' ', text.Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries));
 
     public static string Render(GroundedCharterDraft draft)
     {

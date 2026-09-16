@@ -12,6 +12,78 @@ namespace Dsf.Cli.Tests;
 
 public sealed class FactoryCharterWorkflowTests
 {
+    [Fact]
+    public async Task Unchanged_onboarding_charter_with_CRLF_is_adopted_with_its_original_native_identity()
+    {
+        var content = CharterScenario.ExistingCharter.Replace("\n", "\r\n", StringComparison.Ordinal);
+        Assert.NotEqual(CharterMarkdown.GitBlobSha(CharterScenario.ExistingCharter), CharterMarkdown.GitBlobSha(content));
+        await AssertExactUnchangedAdoptionAsync(content);
+    }
+
+    [Fact]
+    public async Task Unchanged_legacy_charter_with_multiline_prose_is_adopted_without_rewriting_human_intent()
+    {
+        const string content = """
+            <!-- dsf:charter schema_version=1 -->
+            # Product Charter: widget
+
+            ## Vision
+            Help coordinators coordinate volunteer shifts.
+            Keep shift planning understandable for volunteer teams.
+
+            ## Target Users
+            Volunteer coordinators arranging staffed shifts.
+            Team leads responsible for the staffing schedule.
+
+            ## Goals
+            - Ensure scheduling prevents double booking.
+
+            ## Non-Goals
+
+            ## Success Metrics
+            - Measure weekly reductions in double-booked volunteer shifts.
+
+            ## Constraints
+            Existing volunteer schedules remain human-owned.
+
+            ## Glossary
+            - Coordinator: person responsible for a volunteer schedule
+            """;
+        Assert.Contains('\n', CharterMarkdown.Parse(content, "widget").Vision);
+        await AssertExactUnchangedAdoptionAsync(content);
+    }
+
+    private static async Task AssertExactUnchangedAdoptionAsync(string content)
+    {
+        using var scenario = await CharterScenario.ReadyAsync(content);
+        var nativeBlob = scenario.Source.Source!.Blobs.Single(blob => blob.Value.SequenceEqual(Encoding.UTF8.GetBytes(content))).Key;
+        var review = await scenario.Machine.InvokeAsync("charter", "--adopt", "--existing");
+        Assert.True(review.Exit == 0, review.Terminal.Output);
+        Assert.Equal(content, (string?)review.Result["review"]?["before"]);
+        Assert.Equal(content, (string?)review.Result["review"]?["after"]);
+        Assert.Equal(nativeBlob, (string?)review.Result["review"]?["beforeBlob"]);
+        Assert.Equal(nativeBlob, (string?)review.Result["review"]?["afterBlob"]);
+        Assert.Equal("DraftReady", (string?)review.Result["evidence"]?["analysis"]?["state"]);
+        var approval = (string)review.Result["revision"]!;
+        var adopted = await scenario.Machine.InvokeAsync("charter", "--adopt", "--existing", "--approve", approval);
+        Assert.True(adopted.Exit == 0, adopted.Terminal.Output);
+        Assert.Equal("Adopted", (string?)adopted.Result["state"]);
+        Assert.Equal(nativeBlob, (string?)adopted.Result["adoption"]?["charterBlob"]);
+        Assert.Equal(FactoryModelsValidation.Hash(content), (string?)adopted.Result["adoption"]?["charterSha256"]);
+        Assert.Equal(approval, (string?)adopted.Result["adoption"]?["reviewFingerprint"]);
+        Assert.Null(adopted.Result["publication"]);
+        Assert.False((bool)adopted.Result["activated"]!);
+        scenario.Reconstruct();
+        var status = await scenario.Machine.InvokeAsync("charter", "--status-only");
+        Assert.True(status.Exit == 0, status.Terminal.Output);
+        Assert.Equal("Adopted", (string?)status.Result["state"]);
+        Assert.Equal(content, (string?)status.Result["evidence"]?["source"]?["content"]);
+        Assert.Equal(nativeBlob, (string?)status.Result["adoption"]?["charterBlob"]);
+        Assert.Equal(adopted.Result["adoption"]!["revision"]!.ToJsonString(), status.Result["adoption"]!["revision"]!.ToJsonString());
+        Assert.Equal(content, scenario.CurrentCharter);
+        Assert.Empty(scenario.GitHubWrites);
+    }
+
     [Theory]
     [InlineData(520, "Reviewed")]
     [InlineData(8220, "Reviewed")]
