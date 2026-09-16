@@ -138,6 +138,7 @@ followed or executed. `AGENTS.md` in the target is inert input, not instructions
 | Durable records / cumulative reserved metadata | 65,536 / 64 MiB |
 | Each record, including conservative overhead | 8192 bytes, below App Configuration's 10 KiB limit |
 | Source selections per operation | 8 |
+| Native progress listing | 1024 pages, 4 MiB per page, within the same 45-second request budget |
 
 Limits, unread necessary source, unavailable objects and missing chunks never
 become 100% completion. Generated/vendor/binary exclusions are not read source;
@@ -164,9 +165,43 @@ ETag fencing protects checkpoints; lost writes are never blindly retried.
 
 Only bounded metadata lives in the separate remote source store. The root
 `source/<operation-id-N>/current` holds snapshot, cursors, counters, capacity
-reservations and lease. Immutable `source/<snapshot-id>/nodes|results|history/...`
+reservations, integrity commitment and lease. A key-only native App Configuration
+query must prove `source/*` empty before initialization. A conditional immutable
+`source/<operation-id-N>/initialized` record reserves both initial records before
+creating `/current`; concurrent or uncertain initialization is never overwritten.
+Missing `/current` alongside any namespace progress is **Unknown**, not a pristine
+store or permission to reset lifecycle counters. An initialization marker without
+a confirmed root remains held for administrator reconciliation.
+
+Immutable `source/<snapshot-id>/nodes|results|history/...`
 and `source/<snapshot-id>/chunks/<path-index-D8>/<chunk-index-D4>` records retain
-path/range provenance. Capacity is reserved before each immutable write.
+path/range provenance. History keys use the zero-based **selection occurrence**,
+not a fixed slot: A-B-A-C preserves both A observations without overwriting either.
+History values contain the snapshot and its integrity commitment; revisiting
+compatible source retains the original content records and proof. All occurrences,
+history/proof records and conservative capacity reservations count against the
+same lifecycle budgets. Capacity is reserved before each immutable write.
+
+Every global **Acquired** observation requires a fresh, bounded native paged scan
+of the namespace, verification of all current nodes/results/chunks and aggregate
+counts, and comparison of their values/ETags against the immutable
+`source/<snapshot-id>/integrity/00000000` commitment and authoritative root.
+The display page never determines completion. A missing or modified record on
+another page invalidates the aggregate. `--status-only` performs these reads
+without writes, repairs, new proofs or clearing holds.
+
+The SDK's native `Link` continuation is followed only on the same source endpoint,
+with the original namespace/label filters; an empty intermediate page is not
+completion. Missing, malformed, duplicate or incomplete listing evidence remains
+unconfirmed. Interrupted verification restarts a **fresh** scan on another
+invocation; no cross-invocation cached-completion flag substitutes for unread pages.
+If the complete scan cannot fit the time/listing/metadata bounds, no global success
+is returned. Root ETags fence cooperating workers, not a cross-record transaction
+against administrative mutations after an observation.
+
+Current serialized progress requires `integrityProtocol: 1`; earlier unsealed
+checkpoints are held **Unknown**, not silently migrated or assigned guessed
+accounting/proofs. No automatic deletion, reset or reconstruction is provided.
 Workers on other machines deserialize these records; local manifests/caches and
 shared object aliases are not authority. There is no full-source archive or
 persisted excerpt in this slice. Temporary downloaded byte buffers are cleared.
@@ -175,8 +210,10 @@ For a subsequent compatible consumer, Core exposes `SourceSnapshot`,
 `SourceProgress`, `SourceChunkReference` and `IFactorySourceMaterializer`.
 Authenticated code-only `POST /materialize` accepts
 `{ "snapshotId": "...", "pathIndex": 1, "chunkIndex": 0, "sha256": "..." }`.
-It reacquires the pinned blob, checks current authority, safe content and exact
-range hash, and returns temporary bytes with `Cache-Control: no-store`.
+It reacquires the pinned blob, checks safe content and the exact range hash, then
+rechecks the currently selected repository/branch/head identity and current
+authority before exposing bytes with `Cache-Control: no-store`. Changed source,
+access, authority or cancellation suppresses output and clears temporary bytes.
 Operators cannot materialize through this route. In-process consumers dispose
 `SourceMaterializedChunk` to clear its buffer. Fixed byte ranges can split UTF-8
 code points: use a streaming decoder/reassemble contiguous ranges.

@@ -38,6 +38,10 @@ internal sealed class SourceInventoryTransport : HttpMessageHandler
     internal bool V2Tokens { get; set; }
     internal Action<JsonObject>? ChangeApiToken { get; set; }
     internal int GitHubStatus { get; set; } = 200;
+    internal int ProgressPageSize { get; set; } = 100;
+    internal int EmptyProgressPages { get; set; }
+    internal Action<int, HttpResponseMessage>? ChangeProgressPage { get; set; }
+    internal Action? AfterBlobResponse { get; set; }
     internal void ImportProgress(SourceInventoryTransport source)
     {
         var serialized = JsonSerializer.Serialize(source.Progress.ToDictionary(p => p.Key, p => new { p.Value.Value, p.Value.Revision }));
@@ -231,6 +235,31 @@ internal sealed class SourceInventoryTransport : HttpMessageHandler
         }
         if (uri.Host == new Uri(ProgressEndpoint).Host)
         {
+            if (uri.AbsolutePath == "/kv")
+            {
+                Assert.Equal(HttpMethod.Get, request.Method);
+                var query = Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(uri.Query);
+                Assert.Equal("source/*", query["key"].ToString());
+                Assert.Equal("*", query["label"].ToString());
+                var select = query.GetValueOrDefault("$select");
+                var keysOnly = select == "key";
+                Assert.True(keysOnly || select.Count == 0);
+                var page = query.TryGetValue("after", out var after)
+                    ? int.Parse(Encoding.UTF8.GetString(Convert.FromBase64String(after.ToString())), System.Globalization.CultureInfo.InvariantCulture) : 0;
+                var keys = Progress.Keys.Where(k => k.StartsWith("source/", StringComparison.Ordinal)).Order(StringComparer.Ordinal).ToArray();
+                var selected = page < EmptyProgressPages ? [] : keys.Skip((page - EmptyProgressPages) * ProgressPageSize).Take(ProgressPageSize).ToArray();
+                var response = Json(new { items = selected.Select(key => keysOnly ? (object)new { key }
+                    : Setting(key, Progress[key].Value, Progress[key].Revision)).ToArray() });
+                if (page < EmptyProgressPages || (page - EmptyProgressPages + 1) * ProgressPageSize < keys.Length)
+                {
+                    var nextQuery = query.ToDictionary(p => p.Key, p => (string?)p.Value.ToString());
+                    nextQuery["after"] = Convert.ToBase64String(Encoding.UTF8.GetBytes((page + 1).ToString(System.Globalization.CultureInfo.InvariantCulture)));
+                    var next = Microsoft.AspNetCore.WebUtilities.QueryHelpers.AddQueryString("/kv", nextQuery);
+                    response.Headers.TryAddWithoutValidation("Link", $"<{next}>; rel=\"next\"");
+                }
+                ChangeProgressPage?.Invoke(page, response);
+                return response;
+            }
             var key = Uri.UnescapeDataString(uri.AbsolutePath["/kv/".Length..]);
             Assert.DoesNotContain("dsf/factory", key);
             if (request.Method == HttpMethod.Get)
@@ -287,7 +316,9 @@ internal sealed class SourceInventoryTransport : HttpMessageHandler
         if (uri.AbsolutePath.Contains("/git/blobs/", StringComparison.Ordinal))
         {
             var id = uri.Segments.Last();
-            return Blobs.TryGetValue(id, out var bytes) ? Json(new { sha = id, size = bytes.Length, encoding = "base64", content = Convert.ToBase64String(bytes) }) : Json(new { }, 404);
+            var response = Blobs.TryGetValue(id, out var bytes) ? Json(new { sha = id, size = bytes.Length, encoding = "base64", content = Convert.ToBase64String(bytes) }) : Json(new { }, 404);
+            AfterBlobResponse?.Invoke();
+            return response;
         }
         throw new InvalidOperationException("Unexpected source request: " + uri.PathAndQuery);
     }

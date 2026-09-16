@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Text.Json;
 using Azure.Data.AppConfiguration;
 using Dsf.Core.Onboarding;
 
@@ -12,16 +13,22 @@ internal sealed class FactorySourceInventory(FactorySourceAccess access, HttpCli
     private SourceProgress? progress;
     private readonly Guid worker = Guid.NewGuid();
     private string RootKey => "source/" + access.Source.OperationId.ToString("N") + "/current";
+    private string InitializationKey => "source/" + access.Source.OperationId.ToString("N") + "/initialized";
     private string Key(string kind, int index) => "source/" + progress!.Snapshot.Id + "/" + kind + "/" + index.ToString("D8");
     private string ChunkKey(int path, int chunk) => Key("chunks", path) + "/" + chunk.ToString("D4");
+    private sealed record IntegrityProof(string SnapshotId, string Sha256);
+    private sealed record SelectionHistory(SourceSnapshot Snapshot, string? IntegritySha256);
 
     internal async Task<SourceInventoryResult> AdvanceAsync(SourceAcquireRequest request, CancellationToken token)
     {
         root = await store.ReadAsync(RootKey, token);
         if (root is null)
         {
+            await store.RequirePristineAsync(token);
             var snapshot = await github.PinAsync(token);
-            progress = new(snapshot);
+            progress = new(snapshot) { Records = 2, MetadataBytes = 2 * FactorySourceValidation.RecordBytes };
+            await access.CheckAsync(token);
+            await store.WriteAsync(InitializationKey, progress, null, token);
             await access.CheckAsync(token);
             root = await store.WriteAsync(RootKey, progress, null, token);
         }
@@ -45,7 +52,7 @@ internal sealed class FactorySourceInventory(FactorySourceAccess access, HttpCli
         await SaveAsync(token);
         if (replacement is not null)
         {
-            await WriteImmutableAsync(Key("history", 0), progress.Snapshot, token);
+            await WriteImmutableAsync(Key("history", progress.Snapshots - 1), new SelectionHistory(progress.Snapshot, progress.IntegritySha256), token);
             progress = new(replacement) { Worker = worker, LeaseUntil = progress.LeaseUntil, Records = progress.Records,
                 MetadataBytes = progress.MetadataBytes, Snapshots = progress.Snapshots + 1 };
             await SaveAsync(token);
@@ -126,11 +133,12 @@ internal sealed class FactorySourceInventory(FactorySourceAccess access, HttpCli
             await github.CheckSnapshotAsync(progress.Snapshot, token);
             var complete = progress.CompleteRootTree && progress.ContentCursor == progress.Nodes && progress.NecessaryGaps == 0
                 && progress.Failed == 0 && progress.Acquired + progress.Excluded == progress.Files;
+            var verified = complete ? await VerifyInventoryAsync(createProof: true, token) : null;
             progress = progress with { State = complete ? SourceState.Acquired : SourceState.Partial,
                 Reason = complete ? "AcquiredNotAnalyzed" : progress.NecessaryGaps > 0 ? "NecessarySourceGaps" : "Pending",
                 Worker = null, LeaseUntil = null };
             await SaveAsync(token);
-            return await ReportAsync(request.Page, "Pinned source acquisition only; raw bytes discarded, not semantic analysis.", token);
+            return await ReportAsync(request.Page, "Pinned source acquisition only; raw bytes discarded, not semantic analysis.", token, verified);
         }
         catch (SourceAcquisitionException e) when (e is not SourceProgressException)
         {
@@ -174,7 +182,11 @@ internal sealed class FactorySourceInventory(FactorySourceAccess access, HttpCli
     internal async Task<SourceInventoryResult> StatusAsync(int page, CancellationToken token)
     {
         root = await store.ReadAsync(RootKey, token);
-        if (root is null) return new(SourceState.Partial, "Acquisition pending; no snapshot pinned.", null, [], null);
+        if (root is null)
+        {
+            await store.RequirePristineAsync(token);
+            return new(SourceState.Partial, "Acquisition pending; no snapshot pinned.", null, [], null);
+        }
         progress = SourceProgressStore.Parse<SourceProgress>(root);
         ValidateProgress();
         await github.CheckSnapshotAsync(progress.Snapshot, token);
@@ -211,45 +223,57 @@ internal sealed class FactorySourceInventory(FactorySourceAccess access, HttpCli
                 || chunk.ByteOffset + chunk.ByteLength > bytes.Length
                 || Convert.ToHexStringLower(SHA256.HashData(bytes.AsSpan(chunk.ByteOffset, chunk.ByteLength))) != reference.Sha256)
                 throw new SourceAcquisitionException(SourceState.Blocked, "SourceMaterializationGap");
+            await github.CheckSnapshotAsync(progress.Snapshot, token);
             await access.CheckAsync(token);
             await FenceAsync(token);
+            token.ThrowIfCancellationRequested();
             return new(chunk, bytes.AsSpan(chunk.ByteOffset, chunk.ByteLength).ToArray());
         }
         finally { CryptographicOperations.ZeroMemory(bytes); }
     }
 
-    private async Task<SourceInventoryResult> ReportAsync(int page, string detail, CancellationToken token)
+    private async Task<SourceInventoryResult> ReportAsync(int page, string detail, CancellationToken token,
+        IReadOnlyDictionary<string, ConfigurationSetting>? verified = null)
     {
         if (page < 0 || page > FactorySourceValidation.MaximumNodes / FactorySourceValidation.PageSize) throw new ArgumentOutOfRangeException(nameof(page));
+        if (progress!.State == SourceState.Acquired && verified is null)
+            verified = await VerifyInventoryAsync(createProof: false, token);
         var first = page * FactorySourceValidation.PageSize + 1;
         var paths = new List<SourcePathCoverage>();
         for (var i = first; i < Math.Min(first + FactorySourceValidation.PageSize, progress!.Nodes); i++)
         {
-            var node = await ReadNodeAsync(i, token);
-            var record = await store.ReadAsync(Key("results", i), token);
+            var node = await ReadNodeAsync(i, token, verified);
+            var record = verified is null ? await store.ReadAsync(Key("results", i), token) : verified.GetValueOrDefault(Key("results", i));
             var result = record is null ? null : SourceProgressStore.Parse<SourcePathResult>(record);
             if (node.Mode != "040000" && node.Index < progress.ContentCursor && result is null)
                 throw new SourceAcquisitionException(SourceState.Unknown, "MissingPathProgress");
-            var chunks = await ReadChunksAsync(node, result, token);
+            var chunks = await ReadChunksAsync(node, result, token, verified);
             paths.Add(new(node, result, chunks) { State = result?.State
                     ?? (node.Mode == "040000" && node.Index < progress.TreeCursor ? SourcePathState.Acquired : SourcePathState.Pending),
                 ExpectedChunks = node.Mode is "100644" or "100755" && node.Size is >= 0 and <= FactorySourceValidation.MaximumBlobBytes
                     ? Math.Max(1, (int)((node.Size.Value + FactorySourceValidation.ChunkBytes - 1) / FactorySourceValidation.ChunkBytes)) : null });
         }
+        await github.CheckSnapshotAsync(progress.Snapshot, token);
         await access.CheckAsync(token);
         await FenceAsync(token);
         return new(progress.State, detail, progress, paths, first + paths.Count < progress.Nodes ? page + 1 : null);
     }
 
-    private async Task<SourceNode> ReadNodeAsync(int index, CancellationToken token)
+    private async Task<SourceNode> ReadNodeAsync(int index, CancellationToken token,
+        IReadOnlyDictionary<string, ConfigurationSetting>? records = null)
     {
-        var node = SourceProgressStore.Parse<SourceNode>(await store.ReadAsync(Key("nodes", index), token) ?? throw new SourceAcquisitionException(SourceState.Unknown, "MissingInventoryPage"));
-        if (node.SnapshotId != progress!.Snapshot.Id || node.Index != index || !FactorySourceValidation.GitId(node.ObjectId))
+        var record = records is null ? await store.ReadAsync(Key("nodes", index), token) : records.GetValueOrDefault(Key("nodes", index));
+        var node = SourceProgressStore.Parse<SourceNode>(record ?? throw new SourceAcquisitionException(SourceState.Unknown, "MissingInventoryPage"));
+        if (node.SnapshotId != progress!.Snapshot.Id || node.Index != index || !FactorySourceValidation.GitId(node.ObjectId)
+            || node.Mode is not ("040000" or "100644" or "100755" or "120000" or "160000")
+            || index == 0 && (node.Path != "" || node.Mode != "040000" || node.ObjectId != progress.Snapshot.RootTree)
+            || index != 0 && node.Path.Length == 0)
             throw new SourceAcquisitionException(SourceState.Unknown, "InvalidInventoryPage");
         return node;
     }
 
-    private async Task<IReadOnlyList<SourceChunk>> ReadChunksAsync(SourceNode node, SourcePathResult? result, CancellationToken token)
+    private async Task<IReadOnlyList<SourceChunk>> ReadChunksAsync(SourceNode node, SourcePathResult? result, CancellationToken token,
+        IReadOnlyDictionary<string, ConfigurationSetting>? records = null)
     {
         if (result is not null && (result.SnapshotId != progress!.Snapshot.Id || result.PathIndex != node.Index || result.BlobId != node.ObjectId
             || !Enum.IsDefined(result.State) || !Enum.IsDefined(result.Exclusion) || result.Chunks is < 0 or > 16
@@ -259,7 +283,7 @@ internal sealed class FactorySourceInventory(FactorySourceAccess access, HttpCli
         var chunks = new List<SourceChunk>();
         for (var i = 0; i < FactorySourceValidation.MaximumBlobBytes / FactorySourceValidation.ChunkBytes; i++)
         {
-            var record = await store.ReadAsync(ChunkKey(node.Index, i), token);
+            var record = records is null ? await store.ReadAsync(ChunkKey(node.Index, i), token) : records.GetValueOrDefault(ChunkKey(node.Index, i));
             if (record is null) break;
             var chunk = SourceProgressStore.Parse<SourceChunk>(record);
             if (chunk.SnapshotId != progress!.Snapshot.Id || chunk.PathIndex != node.Index || chunk.BlobId != node.ObjectId || chunk.Index != i
@@ -272,6 +296,73 @@ internal sealed class FactorySourceInventory(FactorySourceAccess access, HttpCli
             || node.Index == progress!.ContentCursor && chunks.Count < progress.ChunkCursor)
             throw new SourceAcquisitionException(SourceState.Unknown, "MissingChunk");
         return chunks;
+    }
+
+    private async Task<IReadOnlyDictionary<string, ConfigurationSetting>> VerifyInventoryAsync(bool createProof, CancellationToken token)
+    {
+        var records = await store.ReadNamespaceAsync(token);
+        if (!records.TryGetValue(RootKey, out var current) || current.ETag != root!.ETag || current.Value != root.Value)
+            throw new SourceAcquisitionException(SourceState.Unknown, "ProgressOwnershipChanged");
+        var bytes = FactorySourceValidation.RecordBytes + records.Where(p => p.Key != RootKey)
+            .Sum(p => (long)SourceProgressStore.RecordSize(p.Key, p.Value.Value));
+        if (records.Count > progress!.Records || bytes > progress.MetadataBytes)
+            throw new SourceAcquisitionException(SourceState.Unknown, "ProgressAccountingMismatch");
+        var files = 0;
+        var acquired = 0;
+        var excluded = 0;
+        var failed = 0;
+        var gaps = 0;
+        var chunkCount = 0;
+        var paths = new HashSet<string>(StringComparer.Ordinal);
+        for (var i = 0; i < progress.Nodes; i++)
+        {
+            token.ThrowIfCancellationRequested();
+            var node = await ReadNodeAsync(i, token, records);
+            if (!paths.Add(node.Path)) throw new SourceAcquisitionException(SourceState.Unknown, "DuplicateInventoryPath");
+            if (node.Mode == "040000") continue;
+            files++;
+            var result = SourceProgressStore.Parse<SourcePathResult>(records.GetValueOrDefault(Key("results", i))
+                ?? throw new SourceAcquisitionException(SourceState.Unknown, "MissingPathProgress"));
+            var chunks = await ReadChunksAsync(node, result, token, records);
+            chunkCount += chunks.Count;
+            if (result.State == SourcePathState.Pending) throw new SourceAcquisitionException(SourceState.Unknown, "UnfinishedPathProgress");
+            acquired += result.State == SourcePathState.Acquired ? 1 : 0;
+            excluded += result.State == SourcePathState.Excluded ? 1 : 0;
+            failed += result.State == SourcePathState.Failed ? 1 : 0;
+            gaps += result.Exclusion is SourceExclusion.Sensitive or SourceExclusion.Unavailable or SourceExclusion.External ? 1 : 0;
+        }
+        var prefix = "source/" + progress.Snapshot.Id + "/";
+        var inventory = records.Where(p => p.Key.StartsWith(prefix + "nodes/", StringComparison.Ordinal)
+            || p.Key.StartsWith(prefix + "results/", StringComparison.Ordinal) || p.Key.StartsWith(prefix + "chunks/", StringComparison.Ordinal))
+            .OrderBy(p => p.Key, StringComparer.Ordinal).ToArray();
+        if (files != progress.Files || acquired != progress.Acquired || excluded != progress.Excluded
+            || failed != progress.Failed || gaps != progress.NecessaryGaps || inventory.Length != progress.Nodes + files + chunkCount)
+            throw new SourceAcquisitionException(SourceState.Unknown, "InvalidAggregateCoverage");
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        foreach (var record in inventory)
+        {
+            token.ThrowIfCancellationRequested();
+            hash.AppendData(JsonSerializer.SerializeToUtf8Bytes(new[] { record.Key, record.Value.ETag.ToString(), record.Value.Value }));
+        }
+        var digest = Convert.ToHexStringLower(hash.GetHashAndReset());
+        var historical = records.Where(p => p.Key.StartsWith(prefix + "history/", StringComparison.Ordinal))
+            .Select(p => SourceProgressStore.Parse<SelectionHistory>(p.Value))
+            .Where(p => p.Snapshot.Id == progress.Snapshot.Id && p.IntegritySha256 is not null).ToArray();
+        var proofRecord = records.GetValueOrDefault(Key("integrity", 0));
+        if (proofRecord is null && (!createProof || progress.IntegritySha256 is not null || historical.Length > 0))
+            throw new SourceAcquisitionException(SourceState.Unknown, "MissingIntegrityProof");
+        var proof = proofRecord is null ? null : SourceProgressStore.Parse<IntegrityProof>(proofRecord);
+        if (progress.IntegritySha256 is not null && progress.IntegritySha256 != digest
+            || proof is not null && (proof.SnapshotId != progress.Snapshot.Id || proof.Sha256 != digest)
+            || historical.Any(h => h.IntegritySha256 != digest))
+            throw new SourceAcquisitionException(SourceState.Unknown, "InventoryIntegrityMismatch");
+        await FenceAsync(token);
+        if (createProof)
+        {
+            await WriteImmutableAsync(Key("integrity", 0), new IntegrityProof(progress.Snapshot.Id, digest), token);
+            progress = progress with { IntegritySha256 = digest };
+        }
+        return records;
     }
 
     private async Task WriteImmutableAsync<T>(string key, T value, CancellationToken token)
@@ -310,7 +401,7 @@ internal sealed class FactorySourceInventory(FactorySourceAccess access, HttpCli
     }
     private void ValidateProgress()
     {
-        if (progress!.Snapshot.SchemaVersion != 1 || !FactorySourceValidation.Hash(progress.Snapshot.Id)
+        if (progress!.IntegrityProtocol != 1 || progress.Snapshot.SchemaVersion != 1 || !FactorySourceValidation.Hash(progress.Snapshot.Id)
             || !FactorySourceValidation.GitId(progress.Snapshot.Commit) || !FactorySourceValidation.GitId(progress.Snapshot.RootTree)
             || progress.Snapshot.FactoryId != access.Manifest.Identity.FactoryId || progress.Snapshot.OperationId != access.Source.OperationId
             || progress.Snapshot.ConfigurationRevision != access.Source.ApprovalFingerprint || progress.Snapshot.RepositoryId != access.GitHub.RepositoryId
@@ -324,7 +415,8 @@ internal sealed class FactorySourceInventory(FactorySourceAccess access, HttpCli
             || progress.CompleteRootTree && progress.TreeCursor != progress.Nodes
             || (progress.Worker is null) != (progress.LeaseUntil is null)
             || progress.State == SourceState.Acquired && (!progress.CompleteRootTree || progress.ContentCursor != progress.Nodes
-                || progress.Worker is not null || progress.NecessaryGaps != 0 || progress.Failed != 0 || progress.Acquired + progress.Excluded != progress.Files))
+                || !FactorySourceValidation.Hash(progress.IntegritySha256) || progress.Worker is not null
+                || progress.NecessaryGaps != 0 || progress.Failed != 0 || progress.Acquired + progress.Excluded != progress.Files))
             throw new SourceAcquisitionException(SourceState.Unknown, "UntrustedProgress");
     }
 }

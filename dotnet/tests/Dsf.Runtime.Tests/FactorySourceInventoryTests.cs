@@ -446,6 +446,13 @@ public sealed class FactorySourceInventoryTests
             if (key.EndsWith("/current", StringComparison.Ordinal)) return;
             bytes += System.Text.Encoding.UTF8.GetByteCount(value) + key.Length + 1024;
             writes++;
+            if (key.EndsWith("/initialized", StringComparison.Ordinal))
+            {
+                var initialization = JsonNode.Parse(value)!;
+                Assert.Equal(2, (int)initialization["records"]!);
+                Assert.Equal(2 * FactorySourceValidation.RecordBytes, (long)initialization["metadataBytes"]!);
+                return;
+            }
             var root = JsonNode.Parse(transport.Progress.Single(p => p.Key.EndsWith("/current", StringComparison.Ordinal)).Value.Value)!;
             Assert.True((long)root["metadataBytes"]! >= bytes, "Capacity must precede effects, including lost responses.");
             Assert.True((int)root["records"]! >= writes);
@@ -569,7 +576,7 @@ public sealed class FactorySourceInventoryTests
     {
         using var transport = new SourceInventoryTransport();
         var result = await RunAsync(transport);
-        Assert.Equal(HttpStatusCode.OK, result.Status);
+        Assert.True(result.Status == HttpStatusCode.OK, result.Body + "\n" + string.Join("\n", transport.Requests.TakeLast(4)));
         var progress = JsonNode.Parse(result.Body)!["progress"]!;
         Assert.Equal(913, (long)progress["snapshot"]!["repositoryId"]!);
         Assert.Equal("actual-default", (string?)progress["snapshot"]!["defaultBranch"]);

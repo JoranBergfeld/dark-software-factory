@@ -16,6 +16,37 @@ public sealed class FactorySourceWorkflowTests
         "--source-audience", "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"];
 
     [Fact]
+    public async Task Default_CLI_status_rejects_missing_nonselected_chunk_after_serialized_worker_replacement()
+    {
+        static void Populate(SourceInventoryTransport source) => source.RootTree = source.Tree(Enumerable.Range(0, 40)
+            .Select(i => ($"file-{i:D2}.py", "100644", source.Blob("print('first party')"))).ToArray());
+        var (machine, arm, previous) = await ReadyAsync();
+        using (previous)
+        using (var transport = new SourceWorkflowTransport(arm, previous))
+        {
+            machine.Boundary.Repository.ReservationHttp = new HttpClient(transport);
+            var preview = await machine.InvokeAsync("source", Preparation);
+            await machine.InvokeAsync("source", [.. Preparation, "--approve", (string)preview.Result["source"]!["approvalFingerprint"]!]);
+            Assert.NotNull(transport.Source);
+            Populate(transport.Source);
+            var acquired = await machine.InvokeAsync("source");
+            for (var i = 0; i < 16 && acquired.Exit != 0; i++) acquired = await machine.InvokeAsync("source");
+            Assert.Equal(0, acquired.Exit);
+            using var replacement = new SourceInventoryTransport(transport.Values(), transport.Source.Clock.Now);
+            Populate(replacement);
+            replacement.ImportProgress(transport.Source);
+            replacement.Progress.Remove(replacement.Progress.Keys.Single(k => k.Contains("/chunks/00000033/", StringComparison.Ordinal)));
+            transport.Source.Dispose();
+            transport.Source = replacement;
+            var status = await machine.InvokeAsync("source", "--status-only");
+            Assert.Equal(1, status.Exit);
+            Assert.Equal("Unknown", (string?)status.Result["state"]);
+            Assert.Contains("MissingChunk", (string?)status.Result["detail"]);
+            Assert.Empty(replacement.Writes);
+        }
+    }
+
+    [Fact]
     public async Task Source_preparation_cannot_attach_to_a_replaced_foundation_network()
     {
         var (machine, arm, previous) = await ReadyAsync();

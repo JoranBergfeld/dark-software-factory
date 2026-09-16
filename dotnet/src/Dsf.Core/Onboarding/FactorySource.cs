@@ -22,6 +22,9 @@ public sealed record SourceSnapshot(
 
 public sealed record SourceProgress(SourceSnapshot Snapshot)
 {
+    [System.Text.Json.Serialization.JsonRequired]
+    public int IntegrityProtocol { get; init; } = 1;
+    public string? IntegritySha256 { get; init; }
     public SourceState State { get; init; } = SourceState.Partial;
     public string Reason { get; init; } = "Pending";
     public int Nodes { get; init; } = 1;
