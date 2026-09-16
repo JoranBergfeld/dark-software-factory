@@ -39,7 +39,8 @@ internal sealed class OwnerReservationStore
         catch (RequestFailedException e) when (e.Status == 404) { return null; }
         catch (OperationCanceledException) when (!token.IsCancellationRequested)
         { throw new ReservationStoreException(FactoryReservationState.Unknown, "Owner reservation read timed out; absence was not established."); }
-        catch (Exception e) when (e is RequestFailedException or HttpRequestException or AuthenticationFailedException or JsonException)
+        catch (Exception e) when (e is RequestFailedException or HttpRequestException or AuthenticationFailedException
+            or JsonException or FormatException or InvalidOperationException)
         { throw new ReservationStoreException(FactoryReservationState.Unknown, "Owner reservation read unavailable; provider details withheld."); }
     }
 
@@ -64,7 +65,8 @@ internal sealed class OwnerReservationStore
         { throw new ReservationStoreException(FactoryReservationState.Failed, "Owner rejected the conditional write; no provisioning. Provider details withheld."); }
         catch (AuthenticationFailedException)
         { throw new ReservationStoreException(FactoryReservationState.Failed, "Current Azure CLI registry identity is unavailable or differs from the reviewed operator; no write dispatched."); }
-        catch (Exception e) when (e is RequestFailedException or HttpRequestException or OperationCanceledException or JsonException)
+        catch (Exception e) when (e is RequestFailedException or HttpRequestException or OperationCanceledException
+            or JsonException or FormatException or InvalidOperationException)
         { throw new ReservationStoreException(FactoryReservationState.Unknown, "Conditional write response uncertain; inspect the same operation, never replace identity."); }
     }
 

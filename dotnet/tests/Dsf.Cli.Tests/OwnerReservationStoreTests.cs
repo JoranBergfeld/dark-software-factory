@@ -33,11 +33,30 @@ public sealed class OwnerReservationStoreTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Malformed_provider_receipts_are_unknown_not_operator_input_failures(bool write)
+    [InlineData(false, "json")]
+    [InlineData(true, "json")]
+    [InlineData(false, "last_modified")]
+    [InlineData(true, "last_modified")]
+    [InlineData(false, "locked")]
+    [InlineData(true, "locked")]
+    [InlineData(false, "value")]
+    [InlineData(true, "value")]
+    public async Task Malformed_provider_receipts_are_unknown_not_operator_input_failures(bool write, string field)
     {
-        using var http = new HttpClient(new ContractHandler(_ => Reply(HttpStatusCode.OK, "{secret-provider-body")));
+        var record = new Dictionary<string, object?>
+        {
+            ["key"] = "key", ["label"] = null, ["value"] = "value", ["etag"] = "current",
+            ["content_type"] = OwnerReservationStore.ContentType, ["locked"] = false,
+            ["last_modified"] = "2026-09-15T23:00:00Z", ["tags"] = new Dictionary<string, string>(),
+        };
+        record[field] = field == "value" ? new[] { "secret-provider-body" } : "secret-provider-body";
+        var body = field == "json" ? "{secret-provider-body" : JsonSerializer.Serialize(record);
+        var attempts = 0;
+        using var http = new HttpClient(new ContractHandler(_ =>
+        {
+            attempts++;
+            return Reply(HttpStatusCode.OK, body);
+        }));
         var store = Store(http);
 
         var error = await Assert.ThrowsAsync<ReservationStoreException>(async () =>
@@ -47,7 +66,24 @@ public sealed class OwnerReservationStoreTests
         });
 
         Assert.Equal(FactoryReservationState.Unknown, error.State);
-        Assert.DoesNotContain("secret-provider-body", error.Message);
+        Assert.Equal(1, attempts);
+        Assert.Null(error.InnerException);
+        Assert.DoesNotContain("secret-provider-body", error.ToString());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Unrelated_adapter_errors_are_not_masked_as_malformed_provider_receipts(bool write)
+    {
+        using var http = new HttpClient(new ContractHandler(_ => throw new NotSupportedException("unexpected implementation failure")));
+        var store = Store(http);
+
+        await Assert.ThrowsAsync<NotSupportedException>(async () =>
+        {
+            if (write) await store.WriteAsync("key", "value", null, CancellationToken.None);
+            else await store.ReadAsync("key", CancellationToken.None);
+        });
     }
 
     [Theory]

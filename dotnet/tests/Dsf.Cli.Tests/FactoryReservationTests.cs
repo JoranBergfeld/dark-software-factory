@@ -9,6 +9,221 @@ namespace Dsf.Cli.Tests;
 
 public sealed class FactoryReservationTests
 {
+    private const string MalformedReceiptMarker = "malformed-receipt-marker-do-not-print";
+
+    [Theory]
+    [InlineData("last_modified")]
+    [InlineData("locked")]
+    [InlineData("value")]
+    public async Task Committed_initial_admission_with_malformed_receipt_is_redacted_unknown_and_recovers_the_same_identity(string field)
+    {
+        var store = new ReservationTestStore
+        {
+            ModifyResponse = (method, record) =>
+            {
+                if (method == HttpMethod.Put) MalformReceipt(record, field);
+            },
+        };
+        var machine = new ReservationMachine(store);
+        var reviewed = await machine.Boundary.ReviewAsync();
+        Assert.Equal(0, reviewed.Exit);
+
+        var (exit, uncertain, terminal) = await machine.ReserveAsync((string)reviewed.Plan["fingerprint"]!);
+
+        Assert.Equal(1, exit);
+        Assert.True((string?)uncertain["state"] == "Unknown", terminal.Output + terminal.Error);
+        Assert.Empty(terminal.Error);
+        Assert.True((bool)uncertain["hasRegistryEffects"]!);
+        Assert.False((bool)uncertain["isProvisioned"]!);
+        Assert.Null(uncertain["pendingIntent"]);
+        Assert.Contains("no earlier durable intent", (string?)uncertain["detail"]);
+        Assert.DoesNotContain(MalformedReceiptMarker, terminal.Output + terminal.Error + store.Export());
+        var admission = Assert.Single(store.Writes);
+        Assert.Equal("dsf/onboarding/products/widget", admission.Key);
+        Assert.Equal("*", admission.IfNoneMatch);
+        Assert.Single(JsonNode.Parse(store.ListJson())!.AsArray());
+        Assert.True(JsonNode.DeepEquals(JsonNode.Parse(admission.Value)!["identity"], uncertain["identity"]));
+
+        var persisted = store.Export();
+        var observer = new ReservationMachine(ReservationTestStore.Restore(persisted));
+        var (statusExit, status, _) = await observer.InvokeAsync("status");
+        Assert.Equal(1, statusExit);
+        Assert.Equal("Partial", (string?)status["state"]);
+        Assert.True(JsonNode.DeepEquals(uncertain["identity"], status["identity"]));
+        Assert.Empty(observer.Store.Writes);
+        Assert.Equal(persisted, observer.Store.Export());
+
+        var replacement = new ReservationMachine(ReservationTestStore.Restore(observer.Store.Export()));
+        var input = Path.GetTempFileName();
+        try
+        {
+            await File.WriteAllTextAsync(input, machine.Boundary.Input.ToJsonString());
+            var (resumedExit, resumed, resumedTerminal) = await replacement.InvokeAsync("resume", "--input", input);
+            Assert.True(resumedExit == 0, resumedTerminal.Output + resumedTerminal.Error);
+            Assert.Equal("Reserved", (string?)resumed["state"]);
+            Assert.False((bool)resumed["isProvisioned"]!);
+            Assert.True(JsonNode.DeepEquals(uncertain["identity"], resumed["identity"]));
+            Assert.DoesNotContain(replacement.Store.Writes, w => w.Key == admission.Key && w.IfNoneMatch == "*");
+        }
+        finally { File.Delete(input); }
+        machine.Boundary.AssertReadOnly();
+        observer.Boundary.AssertReadOnly();
+        replacement.Boundary.AssertReadOnly();
+    }
+
+    [Theory]
+    [InlineData("checkpoint", "last_modified")]
+    [InlineData("checkpoint", "locked")]
+    [InlineData("checkpoint", "value")]
+    [InlineData("claim", "last_modified")]
+    [InlineData("claim", "locked")]
+    [InlineData("claim", "value")]
+    public async Task Committed_resume_write_with_malformed_receipt_preserves_intent_and_recovers_without_duplicate_claims(string point, string field)
+    {
+        const string rootKey = "dsf/onboarding/products/widget";
+        var initial = new ReservationMachine(new ReservationTestStore { LoseResponseForKey = "dsf/onboarding/repositories/913" });
+        var reviewed = await initial.Boundary.ReviewAsync();
+        var (initialExit, admitted, _) = await initial.ReserveAsync((string)reviewed.Plan["fingerprint"]!);
+        Assert.Equal(1, initialExit);
+        Assert.Equal("Unknown", (string?)admitted["state"]);
+        var machine = new ReservationMachine(ReservationTestStore.Restore(initial.Store.Export()));
+        machine.Store.ModifyResponse = (method, record) =>
+        {
+            var key = (string)record["key"]!;
+            if (method == HttpMethod.Put && (point == "checkpoint" ? key == rootKey : key.StartsWith("dsf/onboarding/resources/", StringComparison.Ordinal)))
+                MalformReceipt(record, field);
+        };
+
+        var (exit, uncertain, terminal) = await machine.InvokeAsync("resume");
+
+        Assert.Equal(1, exit);
+        Assert.True((string?)uncertain["state"] == "Unknown", terminal.Output + terminal.Error);
+        Assert.Empty(terminal.Error);
+        Assert.True((bool)uncertain["hasRegistryEffects"]!);
+        Assert.False((bool)uncertain["isProvisioned"]!);
+        Assert.True(JsonNode.DeepEquals(admitted["identity"], uncertain["identity"]));
+        Assert.NotNull(uncertain["pendingIntent"]);
+        Assert.DoesNotContain(MalformedReceiptMarker, terminal.Output + terminal.Error + machine.Store.Export());
+        var committed = machine.Store.Writes.Last();
+        var records = JsonNode.Parse(machine.Store.ListJson())!.AsArray();
+        var root = JsonNode.Parse((string)records.Single(r => (string?)r!["key"] == rootKey)!["value"]!)!;
+        Assert.Equal("Partial", (string?)root["state"]);
+        if (point == "checkpoint")
+        {
+            Assert.Single(machine.Store.Writes);
+            Assert.Equal(rootKey, committed.Key);
+            Assert.NotNull(committed.IfMatch);
+            Assert.True(JsonNode.DeepEquals(admitted["pendingIntent"], uncertain["pendingIntent"]));
+            Assert.Null(root["intent"]);
+        }
+        else
+        {
+            Assert.Single(machine.Store.Writes, w => w.Key.StartsWith("dsf/onboarding/resources/", StringComparison.Ordinal));
+            Assert.Equal("*", committed.IfNoneMatch);
+            Assert.Equal(committed.Key, (string?)uncertain["pendingIntent"]!["key"]);
+            Assert.True(JsonNode.DeepEquals(root["intent"], uncertain["pendingIntent"]));
+        }
+        Assert.Equal(committed.Value, (string?)records.Single(r => (string?)r!["key"] == committed.Key)!["value"]);
+
+        var persisted = machine.Store.Export();
+        var observer = new ReservationMachine(ReservationTestStore.Restore(persisted));
+        var (statusExit, status, _) = await observer.InvokeAsync("status");
+        Assert.Equal(1, statusExit);
+        Assert.Equal(point == "checkpoint" ? "Partial" : "Unknown", (string?)status["state"]);
+        Assert.True(JsonNode.DeepEquals(admitted["identity"], status["identity"]));
+        Assert.True(JsonNode.DeepEquals(root["intent"], status["pendingIntent"]));
+        Assert.Empty(observer.Store.Writes);
+        Assert.Equal(persisted, observer.Store.Export());
+
+        var replacement = new ReservationMachine(ReservationTestStore.Restore(observer.Store.Export()));
+        var (resumedExit, resumed, resumedTerminal) = await replacement.InvokeAsync("resume");
+        Assert.True(resumedExit == 0, resumedTerminal.Output + resumedTerminal.Error);
+        Assert.Equal("Reserved", (string?)resumed["state"]);
+        Assert.False((bool)resumed["isProvisioned"]!);
+        Assert.True(JsonNode.DeepEquals(admitted["identity"], resumed["identity"]));
+        Assert.DoesNotContain(replacement.Store.Writes, w => w.Key == rootKey && w.IfNoneMatch == "*");
+        var before = JsonNode.Parse(persisted)!.AsObject();
+        var after = JsonNode.Parse(replacement.Store.Export())!.AsObject();
+        foreach (var record in before.Where(r => r.Key != rootKey))
+        {
+            Assert.Equal((string?)record.Value, (string?)after[record.Key]);
+            Assert.DoesNotContain(replacement.Store.Writes, w => w.Key == record.Key);
+        }
+        initial.Boundary.AssertReadOnly();
+        machine.Boundary.AssertReadOnly();
+        observer.Boundary.AssertReadOnly();
+        replacement.Boundary.AssertReadOnly();
+    }
+
+    [Theory]
+    [InlineData("status", "anchor", "last_modified")]
+    [InlineData("status", "anchor", "locked")]
+    [InlineData("status", "anchor", "value")]
+    [InlineData("status", "claim", "last_modified")]
+    [InlineData("status", "claim", "locked")]
+    [InlineData("status", "claim", "value")]
+    [InlineData("resume", "anchor", "last_modified")]
+    [InlineData("resume", "anchor", "locked")]
+    [InlineData("resume", "anchor", "value")]
+    [InlineData("resume", "claim", "last_modified")]
+    [InlineData("resume", "claim", "locked")]
+    [InlineData("resume", "claim", "value")]
+    public async Task Malformed_registry_reads_report_redacted_unavailability_without_writes_and_allow_subsequent_recovery(string action, string point, string field)
+    {
+        var initial = new ReservationMachine(new ReservationTestStore { LoseResponseForKey = "dsf/onboarding/repositories/913" });
+        var reviewed = await initial.Boundary.ReviewAsync();
+        var (initialExit, admitted, _) = await initial.ReserveAsync((string)reviewed.Plan["fingerprint"]!);
+        Assert.Equal(1, initialExit);
+        Assert.Equal("Unknown", (string?)admitted["state"]);
+        var persisted = initial.Store.Export();
+        var machine = new ReservationMachine(ReservationTestStore.Restore(persisted));
+        var key = point == "anchor" ? "dsf/onboarding/products/widget" : "dsf/onboarding/repositories/913";
+        machine.Store.ModifyResponse = (method, record) =>
+        {
+            if (method == HttpMethod.Get && (string?)record["key"] == key) MalformReceipt(record, field);
+        };
+
+        var (exit, unknown, terminal) = await machine.InvokeAsync(action);
+
+        Assert.Equal(1, exit);
+        Assert.True((string?)unknown["state"] == "Unknown", terminal.Output + terminal.Error);
+        Assert.Contains("read unavailable", (string?)unknown["detail"]);
+        Assert.Empty(terminal.Error);
+        Assert.False((bool)unknown["hasRegistryEffects"]!);
+        Assert.False((bool)unknown["isProvisioned"]!);
+        Assert.DoesNotContain(MalformedReceiptMarker, terminal.Output + terminal.Error);
+        if (point == "anchor") Assert.Null(unknown["identity"]);
+        else
+        {
+            Assert.True(JsonNode.DeepEquals(admitted["identity"], unknown["identity"]));
+            Assert.True(JsonNode.DeepEquals(admitted["pendingIntent"], unknown["pendingIntent"]));
+        }
+        Assert.Empty(machine.Store.Writes);
+        Assert.Equal(persisted, machine.Store.Export());
+
+        var observer = new ReservationMachine(ReservationTestStore.Restore(machine.Store.Export()));
+        var (statusExit, status, _) = await observer.InvokeAsync("status");
+        Assert.Equal(1, statusExit);
+        Assert.Equal("Unknown", (string?)status["state"]);
+        Assert.True(JsonNode.DeepEquals(admitted["identity"], status["identity"]));
+        Assert.True(JsonNode.DeepEquals(admitted["pendingIntent"], status["pendingIntent"]));
+        Assert.Empty(observer.Store.Writes);
+        Assert.Equal(persisted, observer.Store.Export());
+
+        var replacement = new ReservationMachine(ReservationTestStore.Restore(observer.Store.Export()));
+        var (resumedExit, resumed, resumedTerminal) = await replacement.InvokeAsync("resume");
+        Assert.True(resumedExit == 0, resumedTerminal.Output + resumedTerminal.Error);
+        Assert.Equal("Reserved", (string?)resumed["state"]);
+        Assert.False((bool)resumed["isProvisioned"]!);
+        Assert.True(JsonNode.DeepEquals(admitted["identity"], resumed["identity"]));
+        Assert.DoesNotContain(replacement.Store.Writes, w => w.Key == "dsf/onboarding/products/widget" && w.IfNoneMatch == "*"
+            || w.Key == "dsf/onboarding/repositories/913");
+        initial.Boundary.AssertReadOnly();
+        machine.Boundary.AssertReadOnly();
+        observer.Boundary.AssertReadOnly();
+        replacement.Boundary.AssertReadOnly();
+    }
+
     [Theory]
     [InlineData("reserve", "table")]
     [InlineData("reserve", "yaml")]
@@ -796,6 +1011,9 @@ public sealed class FactoryReservationTests
         machine.Boundary.AssertReadOnly();
         other.Boundary.AssertReadOnly();
     }
+
+    private static void MalformReceipt(JsonNode record, string field) =>
+        record[field] = field == "value" ? new JsonObject { ["unexpected"] = MalformedReceiptMarker } : JsonValue.Create(MalformedReceiptMarker);
 }
 
 internal sealed class ReservationMachine
@@ -873,6 +1091,7 @@ internal sealed class ReservationTestStore
     public string? RejectReadKey { get; set; }
     public Func<string, bool, Task>? BeforePut { get; set; }
     public Action<string, string>? AfterPut { get; set; }
+    public Action<HttpMethod, JsonNode>? ModifyResponse { get; set; }
     public List<(string Key, string? IfMatch, string? IfNoneMatch, string Value)> Writes { get; } = [];
     public HttpMessageHandler Client() => new ClientHandler(this);
     public string Export() { lock (gate) return JsonSerializer.Serialize(records); }
@@ -900,8 +1119,11 @@ internal sealed class ReservationTestStore
             {
                 var current = store.records.TryGetValue(key, out var serialized) ? JsonNode.Parse(serialized)! : null;
                 if (request.Method == HttpMethod.Get)
-                    return key == store.RejectReadKey ? Reply(HttpStatusCode.Forbidden, null)
-                        : Reply(current is null ? HttpStatusCode.NotFound : HttpStatusCode.OK, current);
+                {
+                    if (key == store.RejectReadKey) return Reply(HttpStatusCode.Forbidden, null);
+                    if (current is not null) store.ModifyResponse?.Invoke(request.Method, current);
+                    return Reply(current is null ? HttpStatusCode.NotFound : HttpStatusCode.OK, current);
+                }
                 Assert.Equal(HttpMethod.Put, request.Method);
                 var match = request.Headers.TryGetValues("If-Match", out var matches) ? matches.Single() : null;
                 var none = request.Headers.TryGetValues("If-None-Match", out var nones) ? nones.Single() : null;
@@ -926,6 +1148,7 @@ internal sealed class ReservationTestStore
                     store.LoseResponseForKey = null;
                     throw new HttpRequestException("secret-provider-detail-do-not-print");
                 }
+                store.ModifyResponse?.Invoke(request.Method, record);
                 return Reply(HttpStatusCode.OK, record);
             }
         }

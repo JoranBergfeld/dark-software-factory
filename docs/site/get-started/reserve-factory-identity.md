@@ -149,9 +149,17 @@ schemas remain blocked or unknown rather than being adopted as empty state.
 | `2` | Invalid command grammar, including unsupported force/approval shortcuts |
 | `130` | `Canceled`; no further effect dispatch, but prior/in-flight writes may remain |
 
-A definite rejection differs from a lost response. Known step failure is recorded
-conditionally where possible; inability to confirm that outcome update is itself
-unknown. Status reconciles exact immutable records without rewriting them.
+A definite rejection differs from a lost or malformed response. Invalid receipt
+dates or JSON field types remain redacted `Unknown`, even after HTTP success:
+the conditional write may already have committed. DSF retains the same operation
+and any pending intent rather than marking it failed or replacing its identity.
+Malformed reads cannot establish absence or authorize another write. Valid
+subsequent reads reconcile trusted state; provider bodies and parse errors are
+not printed.
+
+Known step failure is recorded conditionally where possible; inability to confirm
+that outcome update is itself unknown. Status reconciles exact immutable records
+without rewriting them.
 Cancellation does not roll back or release admission. A pending intent may still
 have applied, and elapsed time alone never proves that a writer stopped.
 
