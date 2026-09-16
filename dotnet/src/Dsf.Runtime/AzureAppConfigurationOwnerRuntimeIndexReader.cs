@@ -57,6 +57,8 @@ internal sealed class AzureConfigurationSettingsGateway(TokenCredential? credent
         var selector = new SettingSelector { LabelFilter = label };
         await foreach (var setting in client.GetConfigurationSettingsAsync(selector, cancellationToken))
         {
+            if (label == ProductConfigurationKeys.NoLabel && setting.Label is not null)
+                throw new InvalidOperationException("Product configuration returned a labelled record for unlabelled authority.");
             yield return (setting.Key, setting.Value);
         }
     }

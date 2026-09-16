@@ -15,6 +15,7 @@ internal sealed class ProvisioningAssets
         "onboard-foundation.json",
         "product-github-private-key.json",
         "onboard-github-auth.json",
+        "onboard-telemetry.json",
     };
 
     private readonly string directory;

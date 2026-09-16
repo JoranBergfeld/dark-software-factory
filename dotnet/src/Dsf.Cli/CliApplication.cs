@@ -219,6 +219,9 @@ public static partial class CliApplication
         var githubHost = new Command("serve-github-auth", "serve the isolated, inactive factory GitHub authentication module (runtime)");
         githubHost.SetAction((_, token) => RuntimeShell(["serve-github-auth"], token));
         root.Subcommands.Add(githubHost);
+        var telemetryHost = new Command("serve-telemetry", "serve isolated inactive Azure Monitor telemetry proof (runtime)");
+        telemetryHost.SetAction((_, token) => RuntimeShell(["serve-telemetry"], token));
+        root.Subcommands.Add(telemetryHost);
         root.Subcommands.Add(BuildCharterCommand(terminal, appConfig, charterRepository, charterStore));
 
         return root;

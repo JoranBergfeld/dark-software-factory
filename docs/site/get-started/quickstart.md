@@ -24,6 +24,9 @@ For an **existing application**, start with
 [`dsf onboard decide review`](review-repository-attachment.md), a read-only repository
 assessment using effective `gh` authentication and the prepared owner control plane.
 It does not run the greenfield commands below or complete onboarding.
+After the reviewed boundary, reservation and inactive foundation, use
+[scoped application telemetry proof](prove-application-telemetry.md) for the
+mandatory deployed-source check; provisioning alone is not evidence readiness.
 
 - A GitHub API token that can create repositories under the selected owner:
 

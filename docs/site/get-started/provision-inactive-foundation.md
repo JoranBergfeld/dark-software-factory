@@ -182,3 +182,7 @@ runtime bundle. Neither a checkout nor Bicep is needed on the operator machine.
 Missing/corrupt packaged assets fail before provider authentication. Do not
 deploy the template directly: that bypasses the reservation, receipt and
 manifest-handoff protocol.
+
+The separate [application telemetry capability](prove-application-telemetry.md)
+can now prepare the isolated source and prove its real managed-identity/network
+path while inactive. It does not relax ordinary run/gather or publication admission.

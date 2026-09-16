@@ -7,6 +7,18 @@ namespace Dsf.Cli.Tests;
 public sealed class CliSurfaceTests
 {
     [Fact]
+    public async Task Telemetry_host_front_door_uses_the_installed_runtime_and_requires_its_own_identity_settings()
+    {
+        var result = await DsfProcess.RunAsync("serve-telemetry");
+        Assert.Equal(1, result.ExitCode);
+        Assert.Contains("Azure Monitor source", result.Stderr);
+        Assert.Contains("DSF_FACTORY_PROFILE_PIN", result.Stderr);
+        Assert.Contains("AZURE_CLIENT_ID", result.Stderr);
+        Assert.DoesNotContain("AZURE_OPENAI", result.Stderr);
+        Assert.Empty(result.Stdout);
+    }
+
+    [Fact]
     public async Task Authentication_host_front_door_reaches_its_own_pinned_settings_without_legacy_runtime_fallback()
     {
         var result = await DsfProcess.RunAsync("serve-github-auth");
@@ -48,6 +60,7 @@ public sealed class CliSurfaceTests
               serve-agent            serve a source agent over A2A (runtime)
               poll-outcomes          poll human outcome labels and record audited learning data (runtime)
               serve-github-auth      serve the isolated, inactive factory GitHub authentication module (runtime)
+              serve-telemetry        serve isolated inactive Azure Monitor telemetry proof (runtime)
               charter                manage the product charter (.dsf/charter.md)
 
 

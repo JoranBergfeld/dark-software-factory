@@ -20,6 +20,11 @@ public static class ProductConfigurationKeys
     public const string FactoryManifest = "dsf/factory/manifest";
     public const string FactoryProfile = "dsf/factory/profile";
     public const string FactoryGitHubAuthority = "dsf/factory/github-authority";
+    public const string FactoryTelemetry = "dsf/factory/telemetry";
+    public static string TelemetryOperation(Guid operationId, int index) =>
+        $"dsf/factory/telemetry-operations/{operationId:D}/{index:D4}";
+    public static string TelemetryProof(Guid operationId, Guid checkId) =>
+        $"dsf/factory/telemetry-proofs/{operationId:D}/{checkId:D}";
     public static string GitHubAuthorityOperation(Guid operationId, int index) =>
         $"dsf/factory/github-operations/{operationId:D}/{index:D4}";
     public static string FactoryPlanChunk(int index) => $"dsf/factory/reviewed-plan/{index:D4}";

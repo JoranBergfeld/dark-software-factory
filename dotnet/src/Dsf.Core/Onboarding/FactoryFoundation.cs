@@ -46,6 +46,8 @@ public sealed record FactoryManifest(
 {
     public Guid? GitHubAuthorityOperationId { get; init; }
     public string? GitHubAuthorityApprovalFingerprint { get; init; }
+    public Guid? TelemetryOperationId { get; init; }
+    public string? TelemetryApprovalFingerprint { get; init; }
 }
 
 public sealed record FactoryFoundationResult(

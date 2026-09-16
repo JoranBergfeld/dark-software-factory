@@ -59,7 +59,7 @@ public static class RuntimeCliApplication
         RuntimeDependencies dependencies)
     {
         var root = new RootCommand(
-            "Dark Software Factory — runtime host (run/sweep/serve-orchestrator/serve-agent/poll-outcomes/serve-github-auth)");
+            "Dark Software Factory — runtime host (run/sweep/serve-orchestrator/serve-agent/poll-outcomes/serve-github-auth/serve-telemetry)");
         root.Subcommands.Add(BuildRunCommand(env, stdout, stderr, dependencies));
         root.Subcommands.Add(BuildSweepCommand(env, stdout, stderr, dependencies));
         root.Subcommands.Add(BuildServeOrchestratorCommand(env, stdout, stderr, dependencies));
@@ -82,6 +82,23 @@ public static class RuntimeCliApplication
             }
         });
         root.Subcommands.Add(github);
+        var telemetry = new Command("serve-telemetry", "serve isolated inactive Azure Monitor telemetry proof");
+        telemetry.SetAction(async (_, token) =>
+        {
+            try
+            {
+                var settings = FactoryHostSettings.Read(env, "Azure Monitor source");
+                await using var host = RuntimeVerbs.BuildTelemetryHost(settings, dependencies);
+                await dependencies.WebHostRunner.RunAsync(host, token);
+                return Success;
+            }
+            catch (RuntimeVerbException exception)
+            {
+                await stderr.WriteLineAsync(exception.Message);
+                return Failure;
+            }
+        });
+        root.Subcommands.Add(telemetry);
         return root;
     }
 

@@ -328,11 +328,12 @@ internal sealed partial class FactoryFoundationService(IAzureCliRunner azure, Ht
         if (result.Foundation.State != FactoryFoundationState.Inactive) return result;
         try
         {
-            return await FactoryGitHubAuthorityService.InspectAsync(result,
-                new OwnerReservationStore(pointer.ProductEndpoint!, admission.Identity!.TenantId, admission.Identity.SubscriptionId, azure, http), token);
+            var product = new OwnerReservationStore(pointer.ProductEndpoint!, admission.Identity!.TenantId, admission.Identity.SubscriptionId, azure, http);
+            result = await FactoryGitHubAuthorityService.InspectAsync(result, product, token);
+            return await FactoryTelemetryService.InspectAsync(result, product, clock, token);
         }
         catch (Exception e) when (e is ReservationStoreException or JsonException or InvalidOperationException)
-        { return result with { State = FactoryReservationState.Unknown, Detail = "GitHub authority receipt integrity unavailable; no dispatch or greenfield fallback." }; }
+        { return result with { State = FactoryReservationState.Unknown, Detail = "Factory capability receipt integrity unavailable; no dispatch or greenfield fallback." }; }
     }
 
     private OwnerReservationStore Store(FactoryReservationIdentity identity, bool bindActor = true) =>
