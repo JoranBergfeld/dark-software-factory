@@ -19,7 +19,7 @@ namespace Dsf.Runtime;
 /// incomplete dependency composition, or the filing boundary reached with nothing
 /// wired to file through).
 /// </summary>
-public static class RuntimeVerbs
+public static partial class RuntimeVerbs
 {
 
     /// <summary>Default bind host for the served runtime endpoints.</summary>

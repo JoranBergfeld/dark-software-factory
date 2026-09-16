@@ -216,6 +216,9 @@ public static partial class CliApplication
         root.Subcommands.Add(BuildServeOrchestratorCommand());
         root.Subcommands.Add(BuildServeAgentCommand());
         root.Subcommands.Add(BuildPollOutcomesCommand());
+        var githubHost = new Command("serve-github-auth", "serve the isolated, inactive factory GitHub authentication module (runtime)");
+        githubHost.SetAction((_, token) => RuntimeShell(["serve-github-auth"], token));
+        root.Subcommands.Add(githubHost);
         root.Subcommands.Add(BuildCharterCommand(terminal, appConfig, charterRepository, charterStore));
 
         return root;

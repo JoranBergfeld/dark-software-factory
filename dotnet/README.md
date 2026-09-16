@@ -7,7 +7,7 @@ This directory is the active Dark Software Factory implementation.
 - `src/Dsf.Core` — shared domain, contracts, runtime settings, product records, and charters.
 - `src/Dsf.FeatureCouncil` — Feature Council conveyor and stations.
 - `src/Dsf.Cli` — packaged `dsf` global tool; factory provisioning, charter commands, runtime forwarding.
-- `src/Dsf.Runtime` — deployed runtime host for `run`, `sweep`, `serve-orchestrator`, `serve-agent`, and `poll-outcomes`.
+- `src/Dsf.Runtime` — deployed runtime host for `run`, `sweep`, `serve-orchestrator`, `serve-agent`, `poll-outcomes`, and isolated `serve-github-auth`.
 - `src/Dsf.ControlCenter` — governance web process (`dsf-control-center`).
 - `src/Dsf.AgentHost` — reusable source-agent host.
 - `src/Dsf.Testing` — deterministic test helpers; production projects must not reference it.
@@ -59,7 +59,7 @@ executables and require neither the SDK nor a separately installed .NET runtime.
 The CLI's build-only runtime dependency builds the matching runtime automatically,
 including for `dotnet run --project src/Dsf.Cli -- sweep --product <product>`.
 `eng/CliBundle.targets` publishes its dependency closure into `runtime/` and compiles
-the six provisioning entrypoints into self-contained ARM JSON under `assets/infra/`.
+the eight provisioning entrypoints into self-contained ARM JSON under `assets/infra/`.
 Use one `-p:Version=<version>` for build, pack, and publish; when using `--no-build`,
 the configuration and version must match the preceding build.
 
@@ -107,6 +107,17 @@ included. Onboarding runtime admission fails closed; after resource dispatch,
 `status`/`resume` inspect without retry or rollback. See
 [inactive foundation provisioning](../docs/site/get-started/provision-inactive-foundation.md).
 
+`dsf onboard decide github` adds exact-risk-approved, version-pinned owner key
+copy, two authentication-module-only grants, an isolated deployed authentication
+host and nonsecret actual GitHub proof. Interactive prompts have equivalent
+explicit/redirected commands. `--verify-only` refreshes proven deployed authority
+without repeating any creation effect; ordinary status/resume remain inspection.
+The current product manifest points to `FactoryGitHubAuthority` and its
+`GitHubAuthorityProof`/`FoundationOperation` records at canonical product keys.
+Only the approved code identity can receive an ephemeral contents-read token;
+no inactive caller receives issue-write authority. See
+[GitHub authority](../docs/site/get-started/verify-factory-github-authority.md).
+
 ## Runtime host
 
 `src/Dsf.Runtime` (`dsf-runtime`) is the deployed runtime entrypoint. The `dsf` front door
@@ -123,6 +134,11 @@ assembly reference. `DSF_RUNTIME_HOST` remains an advanced override for a custom
   endpoint.
 - `poll-outcomes [--product <product>]` — record audited learning data from downstream human
   outcome labels.
+- `serve-github-auth` — dedicated inactive authentication host behind native Entra
+  ingress; requires pinned product governance and the selected managed identity,
+  not the legacy conveyor/model configuration. Its `/verify` endpoint returns
+  proof; `/tokens/contents` requires the approved code caller; `/tokens/issues`
+  denies publication. The CLI forwards to the matching bundled implementation.
 
 ## Runtime dependency composition
 

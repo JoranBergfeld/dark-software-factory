@@ -149,6 +149,7 @@ public static partial class CliApplication
         decide.Subcommands.Add(review);
         decide.Subcommands.Add(BuildBoundaryPlanCommand(terminal, reviewer, boundaryAzure));
         decide.Subcommands.Add(BuildFoundationCommand(terminal, reviewer, boundaryAzure, reservationHttp, reservationClock));
+        decide.Subcommands.Add(BuildGitHubAuthorityCommand(terminal, reviewer, boundaryAzure, reservationHttp, reservationClock));
         decide.Subcommands.Add(BuildReservationCommand("reserve", terminal, reviewer, boundaryAzure, reservationHttp, reservationClock));
         decide.Subcommands.Add(BuildReservationCommand("status", terminal, reviewer, boundaryAzure, reservationHttp, reservationClock));
         decide.Subcommands.Add(BuildReservationCommand("resume", terminal, reviewer, boundaryAzure, reservationHttp, reservationClock));

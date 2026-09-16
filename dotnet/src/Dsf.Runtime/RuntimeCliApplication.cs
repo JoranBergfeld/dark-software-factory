@@ -59,12 +59,29 @@ public static class RuntimeCliApplication
         RuntimeDependencies dependencies)
     {
         var root = new RootCommand(
-            "Dark Software Factory — runtime host (run/sweep/serve-orchestrator/serve-agent/poll-outcomes)");
+            "Dark Software Factory — runtime host (run/sweep/serve-orchestrator/serve-agent/poll-outcomes/serve-github-auth)");
         root.Subcommands.Add(BuildRunCommand(env, stdout, stderr, dependencies));
         root.Subcommands.Add(BuildSweepCommand(env, stdout, stderr, dependencies));
         root.Subcommands.Add(BuildServeOrchestratorCommand(env, stdout, stderr, dependencies));
         root.Subcommands.Add(BuildServeAgentCommand(env, stdout, stderr, dependencies));
         root.Subcommands.Add(BuildPollOutcomesCommand(env, stdout, stderr, dependencies));
+        var github = new Command("serve-github-auth", "serve the isolated, inactive factory GitHub authentication module");
+        github.SetAction(async (_, token) =>
+        {
+            try
+            {
+                var settings = GitHubApp.FactoryGitHubHostSettings.Read(env);
+                await using var host = RuntimeVerbs.BuildGitHubAuthenticationHost(settings, dependencies);
+                await dependencies.WebHostRunner.RunAsync(host, token);
+                return Success;
+            }
+            catch (RuntimeVerbException exception)
+            {
+                await stderr.WriteLineAsync(exception.Message);
+                return Failure;
+            }
+        });
+        root.Subcommands.Add(github);
         return root;
     }
 

@@ -63,6 +63,10 @@ No code-analysis or activation worker is deployed. GitHub authentication, grants
 evidence/network proof, factory telemetry connectivity, models, code analysis,
 charter, readiness and activation remain explicitly unmet.
 
+Continue with [factory GitHub authority verification](verify-factory-github-authority.md)
+for the separately approved key copy, authentication-only grants and deployed
+read-only proof. That step does not activate this foundation.
+
 ## Product authority and staged handoff
 
 The owner product claim retains the foundation operation ID, progress and

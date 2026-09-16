@@ -66,6 +66,7 @@ nav:
       - Preview a dedicated application boundary: get-started/preview-application-boundary.md
       - Reserve durable factory identity: get-started/reserve-factory-identity.md
       - Provision an inactive Decide foundation: get-started/provision-inactive-foundation.md
+      - Verify factory GitHub authority: get-started/verify-factory-github-authority.md
       - Provision a factory: get-started/provision-a-factory.md
       - Implement the application: get-started/implement-application.md
       - Operate it: get-started/operate.md

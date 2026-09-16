@@ -17,6 +17,9 @@ public static class ProductConfigurationKeys
         $"dsf/foundation/{operationId:D}/operations/{index:D4}";
     public const string FactoryManifest = "dsf/factory/manifest";
     public const string FactoryProfile = "dsf/factory/profile";
+    public const string FactoryGitHubAuthority = "dsf/factory/github-authority";
+    public static string GitHubAuthorityOperation(Guid operationId, int index) =>
+        $"dsf/factory/github-operations/{operationId:D}/{index:D4}";
     public static string FactoryPlanChunk(int index) => $"dsf/factory/reviewed-plan/{index:D4}";
 
     public static string OwnerProductClaim(string productKey) => OwnerOnboardingPrefix + "products/" + productKey;

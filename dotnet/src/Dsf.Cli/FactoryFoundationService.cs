@@ -316,7 +316,7 @@ internal sealed partial class FactoryFoundationService(IAzureCliRunner azure, Ht
                 + "No owner-archive fallback, reissue or activation; provider details withheld.";
             admission = admission with { Plan = null };
         }
-        return admission with
+        var result = admission with
         {
             State = state == FactoryFoundationState.Inactive ? FactoryReservationState.Reserved : Enum.Parse<FactoryReservationState>(state.ToString()),
             Detail = detail,
@@ -325,6 +325,14 @@ internal sealed partial class FactoryFoundationService(IAzureCliRunner azure, Ht
             Foundation = new(state, pointer.Stage, detail, pointer.OperationId, operations)
             { ProductEndpoint = pointer.ProductEndpoint, ProfilePin = pointer.ProfilePin },
         };
+        if (result.Foundation.State != FactoryFoundationState.Inactive) return result;
+        try
+        {
+            return await FactoryGitHubAuthorityService.InspectAsync(result,
+                new OwnerReservationStore(pointer.ProductEndpoint!, admission.Identity!.TenantId, admission.Identity.SubscriptionId, azure, http), token);
+        }
+        catch (Exception e) when (e is ReservationStoreException or JsonException or InvalidOperationException)
+        { return result with { State = FactoryReservationState.Unknown, Detail = "GitHub authority receipt integrity unavailable; no dispatch or greenfield fallback." }; }
     }
 
     private OwnerReservationStore Store(FactoryReservationIdentity identity, bool bindActor = true) =>

@@ -41,6 +41,9 @@ public sealed record RuntimeDependencies(
     Func<RuntimeSettings, ISweepLease>? SweepLeaseFactory = null)
 {
     internal IConfigurationSettingsGateway ConfigurationSettingsGateway { get; init; } = new AzureConfigurationSettingsGateway();
+    internal HttpClient? GitHubAuthorityHttp { get; init; }
+    internal Azure.Core.TokenCredential? GitHubAuthorityCredential { get; init; }
+    internal TimeProvider GitHubAuthorityClock { get; init; } = TimeProvider.System;
 
     /// <summary>Production dependencies resolved from the real process environment.</summary>
     public static RuntimeDependencies Production() => Production(CurrentEnvironment());

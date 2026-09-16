@@ -43,6 +43,8 @@ public sealed record FactoryReservationResult(
     public ReservationWriteIntent? PendingIntent { get; init; }
     public ApplicationBoundaryPlan? Plan { get; init; }
     public FactoryFoundationResult? Foundation { get; init; }
+    public FactoryGitHubAuthority? GitHubAuthority { get; init; }
+    public IReadOnlyList<FoundationOperation> GitHubOperations { get; init; } = [];
     public string NextAction => Foundation is not null
         ? "Inspect foundation receipts and product authority. Resume is inspection-only after foundation dispatch; never reissue an uncertain ARM operation. Access, readiness and activation remain unmet."
         : "Inspect trusted owner status; resume only this pre-provisioning operation. "

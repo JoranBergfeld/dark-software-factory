@@ -26,6 +26,9 @@ public sealed record FoundationOperation(
     public string? ProviderOperationId { get; init; }
     public string? LogicalIdentity { get; init; }
     public string? ManagedBy { get; init; }
+    public string? RoleDefinitionId { get; init; }
+    public string? RoleScope { get; init; }
+    public string? Condition { get; init; }
 }
 
 public sealed record FactoryOnboardingProfile(
@@ -35,7 +38,10 @@ public sealed record FactoryOnboardingProfile(
 public sealed record FactoryManifest(
     int SchemaVersion, string Kind, string Authority, string Publication,
     FactoryReservationIdentity Identity, string ReviewedPlanSha256, int PlanBytes, int PlanChunks,
-    string ProfilePin);
+    string ProfilePin)
+{
+    public Guid? GitHubAuthorityOperationId { get; init; }
+}
 
 public sealed record FactoryFoundationResult(
     FactoryFoundationState State, string Stage, string Detail, Guid OperationId,

@@ -7,6 +7,17 @@ namespace Dsf.Cli.Tests;
 public sealed class CliSurfaceTests
 {
     [Fact]
+    public async Task Authentication_host_front_door_reaches_its_own_pinned_settings_without_legacy_runtime_fallback()
+    {
+        var result = await DsfProcess.RunAsync("serve-github-auth");
+        Assert.Equal(1, result.ExitCode);
+        Assert.Contains("DSF_FACTORY_PROFILE_PIN", result.Stderr);
+        Assert.Contains("AZURE_CLIENT_ID", result.Stderr);
+        Assert.DoesNotContain("AZURE_OPENAI", result.Stderr);
+        Assert.Empty(result.Stdout);
+    }
+
+    [Fact]
     public async Task Top_level_help_exposes_frozen_command_grammar()
     {
         var result = await DsfProcess.RunAsync("--help");
@@ -25,7 +36,7 @@ public sealed class CliSurfaceTests
 
             Commands:
               new                    create a new isolated product factory instance
-              onboard                review existing application attachment without greenfield provisioning
+              onboard                stage existing application attachment and inactive foundation without greenfield provisioning
               list, ls               list provisioned product factories from the owner App Config index
               offboard <product>     remove Azure/runtime artifacts for a product
               bootstrap              one-time: create the DSF GitHub App and store it in the owner Key Vault
@@ -36,6 +47,7 @@ public sealed class CliSurfaceTests
               serve-orchestrator     run the orchestrator worker (runtime)
               serve-agent            serve a source agent over A2A (runtime)
               poll-outcomes          poll human outcome labels and record audited learning data (runtime)
+              serve-github-auth      serve the isolated, inactive factory GitHub authentication module (runtime)
               charter                manage the product charter (.dsf/charter.md)
 
 

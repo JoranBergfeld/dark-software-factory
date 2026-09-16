@@ -39,6 +39,8 @@ try
         ["sre-agent"] = 5,
         ["copy-owner-secret"] = 1,
         ["onboard-foundation"] = 0,
+        ["product-github-private-key"] = 0,
+        ["onboard-github-auth"] = 0,
     };
     foreach (var (name, minimumNestedDeployments) in templates)
     {
@@ -58,7 +60,7 @@ try
     Require(incompleteReview.ExitCode == 1 && incompleteReview.Output.Contains("--repo is required", StringComparison.Ordinal),
         $"Redirected attachment review did not require an explicit repository: {incompleteReview.Output}");
 
-    foreach (var action in new[] { "plan", "reserve", "provision", "status", "resume" })
+    foreach (var action in new[] { "plan", "reserve", "provision", "github", "status", "resume" })
     {
         var help = await Run("onboard", "decide", action, "--help");
         var required = action is "plan" or "reserve" ? "--reviewed-fingerprint" : "--owner-appconfig-endpoint";
@@ -88,6 +90,30 @@ try
     {
         File.WriteAllBytes(foundationAsset, foundationBytes);
     }
+
+    foreach (var name in new[] { "product-github-private-key.json", "onboard-github-auth.json" })
+    {
+        var asset = Path.Combine(payload, "assets", "infra", name);
+        var content = File.ReadAllBytes(asset);
+        File.Delete(asset);
+        try
+        {
+            File.WriteAllText(Path.Combine(scratch.FullName, "azure.log"), "");
+            var missingAuthority = await Run("onboard", "decide", "github", "--owner-appconfig-endpoint", "https://owner.azconfig.io",
+                "--product", "packaging-smoke", "--tenant", "11111111-1111-1111-1111-111111111111",
+                "--subscription", "22222222-2222-2222-2222-222222222222", "--json");
+            Require(missingAuthority.ExitCode == 1 && missingAuthority.Output.Contains(name, StringComparison.Ordinal),
+                "Installed GitHub authority must identify the missing asset.");
+            Require(File.ReadAllText(Path.Combine(scratch.FullName, "azure.log")).Length == 0,
+                "GitHub authority asset preflight reached Azure authentication.");
+        }
+        finally { File.WriteAllBytes(asset, content); }
+    }
+
+    var authentication = await Run("serve-github-auth");
+    Require(authentication.ExitCode == 1 && authentication.Output.Contains("DSF_FACTORY_PROFILE_PIN", StringComparison.Ordinal)
+        && authentication.Output.Contains("AZURE_CLIENT_ID", StringComparison.Ordinal),
+        "Installed CLI did not reach the bundled dedicated authentication host.");
 
     var signalPath = Path.Combine(scratch.FullName, "onboarding-signal.json");
     File.WriteAllText(signalPath, """{"product_hints":"packaging-smoke","source_kinds":["azuremonitor"]}""");
@@ -179,7 +205,7 @@ try
         File.WriteAllBytes(missing, bytes);
     }
 
-    Console.WriteLine("Installed payload smoke passed: repository review, boundary plan, reservation/foundation/status/resume, inactive runtime admission, five runtime verbs, ARM dependency closure, provisioning preview, bootstrap, preflight.");
+    Console.WriteLine("Installed payload smoke passed: repository review, boundary plan, reservation/foundation/GitHub authority/status/resume, inactive runtime admission, six runtime verbs, eight ARM assets, provisioning preview, bootstrap, preflight.");
     return 0;
 }
 finally
