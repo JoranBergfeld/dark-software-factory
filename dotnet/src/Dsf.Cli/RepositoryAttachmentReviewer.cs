@@ -42,6 +42,7 @@ internal sealed record RepositoryIdentityRead(ReviewedGitHubRepository? Reposito
 
 internal sealed partial class RepositoryAttachmentReviewer(IGhCliRunner gh, IOwnerCredentialReader owner, HttpClient appHttp)
 {
+    internal IGhCliRunner OperatorGitHub => gh;
     private static readonly HttpClient AppHttp = new(new HttpClientHandler { AllowAutoRedirect = false })
     {
         BaseAddress = new Uri("https://api.github.com/"),

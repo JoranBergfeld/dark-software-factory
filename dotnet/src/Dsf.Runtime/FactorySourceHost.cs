@@ -29,9 +29,11 @@ public static partial class RuntimeVerbs
         Func<HttpContext, Task<IResult>> intentStatus = context => IntentAsync(context, true);
         app.MapPost("/infer", infer);
         app.MapPost("/intent-status", intentStatus);
+        Func<HttpContext, Task<IResult>> charterReview = context => IntentAsync(context, true, true);
+        app.MapPost("/charter-review", charterReview);
         return app;
 
-        async Task<IResult> IntentAsync(HttpContext context, bool status)
+        async Task<IResult> IntentAsync(HttpContext context, bool status, bool charter = false)
         {
             context.Response.Headers.CacheControl = "no-store";
             try
@@ -46,6 +48,12 @@ public static partial class RuntimeVerbs
                 if (!NativeCaller(context, access.Manifest.Identity.AzureActorId, access.Manifest.Identity.TenantId, null))
                     throw new JsonException();
                 var request = await context.Request.ReadFromJsonAsync<IntentRequest>(FactorySourceValidation.RecordJson, pending.Token) ?? throw new JsonException();
+                if (charter)
+                {
+                    if (request.NewAnalysis || request.Page != 0) throw new JsonException();
+                    return Results.Json(await RuntimeWorkflow.ReviewCharterAsync(access, http, dependencies.SourceClock, pending.Token),
+                        FactoryGitHubJson.Options);
+                }
                 var result = await RuntimeWorkflow.InferCharterAsync(access, http, dependencies.SourceClock, request, status, pending.Token);
                 return Results.Json(result, FactoryGitHubJson.Options, statusCode: result.State == IntentState.DraftReady ? 200 : 409);
             }

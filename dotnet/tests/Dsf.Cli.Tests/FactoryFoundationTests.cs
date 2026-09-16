@@ -799,7 +799,7 @@ public sealed class FactoryFoundationTests
     internal sealed class FoundationTransport(ReservationTestStore owner) : HttpMessageHandler
     {
         private readonly HttpMessageInvoker ownerClient = new(owner.Client());
-        public ReservationTestStore Product { get; init; } = new();
+        public ReservationTestStore Product { get; set; } = new();
         public bool CompleteCreates { get; init; }
         public bool CompleteDeployment { get; init; }
         public CancellationTokenSource? CancelOnPut { get; init; }

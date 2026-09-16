@@ -185,8 +185,7 @@ internal sealed class SourceWorkflowTransport(FactoryFoundationTests.FoundationT
         if (uri.Host == "source.private.azurecontainerapps.io")
         {
             Assert.NotNull(Source);
-            Source.Values.Clear();
-            foreach (var (key, value) in Values()) Source.Values.Add(key, value);
+            Source.Values = Values();
             using var workload = WorkloadTransport?.Invoke(Source);
             using var http = new HttpClient(workload ?? Source, false);
             var runner = new SourceHostRunner(Source)

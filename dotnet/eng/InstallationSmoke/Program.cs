@@ -137,6 +137,20 @@ try
         && incompleteInfer.Output.Contains("required", StringComparison.Ordinal), "Installed inference accepted missing explicit locators.");
     Require(File.ReadAllText(Path.Combine(scratch.FullName, "azure.log")).Length == 0, "Incomplete inference reached Azure.");
 
+    var charterHelp = await Run("onboard", "decide", "charter", "--help");
+    Require(charterHelp.ExitCode == 0 && new[] { "--publish", "--adopt", "--existing", "--approve", "--status-only" }
+        .All(option => charterHelp.Output.Contains(option, StringComparison.Ordinal)),
+        "Installed reviewed-charter publication/adoption grammar is unavailable.");
+    File.WriteAllText(Path.Combine(scratch.FullName, "azure.log"), "");
+    foreach (var action in new[] { "--publish", "--adopt", "--status-only" })
+    {
+        var incompleteCharter = await Run("onboard", "decide", "charter", action, "--json");
+        Require(incompleteCharter.ExitCode == 1 && incompleteCharter.Output.Contains("\"state\": \"Blocked\"", StringComparison.Ordinal)
+            && incompleteCharter.Output.Contains("required", StringComparison.Ordinal),
+            "Installed charter command accepted incomplete redirected inputs.");
+    }
+    Require(File.ReadAllText(Path.Combine(scratch.FullName, "azure.log")).Length == 0, "Incomplete charter command reached Azure.");
+
     var foundationAsset = Path.Combine(payload, "assets", "infra", "onboard-foundation.json");
     var foundationBytes = File.ReadAllBytes(foundationAsset);
     File.Delete(foundationAsset);
@@ -271,7 +285,7 @@ try
         File.WriteAllBytes(missing, bytes);
     }
 
-    Console.WriteLine($"Installed payload smoke passed: repository review, boundary plan, reservation/foundation/GitHub/models/source/status/resume, inactive runtime admission, eight runtime verbs, {templates.Count} ARM assets, provisioning preview, bootstrap, preflight.");
+    Console.WriteLine($"Installed payload smoke passed: repository review, boundary plan, reservation/foundation/GitHub/models/source/infer/charter/status/resume, inactive runtime admission, eight runtime verbs, {templates.Count} ARM assets, provisioning preview, bootstrap, preflight.");
     return 0;
 }
 finally

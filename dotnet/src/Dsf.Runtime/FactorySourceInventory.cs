@@ -5,10 +5,10 @@ using Dsf.Core.Onboarding;
 
 namespace Dsf.Runtime;
 
-internal sealed class FactorySourceInventory(FactorySourceAccess access, HttpClient http, TimeProvider clock) : IFactorySourceMaterializer
+internal sealed class FactorySourceInventory(FactorySourceAccess access, HttpClient http, TimeProvider clock, bool charterReview = false) : IFactorySourceMaterializer
 {
     private readonly SourceProgressStore store = new(access, http);
-    private readonly GitHubSourceSnapshot github = new(access, clock);
+    private readonly GitHubSourceSnapshot github = new(access, clock, charterReview);
     private ConfigurationSetting? root;
     private SourceProgress? progress;
     private readonly Guid worker = Guid.NewGuid();
@@ -222,6 +222,21 @@ internal sealed class FactorySourceInventory(FactorySourceAccess access, HttpCli
         await access.CheckAsync(token);
         await FenceAsync(token);
         return new(SourceState.Acquired, "Fresh whole-inventory integrity verified; not analysis.", progress, paths, null);
+    }
+
+    internal async Task<CharterSource> ReadCharterAsync(CancellationToken token)
+    {
+        var complete = await ReadAnalysisInventoryAsync(token);
+        if (complete.State != SourceState.Acquired) throw new SourceAcquisitionException(complete.State, complete.Detail);
+        var charter = await github.CurrentCharterAsync(complete.Progress!.Snapshot, token);
+        await github.CheckSnapshotAsync(complete.Progress!.Snapshot, token);
+        await access.CheckAsync(token);
+        await FenceAsync(token);
+        return charter with
+        {
+            AnalyzedCharterBlob = complete.Paths.SingleOrDefault(p => p.Node.Path == Dsf.Core.Charters.CharterMarkdown.CharterPath)?.Node.ObjectId,
+            Reconciliation = charter.Snapshot.Id == complete.Progress.Snapshot.Id ? "ExactAnalyzedSource" : "CompleteCharterOnly",
+        };
     }
 
     public async Task<SourceMaterializedChunk> MaterializeAsync(SourceChunkReference reference, CancellationToken cancellationToken)

@@ -139,6 +139,14 @@ original-source semantic checks through the deployed code/model hosts.
 `--status-only --page N` exposes private coverage and review data. Drafts never
 govern or publish; [operator guide](../docs/site/get-started/infer-product-charter.md).
 
+`dsf onboard decide charter` previews exact charter-only content and complete
+private evidence. `--publish --approve <revision>` uses effective operator `gh`
+identity to create a human-reviewed PR; `--adopt --approve <revision>` adopts
+its exact human-merged result. `--adopt --existing` reviews unchanged current
+intent without an empty PR. Adoption never activates; uncertainty retains
+original receipts without forced retry.
+[Interactive and explicit guide](../docs/site/get-started/publish-adopt-charter.md).
+
 `src/Dsf.Runtime` (`dsf-runtime`) is the deployed runtime entrypoint. The `dsf` front door
 automatically resolves the bundled host under `runtime/`, then forwards runtime verbs without an
 assembly reference. `DSF_RUNTIME_HOST` remains an advanced override for a custom host executable.

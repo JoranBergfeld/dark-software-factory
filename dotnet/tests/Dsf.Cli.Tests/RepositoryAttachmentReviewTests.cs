@@ -990,6 +990,7 @@ internal sealed class RepositoryReviewFixture : HttpMessageHandler, IGhCliRunner
         ["repos/acme/renamed/hooks?per_page=100&page=1"] = new(0, "[]", ""),
     };
     public List<IReadOnlyList<string>> Invocations { get; } = [];
+    internal Func<IReadOnlyList<string>, string?, GhInvocationResult?>? NativeCharter { get; set; }
     private readonly RecordingGitHubProvisioningClient github = new();
     private readonly RecordingAzureProvisioningClient azure = new();
     private readonly RecordingCharterRepositoryClient charter = new(null);
@@ -1012,10 +1013,11 @@ internal sealed class RepositoryReviewFixture : HttpMessageHandler, IGhCliRunner
             }), "");
     }
 
-    public GhInvocationResult Run(IReadOnlyList<string> arguments, CancellationToken cancellationToken)
+    public GhInvocationResult Run(IReadOnlyList<string> arguments, CancellationToken cancellationToken, string? standardInput = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
         Invocations.Add(arguments.ToArray());
+        if (NativeCharter?.Invoke(arguments, standardInput) is { } native) return native;
         var response = Responses[arguments[^1]];
         return arguments.Contains("--include") && response.ExitCode == 0
             ? response with { StandardOutput = "HTTP/2.0 200 OK\r\n\r\n" + response.StandardOutput }

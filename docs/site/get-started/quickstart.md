@@ -31,6 +31,8 @@ Acquire repository coverage separately with
 [resumable source inventory](acquire-source-inventory.md); acquisition is not analysis.
 Then [infer a grounded private charter draft](infer-product-charter.md) for owner
 review; inference does not publish, adopt or activate.
+Then [publish and adopt the reviewed charter](publish-adopt-charter.md) using
+explicit operator approvals. Charter adoption still leaves the factory inactive.
 
 - A GitHub API token that can create repositories under the selected owner:
 

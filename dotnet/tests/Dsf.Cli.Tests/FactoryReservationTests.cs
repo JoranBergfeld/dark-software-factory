@@ -1125,6 +1125,18 @@ internal sealed class ReservationTestStore
         {
             Assert.True(request.RequestUri!.Host == "owner.azconfig.io"
                 || request.RequestUri.Host.StartsWith("dsfo-", StringComparison.Ordinal) && request.RequestUri.Host.EndsWith(".azconfig.io", StringComparison.Ordinal));
+            if (request.Method == HttpMethod.Get && request.RequestUri.AbsolutePath == "/kv")
+            {
+                var query = Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(request.RequestUri.Query);
+                var filter = query["key"].ToString();
+                Assert.EndsWith("*", filter);
+                Assert.Equal("*", query["label"]);
+                Assert.Equal("key", query["$select"]);
+                lock (store.gate)
+                    return Reply(HttpStatusCode.OK, new JsonObject { ["items"] = new JsonArray(store.records.Keys
+                        .Where(key => key.StartsWith(filter[..^1], StringComparison.Ordinal))
+                        .Select(key => (JsonNode)new JsonObject { ["key"] = key }).ToArray()) });
+            }
             var key = Uri.UnescapeDataString(request.RequestUri.AbsolutePath["/kv/".Length..]);
             var body = request.Content is null ? null : await request.Content.ReadAsStringAsync(cancellationToken);
             if (request.Method == HttpMethod.Put && store.BeforePut is not null)

@@ -17,7 +17,7 @@ internal sealed class SourceInventoryTransport : HttpMessageHandler
     internal const string SourceKey = "dsf/factory/source";
     internal const string Commit = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     internal const string InstallationToken = "source-installation-token-never-persist";
-    internal readonly Dictionary<string, string> Values;
+    internal Dictionary<string, string> Values;
     internal readonly Dictionary<string, (string Value, int Revision)> Progress = new(StringComparer.Ordinal);
     internal readonly Dictionary<string, JsonNode> Resources = new(StringComparer.OrdinalIgnoreCase);
     internal readonly Dictionary<string, JsonNode> Trees = new(StringComparer.Ordinal);

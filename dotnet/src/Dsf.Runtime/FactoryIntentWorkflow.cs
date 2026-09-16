@@ -6,10 +6,10 @@ using Dsf.Core.Onboarding;
 
 namespace Dsf.Runtime;
 
-internal sealed class FactoryIntentWorkflow(FactorySourceAccess source, HttpClient http, TimeProvider clock)
+internal sealed class FactoryIntentWorkflow(FactorySourceAccess source, HttpClient http, TimeProvider clock, bool charterReview = false)
 {
     private readonly SourceProgressStore store = new(source, http, "intent");
-    private readonly FactorySourceInventory inventory = new(source, http, clock);
+    private readonly FactorySourceInventory inventory = new(source, http, clock, charterReview);
     private readonly FactoryIntentAccess access = new(source, http, clock);
     private ConfigurationSetting? root;
     private IntentProgress progress = null!;
@@ -23,6 +23,23 @@ internal sealed class FactoryIntentWorkflow(FactorySourceAccess source, HttpClie
     private int Completed => progress.AnalyzedChunks + progress.CheckedChunks;
     private static string Commitment(ConfigurationSetting record) => FactoryModelsValidation.Hash(new
         { record.Key, record.Value, ETag = record.ETag.ToString() });
+
+    internal async Task<IntentResult> ReviewCharterAsync(CancellationToken token)
+    {
+        var result = await RunAsync(new(), true, token);
+        if (result.State != IntentState.DraftReady) return result;
+        return result with { Chunks = completed.ToArray(), NextPage = null,
+            Limitations = result.Limitations.Concat(completed.SelectMany(c => c.Candidate?.Limitations ?? c.Verification?.Limitations ?? []))
+                .Distinct().ToArray(), ExcludedPaths = acquisition.Paths.Where(p => p.Result?.State == SourcePathState.Excluded).ToArray(),
+            NextExclusionPage = null };
+    }
+
+    internal async Task<IntentResult> RevalidateCharterReviewAsync(IntentResult review, CancellationToken token)
+    {
+        await access.CheckAsync(token);
+        await FenceAsync(token);
+        return review with { ModelAuthority = access.CurrentAuthority };
+    }
 
     internal async Task<IntentResult> RunAsync(IntentRequest request, bool status, CancellationToken token)
     {

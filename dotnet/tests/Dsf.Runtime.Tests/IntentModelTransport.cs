@@ -58,7 +58,7 @@ internal sealed class IntentModelRunner(SourceInventoryTransport source, string 
     }
 }
 
-internal sealed class IntentNativeModelTransport(SourceInventoryTransport source, HttpMessageHandler arm) : HttpMessageHandler
+internal sealed class IntentNativeModelTransport(SourceInventoryTransport source, HttpMessageHandler arm, Func<string, string>? complete = null) : HttpMessageHandler
 {
     private readonly HttpMessageInvoker native = new(arm, false);
     internal readonly List<JsonNode> Completions = [];
@@ -76,7 +76,7 @@ internal sealed class IntentNativeModelTransport(SourceInventoryTransport source
         Assert.Equal(HttpMethod.Post, request.Method);
         var input = await request.Content!.ReadFromJsonAsync<JsonNode>(cancellationToken: token) ?? throw new JsonException();
         Completions.Add(input);
-        var content = IntentModelFixture.Complete((string)input["messages"]![0]!["content"]!);
+        var content = (complete ?? IntentModelFixture.Complete)((string)input["messages"]![0]!["content"]!);
         var response = SourceInventoryTransport.Json(new { model = selection.Model, choices = new[]
             { new { finish_reason = "stop", message = new { content } } } });
         response.Headers.Add("x-request-id", Guid.NewGuid().ToString());

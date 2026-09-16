@@ -50,6 +50,28 @@ internal sealed class OwnerReservationStore
         { throw new ReservationStoreException(FactoryReservationState.Unknown, "Owner reservation read unavailable; provider details withheld."); }
     }
 
+    internal async Task RequirePristineAsync(string prefix, CancellationToken token)
+    {
+        try
+        {
+            var selector = new SettingSelector { KeyFilter = prefix + "*", LabelFilter = "*", Fields = SettingFields.Key };
+            await using var pages = client.GetConfigurationSettingsAsync(selector, token).AsPages().GetAsyncEnumerator(token);
+            if (!await pages.MoveNextAsync()) throw new JsonException();
+            var page = pages.Current;
+            var response = page.GetRawResponse();
+            if (response.Content.ToMemory().Length > 4 * 1024 * 1024) throw new JsonException();
+            using var document = JsonDocument.Parse(response.Content.ToMemory(), new JsonDocumentOptions { AllowDuplicateProperties = false });
+            if (!document.RootElement.TryGetProperty("items", out var items) || items.ValueKind != JsonValueKind.Array
+                || items.GetArrayLength() != 0 || page.Values.Count != 0 || !string.IsNullOrEmpty(page.ContinuationToken)
+                || response.Headers.TryGetValue("Link", out var link) && !string.IsNullOrEmpty(link))
+                throw new ReservationStoreException(FactoryReservationState.Unknown,
+                    "Authoritative charter coordinator missing or namespace absence unconfirmed; surviving history forbids recreation.");
+        }
+        catch (Exception e) when (e is RequestFailedException or HttpRequestException or AuthenticationFailedException
+            or JsonException or FormatException or InvalidOperationException)
+        { throw new ReservationStoreException(FactoryReservationState.Unknown, "Charter namespace absence unconfirmed; no new operation."); }
+    }
+
     public async Task<ConfigurationSetting> WriteAsync(string key, string value, ETag? revision, CancellationToken token, Guid? correlation = null)
     {
         CheckSize(key, ProductConfigurationKeys.NoLabel, value);

@@ -98,7 +98,8 @@ public sealed class FactoryIntentCommandTests
         Assert.Empty(terminal.Prompts);
     }
 
-    internal sealed class IntentCliWorkloadTransport(SourceInventoryTransport source, ModelsWorkflowTransport models) : HttpMessageHandler
+    internal sealed class IntentCliWorkloadTransport(SourceInventoryTransport source, ModelsWorkflowTransport models,
+        Func<string, string>? complete = null) : HttpMessageHandler
     {
         private readonly HttpMessageInvoker sourceHttp = new(source, false);
         private readonly HttpMessageInvoker modelHttp = new(models, false);
@@ -109,7 +110,7 @@ public sealed class FactoryIntentCommandTests
             {
                 var manifest = JsonSerializer.Deserialize<FactoryManifest>(source.Values[ProductConfigurationKeys.FactoryManifest], FactoryGitHubJson.Options)!;
                 var authority = FactoryModelsValidation.ReadPreparation(manifest, source.Values);
-                using var native = new IntentNativeModelTransport(source, models);
+                using var native = new IntentNativeModelTransport(source, models, complete);
                 using var http = new HttpClient(native);
                 var runner = new IntentModelRunner(source, uri.AbsolutePath,
                     await request.Content!.ReadFromJsonAsync<JsonNode>(cancellationToken: token) ?? throw new JsonException());

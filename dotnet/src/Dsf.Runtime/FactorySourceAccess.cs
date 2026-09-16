@@ -24,12 +24,7 @@ internal sealed class FactorySourceAccess(FactoryHostSettings settings, TokenCre
 
     internal async Task CheckAsync(CancellationToken token)
     {
-        var gateway = new AzureConfigurationSettingsGateway(pinned is null ? credential : Credential, http);
-        var values = new Dictionary<string, string>(StringComparer.Ordinal);
-        await foreach (var (key, value) in gateway.ListAsync(settings.ProductEndpoint, ProductConfigurationKeys.NoLabel, token))
-        {
-            if (values.Count >= 512 || !values.TryAdd(key, value)) throw new JsonException();
-        }
+        var values = await ReadGovernanceAsync(pinned is null ? credential : Credential, token);
         var manifest = FactoryGovernance.ReadInactiveManifest(values.GetValueOrDefault(ProductConfigurationKeys.FactoryManifest),
             values.GetValueOrDefault(ProductConfigurationKeys.FactoryProfile), settings.Product, settings.ProductEndpoint, settings.ProfilePin);
         var github = FactoryGitHubAuthorityValidation.ReadPreparation(manifest, values);
@@ -103,10 +98,7 @@ internal sealed class FactorySourceAccess(FactoryHostSettings settings, TokenCre
             }
         }
         if (assignments.Count != grants.Count) throw new JsonException();
-        var current = new Dictionary<string, string>(StringComparer.Ordinal);
-        await foreach (var (key, value) in new AzureConfigurationSettingsGateway(Credential, http)
-            .ListAsync(settings.ProductEndpoint, ProductConfigurationKeys.NoLabel, token))
-            if (current.Count >= 512 || !current.TryAdd(key, value)) throw new JsonException();
+        var current = await ReadGovernanceAsync(Credential, token);
         var keys = new[] { ProductConfigurationKeys.FactoryManifest, ProductConfigurationKeys.FactoryProfile,
             ProductConfigurationKeys.FactorySource, ProductConfigurationKeys.FactoryGitHubAuthority }
             .Concat(FactoryGitHubAuthorityValidation.BindingNames.Select(n => ProductConfigurationKeys.GitHubAuthorityBinding(github.OperationId, n)))
@@ -116,6 +108,26 @@ internal sealed class FactorySourceAccess(FactoryHostSettings settings, TokenCre
             throw new SourceAcquisitionException(SourceState.Blocked, "AuthorityChanged");
         pinned = revision;
         Values = current;
+    }
+
+    private async Task<Dictionary<string, string>> ReadGovernanceAsync(TokenCredential currentCredential, CancellationToken token)
+    {
+        var values = new Dictionary<string, string>(StringComparer.Ordinal);
+        var audit = new HashSet<string>(StringComparer.Ordinal);
+        await foreach (var (key, value) in new AzureConfigurationSettingsGateway(currentCredential, http)
+            .ListAsync(settings.ProductEndpoint, ProductConfigurationKeys.NoLabel, token))
+        {
+            if (key.StartsWith(FactoryCharterLimits.AuditPrefix, StringComparison.Ordinal))
+            {
+                if (!audit.Add(key)) throw new JsonException();
+                if (audit.Count > FactoryCharterLimits.MaximumAuditRecords
+                    || System.Text.Encoding.UTF8.GetByteCount(key + value + FactoryCharterLimits.RecordContentType) + 1024 > FactoryCharterLimits.RecordBytes)
+                    throw new SourceAcquisitionException(SourceState.Partial, "CharterAuditBudgetExceeded; audit records are not source authority.");
+                continue;
+            }
+            if (values.Count >= 512 || !values.TryAdd(key, value)) throw new JsonException();
+        }
+        return values;
     }
 
     internal async Task<JsonDocument> ArmAsync(string target, string api, CancellationToken token)

@@ -11,6 +11,17 @@ namespace Dsf.Runtime;
 /// </summary>
 internal static class RuntimeWorkflow
 {
+    internal static async Task<CharterEvidence> ReviewCharterAsync(FactorySourceAccess source, HttpClient http,
+        TimeProvider clock, CancellationToken token)
+    {
+        var workflow = new FactoryIntentWorkflow(source, http, clock, charterReview: true);
+        var analysis = await workflow.ReviewCharterAsync(token);
+        if (analysis.State != IntentState.DraftReady) throw new IntentException(analysis.State, analysis.Detail);
+        var charter = await new FactorySourceInventory(source, http, clock, charterReview: true).ReadCharterAsync(token);
+        analysis = await workflow.RevalidateCharterReviewAsync(analysis, token);
+        return new(analysis, charter);
+    }
+
     internal static Task<IntentResult> InferCharterAsync(FactorySourceAccess source, HttpClient http, TimeProvider clock,
         IntentRequest request, bool status, CancellationToken token) =>
         new FactoryIntentWorkflow(source, http, clock).RunAsync(request, status, token);

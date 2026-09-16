@@ -7,7 +7,7 @@ using Dsf.Core.Onboarding;
 
 namespace Dsf.Runtime;
 
-internal sealed class GitHubSourceSnapshot(FactorySourceAccess access, TimeProvider clock)
+internal sealed class GitHubSourceSnapshot(FactorySourceAccess access, TimeProvider clock, bool charterReview = false)
 {
     private string? ephemeralToken;
     private DateTimeOffset tokenObserved;
@@ -26,7 +26,7 @@ internal sealed class GitHubSourceSnapshot(FactorySourceAccess access, TimeProvi
         if (revision.RootElement.GetProperty("sha").GetString() != commit || !FactorySourceValidation.GitId(tree)) throw new JsonException();
         if (repository != await RepositoryAsync(token)) throw new SourceAcquisitionException(SourceState.Blocked, "RepositoryMetadataRace");
         var factory = access.Manifest.Identity.FactoryId;
-        var id = FactoryModelsValidation.Hash(new { factory, access.Source.OperationId, access.GitHub.RepositoryId, repository.Branch, commit, tree });
+        var id = SnapshotId(factory, access.Source.OperationId, access.GitHub.RepositoryId, repository.Branch, commit, tree);
         return new(1, factory, access.Source.OperationId, access.Source.ApprovalFingerprint,
             access.GitHub.RepositoryId, access.GitHub.AccountId, repository.Name, repository.Branch, commit, tree, clock.GetUtcNow(), id);
     }
@@ -34,11 +34,85 @@ internal sealed class GitHubSourceSnapshot(FactorySourceAccess access, TimeProvi
     internal async Task CheckSnapshotAsync(SourceSnapshot snapshot, CancellationToken token)
     {
         var current = await PinAsync(token);
-        if (current.Id != snapshot.Id || current.RepositoryId != snapshot.RepositoryId || current.AccountId != snapshot.AccountId
-            || current.Commit != snapshot.Commit || current.RootTree != snapshot.RootTree || current.DefaultBranch != snapshot.DefaultBranch
+        await CheckObservedSnapshotAsync(snapshot, current, token);
+    }
+
+    private static string SnapshotId(Guid factory, Guid operation, long repository, string branch, string commit, string tree) =>
+        FactoryModelsValidation.Hash(new { factory, OperationId = operation, RepositoryId = repository, Branch = branch, commit, tree });
+
+    private async Task CheckObservedSnapshotAsync(SourceSnapshot snapshot, SourceSnapshot current, CancellationToken token)
+    {
+        if (current.RepositoryId != snapshot.RepositoryId || current.AccountId != snapshot.AccountId || current.DefaultBranch != snapshot.DefaultBranch
             || snapshot.OperationId != access.Source.OperationId || snapshot.ObservedAt == default || snapshot.ObservedAt > clock.GetUtcNow()
-            || snapshot.ConfigurationRevision != access.Source.ApprovalFingerprint || snapshot.FactoryId != access.Manifest.Identity.FactoryId)
+            || snapshot.ConfigurationRevision != access.Source.ApprovalFingerprint || snapshot.FactoryId != access.Manifest.Identity.FactoryId
+            || snapshot.Id != SnapshotId(snapshot.FactoryId, snapshot.OperationId, snapshot.RepositoryId, snapshot.DefaultBranch, snapshot.Commit, snapshot.RootTree))
             throw new SourceAcquisitionException(SourceState.Blocked, "SourceIdentityChanged");
+        if (current.Id != snapshot.Id)
+        {
+            if (!charterReview) throw new SourceAcquisitionException(SourceState.Blocked, "SourceIdentityChanged");
+            await CheckCharterOnlyAsync(snapshot, current, token);
+        }
+    }
+
+    private async Task CheckCharterOnlyAsync(SourceSnapshot prior, SourceSnapshot current, CancellationToken token)
+    {
+        var nodes = 0;
+        await CompareAsync("", prior.RootTree, current.RootTree);
+        if ((await PinAsync(token)).Id != current.Id)
+            throw new SourceAcquisitionException(SourceState.Blocked, "SourceChangedDuringCharterReconciliation");
+
+        async Task CompareAsync(string path, string? oldTree, string? newTree)
+        {
+            // Complete old inventory is independently verified. Equal immutable subtrees preserve every tracked path, not just display pages.
+            if (oldTree == newTree) return;
+            var before = oldTree is null ? [] : await TreeAsync(prior, new(prior.Id, 0, path, "040000", oldTree, null), token);
+            var after = newTree is null ? [] : await TreeAsync(current, new(current.Id, 0, path, "040000", newTree, null), token);
+            nodes += before.Count + after.Count;
+            if (nodes > FactorySourceValidation.MaximumNodes)
+                throw new SourceAcquisitionException(SourceState.Partial, "CharterReconciliationInventoryLimit");
+            foreach (var name in before.Select(n => n.Path).Union(after.Select(n => n.Path), StringComparer.Ordinal))
+            {
+                var old = before.SingleOrDefault(n => n.Path == name);
+                var next = after.SingleOrDefault(n => n.Path == name);
+                if (old?.ObjectId == next?.ObjectId && old?.Mode == next?.Mode) continue;
+                if (name == Dsf.Core.Charters.CharterMarkdown.CharterPath && (old is null || old.Mode == "100644")
+                    && next?.Mode == "100644") continue;
+                if (name == ".dsf" && (old is null || old.Mode == "040000") && next?.Mode == "040000")
+                    await CompareAsync(name, old?.ObjectId, next.ObjectId);
+                else throw new SourceAcquisitionException(SourceState.Blocked,
+                    "MaterialSourceChanged; acquire complete current source and explicitly infer a new compatible analysis.");
+            }
+        }
+    }
+
+    internal async Task<CharterSource> CurrentCharterAsync(SourceSnapshot analyzed, CancellationToken token)
+    {
+        var current = await PinAsync(token);
+        await CheckObservedSnapshotAsync(analyzed, current, token);
+        var entries = await TreeAsync(current, new(current.Id, 0, "", "040000", current.RootTree, null), token);
+        var directory = entries.SingleOrDefault(n => n.Path == ".dsf");
+        SourceNode? file = null;
+        if (directory is not null)
+        {
+            if (directory.Mode != "040000") throw new SourceAcquisitionException(SourceState.Blocked, "NonRegularCharterDirectory");
+            file = (await TreeAsync(current, directory, token)).SingleOrDefault(n => n.Path == Dsf.Core.Charters.CharterMarkdown.CharterPath);
+        }
+        string? content = null;
+        if (file is not null)
+        {
+            if (file.Mode != "100644") throw new SourceAcquisitionException(SourceState.Blocked, "NonRegularCharter");
+            var bytes = await BlobAsync(current, file, token);
+            try
+            {
+                if (bytes.Length > 24576 || SourceContentPolicy.ContentExclusion(bytes) != SourceExclusion.None)
+                    throw new SourceAcquisitionException(SourceState.Blocked, "UnsafeOrOversizedCharter");
+                content = Utf8.GetString(bytes);
+            }
+            finally { CryptographicOperations.ZeroMemory(bytes); }
+        }
+        if ((await PinAsync(token)).Id != current.Id)
+            throw new SourceAcquisitionException(SourceState.Blocked, "CurrentCharterChanged");
+        return new(current, content, file?.ObjectId);
     }
 
     internal async Task<IReadOnlyList<SourceNode>> TreeAsync(SourceSnapshot snapshot, SourceNode parent, CancellationToken token)

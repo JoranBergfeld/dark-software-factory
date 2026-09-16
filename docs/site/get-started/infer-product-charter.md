@@ -218,5 +218,6 @@ readiness is asserted. An eight-claim candidate may be insufficient for complex
 products: the model must report incomplete rather than suppress material intent.
 Owner review is still required even when both passes complete.
 
-Repository publication, exact human-reviewed adoption, council preview and
-activation are separate operations, not part of inference.
+[Publish and adopt the reviewed charter](publish-adopt-charter.md) through the
+separate operator command. Council preview and activation remain separate;
+inference never grants either authority.
