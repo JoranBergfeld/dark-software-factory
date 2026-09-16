@@ -1097,6 +1097,17 @@ internal sealed class ReservationTestStore
     public List<(string Key, string? IfMatch, string? IfNoneMatch, string Value)> Writes { get; } = [];
     public HttpMessageHandler Client() => new ClientHandler(this);
     public string Export() { lock (gate) return JsonSerializer.Serialize(records); }
+    public void Remove(string key) { lock (gate) records.Remove(key); }
+    public void Change(string key, Func<string, string> change)
+    {
+        lock (gate)
+        {
+            var record = JsonNode.Parse(records[key])!;
+            record["value"] = change((string)record["value"]!);
+            record["etag"] = "revision-" + ++revision;
+            records[key] = record.ToJsonString();
+        }
+    }
     public static ReservationTestStore Restore(string persisted) => new()
     {
         records = JsonSerializer.Deserialize<Dictionary<string, string>>(persisted)!,

@@ -22,7 +22,13 @@ internal sealed class TelemetryWorkflowTransport(FactoryFoundationTests.Foundati
     public bool DenyGrant { get; init; }
     public bool DenyHost { get; init; }
     public bool InvalidDeploymentOperationId { get; init; }
+    public bool MixedTables { get; init; }
+    public JsonNode? ProtectionLevel { get; set; } = JsonValue.Create("General");
+    public JsonNode? DataAuthorizationMode { get; set; } = JsonValue.Create(false);
+    public bool OmitProtectionLevel { get; set; }
+    public bool OmitDataAuthorizationMode { get; set; }
     public Action? OnProof { get; set; }
+    public Action<int>? OnGrant { get; set; }
     public Action<JsonNode>? ChangeProof { get; init; }
     public JsonNode Manifest => Record(ProductConfigurationKeys.FactoryManifest);
     private JsonNode Record(string key) => JsonNode.Parse((string)JsonNode.Parse(foundation.Product.ListJson())!.AsArray()
@@ -50,8 +56,10 @@ internal sealed class TelemetryWorkflowTransport(FactoryFoundationTests.Foundati
             var proof = new TelemetryProof(TelemetryState.Ready, TelemetryReason.None, selected.FactoryId, authority.OperationId,
                 authority.ApprovalFingerprint, selected.SourceIdentity.PrincipalId!, selected.ApplicationEnvironment,
                 now, now.AddSeconds(-selected.FreshnessSeconds), now, [record], "Real hosted proof")
-            { CheckId = authority.CheckId, Queries = [new(record.BackendResourceId, record.Table, TelemetryReason.None,
-                FactoryTelemetryValidation.Hash(selected.Queries["AppRequests"]), Guid.NewGuid().ToString(), 1, record)] };
+            { CheckId = authority.CheckId, Queries = selected.Backends.SelectMany(b => b.Tables.Select(t =>
+                new TelemetryQueryObservation(b.ResourceId, t, t == "AppRequests" ? TelemetryReason.None : TelemetryReason.Empty,
+                    FactoryTelemetryValidation.Hash(selected.Queries[t]), Guid.NewGuid().ToString(), t == "AppRequests" ? 1 : 0,
+                    t == "AppRequests" ? record : null))).ToArray() };
             var payload = JsonSerializer.SerializeToNode(proof, FactoryGitHubJson.Options)!;
             ChangeProof?.Invoke(payload);
             return Reply((string?)payload["state"] == "Ready" ? HttpStatusCode.OK : HttpStatusCode.Conflict, payload);
@@ -92,13 +100,23 @@ internal sealed class TelemetryWorkflowTransport(FactoryFoundationTests.Foundati
                 return Reply(HttpStatusCode.OK, new JsonObject { ["value"] = new JsonArray(Component()) });
             if (path == FactoryTelemetryWorkflowTests.Component) return Reply(HttpStatusCode.OK, Component());
             if (path == BoundaryPlanFixture.Logs.ToLowerInvariant())
+            {
+                var features = new JsonObject { ["enableLogAccessUsingOnlyResourcePermissions"] = false };
+                if (uri.Query == "?api-version=2026-03-01" && !OmitDataAuthorizationMode) features["dataAuthorizationMode"] = DataAuthorizationMode?.DeepClone();
                 return Reply(HttpStatusCode.OK, new JsonObject { ["id"] = path,
                     ["type"] = "Microsoft.OperationalInsights/workspaces", ["location"] = "swedencentral",
                     ["properties"] = new JsonObject { ["customerId"] = "44444444-4444-4444-4444-444444444444",
-                        ["features"] = new JsonObject { ["enableLogAccessUsingOnlyResourcePermissions"] = false } } });
+                        ["features"] = features } });
+            }
             if (path == BoundaryPlanFixture.Logs.ToLowerInvariant() + "/tables")
-                return Reply(HttpStatusCode.OK, new JsonObject { ["value"] = new JsonArray(new JsonObject
-                    { ["name"] = "AppRequests", ["properties"] = new JsonObject { ["plan"] = "Analytics" } }) });
+                return Reply(HttpStatusCode.OK, new JsonObject { ["value"] = new JsonArray(
+                    (MixedTables ? new[] { "AppRequests", "AppTraces" } : new[] { "AppRequests" }).Select(t =>
+                    {
+                        var properties = new JsonObject { ["plan"] = "Analytics" };
+                        if (uri.Query == "?api-version=2026-03-01" && !OmitProtectionLevel)
+                            properties["protectionLevel"] = MixedTables && t == "AppRequests" ? JsonValue.Create("General") : ProtectionLevel?.DeepClone();
+                        return (JsonNode)new JsonObject { ["name"] = t, ["properties"] = properties };
+                    }).ToArray()) });
             if (path.EndsWith("/operations", StringComparison.Ordinal))
                 return Reply(HttpStatusCode.OK, new JsonObject { ["value"] = new JsonArray(Resources.Values.Where(v =>
                     ((string?)v["id"])?.Contains("/microsoft.app/containerapps/", StringComparison.Ordinal) == true).Select((v, i) => (JsonNode)new JsonObject
@@ -129,6 +147,7 @@ internal sealed class TelemetryWorkflowTransport(FactoryFoundationTests.Foundati
             props["condition"] = null;
             Grants.Add(grant);
             Resources[path] = grant;
+            OnGrant?.Invoke(Grants.Count);
             if (LoseGrantResponse) throw new HttpRequestException("secret-provider-detail");
             return Reply(HttpStatusCode.Created, grant);
         }

@@ -22,6 +22,25 @@ Workspace metadata must explicitly establish workspace-context access
 (`features.enableLogAccessUsingOnlyResourcePermissions: false`). DSF never changes
 this mode. The boundary planner's wider table inventory is not readiness support.
 
+Readiness also requires independently observed authorization metadata from ARM
+**2026-03-01**: table `protectionLevel: General` and workspace
+`features.dataAuthorizationMode: false`. The current
+[workspace GET contract](https://learn.microsoft.com/en-us/rest/api/loganalytics/workspaces/get?view=rest-loganalytics-2026-03-01#workspacefeatures)
+defines the latter as Boolean; the
+[table contract](https://learn.microsoft.com/en-us/rest/api/loganalytics/tables/get?view=rest-loganalytics-2026-03-01#tableprotectionlevelenum)
+defines `General` as the default protection level. Neither description establishes
+that an omitted response field proves that setting. Missing/null/unknown metadata,
+older-API omission, `Protected`, enabled data authorization and string modes
+(including the how-to guide's `DataActionsOnly`) remain NOT READY, without an
+older-API fallback or inferred default.
+
+[Protected-table queries can succeed with zero rows](https://learn.microsoft.com/en-us/azure/azure-monitor/logs/protected-tables-configure#confirm-that-non-privileged-users-see-no-data).
+A fresh request cannot make empty protected traces complete evidence. The CLI
+checks authorization before preparation and around observation; the source uses
+its existing scoped Reader authority for ARM GETs before and after each Logs query.
+No privileged reader role, ABAC expansion or protection-mode repair is attempted.
+Provider/API metadata discrepancies require administrator inspection, not a grant.
+
 The CLI rechecks current resources, environment/dedication conflicts, component
 workspace mappings, the complete component inventory and selected table modes.
 A workspace backing an unselected component is rejected even if a filter could
@@ -37,7 +56,7 @@ the other application resources.
 | Factory administrator | Preserve original foundation source MI and internal hosting incarnations; permit creation of only the displayed source host and native auth policy |
 | Image administrator | Supply an accessible digest-pinned image built from the current DSF runtime Dockerfile, containing `serve-telemetry`; a placeholder container is not sufficient |
 | Entra API administrator | Supply an existing single-tenant API application client ID and existing operator consent for `api://<client-id>`; DSF creates no registration, directory permission or consent |
-| Network administrator | Existing operator connectivity/DNS to the private factory ingress, and source connectivity to product App Configuration and Azure Monitor (including any firewall, AMPLS/private-link restrictions); DSF changes no application/shared network |
+| Network administrator | Existing operator connectivity/DNS to the private factory ingress, and source connectivity to product App Configuration, Azure Resource Manager and Azure Monitor (including any firewall, AMPLS/private-link restrictions); DSF changes no application/shared network |
 
 Only the proven `factory:source-azuremonitor` MI is attached to the host. It receives
 App Configuration Data Reader at the product store and Log Analytics Reader at
@@ -178,6 +197,23 @@ receipts after querying. Missing or changed exact grants cannot be excused by
 working access. Cancellation or failed final persistence leaves the confirmed
 hold, not an old Ready cache. An unconfirmed initial hold permits no check and
 claims neither successful revocation nor an atomic global stop.
+
+An interactive confirmation is not a durable governance lease. Before recording
+preparation intent and before every grant/host dispatch, the CLI re-reads shared
+inactive governance and binds it to the admitted identity, reviewed plan and
+original profile pin. Conditional manifest writes use the validated manifest ETag;
+subsequent checks require the exact held telemetry configuration/ETag. Governance
+loss stops later effects; earlier creation receipts remain intact. Intents rejected
+before ARM dispatch are recorded as failed/unproven, never newly owned.
+
+The CLI revalidates manifest/profile after the host proof, after staging the
+immutable proof, and after the final conditional promotion. A detected concurrent
+governance change is held again; if that hold cannot commit, the outcome is
+**Unknown**, not Ready or confirmed revocation. Cancellation during promotion
+likewise reports an unconfirmed final authority/hold. These are bounded fresh
+checks, not atomic fencing across governance, proof, authority and ARM resources.
+Consumers must still validate current governance; a persisted Ready value alone
+is not authority.
 
 `status`, `resume` and repeated `telemetry` without preparation inputs only inspect.
 No unknown grant/host operation is retried, recreated, adopted or rolled back.

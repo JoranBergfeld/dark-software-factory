@@ -5,6 +5,286 @@ namespace Dsf.Cli.Tests;
 
 public sealed class FactoryTelemetryWorkflowTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Unchanged_interactive_governance_preserves_readonly_preview_and_explicit_approval(bool approve)
+    {
+        var (machine, arm) = await FoundationAsync();
+        var preview = await machine.InvokeAsync("telemetry", Preparation);
+        using var transport = new TelemetryWorkflowTransport(arm);
+        machine.Boundary.Repository.ReservationHttp = new HttpClient(transport);
+        var before = arm.Product.Export();
+        var terminal = new ScriptedTerminal(new(true, false, false),
+            [approve ? (string)preview.Result["telemetry"]!["approvalFingerprint"]! : ""]);
+        var exit = await machine.Boundary.Repository.InvokeCommandAsync(terminal,
+            ["onboard", "decide", "telemetry", .. Locator, .. Preparation, "--freshness-hours", "24"]);
+        Assert.Equal(approve ? 0 : 1, exit);
+        Assert.Single(terminal.Prompts);
+        Assert.Equal(approve ? 2 : 0, transport.Grants.Count);
+        if (!approve) Assert.Equal(before, arm.Product.Export());
+    }
+
+    [Fact]
+    public async Task Cancellation_during_promotion_write_preserves_unknown_commit_without_claiming_a_hold()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var (machine, arm) = await FoundationAsync(cancellation.Token);
+        var preview = await machine.InvokeAsync("telemetry", Preparation);
+        using var transport = new TelemetryWorkflowTransport(arm);
+        machine.Boundary.Repository.ReservationHttp = new HttpClient(transport);
+        arm.Product.AfterPut = (key, value) =>
+        {
+            if (key == "dsf/factory/telemetry" && (string?)JsonNode.Parse(value)!["state"] == "Ready")
+                cancellation.Cancel();
+        };
+        var result = await machine.InvokeAsync("telemetry", [.. Preparation, "--approve",
+            (string)preview.Result["telemetry"]!["approvalFingerprint"]!]);
+        Assert.Equal(1, result.Exit);
+        Assert.Equal("Unknown", (string?)result.Result["state"]);
+        Assert.Contains("Conditional write response uncertain", result.Terminal.Output);
+        Assert.DoesNotContain("confirmed readiness hold remains", result.Terminal.Output);
+        Assert.Null(result.Result["telemetry"]!["verifiedProofReference"]);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Governance_change_at_promotion_is_reheld_or_reported_unconfirmed_never_ready(bool rejectHold)
+    {
+        var (machine, arm) = await FoundationAsync();
+        var preview = await machine.InvokeAsync("telemetry", Preparation);
+        using var transport = new TelemetryWorkflowTransport(arm);
+        machine.Boundary.Repository.ReservationHttp = new HttpClient(transport);
+        arm.Product.AfterPut = (key, value) =>
+        {
+            if (key != "dsf/factory/telemetry" || (string?)JsonNode.Parse(value)!["state"] != "Ready") return;
+            ChangeGovernance(arm.Product, "profile-deleted");
+            if (rejectHold) arm.Product.RejectKey = key;
+        };
+
+        var result = await machine.InvokeAsync("telemetry", [.. Preparation, "--approve",
+            (string)preview.Result["telemetry"]!["approvalFingerprint"]!]);
+
+        Assert.Equal(1, result.Exit);
+        Assert.Equal(rejectHold ? "Unknown" : "Blocked", (string?)result.Result["state"]);
+        Assert.Null(result.Result["telemetry"]!["verifiedProofReference"]);
+        if (rejectHold) Assert.Contains("unconfirmed", result.Terminal.Output);
+        else Assert.Equal("Blocked", (string?)ReadProductRecord(arm.Product, "dsf/factory/telemetry")["state"]);
+        Assert.Equal(2, transport.Grants.Count);
+        Assert.Single(transport.Deployments);
+    }
+
+    public static IEnumerable<object[]> PromotionGovernanceChanges =>
+        new[] { "proof", "persisting-proof" }.SelectMany(phase =>
+            new[] { "profile-deleted", "profile-corrupt", "manifest-deleted", "manifest-corrupt",
+                "publication", "identity", "pin", "reviewed-plan", "profile-repin" }.Select(change => new object[] { phase, change }));
+
+    [Theory]
+    [MemberData(nameof(PromotionGovernanceChanges))]
+    public async Task Governance_changes_during_proof_or_final_persistence_cannot_promote_ready(string phase, string change)
+    {
+        var (machine, arm) = await FoundationAsync();
+        var preview = await machine.InvokeAsync("telemetry", Preparation);
+        using var transport = new TelemetryWorkflowTransport(arm);
+        machine.Boundary.Repository.ReservationHttp = new HttpClient(transport);
+        if (phase == "proof") transport.OnProof = () => ChangeGovernance(arm.Product, change);
+        else arm.Product.AfterPut = (key, _) =>
+        {
+            if (key.StartsWith("dsf/factory/telemetry-proofs/", StringComparison.Ordinal))
+                ChangeGovernance(arm.Product, change);
+        };
+
+        var result = await machine.InvokeAsync("telemetry", [.. Preparation, "--approve",
+            (string)preview.Result["telemetry"]!["approvalFingerprint"]!]);
+
+        Assert.Equal(1, result.Exit);
+        Assert.Equal(2, transport.Grants.Count);
+        Assert.Single(transport.Deployments);
+        Assert.Equal(1, transport.Proofs);
+        var persisted = ReadProductRecord(arm.Product, "dsf/factory/telemetry");
+        Assert.NotEqual("Ready", (string?)persisted["state"]);
+        Assert.Null(persisted["verifiedProofReference"]);
+    }
+
+    private static JsonNode ReadProductRecord(ReservationTestStore store, string key) => JsonNode.Parse(
+        (string)JsonNode.Parse(store.ListJson())!.AsArray().Single(r => (string?)r!["key"] == key)!["value"]!)!;
+
+    [Theory]
+    [InlineData("manifest-intent", 0)]
+    [InlineData("grant-intent", 0)]
+    [InlineData("first-grant", 1)]
+    [InlineData("second-grant", 2)]
+    [InlineData("host-intent", 2)]
+    public async Task Governance_loss_between_admitted_effects_stops_later_dispatch_without_losing_owned_history(string phase, int grants)
+    {
+        var (machine, arm) = await FoundationAsync();
+        var preview = await machine.InvokeAsync("telemetry", Preparation);
+        using var transport = new TelemetryWorkflowTransport(arm);
+        machine.Boundary.Repository.ReservationHttp = new HttpClient(transport);
+        transport.OnGrant = count =>
+        {
+            if (phase == "first-grant" && count == 1 || phase == "second-grant" && count == 2)
+                ChangeGovernance(arm.Product, "profile-deleted");
+        };
+        arm.Product.AfterPut = (key, _) =>
+        {
+            if (phase == "manifest-intent" && key == "dsf/factory/manifest"
+                || phase == "grant-intent" && key.StartsWith("dsf/factory/telemetry-operations/", StringComparison.Ordinal) && key.EndsWith("/0000", StringComparison.Ordinal)
+                || phase == "host-intent" && key.StartsWith("dsf/factory/telemetry-operations/", StringComparison.Ordinal) && key.EndsWith("/0003", StringComparison.Ordinal))
+                ChangeGovernance(arm.Product, "profile-deleted");
+        };
+
+        var result = await machine.InvokeAsync("telemetry", [.. Preparation, "--approve",
+            (string)preview.Result["telemetry"]!["approvalFingerprint"]!]);
+        await machine.InvokeAsync("resume");
+
+        Assert.Equal(1, result.Exit);
+        Assert.Equal(grants, transport.Grants.Count);
+        Assert.Empty(transport.Deployments);
+        Assert.Equal(0, transport.Proofs);
+        var operations = JsonNode.Parse(arm.Product.ListJson())!.AsArray()
+            .Where(r => ((string)r!["key"]!).StartsWith("dsf/factory/telemetry-operations/", StringComparison.Ordinal))
+            .Select(r => JsonNode.Parse((string)r!["value"]!)!).ToArray();
+        Assert.Equal(grants, operations.Count(o => (string?)o["disposition"] == "Created"));
+        Assert.True((bool)result.Result["hasRegistryEffects"]!);
+    }
+
+    [Theory]
+    [InlineData("profile-deleted")]
+    [InlineData("profile-corrupt")]
+    [InlineData("manifest-deleted")]
+    [InlineData("manifest-corrupt")]
+    [InlineData("publication")]
+    [InlineData("identity")]
+    [InlineData("pin")]
+    [InlineData("reviewed-plan")]
+    [InlineData("profile-repin")]
+    public async Task Governance_changed_while_interactive_approval_is_open_creates_no_grants_or_host(string change)
+    {
+        var (machine, arm) = await FoundationAsync();
+        var preview = await machine.InvokeAsync("telemetry", Preparation);
+        using var transport = new TelemetryWorkflowTransport(arm);
+        machine.Boundary.Repository.ReservationHttp = new HttpClient(transport);
+        var writes = arm.Product.Writes.Count;
+        var prompted = false;
+        var terminal = new ScriptedTerminal(new(true, false, false), [(string)preview.Result["telemetry"]!["approvalFingerprint"]!])
+        {
+            OnPrompt = message =>
+            {
+                Assert.StartsWith("Approve exact source", message);
+                prompted = true;
+                ChangeGovernance(arm.Product, change);
+            },
+        };
+
+        var exit = await machine.Boundary.Repository.InvokeCommandAsync(terminal,
+            ["onboard", "decide", "telemetry", .. Locator, .. Preparation, "--freshness-hours", "24"]);
+
+        Assert.True(prompted);
+        Assert.Equal(1, exit);
+        Assert.Empty(transport.Grants);
+        Assert.Empty(transport.Deployments);
+        Assert.Equal(0, transport.Proofs);
+        Assert.Equal(writes, arm.Product.Writes.Count);
+    }
+
+    private static readonly string[] Locator = ["--owner-appconfig-endpoint", "https://owner.azconfig.io", "--product", "widget",
+        "--tenant", BoundaryPlanFixture.Tenant, "--subscription", BoundaryPlanFixture.Subscription];
+
+    private static void ChangeGovernance(ReservationTestStore store, string change)
+    {
+        const string manifest = "dsf/factory/manifest";
+        const string profile = "dsf/factory/profile";
+        if (change is "profile-deleted" or "manifest-deleted") store.Remove(change == "profile-deleted" ? profile : manifest);
+        else if (change is "profile-corrupt" or "manifest-corrupt") store.Change(change == "profile-corrupt" ? profile : manifest, _ => "{corrupt");
+        else if (change == "profile-repin")
+        {
+            string? pin = null;
+            store.Change(profile, value =>
+            {
+                var changed = value + " ";
+                pin = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(changed)));
+                return changed;
+            });
+            store.Change(manifest, value =>
+            {
+                var current = JsonNode.Parse(value)!;
+                current["profilePin"] = pin;
+                return current.ToJsonString();
+            });
+        }
+        else store.Change(manifest, value =>
+        {
+            var current = JsonNode.Parse(value)!;
+            if (change == "publication") current["publication"] = "Active";
+            if (change == "identity") current["identity"]!["azureActorId"] = "ffffffff-ffff-ffff-ffff-ffffffffffff";
+            if (change == "pin") current["profilePin"] = new string('b', 64);
+            if (change == "reviewed-plan") current["reviewedPlanSha256"] = new string('b', 64);
+            return current.ToJsonString();
+        });
+    }
+
+    [Theory]
+    [InlineData("table", "missing")]
+    [InlineData("table", "null")]
+    [InlineData("table", "\"Unknown\"")]
+    [InlineData("table", "{}")]
+    [InlineData("workspace", "missing")]
+    [InlineData("workspace", "null")]
+    [InlineData("workspace", "true")]
+    [InlineData("workspace", "\"DataActionsOnly\"")]
+    [InlineData("workspace", "\"Unknown\"")]
+    [InlineData("workspace", "{}")]
+    public async Task Unproven_authorization_metadata_blocks_preparation_without_repair(string field, string value)
+    {
+        var (machine, arm) = await FoundationAsync();
+        var preview = await machine.InvokeAsync("telemetry", Preparation);
+        using var transport = new TelemetryWorkflowTransport(arm);
+        if (field == "table")
+        {
+            transport.OmitProtectionLevel = value == "missing";
+            transport.ProtectionLevel = value == "missing" ? null : JsonNode.Parse(value);
+        }
+        else
+        {
+            transport.OmitDataAuthorizationMode = value == "missing";
+            transport.DataAuthorizationMode = value == "missing" ? null : JsonNode.Parse(value);
+        }
+        machine.Boundary.Repository.ReservationHttp = new HttpClient(transport);
+        var before = arm.Product.Export();
+        var result = await machine.InvokeAsync("telemetry", [.. Preparation, "--approve",
+            (string)preview.Result["telemetry"]!["approvalFingerprint"]!]);
+        Assert.Equal("Blocked", (string?)result.Result["state"]);
+        Assert.Empty(transport.Grants);
+        Assert.Empty(transport.Deployments);
+        Assert.Equal(0, transport.Proofs);
+        Assert.Equal(before, arm.Product.Export());
+    }
+
+    [Theory]
+    [InlineData("Protected", false)]
+    [InlineData("General", true)]
+    public async Task Mixed_table_preparation_requires_supported_authorization_before_any_grants(string protection, bool ready)
+    {
+        var (machine, arm) = await FoundationAsync(mixedTables: true);
+        var preview = await machine.InvokeAsync("telemetry", Preparation);
+        using var transport = new TelemetryWorkflowTransport(arm)
+        { MixedTables = true, ProtectionLevel = JsonValue.Create(protection) };
+        machine.Boundary.Repository.ReservationHttp = new HttpClient(transport);
+        var before = arm.Product.Export();
+
+        var result = await machine.InvokeAsync("telemetry", [.. Preparation, "--approve",
+            (string)preview.Result["telemetry"]!["approvalFingerprint"]!]);
+
+        Assert.Equal(ready ? 0 : 1, result.Exit);
+        Assert.Equal(ready ? "Reserved" : "Blocked", (string?)result.Result["state"]);
+        Assert.Equal(ready ? 2 : 0, transport.Grants.Count);
+        Assert.Equal(ready ? 1 : 0, transport.Deployments.Count);
+        Assert.Equal(ready ? 1 : 0, transport.Proofs);
+        if (!ready) Assert.Equal(before, arm.Product.Export());
+    }
+
     [Fact]
     public async Task Source_host_stays_in_exact_reviewed_group_when_group_name_contains_hosting()
     {
@@ -409,10 +689,16 @@ public sealed class FactoryTelemetryWorkflowTests
     }
 
     internal static async Task<(ReservationMachine Machine, FactoryFoundationTests.FoundationTransport Arm)> FoundationAsync(
-        CancellationToken token = default, string factoryGroup = "widget-decide")
+        CancellationToken token = default, string factoryGroup = "widget-decide", bool mixedTables = false)
     {
         var machine = new ReservationMachine(new ReservationTestStore()) { Token = token };
         machine.Boundary.Input["factoryResourceGroup"] = factoryGroup;
+        if (mixedTables)
+        {
+            machine.Boundary.Input["evidenceBackends"]![0]!["tables"]!.AsArray().Add("AppTraces");
+            machine.Boundary.Overrides["https://management.azure.com" + BoundaryPlanFixture.Logs.ToLowerInvariant() + "/tables?api-version=2022-10-01"] =
+                new(0, """{"value":[{"name":"AppRequests","properties":{"plan":"Analytics"}},{"name":"AppTraces","properties":{"plan":"Analytics"}}]}""", "");
+        }
         var component = BoundaryPlanFixture.Resource(Component, "Microsoft.Insights/components");
         component["properties"]!["WorkspaceResourceId"] = BoundaryPlanFixture.Logs;
         machine.Boundary.Resources[Component] = component;

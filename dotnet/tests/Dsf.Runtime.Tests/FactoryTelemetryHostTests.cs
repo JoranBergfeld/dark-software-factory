@@ -12,6 +12,130 @@ namespace Dsf.Runtime.Tests;
 
 public sealed class FactoryTelemetryHostTests
 {
+    [Theory]
+    [InlineData("profile-deleted")]
+    [InlineData("profile-corrupt")]
+    [InlineData("manifest-deleted")]
+    [InlineData("manifest-corrupt")]
+    [InlineData("publication")]
+    [InlineData("identity")]
+    [InlineData("pin")]
+    [InlineData("reviewed-plan")]
+    [InlineData("profile-repin")]
+    public async Task Current_governance_loss_after_real_query_releases_no_source_proof(string change)
+    {
+        using var transport = new TelemetryTransport();
+        transport.OnQuery = () =>
+        {
+            var values = transport.Values;
+            var profileKey = ProductConfigurationKeys.FactoryProfile;
+            var manifestKey = ProductConfigurationKeys.FactoryManifest;
+            if (change == "profile-deleted") values.Remove(profileKey);
+            else if (change == "manifest-deleted") values.Remove(manifestKey);
+            else if (change == "profile-corrupt") values[profileKey] = "{corrupt";
+            else if (change == "manifest-corrupt") values[manifestKey] = "{corrupt";
+            else
+            {
+                var manifest = JsonNode.Parse(values[manifestKey])!;
+                if (change == "publication") manifest["publication"] = "Active";
+                if (change == "identity") manifest["identity"]!["azureActorId"] = "ffffffff-ffff-ffff-ffff-ffffffffffff";
+                if (change == "pin") manifest["profilePin"] = new string('b', 64);
+                if (change == "reviewed-plan") manifest["reviewedPlanSha256"] = new string('b', 64);
+                if (change == "profile-repin")
+                {
+                    values[profileKey] += " ";
+                    manifest["profilePin"] = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(values[profileKey])));
+                }
+                values[manifestKey] = manifest.ToJsonString();
+            }
+        };
+        using var http = new HttpClient(transport);
+        var runner = new TelemetryRunner(transport);
+        await RuntimeCliApplication.InvokeAsync(["serve-telemetry"], transport.Environment,
+            new StringWriter(), new StringWriter(), TestDependencies.Build(webHostRunner: runner) with
+            {
+                TelemetryHttp = http, TelemetryCredential = new TelemetryCredential(transport), TelemetryClock = new TelemetryClock(),
+            }, CancellationToken.None);
+        Assert.Equal(HttpStatusCode.Forbidden, runner.Response);
+        Assert.Single(transport.Queries);
+        Assert.DoesNotContain("record-123", runner.Body);
+    }
+
+    [Theory]
+    [InlineData("table", "missing")]
+    [InlineData("table", "null")]
+    [InlineData("table", "\"Unknown\"")]
+    [InlineData("table", "{}")]
+    [InlineData("workspace", "missing")]
+    [InlineData("workspace", "null")]
+    [InlineData("workspace", "true")]
+    [InlineData("workspace", "\"DataActionsOnly\"")]
+    [InlineData("workspace", "\"Unknown\"")]
+    [InlineData("workspace", "{}")]
+    public async Task Missing_unknown_or_unsupported_authorization_metadata_cannot_be_inferred_from_query_success(string field, string value)
+    {
+        using var transport = new TelemetryTransport();
+        if (field == "table")
+        {
+            transport.OmitProtectionLevel = value == "missing";
+            transport.ProtectionLevel = value == "missing" ? null : JsonNode.Parse(value);
+        }
+        else
+        {
+            transport.OmitDataAuthorizationMode = value == "missing";
+            transport.DataAuthorizationMode = value == "missing" ? null : JsonNode.Parse(value);
+        }
+        using var http = new HttpClient(transport);
+        var runner = new TelemetryRunner(transport);
+        await RuntimeCliApplication.InvokeAsync(["serve-telemetry"], transport.Environment,
+            new StringWriter(), new StringWriter(), TestDependencies.Build(webHostRunner: runner) with
+            {
+                TelemetryHttp = http, TelemetryCredential = new TelemetryCredential(transport), TelemetryClock = new TelemetryClock(),
+            }, CancellationToken.None);
+        Assert.Equal(HttpStatusCode.Conflict, runner.Response);
+        Assert.Equal("Unsupported", (string?)JsonNode.Parse(runner.Body)!["reason"]);
+        Assert.Empty(transport.Queries);
+    }
+
+    [Fact]
+    public async Task Authorization_change_during_the_query_cannot_release_ready_proof()
+    {
+        using var transport = new TelemetryTransport();
+        transport.OnQuery = () => transport.ProtectionLevel = JsonValue.Create("Protected");
+        using var http = new HttpClient(transport);
+        var runner = new TelemetryRunner(transport);
+        await RuntimeCliApplication.InvokeAsync(["serve-telemetry"], transport.Environment,
+            new StringWriter(), new StringWriter(), TestDependencies.Build(webHostRunner: runner) with
+            {
+                TelemetryHttp = http, TelemetryCredential = new TelemetryCredential(transport), TelemetryClock = new TelemetryClock(),
+            }, CancellationToken.None);
+        Assert.Equal(HttpStatusCode.Conflict, runner.Response);
+        Assert.Equal("Unsupported", (string?)JsonNode.Parse(runner.Body)!["reason"]);
+        Assert.Single(transport.Queries);
+    }
+
+    [Theory]
+    [InlineData("Protected", false)]
+    [InlineData("General", true)]
+    public async Task Empty_selected_traces_and_one_fresh_request_require_independent_table_authorization(string protection, bool ready)
+    {
+        using var transport = new TelemetryTransport(mixedTables: true) { ProtectionLevel = JsonValue.Create(protection) };
+        using var http = new HttpClient(transport);
+        var runner = new TelemetryRunner(transport);
+        await RuntimeCliApplication.InvokeAsync(["serve-telemetry"], transport.Environment,
+            new StringWriter(), new StringWriter(), TestDependencies.Build(webHostRunner: runner) with
+            {
+                TelemetryHttp = http, TelemetryCredential = new TelemetryCredential(transport), TelemetryClock = new TelemetryClock(),
+            }, CancellationToken.None);
+
+        var proof = JsonNode.Parse(runner.Body)!;
+        Assert.Equal(ready ? HttpStatusCode.OK : HttpStatusCode.Conflict, runner.Response);
+        Assert.Equal(ready ? "None" : "Unsupported", (string?)proof["reason"]);
+        Assert.Single(proof["records"]!.AsArray());
+        Assert.Equal("AppRequests", (string?)proof["records"]![0]!["table"]);
+        Assert.Equal(ready ? 3 : 1, transport.Queries.Count);
+    }
+
     [Fact]
     public async Task Labelled_configuration_is_not_unlabelled_product_authority()
     {
@@ -265,17 +389,24 @@ public sealed class FactoryTelemetryHostTests
         public string Scenario { get; init; } = "valid";
         public Action? OnQuery { get; set; }
         public string? Label { get; init; }
+        public JsonNode? ProtectionLevel { get; set; } = JsonValue.Create("General");
+        public JsonNode? DataAuthorizationMode { get; set; } = JsonValue.Create(false);
+        public bool OmitProtectionLevel { get; set; }
+        public bool OmitDataAuthorizationMode { get; set; }
         private readonly int freshnessSeconds;
+        private readonly bool mixedTables;
 
-        public TelemetryTransport(int freshnessSeconds = 86400, bool multipleBackends = false)
+        public TelemetryTransport(int freshnessSeconds = 86400, bool multipleBackends = false, bool mixedTables = false)
         {
             this.freshnessSeconds = freshnessSeconds;
+            this.mixedTables = mixedTables;
             Values = AuthorityTransport.ReadFixture();
             var original = JsonSerializer.Deserialize<FactoryManifest>(Values[ProductConfigurationKeys.FactoryManifest], FactoryGitHubJson.Options)!;
             var source = Binding("source");
             var hosting = Binding("hosting");
             var endpoint = "https://dsfo-" + original.Identity.FactoryId.ToString("N") + ".azconfig.io";
-            var backends = new List<TelemetryBackend> { new(Workspace, WorkspaceId, ["AppRequests"], [Component]) };
+            var backends = new List<TelemetryBackend> { new(Workspace, WorkspaceId,
+                mixedTables ? ["AppRequests", "AppTraces"] : ["AppRequests"], [Component]) };
             if (multipleBackends) backends.Add(new(Workspace + "-second", "55555555-5555-5555-5555-555555555555", ["AppRequests"], [Component + "-second"]));
             var config = new FactoryTelemetryConfiguration(1, original.Identity.FactoryId, original.Identity.PlanFingerprint,
                 original.Identity.ApplicationEnvironment, backends.SelectMany(b => b.ApplicationResourceIds).ToArray(),
@@ -329,6 +460,24 @@ public sealed class FactoryTelemetryHostTests
                 ConfigurationReads++;
                 return Reply(new { items = Values.Select(p => new { key = p.Key, value = p.Value, label = Label, etag = "revision" }) });
             }
+            if (request.RequestUri.Host == "management.azure.com")
+            {
+                Assert.Equal(HttpMethod.Get, request.Method);
+                Assert.Equal("?api-version=2026-03-01", request.RequestUri.Query);
+                var path = request.RequestUri.AbsolutePath;
+                var resource = Authority.Configuration.Backends.Single(b => path == b.ResourceId
+                    || b.Tables.Any(t => path == b.ResourceId + "/tables/" + t));
+                if (path == resource.ResourceId)
+                {
+                    var features = new JsonObject { ["enableLogAccessUsingOnlyResourcePermissions"] = false };
+                    if (!OmitDataAuthorizationMode) features["dataAuthorizationMode"] = DataAuthorizationMode?.DeepClone();
+                    return Reply(new { id = path, properties = new { customerId = resource.WorkspaceId, features } });
+                }
+                var properties = new JsonObject { ["plan"] = "Analytics" };
+                if (!OmitProtectionLevel) properties["protectionLevel"] = mixedTables && path.EndsWith("/AppRequests", StringComparison.Ordinal)
+                    ? JsonValue.Create("General") : ProtectionLevel?.DeepClone();
+                return Reply(new { id = path, name = path.Split('/').Last(), properties });
+            }
             Assert.Equal("api.loganalytics.io", request.RequestUri.Host);
             var backend = Authority.Configuration.Backends.Single(b => request.RequestUri.AbsolutePath == "/v1/workspaces/" + b.WorkspaceId + "/query");
             Assert.Equal(HttpMethod.Post, request.Method);
@@ -339,9 +488,10 @@ public sealed class FactoryTelemetryHostTests
                 { Content = new StringContent("""{"error":{"code":"InsufficientAccessError","message":"secret-provider-detail"}}""") };
             if (Scenario == "partial") return Reply(new { error = new { code = "PartialError", message = "secret-provider-detail",
                 details = new[] { new { code = "QueryPartialError", message = "secret-provider-detail" } } }, tables = Array.Empty<object>() });
-            var staleProbe = Queries.Count > 1;
+            var staleProbe = ((string)Queries[^1]["query"]!).Contains("| top 1", StringComparison.Ordinal);
             var rows = Scenario == "empty" || Scenario == "stale" && !staleProbe
                 || Scenario == "second-empty" && backend.WorkspaceId != WorkspaceId
+                || ((string)Queries[^1]["query"]!).StartsWith("AppTraces ", StringComparison.Ordinal)
                 ? Array.Empty<string[]>()
                 : new[] { new[] { Scenario is "stale" or "before-boundary" ? "2026-09-15T11:59:59.9999999Z"
                     : Scenario == "after-window" ? "2026-09-16T12:00:00.0000001Z"
@@ -349,7 +499,7 @@ public sealed class FactoryTelemetryHostTests
                     Scenario == "wrong-scope" ? Component + "-other" : backend.ApplicationResourceIds[0], Scenario == "missing-id" ? "" : "record-123",
                     Scenario == "wrong-workspace" ? "ffffffff-ffff-ffff-ffff-ffffffffffff" : backend.WorkspaceId,
                     Scenario == "wrong-table" ? "AzureActivity" : "AppRequests" } };
-        if (Scenario == "ragged-row") rows[0] = [.. rows[0], "secret-provider-detail"];
+            if (Scenario == "ragged-row") rows[0] = [.. rows[0], "secret-provider-detail"];
             return Reply(new { tables = new[] { new
             {
                 name = "PrimaryResult",

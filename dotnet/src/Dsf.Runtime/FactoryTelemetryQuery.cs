@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Net.Http.Headers;
 using Azure.Core;
 using Azure.Core.Pipeline;
 using Azure.Monitor.Query;
@@ -9,6 +10,7 @@ namespace Dsf.Runtime;
 
 internal sealed class FactoryTelemetryQuery(TokenCredential credential, HttpClient? http, TimeProvider clock)
 {
+    private static readonly HttpClient BackendHttp = new(new HttpClientHandler { AllowAutoRedirect = false });
     public async Task<TelemetryProof> ObserveAsync(FactoryManifest manifest, FactoryTelemetry authority, CancellationToken token)
     {
         var config = authority.Configuration;
@@ -18,7 +20,8 @@ internal sealed class FactoryTelemetryQuery(TokenCredential credential, HttpClie
         var observations = new List<TelemetryQueryObservation>();
         var options = new LogsQueryClientOptions { Retry = { MaxRetries = 0 } };
         if (http is not null) options.Transport = new HttpClientTransport(http);
-        var client = new LogsQueryClient(new BoundCredential(credential, manifest, config), options);
+        var bound = new BoundCredential(credential, manifest, config);
+        var client = new LogsQueryClient(bound, options);
         foreach (var backend in config.Backends)
         foreach (var table in backend.Tables)
         {
@@ -58,6 +61,7 @@ internal sealed class FactoryTelemetryQuery(TokenCredential credential, HttpClie
 
             async Task<(TelemetryRecordReference? Latest, int Count, string? RequestId)> QueryAsync(bool staleProbe)
             {
+                await CheckBackendAsync(bound, backend, table, token);
                 var response = await client.QueryWorkspaceAsync(backend.WorkspaceId,
                     staleProbe ? config.StaleQueries[table] : config.Queries[table],
                     new QueryTimeRange(staleProbe ? DateTimeOffset.UnixEpoch : start, end),
@@ -92,6 +96,7 @@ internal sealed class FactoryTelemetryQuery(TokenCredential credential, HttpClie
                 }
                 var id = response.GetRawResponse().Headers.TryGetValue("x-ms-request-id", out var header)
                     && Guid.TryParse(header, out var parsed) ? parsed.ToString() : null;
+                await CheckBackendAsync(bound, backend, table, token);
                 return (newest, result.Table.Rows.Count, id);
             }
         }
@@ -106,6 +111,28 @@ internal sealed class FactoryTelemetryQuery(TokenCredential credential, HttpClie
             state == TelemetryState.Ready ? "Real source managed-identity query completed; native application records observed. " + FactoryTelemetryValidation.Coverage
                 : $"NOT READY: {reason}. Source/evidence/network administrator: inspect the exact backend/table and managed identity in this proof; no repair, synthetic data, or application-health diagnosis.")
             { Queries = observations, CheckId = authority.CheckId };
+    }
+
+    private async Task CheckBackendAsync(TokenCredential bound, TelemetryBackend backend, string table, CancellationToken token)
+    {
+        foreach (var target in new[] { backend.ResourceId, backend.ResourceId + "/tables/" + table })
+        {
+            var access = await bound.GetTokenAsync(new TokenRequestContext(["https://management.azure.com/.default"]), token);
+            using var request = new HttpRequestMessage(HttpMethod.Get, "https://management.azure.com" + target
+                + "?api-version=" + FactoryTelemetryValidation.BackendApiVersion);
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", access.Token);
+            using var response = await (http ?? BackendHttp).SendAsync(request, token);
+            if (!response.IsSuccessStatusCode) throw new Azure.RequestFailedException((int)response.StatusCode, "Backend authorization metadata unavailable.");
+            using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync(token),
+                new JsonDocumentOptions { AllowDuplicateProperties = false });
+            var resource = json.RootElement;
+            if (!string.Equals(resource.GetProperty("id").GetString(), target, StringComparison.OrdinalIgnoreCase)
+                || target == backend.ResourceId && resource.GetProperty("properties").GetProperty("customerId").GetString() != backend.WorkspaceId)
+                throw new QueryFailure(TelemetryReason.WrongScope);
+            if (!(target == backend.ResourceId ? FactoryTelemetryValidation.HasSupportedWorkspaceAuthorization(resource)
+                : FactoryTelemetryValidation.HasSupportedTableAuthorization(resource)))
+                throw new QueryFailure(TelemetryReason.Unsupported);
+        }
     }
 
     private sealed class QueryFailure(TelemetryReason reason) : Exception

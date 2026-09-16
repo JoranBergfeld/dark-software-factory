@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Azure.Data.AppConfiguration;
 using Dsf.Core.Onboarding;
 using Dsf.Core.Runtime;
 
@@ -8,6 +9,55 @@ namespace Dsf.Cli;
 
 internal sealed partial class FactoryTelemetryService
 {
+    private static FactoryManifest ReadGovernance(FactoryReservationResult admission, string? manifestValue, string? profileValue)
+    {
+        try
+        {
+            var identity = admission.Identity ?? throw new JsonException();
+            var foundation = admission.Foundation ?? throw new JsonException();
+            var manifest = FactoryGovernance.ReadInactiveManifest(manifestValue, profileValue, identity.ProductKey,
+                foundation.ProductEndpoint ?? throw new JsonException(), foundation.ProfilePin ?? throw new JsonException());
+            var plan = admission.Plan ?? throw new JsonException();
+            if (foundation.State != FactoryFoundationState.Inactive || manifest.Identity != identity
+                || manifest.ReviewedPlanSha256 != FactoryReservationRecords.Hash(BoundaryPlanFingerprint.Canonical(
+                    JsonSerializer.SerializeToElement(plan, FactoryReservationRecords.Json))))
+                throw new JsonException();
+            return manifest;
+        }
+        catch (JsonException)
+        {
+            throw new ReservationStoreException(FactoryReservationState.Blocked,
+                "Current inactive factory manifest/profile no longer matches reviewed identity, plan and profile pin. No new telemetry effects authorized; factory governance administrator must reconcile.");
+        }
+    }
+
+    private static async Task<(ConfigurationSetting Record, FactoryManifest Manifest)> ReadGovernanceAsync(
+        FactoryReservationResult admission, OwnerReservationStore store, CancellationToken token)
+    {
+        var record = await store.ReadAsync(ProductConfigurationKeys.FactoryManifest, token);
+        var profile = await store.ReadAsync(ProductConfigurationKeys.FactoryProfile, token);
+        var manifest = ReadGovernance(admission, record?.Value, profile?.Value);
+        return (record!, manifest);
+    }
+
+    private async Task EnsureCurrentAuthorityAsync(FactoryReservationResult admission, OwnerReservationStore store, CancellationToken token)
+    {
+        var (record, manifest) = await ReadGovernanceAsync(admission, store, token);
+        var expected = Persisted(authority!);
+        if (root is not null)
+        {
+            var current = await store.ReadAsync(ProductConfigurationKeys.FactoryTelemetry, token);
+            if (current is null || current.ETag != root.ETag || current.Value != expected)
+                throw new ReservationStoreException(FactoryReservationState.Unknown,
+                    "Telemetry authority changed since its conditional intent; no further dispatch or readiness promotion.");
+        }
+        _ = FactoryTelemetryValidation.ReadPreparation(manifest, new Dictionary<string, string>
+        {
+            [ProductConfigurationKeys.FactoryManifest] = record.Value,
+            [ProductConfigurationKeys.FactoryTelemetry] = expected,
+        }, requireChecking: false);
+    }
+
     private async Task CheckBindingsAsync(FactoryReservationResult admission, FactoryTelemetry selected, CancellationToken token)
     {
         var config = selected.Configuration;
@@ -43,21 +93,27 @@ internal sealed partial class FactoryTelemetryService
         var tableModes = new List<EvidenceTableObservation>();
         foreach (var backend in config.Backends)
         {
-            using var workspace = await GetAsync(admission, backend.ResourceId, "2022-10-01", token);
+            using var workspace = await GetAsync(admission, backend.ResourceId, FactoryTelemetryValidation.BackendApiVersion, token);
             var native = workspace.RootElement;
             var properties = native.GetProperty("properties");
             if (!Same(native.GetProperty("id").GetString(), backend.ResourceId)
                 || properties.GetProperty("customerId").GetString() != backend.WorkspaceId)
                 throw new ReservationStoreException(FactoryReservationState.Blocked, "Wrong scope: workspace resource/customer ID changed at " + backend.ResourceId + "; evidence administrator must reconcile.");
-            if (properties.GetProperty("features").GetProperty("enableLogAccessUsingOnlyResourcePermissions").ValueKind != JsonValueKind.False)
-                throw new ReservationStoreException(FactoryReservationState.Blocked, "Unsupported authentication: conventional workspace-context permission mode required at " + backend.ResourceId + ". No workspace-mode changes.");
+            if (!FactoryTelemetryValidation.HasSupportedWorkspaceAuthorization(native))
+                throw new ReservationStoreException(FactoryReservationState.Blocked, "Unsupported or unproven authentication: workspace-context access and explicit disabled dataAuthorizationMode required from ARM "
+                    + FactoryTelemetryValidation.BackendApiVersion + " at " + backend.ResourceId + ". Evidence administrator must inspect metadata; no workspace-mode changes or privilege expansion.");
             currentResources.Add(AzureBoundaryReader.Resource(native));
-            using var tables = await GetAsync(admission, backend.ResourceId + "/tables", "2022-10-01", token);
+            using var tables = await GetAsync(admission, backend.ResourceId + "/tables", FactoryTelemetryValidation.BackendApiVersion, token);
             foreach (var table in CompleteValues(tables))
             {
                 var name = table.GetProperty("name").GetString()!;
                 if (backend.Tables.Contains(name, StringComparer.Ordinal))
+                {
+                    if (!FactoryTelemetryValidation.HasSupportedTableAuthorization(table))
+                        throw new ReservationStoreException(FactoryReservationState.Blocked, "Unsupported or unproven table authorization at "
+                            + backend.ResourceId + "/tables/" + name + ": explicit General protectionLevel and Analytics plan required. Empty query success is not access proof; no privileged grant or repair.");
                     tableModes.Add(new(backend.ResourceId, name, table.GetProperty("properties").GetProperty("plan").GetString()!));
+                }
             }
             foreach (var componentId in backend.ApplicationResourceIds)
             {
@@ -297,7 +353,7 @@ internal sealed partial class FactoryTelemetryService
     {
         if (selected.OperationCount is < 0 or > 64) throw new JsonException();
         var values = new Dictionary<string, string>();
-        foreach (var key in new[] { ProductConfigurationKeys.FactoryManifest, ProductConfigurationKeys.FactoryTelemetry }
+        foreach (var key in new[] { ProductConfigurationKeys.FactoryManifest, ProductConfigurationKeys.FactoryProfile, ProductConfigurationKeys.FactoryTelemetry }
             .Concat(Enumerable.Range(0, selected.OperationCount).Select(i => ProductConfigurationKeys.TelemetryOperation(selected.OperationId, i))))
             if (await store.ReadAsync(key, token) is { } value) values.Add(key, value.Value);
         return values;

@@ -71,11 +71,28 @@ public sealed record TelemetryProof(
 
 public static class FactoryTelemetryValidation
 {
+    public const string BackendApiVersion = "2026-03-01";
     public const string QueryRevision = "azuremonitor-workspace-native-v1";
     public const string Attribution = "Azure Monitor native _ResourceId mapped to explicitly selected workspace-based Application Insights components; reviewed dedicated environment.";
     public const string Coverage = "At least one real record is required per selected backend; not every component or code path is thereby observed. Empty or stale telemetry is NOT READY, not an application-health diagnosis. Dedication/exclusivity is owner-reviewed, not a global lock.";
     public static IReadOnlySet<string> SupportedTables { get; } = new HashSet<string>(StringComparer.Ordinal)
         { "AppRequests", "AppDependencies", "AppExceptions", "AppTraces", "AppEvents" };
+    public static bool HasSupportedWorkspaceAuthorization(JsonElement workspace)
+    {
+        var features = Property(Property(workspace, "properties"), "features");
+        return Property(features, "enableLogAccessUsingOnlyResourcePermissions").ValueKind == JsonValueKind.False
+            && Property(features, "dataAuthorizationMode").ValueKind == JsonValueKind.False;
+    }
+    public static bool HasSupportedTableAuthorization(JsonElement table)
+    {
+        var properties = Property(table, "properties");
+        var plan = Property(properties, "plan");
+        var protection = Property(properties, "protectionLevel");
+        return plan.ValueKind == JsonValueKind.String && plan.GetString() == "Analytics"
+            && protection.ValueKind == JsonValueKind.String && protection.GetString() == "General";
+    }
+    private static JsonElement Property(JsonElement value, string name) =>
+        value.ValueKind == JsonValueKind.Object && value.TryGetProperty(name, out var property) ? property : default;
     public static bool HasFreshEvidence(FactoryTelemetry authority, DateTimeOffset now) =>
         authority.State == TelemetryState.Ready && authority.Configuration.FreshnessSeconds > 0
         && authority.Proof is { State: TelemetryState.Ready, Reason: TelemetryReason.None } proof

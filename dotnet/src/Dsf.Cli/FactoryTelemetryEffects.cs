@@ -30,8 +30,7 @@ internal sealed partial class FactoryTelemetryService(IAzureCliRunner azure, Htt
             await CheckBindingsAsync(admission, preview, token);
             await CheckIsolationAsync(admission, preview, token);
             foreach (var grant in preview.Configuration.AccessGrants) await CheckDelegationAsync(admission, grant, token);
-            var manifestRecord = await store.ReadAsync(ProductConfigurationKeys.FactoryManifest, token) ?? throw new JsonException();
-            var manifest = FactoryReservationRecords.Parse<FactoryManifest>(manifestRecord.Value);
+            var (manifestRecord, manifest) = await ReadGovernanceAsync(admission, store, token);
             if (manifest.TelemetryOperationId is not null)
                 throw new ReservationStoreException(FactoryReservationState.Unknown, "Telemetry intent already held; no new dispatch or replacement.");
             var requested = preview with { OperationId = Guid.NewGuid(), Stage = "preparation" };
@@ -41,6 +40,7 @@ internal sealed partial class FactoryTelemetryService(IAzureCliRunner azure, Htt
                 TelemetryOperationId = requested.OperationId, TelemetryApprovalFingerprint = approval,
             }), manifestRecord.ETag, token);
             authority = requested;
+            await EnsureCurrentAuthorityAsync(admission, store, token);
             root = await store.WriteAsync(ProductConfigurationKeys.FactoryTelemetry, FactoryReservationRecords.Serialize(authority), null, token);
             foreach (var grant in authority.Configuration.AccessGrants)
                 await GrantAsync(admission, store, grant, token);
@@ -63,6 +63,7 @@ internal sealed partial class FactoryTelemetryService(IAzureCliRunner azure, Htt
             return admission with { State = FactoryReservationState.Blocked,
                 Detail = "Check requires completed provenance-proven source grants and host. Unknown preparation stays held; no create retry." };
         var store = Store(admission);
+        var promotionStarted = false;
         try
         {
             root = await store.ReadAsync(ProductConfigurationKeys.FactoryTelemetry, token) ?? throw new JsonException();
@@ -71,7 +72,8 @@ internal sealed partial class FactoryTelemetryService(IAzureCliRunner azure, Htt
             existing = stored;
             authority = existing;
             var values = await ReadAsync(store, existing, token);
-            var manifest = FactoryReservationRecords.Parse<FactoryManifest>(values[ProductConfigurationKeys.FactoryManifest]);
+            var manifest = ReadGovernance(admission, values.GetValueOrDefault(ProductConfigurationKeys.FactoryManifest),
+                values.GetValueOrDefault(ProductConfigurationKeys.FactoryProfile));
             _ = FactoryTelemetryValidation.ReadPreparation(manifest, values, requireChecking: false);
             effects.Clear();
             effects.AddRange(ReadEffects(existing, values, completed: true));
@@ -90,6 +92,7 @@ internal sealed partial class FactoryTelemetryService(IAzureCliRunner azure, Htt
             var access = await credential.GetTokenAsync(new TokenRequestContext(["api://" + authority.Configuration.AudienceClientId + "/.default"]), token);
             using var request = new HttpRequestMessage(HttpMethod.Post, endpoint + "/proof");
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", access.Token);
+            await EnsureCurrentAuthorityAsync(admission, store, token);
             using var response = await (http ?? ProviderHttp).SendAsync(request, token);
             if (response.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.Unauthorized)
                 throw new ReservationStoreException(FactoryReservationState.Blocked,
@@ -105,23 +108,40 @@ internal sealed partial class FactoryTelemetryService(IAzureCliRunner azure, Htt
             await CheckEffectsAsync(admission, token);
             _ = await CheckHostAsync(admission, token);
             var current = await ReadAsync(store, authority, token);
+            _ = ReadGovernance(admission, current.GetValueOrDefault(ProductConfigurationKeys.FactoryManifest),
+                current.GetValueOrDefault(ProductConfigurationKeys.FactoryProfile));
             if (current[ProductConfigurationKeys.FactoryManifest] != values[ProductConfigurationKeys.FactoryManifest]
+                || current[ProductConfigurationKeys.FactoryProfile] != values[ProductConfigurationKeys.FactoryProfile]
                 || current[ProductConfigurationKeys.FactoryTelemetry] != Persisted(authority)) throw new JsonException();
             _ = ReadEffects(authority, current, completed: true);
             var proofKey = ProductConfigurationKeys.TelemetryProof(authority.OperationId, authority.CheckId!.Value);
             await store.WriteAsync(proofKey, FactoryReservationRecords.Serialize(proof), null, token);
+            await EnsureCurrentAuthorityAsync(admission, store, token);
+            var held = authority;
             authority = authority with { State = proof.State, Stage = "observed", LastFailure = proof.Reason,
                 Proof = proof.State == TelemetryState.Ready ? proof : authority.Proof, Detail = proof.Detail,
                 LastCheckReference = proofKey, LastCheckSha256 = FactoryTelemetryValidation.Hash(proof),
                 VerifiedProofReference = proof.State == TelemetryState.Ready ? proofKey : authority.VerifiedProofReference,
                 VerifiedProofSha256 = proof.State == TelemetryState.Ready ? FactoryTelemetryValidation.Hash(proof) : authority.VerifiedProofSha256 };
             authority = Expire(authority, clock.GetUtcNow());
-            await SaveAsync(store, token);
+            promotionStarted = authority.State == TelemetryState.Ready;
+            try
+            {
+                await SaveAsync(store, token);
+                await EnsureCurrentAuthorityAsync(admission, store, token);
+            }
+            catch (Exception e) when (e is ReservationStoreException || ProviderFailure(e))
+            {
+                authority = held;
+                throw;
+            }
             return Result(admission, authority.State, authority.Detail);
         }
         catch (ReservationStoreException e) { return await CloseAsync(admission, store, Map(e.State), e.Message, token); }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
-        { return Result(admission, TelemetryState.Canceled, "Check canceled; confirmed readiness hold remains, historical proof is not current. No effects retried."); }
+        { return Result(admission, TelemetryState.Canceled, promotionStarted
+            ? "Check canceled during readiness promotion; final authority/hold is unconfirmed. Inspect current records; no revocation or atomic global stop claimed."
+            : "Check canceled; confirmed readiness hold remains, historical proof is not current. No effects retried."); }
         catch (Exception e) when (ProviderFailure(e))
         { return await CloseAsync(admission, store, TelemetryState.Unknown,
             "NOT READY: deployed proof/current authority unavailable or malformed. Network/Entra/evidence administrator must inspect the exact source endpoint and held records; no operator query fallback.", token); }
@@ -137,8 +157,10 @@ internal sealed partial class FactoryTelemetryService(IAzureCliRunner azure, Htt
             throw new ReservationStoreException(FactoryReservationState.Blocked, "Exact grant already exists or cannot be inspected: " + grant.Target + ". Not adopted, replaced or newly owned.");
         var body = JsonSerializer.Serialize(new { properties = new { principalId = grant.PrincipalId,
             principalType = "ServicePrincipal", roleDefinitionId = grant.RoleDefinitionId } });
+        await EnsureCurrentAuthorityAsync(admission, store, token);
         var (operation, record) = await IntentAsync(store, grant.Target, "2022-04-01", body, token,
             grant: grant);
+        await EnsureDispatchAuthorityAsync(admission, store, [(operation, record)], token);
         using var response = await ArmAsync(admission, HttpMethod.Put, grant.Target, operation.ApiVersion, token, body, operation.ClientRequestId);
         if (response.StatusCode is HttpStatusCode.BadRequest or HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
             await CompleteAsync(store, record, operation with { State = FoundationOperationState.Failed,
@@ -184,8 +206,10 @@ internal sealed partial class FactoryTelemetryService(IAzureCliRunner azure, Htt
         var deployment = assets.Group + "/providers/microsoft.resources/deployments/tm-" + authority.OperationId.ToString("N");
         using var absence = await ArmAsync(admission, HttpMethod.Get, deployment, "2025-04-01", token);
         if (absence.StatusCode != HttpStatusCode.NotFound) throw new JsonException();
+        await EnsureCurrentAuthorityAsync(admission, store, token);
         var hostIntent = await IntentAsync(store, host, "2025-01-01", body, token, deployment: deployment);
         var policyIntent = await IntentAsync(store, host + "/authconfigs/current", "2025-01-01", body, token, deployment: deployment);
+        await EnsureDispatchAuthorityAsync(admission, store, [hostIntent, policyIntent], token);
         using var response = await ArmAsync(admission, HttpMethod.Put, deployment, "2025-04-01", token, body, hostIntent.Operation.ClientRequestId);
         if (response.StatusCode is HttpStatusCode.BadRequest or HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
             foreach (var (intent, record) in new[] { hostIntent, policyIntent })
@@ -233,6 +257,20 @@ internal sealed partial class FactoryTelemetryService(IAzureCliRunner azure, Htt
                 ProviderRequestId = Guid.Parse(rp.GetProperty("trackingId").GetString()!).ToString(), HttpStatus = 201 }, token);
         }
         authority = authority with { HostEndpoint = await CheckHostAsync(admission, token) };
+    }
+
+    private async Task EnsureDispatchAuthorityAsync(FactoryReservationResult admission, OwnerReservationStore store,
+        IReadOnlyList<(FoundationOperation Operation, ConfigurationSetting Record)> intents, CancellationToken token)
+    {
+        try { await EnsureCurrentAuthorityAsync(admission, store, token); }
+        catch (Exception e) when (e is ReservationStoreException or JsonException)
+        {
+            // These intents have not reached ARM. Earlier completed/unknown effects remain untouched.
+            foreach (var (operation, record) in intents)
+                await CompleteAsync(store, record, operation with
+                { State = FoundationOperationState.Failed, Disposition = FoundationResourceDisposition.Unproven }, token);
+            throw;
+        }
     }
 
     private async Task<(FoundationOperation Operation, ConfigurationSetting Record)> IntentAsync(OwnerReservationStore store,
