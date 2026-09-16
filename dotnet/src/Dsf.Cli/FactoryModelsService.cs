@@ -5,7 +5,8 @@ using Dsf.Core.Runtime;
 
 namespace Dsf.Cli;
 
-internal sealed partial class FactoryModelsService(IAzureCliRunner azure, HttpClient? http, TimeProvider clock)
+internal sealed partial class FactoryModelsService(IAzureCliRunner azure, HttpClient? http, TimeProvider clock,
+    HttpMessageHandler? modelProofTransport = null)
 {
     internal async Task<FactoryModels> PreviewAsync(FactoryReservationResult admission, ModelTopologySelection selection, CancellationToken token)
     {

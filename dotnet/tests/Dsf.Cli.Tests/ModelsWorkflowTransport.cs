@@ -33,6 +33,7 @@ internal sealed class ModelsWorkflowTransport(FactoryFoundationTests.FoundationT
     internal bool IncludeMaaSChat { get; set; } = true;
     internal int Proofs { get; private set; }
     internal Action? OnProof { get; set; }
+    internal Func<CancellationToken, Task>? BeforeProofAsync { get; set; }
     internal Action<JsonNode>? MutateProof { get; set; }
     internal Action<HttpRequestMessage>? OnRequest { get; set; }
     internal Action<string>? AfterWrite { get; set; }
@@ -63,6 +64,7 @@ internal sealed class ModelsWorkflowTransport(FactoryFoundationTests.FoundationT
             Assert.Equal("Partial", (string?)authority["state"]);
             Proofs++;
             OnProof?.Invoke();
+            if (BeforeProofAsync is not null) await BeforeProofAsync(token);
             var config = authority["configuration"]!;
             var operationId = Guid.Parse((string)authority["operationId"]!);
             var identity = Record("dsf/factory/model-bindings/" + operationId + "/model");

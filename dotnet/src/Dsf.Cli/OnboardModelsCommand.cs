@@ -7,7 +7,7 @@ namespace Dsf.Cli;
 public static partial class CliApplication
 {
     private static Command BuildModelsCommand(ICliTerminal terminal, RepositoryAttachmentReviewer? reviewer,
-        IAzureCliRunner? azure, HttpClient? http, TimeProvider? clock)
+        IAzureCliRunner? azure, HttpClient? http, TimeProvider? clock, HttpMessageHandler? modelProofTransport)
     {
         var command = new Command("models", "prepare and prove required factory model capabilities; never activate");
         var endpoint = StringOption("--owner-appconfig-endpoint", "trusted owner endpoint");
@@ -46,7 +46,7 @@ public static partial class CliApplication
                 var productKey = Input(product) ?? "";
                 result = await new FactoryReservationService(reviewer, runner, http, time).StatusAsync(
                     owner, tenantId, subscriptionId, productKey, token);
-                var service = new FactoryModelsService(runner, http, time);
+                var service = new FactoryModelsService(runner, http, time, modelProofTransport);
                 if (parse.GetValue(verify)) result = await service.CheckAsync(result, token);
                 else if (result.Models is not null)
                     result = result with { State = FactoryReservationState.Blocked, Detail = "Model preparation already held; inspect current records, no create retry or replacement." };

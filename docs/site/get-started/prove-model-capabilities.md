@@ -258,7 +258,15 @@ is claimed.
 
 Proof lifetime starts when probing starts, not when the last model finishes.
 A topology taking 300 seconds or the configured shorter lifetime is not promoted
-as fresh. Consumer calls reject expired/stale references and changed native
+as fresh. The CLI's dedicated proof request allows that aggregate budget plus
+30 seconds for transport/authentication/response overhead, at most **330 seconds**.
+The deadline covers both sending and receiving the proof; other HTTP clients
+retain their existing bounded timeouts. This allowance does not extend proof
+freshness or authorize an over-budget host result. A transport timeout is
+**Unknown**, not operator cancellation: no result is inferred, no request is
+retried, and the held capability cannot authorize consumers. **Canceled** is
+reserved for an actually canceled caller token, without claiming current
+revocation. Consumer calls reject expired/stale references and changed native
 bindings. `status`/`resume` inspect stored authority; they do not repeat inference
 or creation. Refresh only through `models --verify-only` after administrator
 reconciliation.

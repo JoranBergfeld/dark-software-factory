@@ -135,7 +135,8 @@ public static partial class CliApplication
         RepositoryAttachmentReviewer? repositoryReviewer = null,
         IAzureCliRunner? boundaryAzure = null,
         HttpClient? reservationHttp = null,
-        TimeProvider? reservationClock = null)
+        TimeProvider? reservationClock = null,
+        HttpMessageHandler? modelProofTransport = null)
     {
         if (cancellationToken.IsCancellationRequested)
         {
@@ -147,7 +148,7 @@ public static partial class CliApplication
             .Select(arg => arg.Split('=', 2)[0])
             .ToHashSet();
         var root = BuildRootCommand(
-            terminal, providedOptions, github, azure, appConfig, charterRepository, charterStore, repositoryReviewer, boundaryAzure, reservationHttp, reservationClock);
+            terminal, providedOptions, github, azure, appConfig, charterRepository, charterStore, repositoryReviewer, boundaryAzure, reservationHttp, reservationClock, modelProofTransport);
         var parseResult = root.Parse(args);
         return await InvokeAsync(parseResult, terminal, cancellationToken);
     }
@@ -195,7 +196,8 @@ public static partial class CliApplication
         RepositoryAttachmentReviewer? repositoryReviewer = null,
         IAzureCliRunner? boundaryAzure = null,
         HttpClient? reservationHttp = null,
-        TimeProvider? reservationClock = null)
+        TimeProvider? reservationClock = null,
+        HttpMessageHandler? modelProofTransport = null)
     {
         var root = new RootCommand("Dark Software Factory — factory CLI (create product instances)");
         root.Options.Remove(root.Options.Single(option => option.Name == "--version"));
@@ -205,7 +207,7 @@ public static partial class CliApplication
         helpOption.Aliases.Remove("/h");
 
         root.Subcommands.Add(BuildNewCommand(terminal, providedOptions, github, azure, appConfig));
-        root.Subcommands.Add(BuildOnboardCommand(terminal, providedOptions, repositoryReviewer, boundaryAzure, reservationHttp, reservationClock));
+        root.Subcommands.Add(BuildOnboardCommand(terminal, providedOptions, repositoryReviewer, boundaryAzure, reservationHttp, reservationClock, modelProofTransport));
         root.Subcommands.Add(BuildListCommand(terminal, appConfig));
         root.Subcommands.Add(BuildOffboardCommand());
         root.Subcommands.Add(BuildBootstrapCommand(terminal));

@@ -65,7 +65,7 @@ public static partial class RuntimeVerbs
                 if (FactoryModelsValidation.Hash(manifest) != FactoryModelsValidation.Hash(latestManifest)
                     || FactoryModelsValidation.Hash(authority) != FactoryModelsValidation.Hash(latestAuthority)) throw new JsonException();
                 var now = dependencies.ModelClock.GetUtcNow();
-                if (now < started || now - started >= TimeSpan.FromSeconds(Math.Min(300, authority.Configuration.ValidForSeconds)))
+                if (now < started || now - started >= FactoryModelsValidation.ProofExecutionBudget(authority.Configuration.ValidForSeconds))
                     observations[0] = observations[0] with { State = ModelCapabilityState.Blocked, Reason = ModelCapabilityReason.Expired };
                 var state = observations.All(o => o.State == ModelCapabilityState.Verified) ? ModelCapabilityState.Verified : ModelCapabilityState.Blocked;
                 var proof = new ModelCapabilityProof(authority.Configuration.FactoryId, authority.OperationId, authority.CheckId.Value,

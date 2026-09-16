@@ -9,6 +9,12 @@ public sealed record ModelDeduplicationRequest(ModelCapabilityReference Capabili
 
 public static partial class FactoryModelsValidation
 {
+    public const int MaximumProbeSeconds = 300;
+    public static TimeSpan ProofExecutionBudget(int validForSeconds) =>
+        TimeSpan.FromSeconds(Math.Min(MaximumProbeSeconds, validForSeconds));
+    public static TimeSpan ProofRequestBudget(int validForSeconds) =>
+        ProofExecutionBudget(validForSeconds) + TimeSpan.FromSeconds(30);
+
     public static void ValidateProof(FactoryModels authority, ModelCapabilityProof proof, DateTimeOffset now, bool requireCurrent)
     {
         if (proof.FactoryId != authority.Configuration.FactoryId || proof.OperationId != authority.OperationId

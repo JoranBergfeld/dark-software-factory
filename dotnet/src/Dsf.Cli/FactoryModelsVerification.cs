@@ -9,7 +9,10 @@ namespace Dsf.Cli;
 
 internal sealed partial class FactoryModelsService
 {
-    private static readonly HttpClient WorkloadHttp = new(new HttpClientHandler { AllowAutoRedirect = false });
+    private static readonly HttpClient WorkloadHttp = CreateWorkloadHttp(new HttpClientHandler { AllowAutoRedirect = false });
+
+    private static HttpClient CreateWorkloadHttp(HttpMessageHandler transport) => new(transport, disposeHandler: false)
+    { Timeout = FactoryModelsValidation.ProofRequestBudget(FactoryModelsValidation.MaximumProbeSeconds) };
 
     internal async Task<FactoryReservationResult> CheckAsync(FactoryReservationResult admission, CancellationToken token)
     {
@@ -41,14 +44,20 @@ internal sealed partial class FactoryModelsService
             using var request = new HttpRequestMessage(HttpMethod.Post, current.HostEndpoint + "/proof");
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", access.Token);
             await EnsureCurrentAsync(admission, store, token);
-            using var response = await (http ?? WorkloadHttp).SendAsync(request, token);
-            if (response.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.Unauthorized)
-                throw FactoryModelsValidation.Failure(ModelCapabilityReason.PermissionDenied, "host", "Native model host caller/governance denied; Entra/model administrator must reconcile.");
-            if (response.StatusCode is not (HttpStatusCode.OK or HttpStatusCode.Conflict)) throw new JsonException();
-            var proof = JsonSerializer.Deserialize<ModelCapabilityProof>(await response.Content.ReadAsStringAsync(token), FactoryGitHubJson.Options)
-                ?? throw new JsonException();
+            ModelCapabilityProof proof;
+            using (var deadline = new CancellationTokenSource(FactoryModelsValidation.ProofRequestBudget(current.Configuration.ValidForSeconds), clock))
+            using (var pending = CancellationTokenSource.CreateLinkedTokenSource(token, deadline.Token))
+            {
+                using var proofHttp = modelProofTransport is null ? null : CreateWorkloadHttp(modelProofTransport);
+                using var response = await (proofHttp ?? http ?? WorkloadHttp).SendAsync(request, pending.Token);
+                if (response.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.Unauthorized)
+                    throw FactoryModelsValidation.Failure(ModelCapabilityReason.PermissionDenied, "host", "Native model host caller/governance denied; Entra/model administrator must reconcile.");
+                if (response.StatusCode is not (HttpStatusCode.OK or HttpStatusCode.Conflict)) throw new JsonException();
+                proof = JsonSerializer.Deserialize<ModelCapabilityProof>(await response.Content.ReadAsStringAsync(pending.Token), FactoryGitHubJson.Options)
+                    ?? throw new JsonException();
+                if (proof.State == ModelCapabilityState.Verified && response.StatusCode != HttpStatusCode.OK) throw new JsonException();
+            }
             FactoryModelsValidation.ValidateProof(current, proof, clock.GetUtcNow(), requireCurrent: true);
-            if (proof.State == ModelCapabilityState.Verified && response.StatusCode != HttpStatusCode.OK) throw new JsonException();
             await CheckPreparedAsync(admission, arm, token);
             await EnsureCurrentAsync(admission, store, token);
             var proofKey = ProductConfigurationKeys.ModelProof(current.OperationId, current.CheckId!.Value);
@@ -71,10 +80,14 @@ internal sealed partial class FactoryModelsService
         { return await CloseAsync(admission, store, ModelCapabilityState.Blocked, $"{e.Route}: {e.Reason}. {e.Message}", token); }
         catch (ReservationStoreException e)
         { return await CloseAsync(admission, store, Enum.Parse<ModelCapabilityState>(e.State.ToString()), e.Message, token); }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
         { return Result(admission, ModelCapabilityState.Canceled, held
             ? "Canceled after a hold was confirmed; current final authority/hold unconfirmed. No revocation asserted; previous proof historical."
             : "Canceled before a hold was confirmed; no revocation asserted. Inspect current authority."); }
+        catch (OperationCanceledException)
+        { return await CloseAsync(admission, store, ModelCapabilityState.Unknown, held
+            ? "Model verification transport timed out after a hold was confirmed; proof result unknown. Previous proof historical; no current revocation asserted or retry."
+            : "Model verification transport timed out before a hold was confirmed; no revocation asserted. Inspect current authority.", token); }
         catch (HttpRequestException)
         { return await CloseAsync(admission, store, ModelCapabilityState.Blocked, "NetworkUnavailable: actual private hosted model path unavailable; no local probe or public-access fallback.", token); }
         catch (Exception e) when (ProviderFailure(e))
