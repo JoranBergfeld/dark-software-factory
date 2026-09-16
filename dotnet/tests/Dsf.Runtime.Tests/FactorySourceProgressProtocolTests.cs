@@ -7,6 +7,24 @@ namespace Dsf.Runtime.Tests;
 
 public sealed class FactorySourceProgressProtocolTests
 {
+    [Fact]
+    public async Task Materialization_preserves_unknown_when_the_current_checkpoint_was_lost()
+    {
+        using var first = new SourceInventoryTransport();
+        var acquired = await AcquireAsync(first);
+        var reference = new SourceChunkReference((string)acquired["progress"]!["snapshot"]!["id"]!, 1, 0,
+            (string)acquired["paths"]![0]!["chunks"]![0]!["sha256"]!);
+        first.Progress.Remove(first.Progress.Keys.Single(k => k.EndsWith("/current", StringComparison.Ordinal)));
+        using var consumer = new SourceInventoryTransport();
+        consumer.ImportProgress(first);
+        var before = consumer.Progress.ToDictionary(p => p.Key, p => p.Value);
+        var result = await FactorySourceInventoryTests.RunAsync(consumer, "/materialize", reference, codeCaller: true);
+        Assert.Equal("Unknown", (string?)JsonNode.Parse(result.Body)!["state"]);
+        Assert.Equal(before, consumer.Progress);
+        Assert.Empty(consumer.Writes);
+        Assert.DoesNotContain(consumer.Requests, r => r.Contains("/git/blobs/", StringComparison.Ordinal));
+    }
+
     [Theory]
     [InlineData("pages")]
     [InlineData("bytes")]

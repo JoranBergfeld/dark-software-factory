@@ -23,7 +23,7 @@ param productKey string
 @maxLength(37)
 param productConfigName string
 
-@description('Isolated source/intent progress store; separate bounded namespaces, never product governance.')
+@description('Isolated source/intent progress store; separate bounded namespaces, never product governance or model-access grants.')
 @minLength(37)
 @maxLength(37)
 param progressConfigName string

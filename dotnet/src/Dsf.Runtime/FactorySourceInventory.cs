@@ -19,12 +19,18 @@ internal sealed class FactorySourceInventory(FactorySourceAccess access, HttpCli
     private sealed record IntegrityProof(string SnapshotId, string Sha256);
     private sealed record SelectionHistory(SourceSnapshot Snapshot, string? IntegritySha256);
 
+    private async Task<ConfigurationSetting?> ReadCurrentAsync(CancellationToken token)
+    {
+        var current = await store.ReadAsync(RootKey, token);
+        if (current is null) await store.RequirePristineAsync(token);
+        return current;
+    }
+
     internal async Task<SourceInventoryResult> AdvanceAsync(SourceAcquireRequest request, CancellationToken token)
     {
-        root = await store.ReadAsync(RootKey, token);
+        root = await ReadCurrentAsync(token);
         if (root is null)
         {
-            await store.RequirePristineAsync(token);
             var snapshot = await github.PinAsync(token);
             progress = new(snapshot) { Records = 2, MetadataBytes = 2 * FactorySourceValidation.RecordBytes };
             await access.CheckAsync(token);
@@ -181,10 +187,9 @@ internal sealed class FactorySourceInventory(FactorySourceAccess access, HttpCli
 
     internal async Task<SourceInventoryResult> StatusAsync(int page, CancellationToken token)
     {
-        root = await store.ReadAsync(RootKey, token);
+        root = await ReadCurrentAsync(token);
         if (root is null)
         {
-            await store.RequirePristineAsync(token);
             return new(SourceState.Partial, "Acquisition pending; no snapshot pinned.", null, [], null);
         }
         progress = SourceProgressStore.Parse<SourceProgress>(root);
@@ -198,7 +203,7 @@ internal sealed class FactorySourceInventory(FactorySourceAccess access, HttpCli
         using var deadline = new CancellationTokenSource(FactorySourceValidation.AdvanceBudget, clock);
         using var pending = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline.Token);
         var token = pending.Token;
-        root = await store.ReadAsync(RootKey, token) ?? throw new SourceAcquisitionException(SourceState.Blocked, "CompleteAcquisitionRequired");
+        root = await ReadCurrentAsync(token) ?? throw new SourceAcquisitionException(SourceState.Blocked, "CompleteAcquisitionRequired");
         progress = SourceProgressStore.Parse<SourceProgress>(root);
         ValidateProgress();
         await github.CheckSnapshotAsync(progress.Snapshot, token);
@@ -222,7 +227,7 @@ internal sealed class FactorySourceInventory(FactorySourceAccess access, HttpCli
     public async Task<SourceMaterializedChunk> MaterializeAsync(SourceChunkReference reference, CancellationToken cancellationToken)
     {
         var token = cancellationToken;
-        root = await store.ReadAsync(RootKey, token) ?? throw new SourceAcquisitionException(SourceState.Blocked, "MissingSnapshot");
+        root = await ReadCurrentAsync(token) ?? throw new SourceAcquisitionException(SourceState.Blocked, "MissingSnapshot");
         progress = SourceProgressStore.Parse<SourceProgress>(root);
         ValidateProgress();
         if (progress.Snapshot.Id != reference.SnapshotId || !progress.CompleteRootTree || progress.Worker is not null

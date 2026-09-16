@@ -16,9 +16,25 @@ internal sealed class FactoryIntentAccess(FactorySourceAccess source, HttpClient
 {
     internal FactoryModels Models { get; private set; } = null!;
     internal ModelCapabilityReference Capability { get; private set; } = null!;
+    internal ModelAuthorityResult CurrentAuthority { get; private set; } = null!;
     private string? pin;
 
     internal async Task CheckAsync(CancellationToken token)
+    {
+        try
+        {
+            await CheckHostAsync(token);
+            var request = new ModelAuthorityRequest(Capability, Guid.NewGuid());
+            var result = await RequestAsync<ModelAuthorityResult>("/authority", request, token);
+            FactoryModelsValidation.ValidateNativeAuthority(Models, request.CheckId, result);
+            await CheckHostAsync(token);
+            CurrentAuthority = result;
+        }
+        catch (Exception e) when (e is HttpRequestException or IOException || e is OperationCanceledException && !token.IsCancellationRequested)
+        { throw new IntentException(IntentState.Unknown, "NativeModelAuthorityUnconfirmed; no probe, fallback or draft release."); }
+    }
+
+    private async Task CheckHostAsync(CancellationToken token)
     {
         await source.CheckAsync(token);
         var models = FactoryModelsValidation.ReadPreparation(source.Manifest, source.Values);
@@ -59,15 +75,33 @@ internal sealed class FactoryIntentAccess(FactorySourceAccess source, HttpClient
     private async Task<ModelTextResult> RequestCompletionAsync(string input, CancellationToken token)
     {
         await CheckAsync(token);
+        var result = await RequestAsync<ModelTextResult>("/synthesis", new ModelWorkloadRequest(Capability, input), token);
+        var observation = result.Observation;
+        var route = Models.Routes![0].Selection;
+        if (observation is null || observation.Route != "synthesis" || observation.ConfigurationRevision != Models.ApprovalFingerprint
+            || observation.State != ModelCapabilityState.Verified || observation.Reason != ModelCapabilityReason.None
+            || observation.ResponseModel != route.Model && observation.ResponseModel != route.Model + "-" + route.Version
+            || observation.OutputSha256 != FactoryModelsValidation.Hash(result.Text) || observation.OutputCharacters != result.Text.Length
+            || observation.RequestId is not null && (!Guid.TryParse(observation.RequestId, out var requestId) || requestId == Guid.Empty)
+            || observation.Dimensions != 0 || observation.Groups.Count != 0)
+            throw new IntentException(IntentState.Failed, "InvalidModelObservation");
+        await CheckAsync(token);
+        return result;
+    }
+
+    private async Task<T> RequestAsync<T>(string path, object body, CancellationToken token)
+    {
         var access = await source.Credential.GetTokenAsync(
             new TokenRequestContext(["api://" + Models.Configuration.AudienceClientId + "/.default"]), token);
-        using var request = new HttpRequestMessage(HttpMethod.Post, Models.HostEndpoint + "/synthesis")
+        using var request = new HttpRequestMessage(HttpMethod.Post, Models.HostEndpoint + path)
         {
-            Content = JsonContent.Create(new ModelWorkloadRequest(Capability, input), options: FactoryGitHubJson.Options),
+            Content = JsonContent.Create(body, options: FactoryGitHubJson.Options),
         };
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", access.Token);
-        await CheckAsync(token);
+        await CheckHostAsync(token);
         using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token);
+        if (path == "/authority" && response.StatusCode == HttpStatusCode.NotFound)
+            throw new IntentException(IntentState.Blocked, "NativeModelAuthorityUnavailable; compatible model-host image required.");
         if (response.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.Unauthorized)
             throw new IntentException(IntentState.Blocked, "ModelAccessOrCapabilityRejected");
         if (response.StatusCode is not (HttpStatusCode.OK or HttpStatusCode.Conflict))
@@ -96,19 +130,7 @@ internal sealed class FactoryIntentAccess(FactorySourceAccess source, HttpClient
             catch (JsonException) { throw new IntentException(IntentState.Unknown, "MalformedModelFailureEnvelope"); }
             throw new IntentException(IntentState.Unknown, "ModelOutcomeUnconfirmed");
         }
-        ModelTextResult result;
-        try { result = JsonSerializer.Deserialize<ModelTextResult>(buffer.ToArray(), FactorySourceValidation.RecordJson) ?? throw new JsonException(); }
+        try { return JsonSerializer.Deserialize<T>(buffer.ToArray(), FactorySourceValidation.RecordJson) ?? throw new JsonException(); }
         catch (JsonException) { throw new IntentException(IntentState.Failed, "MalformedModelEnvelope"); }
-        var observation = result.Observation;
-        var route = Models.Routes![0].Selection;
-        if (observation is null || observation.Route != "synthesis" || observation.ConfigurationRevision != Models.ApprovalFingerprint
-            || observation.State != ModelCapabilityState.Verified || observation.Reason != ModelCapabilityReason.None
-            || observation.ResponseModel != route.Model && observation.ResponseModel != route.Model + "-" + route.Version
-            || observation.OutputSha256 != FactoryModelsValidation.Hash(result.Text) || observation.OutputCharacters != result.Text.Length
-            || observation.RequestId is not null && (!Guid.TryParse(observation.RequestId, out var requestId) || requestId == Guid.Empty)
-            || observation.Dimensions != 0 || observation.Groups.Count != 0)
-            throw new IntentException(IntentState.Failed, "InvalidModelObservation");
-        await CheckAsync(token);
-        return result;
     }
 }

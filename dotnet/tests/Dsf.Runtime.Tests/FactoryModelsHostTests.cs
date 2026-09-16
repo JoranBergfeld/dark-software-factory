@@ -12,6 +12,50 @@ namespace Dsf.Runtime.Tests;
 
 public sealed class FactoryModelsHostTests
 {
+    [Theory]
+    [InlineData("current", 200)]
+    [InlineData("wrong-caller", 403)]
+    [InlineData("changed-config", 403)]
+    [InlineData("juror-alias", 403)]
+    public async Task Readonly_native_authority_is_code_authenticated_request_bound_and_not_inference_proof(string scenario, int status)
+    {
+        using var transport = new ModelHostTransport();
+        using var http = new HttpClient(transport);
+        Guid check = Guid.Empty;
+        Dictionary<string, string> before = null!;
+        var runner = new ModelHostRunner(transport)
+        {
+            Consume = true, ConsumerRoute = "authority", WrongConsumer = scenario == "wrong-caller",
+            ConsumerPath = scenario == "juror-alias" ? "jurors/authority" : null,
+            BeforeConsume = request =>
+            {
+                check = Guid.Parse((string)request["checkId"]!);
+                before = new(transport.Values);
+                transport.ArmRequests.Clear();
+                transport.Scopes.Clear();
+                if (scenario == "changed-config")
+                    transport.OnArmRead = _ => transport.Values.Remove(ProductConfigurationKeys.FactoryProfile);
+            },
+        };
+        await RuntimeCliApplication.InvokeAsync(["serve-models"], transport.Environment, new StringWriter(), new StringWriter(),
+            RuntimeDependencies.Production() with { WebHostRunner = runner, ModelHttp = http,
+                ModelCredential = new ModelCredential(transport), ModelClock = transport.Clock }, CancellationToken.None);
+        Assert.Equal((HttpStatusCode)status, runner.ConsumerStatus);
+        Assert.Equal(5, transport.Inference.Count);
+        Assert.DoesNotContain("https://ai.azure.com/.default", transport.Scopes);
+        if (scenario != "changed-config") Assert.Equal(before, transport.Values);
+        if (scenario == "current")
+        {
+            var result = JsonSerializer.Deserialize<ModelAuthorityResult>(runner.ConsumerBody, FactoryGitHubJson.Options)!;
+            Assert.Equal(check, result.CheckId);
+            Assert.Equal(transport.Authority.Bindings![0].PrincipalId, result.PrincipalId);
+            Assert.Equal(FactoryModelsValidation.RouteNames, result.Routes.Select(r => r.Route));
+            Assert.Equal(20, transport.ArmRequests.Count);
+            Assert.DoesNotContain("outputSha256", runner.ConsumerBody);
+        }
+        else Assert.DoesNotContain("\"routes\"", runner.ConsumerBody);
+    }
+
     [Fact]
     public async Task Slow_topology_cannot_turn_old_route_observations_into_fresh_capability()
     {
@@ -259,6 +303,8 @@ public sealed class FactoryModelsHostTests
         public string Body { get; private set; } = "";
         public bool Consume { get; init; }
         public string ConsumerRoute { get; init; } = "deduplicate";
+        public string? ConsumerPath { get; init; }
+        public bool WrongConsumer { get; init; }
         public HttpStatusCode ConsumerStatus { get; private set; }
         public string ConsumerBody { get; private set; } = "";
         public Action<JsonNode>? BeforeConsume { get; init; }
@@ -289,7 +335,7 @@ public sealed class FactoryModelsHostTests
                     stored = stored with { State = ModelCapabilityState.Verified, Stage = "observed", LastProofReference = proofKey,
                         LastProofSha256 = FactoryModelsValidation.Hash(proof), VerifiedUntil = proof.ExpiresAt };
                     transport.Values[ProductConfigurationKeys.FactoryModels] = JsonSerializer.Serialize(stored, FactoryGitHubJson.Options);
-                    var code = transport.Authority.Bindings![ConsumerRoute.StartsWith("jurors/", StringComparison.Ordinal) ? 0 : 1];
+                    var code = transport.Authority.Bindings![WrongConsumer || ConsumerRoute.StartsWith("jurors/", StringComparison.Ordinal) ? 0 : 1];
                     client.DefaultRequestHeaders.Remove("X-MS-CLIENT-PRINCIPAL-ID");
                     client.DefaultRequestHeaders.Remove("X-MS-CLIENT-PRINCIPAL");
                     client.DefaultRequestHeaders.Add("X-MS-CLIENT-PRINCIPAL-ID", code.PrincipalId);
@@ -302,10 +348,11 @@ public sealed class FactoryModelsHostTests
                     object request = ConsumerRoute == "deduplicate" ? new ModelDeduplicationRequest(reference,
                         [new("existing-problem", "Sessions expire and prevent login."), new("new-observation", "Expired sessions block sign in."),
                             new("different-problem", "Invoices need export to PDF.")])
+                        : ConsumerRoute == "authority" ? new ModelAuthorityRequest(reference, Guid.NewGuid())
                         : new ModelWorkloadRequest(reference, "Explain why equivalent problem descriptions should retain a stable identifier.");
                     var requestBody = JsonSerializer.SerializeToNode(request, FactoryGitHubJson.Options)!;
                     BeforeConsume?.Invoke(requestBody);
-                    using var consumed = await client.PostAsync("/" + ConsumerRoute,
+                    using var consumed = await client.PostAsync("/" + (ConsumerPath ?? ConsumerRoute),
                         new StringContent(requestBody.ToJsonString(), Encoding.UTF8, "application/json"), token);
                     ConsumerStatus = consumed.StatusCode;
                     ConsumerBody = await consumed.Content.ReadAsStringAsync(token);
@@ -346,6 +393,8 @@ public sealed class FactoryModelsHostTests
         public Dictionary<string, string?> Environment { get; }
         public List<string> Scopes { get; } = [];
         public List<JsonNode> Inference { get; } = [];
+        public List<string> ArmRequests { get; } = [];
+        public Action<string>? OnArmRead { get; set; }
         public ModelClock Clock { get; } = new();
         public string Scenario { get; set; } = "";
         public Action? OnInference { get; set; }
@@ -466,6 +515,8 @@ public sealed class FactoryModelsHostTests
             if (request.RequestUri.Host == "management.azure.com")
             {
                 Assert.Equal(HttpMethod.Get, request.Method);
+                ArmRequests.Add(request.RequestUri.AbsolutePath);
+                OnArmRead?.Invoke(request.RequestUri.AbsolutePath);
                 if (request.RequestUri.AbsolutePath.EndsWith("/deployments/juror-2", StringComparison.Ordinal))
                 {
                     if (Scenario == "missing-juror") return new(HttpStatusCode.NotFound);

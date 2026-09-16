@@ -217,6 +217,7 @@ quality or semantic grounding of real application evidence.
 | Reviewed operator | `POST /proof` | Complete `ModelCapabilityProof` for all five routes |
 | Approved code identity | `POST /synthesis` | `ModelWorkloadRequest` -> `ModelTextResult` |
 | Approved code identity | `POST /deduplicate` | `ModelDeduplicationRequest` -> `ModelDeduplicationResult` |
+| Approved code identity | `POST /authority` | `ModelAuthorityRequest` -> request-bound `ModelAuthorityResult`, protocol 1 |
 | Approved council identity | `POST /jurors/juror-1`, `juror-2`, `juror-3` | `ModelWorkloadRequest` -> `ModelTextResult` |
 
 Consumers supply `ModelCapabilityReference`: operation ID, configuration revision,
@@ -228,6 +229,18 @@ Text inputs are bounded to 32,768 characters; completions remain bounded to 8192
 characters and must finish normally. [Charter inference](infer-product-charter.md)
 uses the actual synthesis route for both bounded drafting and original-source
 semantic checks. Those checks are not independent council deliberation.
+
+The read-only authority route reuses the ordinary workload verifier for all five
+routes: current account/network identity, deployment incarnation/version, role
+definition and exact approved inference assignment receipt. Native reads use the
+model identity's existing permissions, never new code-identity ARM powers.
+The caller supplies a fresh check ID and capability reference; returned native
+provenance must match both that request and the review. No proof is renewed, no
+inference runs, and no configuration or governance is written. Control-plane
+observations do not prove present data-plane availability or quota.
+Charter draft release requires this route even when an old proof is unexpired.
+Both deployed images must implement the compatible protocol; older images fail
+closed, without in-place repair or an inherited-permission substitute.
 
 These are the implemented model/embedding interfaces for subsequent source
 analysis and readiness-preview slices. The existing greenfield lexical clusterer

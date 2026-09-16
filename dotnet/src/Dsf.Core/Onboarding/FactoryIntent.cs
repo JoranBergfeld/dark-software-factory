@@ -45,6 +45,7 @@ public sealed record IntentResult(IntentState State, string Detail, IntentProgre
     SourceProgress? Acquisition, GroundedCharterDraft? Draft, IReadOnlyList<IntentReviewClaim> Claims,
     IReadOnlyList<IntentChunkAnalysis> Chunks, IReadOnlyList<string> Limitations, int? NextPage)
 {
+    public ModelAuthorityResult? ModelAuthority { get; init; }
     public bool Governs { get; init; }
     public string DeployedSourceCorrelation { get; init; } = "Unknown";
     public IReadOnlyList<SourcePathCoverage> ExcludedPaths { get; init; } = [];

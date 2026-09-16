@@ -6,7 +6,7 @@ param namePrefix string
 @description('Reviewed factory hosting location.')
 param location string
 
-@description('Implemented runtime image pinned by digest.')
+@description('Implemented runtime image including code-only readonly /authority, pinned by digest.')
 @minLength(1)
 @maxLength(512)
 param runtimeImage string

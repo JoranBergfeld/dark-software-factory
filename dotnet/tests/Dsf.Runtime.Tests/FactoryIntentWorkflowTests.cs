@@ -11,6 +11,191 @@ namespace Dsf.Runtime.Tests;
 
 public sealed class FactoryIntentWorkflowTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Final_native_authority_reread_withholds_draft_when_grant_changes_after_admission_or_model_response(bool duringModel)
+    {
+        using var first = await IntentWorkflowTransport.CreateAsync();
+        await first.RunAsync("/acquire");
+        await first.RunAsync("/infer");
+        if (!duringModel) Assert.Equal(HttpStatusCode.OK, (await first.RunAsync("/infer")).Status);
+        using var second = await IntentWorkflowTransport.CreateAsync();
+        second.Source.ImportProgress(first.Source);
+        var before = second.Source.Progress.ToDictionary(p => p.Key, p => p.Value);
+        var calls = second.Models.Inference.Count;
+        var grant = second.Models.Authority.Grants!.Single(g => g.Scope.Contains("/microsoft.cognitiveservices/", StringComparison.Ordinal));
+        if (duringModel) second.BeforeModelResponse = () => { second.Models.Resources.Remove(grant.Target); return Task.CompletedTask; };
+        else second.AfterAuthorityResponse = () => second.Models.Resources.Remove(grant.Target);
+        var result = await second.RunAsync(duringModel ? "/infer" : "/intent-status");
+        Assert.Equal("Blocked", (string?)JsonNode.Parse(result.Body)!["state"]);
+        Assert.Null(JsonNode.Parse(result.Body)!["draft"]);
+        Assert.Equal(calls + (duringModel ? 1 : 0), second.Models.Inference.Count);
+        if (duringModel)
+            Assert.Equal(0, (int?)JsonNode.Parse(second.Source.Progress["intent/current"].Value)!["checkedChunks"]);
+        else Assert.Equal(before, second.Source.Progress);
+    }
+
+    [Theory]
+    [InlineData("nonce")]
+    [InlineData("provenance")]
+    [InlineData("missing-route")]
+    public async Task Cached_or_incomplete_native_authority_cannot_release_a_draft(string mutation)
+    {
+        using var first = await IntentWorkflowTransport.CreateAsync();
+        await first.RunAsync("/acquire");
+        await first.RunAsync("/infer");
+        Assert.Equal(HttpStatusCode.OK, (await first.RunAsync("/infer")).Status);
+        using var second = await IntentWorkflowTransport.CreateAsync();
+        second.Source.ImportProgress(first.Source);
+        second.AuthorityResponse = result =>
+        {
+            if (mutation == "nonce") result["checkId"] = Guid.NewGuid();
+            if (mutation == "provenance") result["routes"]![0]!["grant"]!["revision"] = new string('f', 64);
+            if (mutation == "missing-route") result["routes"]!.AsArray().RemoveAt(4);
+            return result;
+        };
+        var before = second.Source.Progress.ToDictionary(p => p.Key, p => p.Value);
+        var result = await second.RunAsync("/intent-status");
+        Assert.Equal("Blocked", (string?)JsonNode.Parse(result.Body)!["state"]);
+        Assert.Null(JsonNode.Parse(result.Body)!["draft"]);
+        Assert.Equal(before, second.Source.Progress);
+        Assert.Empty(second.AnalysisPrompts);
+    }
+
+    [Fact]
+    public async Task Older_model_host_without_native_authority_route_is_an_explicit_compatibility_blocker()
+    {
+        using var transport = await IntentWorkflowTransport.CreateAsync();
+        await transport.RunAsync("/acquire");
+        transport.AuthorityUnavailable = true;
+        var result = await transport.RunAsync("/infer");
+        Assert.Equal("Blocked", (string?)JsonNode.Parse(result.Body)!["state"]);
+        Assert.Contains("NativeModelAuthorityUnavailable", result.Body);
+        Assert.DoesNotContain(transport.Source.Progress.Keys, key => key.StartsWith("intent/", StringComparison.Ordinal));
+        Assert.Empty(transport.AnalysisPrompts);
+    }
+
+    [Fact]
+    public async Task Lost_native_authority_response_remains_unknown_without_inference_or_provider_detail()
+    {
+        using var transport = await IntentWorkflowTransport.CreateAsync();
+        await transport.RunAsync("/acquire");
+        transport.AfterAuthorityResponse = () => throw new HttpRequestException("private-provider-secret");
+        var result = await transport.RunAsync("/infer");
+        Assert.Equal("Unknown", (string?)JsonNode.Parse(result.Body)!["state"]);
+        Assert.DoesNotContain("private-provider-secret", result.Body);
+        Assert.DoesNotContain(transport.Source.Progress.Keys, key => key.StartsWith("intent/", StringComparison.Ordinal));
+        Assert.Empty(transport.AnalysisPrompts);
+    }
+
+    [Theory]
+    [InlineData("/infer")]
+    [InlineData("/intent-status")]
+    public async Task Recorded_source_uncertainty_is_not_downgraded_to_a_missing_prerequisite(string path)
+    {
+        using var first = await IntentWorkflowTransport.CreateAsync();
+        await first.RunAsync("/acquire");
+        var key = first.Source.Progress.Keys.Single(k => k.EndsWith("/current", StringComparison.Ordinal));
+        var prior = first.Source.Progress[key];
+        var source = JsonNode.Parse(prior.Value)!;
+        source["state"] = "Unknown";
+        source["reason"] = "AcquisitionRequestUnconfirmed";
+        first.Source.Progress[key] = (source.ToJsonString(), prior.Revision + 1);
+        using var second = await IntentWorkflowTransport.CreateAsync();
+        second.Source.ImportProgress(first.Source);
+        var before = second.Source.Progress.ToDictionary(p => p.Key, p => p.Value);
+        var result = await second.RunAsync(path);
+        Assert.Equal("Unknown", (string?)JsonNode.Parse(result.Body)!["state"]);
+        Assert.Null(JsonNode.Parse(result.Body)!["draft"]);
+        Assert.Equal(before, second.Source.Progress);
+        Assert.Empty(second.AnalysisPrompts);
+    }
+
+    [Theory]
+    [InlineData("grant-replaced")]
+    [InlineData("role-expanded")]
+    [InlineData("deployment-changed")]
+    [InlineData("juror-removed")]
+    [InlineData("account-changed")]
+    [InlineData("workload-identity")]
+    public async Task Current_native_authority_drift_withholds_existing_draft_without_inference_or_store_writes(string change)
+    {
+        using var first = await IntentWorkflowTransport.CreateAsync();
+        await first.RunAsync("/acquire");
+        await first.RunAsync("/infer");
+        Assert.Equal(HttpStatusCode.OK, (await first.RunAsync("/infer")).Status);
+        using var second = await IntentWorkflowTransport.CreateAsync();
+        second.Source.ImportProgress(first.Source);
+        var routes = second.Models.Authority.Routes!;
+        var account = routes[0].Selection.AccountResourceId;
+        var grant = second.Models.Authority.Grants!.Single(g => g.Scope == account);
+        if (change == "grant-replaced") second.Models.Resources[grant.Target]["properties"]!["createdOn"] = "2026-09-16T11:01:00Z";
+        if (change == "role-expanded") second.Models.Resources[account + "/providers/microsoft.authorization/roledefinitions/" + grant.RoleDefinitionId.Split('/').Last()]
+            ["properties"]!["permissions"]![0]!["dataActions"]!.AsArray().Add("Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read");
+        if (change == "deployment-changed") second.Models.Resources[FactoryModelsValidation.DeploymentTarget(routes[0].Selection)]
+            ["properties"]!["model"]!["version"] = "2099-01-01";
+        if (change == "juror-removed") second.Models.Resources.Remove(FactoryModelsValidation.DeploymentTarget(routes[4].Selection));
+        if (change == "account-changed") second.Models.Resources[account]["properties"]!["publicNetworkAccess"] = "Enabled";
+        if (change == "workload-identity") second.Models.Scenario = "wrong-token";
+        var before = second.Source.Progress.ToDictionary(p => p.Key, p => p.Value);
+        var calls = second.Models.Inference.Count;
+        var result = await second.RunAsync("/intent-status");
+        Assert.Equal("Blocked", (string?)JsonNode.Parse(result.Body)!["state"]);
+        Assert.Null(JsonNode.Parse(result.Body)!["draft"]);
+        Assert.Equal(before, second.Source.Progress);
+        Assert.Equal(calls, second.Models.Inference.Count);
+        Assert.DoesNotContain(second.Requests, r => r.Host == "management.azure.com" && r.AbsolutePath.StartsWith(account, StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("/infer", true)]
+    [InlineData("/intent-status", true)]
+    [InlineData("/infer", false)]
+    [InlineData("/intent-status", false)]
+    public async Task Missing_source_current_is_unknown_with_surviving_records_but_blocked_when_pristine(string path, bool existing)
+    {
+        using var first = await IntentWorkflowTransport.CreateAsync();
+        if (existing)
+        {
+            await first.RunAsync("/acquire");
+            await first.RunAsync("/infer");
+            Assert.Equal(HttpStatusCode.OK, (await first.RunAsync("/infer")).Status);
+            first.Source.Progress.Remove(first.Source.Progress.Keys.Single(k => k.StartsWith("source/", StringComparison.Ordinal)
+                && k.EndsWith("/current", StringComparison.Ordinal)));
+        }
+        using var second = await IntentWorkflowTransport.CreateAsync();
+        second.Source.ImportProgress(first.Source);
+        var before = second.Source.Progress.ToDictionary(p => p.Key, p => p.Value);
+        var calls = second.Models.Inference.Count;
+        var result = await second.RunAsync(path);
+        Assert.Equal(existing ? "Unknown" : "Blocked", (string?)JsonNode.Parse(result.Body)!["state"]);
+        Assert.Null(JsonNode.Parse(result.Body)!["draft"]);
+        Assert.Equal(before, second.Source.Progress);
+        Assert.Equal(calls, second.Models.Inference.Count);
+        Assert.DoesNotContain(second.Source.Requests, r => r.Contains("/git/blobs/", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Revoked_native_inference_grant_with_current_proof_withholds_completed_draft_on_independent_worker()
+    {
+        using var first = await IntentWorkflowTransport.CreateAsync();
+        await first.RunAsync("/acquire");
+        await first.RunAsync("/infer");
+        Assert.Equal(HttpStatusCode.OK, (await first.RunAsync("/infer")).Status);
+        using var second = await IntentWorkflowTransport.CreateAsync();
+        second.Source.ImportProgress(first.Source);
+        var grant = second.Models.Authority.Grants!.Single(g => g.Scope.Contains("/microsoft.cognitiveservices/", StringComparison.Ordinal));
+        Assert.True(second.Models.Resources.Remove(grant.Target));
+        var before = second.Source.Progress.ToDictionary(p => p.Key, p => p.Value);
+        var calls = second.Models.Inference.Count;
+        var result = await second.RunAsync("/intent-status");
+        Assert.Equal("Blocked", (string?)JsonNode.Parse(result.Body)!["state"]);
+        Assert.Null(JsonNode.Parse(result.Body)!["draft"]);
+        Assert.Equal(before, second.Source.Progress);
+        Assert.Equal(calls, second.Models.Inference.Count);
+    }
+
     [Fact]
     public async Task Revision_identity_cannot_be_replaced_to_abandon_earlier_dispatched_work()
     {
@@ -559,6 +744,9 @@ internal sealed class IntentWorkflowTransport : HttpMessageHandler
     internal readonly List<Uri> Requests = [];
     internal bool LoseModelResponse { get; set; }
     internal Func<Task>? BeforeModelResponse { get; set; }
+    internal Action? AfterAuthorityResponse { get; set; }
+    internal Func<JsonNode, JsonNode>? AuthorityResponse { get; set; }
+    internal bool AuthorityUnavailable { get; set; }
     private HttpMessageInvoker? source;
     private HttpMessageInvoker? models;
 
@@ -656,6 +844,7 @@ internal sealed class IntentWorkflowTransport : HttpMessageHandler
         if (request.RequestUri!.Host == "unreviewed.azurecontainerapps.io") return new(HttpStatusCode.Forbidden);
         if (request.RequestUri!.Host == "models.private.azurecontainerapps.io")
         {
+            if (request.RequestUri.AbsolutePath == "/authority" && AuthorityUnavailable) return new(HttpStatusCode.NotFound);
             Models.Values.Clear();
             foreach (var pair in Source.Values) Models.Values.Add(pair.Key, pair.Value);
             Models.Clock.Now = Source.Clock.Now;
@@ -665,8 +854,18 @@ internal sealed class IntentWorkflowTransport : HttpMessageHandler
             await RuntimeCliApplication.InvokeAsync(["serve-models"], Models.Environment, new StringWriter(), new StringWriter(),
                 RuntimeDependencies.Production() with { WebHostRunner = runner, ModelHttp = http,
                     ModelCredential = new ModelCredential(Models), ModelClock = Models.Clock }, token);
-            if (BeforeModelResponse is not null) await BeforeModelResponse();
-            if (LoseModelResponse) throw new HttpRequestException("private-provider-secret");
+            if (request.RequestUri.AbsolutePath == "/synthesis")
+            {
+                if (BeforeModelResponse is not null) await BeforeModelResponse();
+                if (LoseModelResponse) throw new HttpRequestException("private-provider-secret");
+            }
+            if (request.RequestUri.AbsolutePath == "/authority")
+            {
+                AfterAuthorityResponse?.Invoke();
+                if (AuthorityResponse is not null && runner.Status == HttpStatusCode.OK)
+                    return new(runner.Status) { Content = new StringContent(AuthorityResponse(JsonNode.Parse(runner.Body)!).ToJsonString(),
+                        System.Text.Encoding.UTF8, "application/json") };
+            }
             return new(runner.Status) { Content = new StringContent(runner.Body, System.Text.Encoding.UTF8, "application/json") };
         }
         if (request.RequestUri.Host == "management.azure.com" && Models.Resources.ContainsKey(request.RequestUri.AbsolutePath))

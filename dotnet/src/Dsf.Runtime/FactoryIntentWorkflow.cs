@@ -31,7 +31,8 @@ internal sealed class FactoryIntentWorkflow(FactorySourceAccess source, HttpClie
         await access.CheckAsync(token);
         acquisition = await inventory.ReadAnalysisInventoryAsync(token);
         if (acquisition.State != SourceState.Acquired)
-            return new(IntentState.Blocked, acquisition.Detail, null, acquisition.Progress, null, [], [], [], null);
+            return new(acquisition.State == SourceState.Partial ? IntentState.Blocked : Map(acquisition.State),
+                acquisition.Detail, null, acquisition.Progress, null, [], [], [], null);
         chunks = acquisition.Paths.SelectMany(path => path.Chunks.Select(chunk => (path, chunk))).ToArray();
         if (chunks.Length is < 1 or > FactoryIntentLimits.MaximumChunks)
             return new(IntentState.Partial, "AnalysisChunkLimit; no source silently omitted.", null, acquisition.Progress, null, [], [], [], null);
@@ -288,6 +289,7 @@ internal sealed class FactoryIntentWorkflow(FactorySourceAccess source, HttpClie
         return new(state ?? progress.State, reason ?? progress.Reason, progress, acquisition.Progress, review.Draft, review.Claims,
             completed.Skip(offset).Take(FactoryIntentLimits.PageSize).ToArray(), limitations, offset + FactoryIntentLimits.PageSize < completed.Count ? page + 1 : null)
         {
+            ModelAuthority = access.CurrentAuthority,
             ExcludedPaths = excluded.Skip(offset).Take(FactoryIntentLimits.PageSize).ToArray(),
             NextExclusionPage = offset + FactoryIntentLimits.PageSize < excluded.Length ? page + 1 : null,
         };

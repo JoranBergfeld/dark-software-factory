@@ -97,11 +97,12 @@ internal sealed class FactoryModelWorkloads(
             "Finite nonzero complete embeddings of the reviewed dimensions required; no lexical or synthetic fallback.");
     }
 
-    internal async Task CheckRouteAsync(ReviewedModelRoute route, CancellationToken token)
+    internal async Task<ModelRouteAuthority> CheckRouteAsync(ReviewedModelRoute route, CancellationToken token)
     {
         var selection = route.Selection;
         using var account = await ReadArmAsync(selection.AccountResourceId, FactoryModelsValidation.ProviderApi, selection.Name, token);
-        if (FactoryModelsValidation.ObserveAccount(selection, account.RootElement) != route.AccountObservation)
+        var observedAccount = FactoryModelsValidation.ObserveAccount(selection, account.RootElement);
+        if (observedAccount != route.AccountObservation)
             throw FactoryModelsValidation.Failure(ModelCapabilityReason.AuthorityChanged, selection.Name, "Reviewed model-serving account identity/network changed.");
         var target = FactoryModelsValidation.DeploymentTarget(selection);
         using var deployment = await ReadArmAsync(target, FactoryModelsValidation.ProviderApi, selection.Name, token);
@@ -112,7 +113,8 @@ internal sealed class FactoryModelWorkloads(
         var grant = authority.Grants!.Single(g => g.Scope == selection.AccountResourceId);
         var roleTarget = grant.Scope + "/providers/microsoft.authorization/roledefinitions/" + grant.RoleDefinitionId.Split('/').Last();
         using var role = await ReadArmAsync(roleTarget, "2022-04-01", selection.Name, token);
-        if (FactoryModelsValidation.ObserveRole(grant.RoleDefinitionId, role.RootElement) != grant.RoleRevision)
+        var roleRevision = FactoryModelsValidation.ObserveRole(grant.RoleDefinitionId, role.RootElement);
+        if (roleRevision != grant.RoleRevision)
             throw FactoryModelsValidation.Failure(ModelCapabilityReason.AuthorityChanged, selection.Name,
                 "Current native inference role definition differs from review; effective access cannot authorize permission expansion.");
         var effect = authority.Effects!.Single(e => e.Target == grant.Target);
@@ -125,6 +127,8 @@ internal sealed class FactoryModelWorkloads(
             || !string.Equals(properties.GetProperty("roleDefinitionId").GetString(), grant.RoleDefinitionId, StringComparison.OrdinalIgnoreCase)
             || !string.Equals(properties.GetProperty("scope").GetString(), grant.Scope, StringComparison.OrdinalIgnoreCase))
             throw FactoryModelsValidation.Failure(ModelCapabilityReason.IdentityMismatch, selection.Name, "Current exact inference grant no longer matches approved receipt; inherited access is not replacement authority.");
+        return new(selection.Name, observedAccount, observed, roleRevision,
+            new(grant.Target, FactoryModelsValidation.Hash(properties), properties.GetProperty("createdOn").GetDateTimeOffset().ToString("O")));
     }
 
     private async Task<JsonDocument> ReadArmAsync(string target, string api, string route, CancellationToken token)

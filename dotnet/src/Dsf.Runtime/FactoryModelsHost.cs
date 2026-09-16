@@ -84,14 +84,17 @@ public static partial class RuntimeVerbs
         Func<HttpContext, Task<IResult>> deduplication = context => ConsumeAsync(context, "embedding");
         app.MapPost("/synthesis", synthesis);
         app.MapPost("/deduplicate", deduplication);
+        Func<HttpContext, Task<IResult>> nativeAuthority = context => ConsumeAsync(context, "authority", authorityOnly: true);
+        app.MapPost("/authority", nativeAuthority);
         app.MapPost("/jurors/{juror}", (HttpContext context, string juror) => ConsumeAsync(context, juror));
         return app;
 
-        async Task<IResult> ConsumeAsync(HttpContext context, string route)
+        async Task<IResult> ConsumeAsync(HttpContext context, string route, bool authorityOnly = false)
         {
+            context.Response.Headers.CacheControl = "no-store";
             try
             {
-                if (!FactoryModelsValidation.RouteNames.Contains(route) || !Guid.TryParse(settings.ManagedIdentityClientId, out var id)
+                if (!authorityOnly && !FactoryModelsValidation.RouteNames.Contains(route) || !Guid.TryParse(settings.ManagedIdentityClientId, out var id)
                     || id == Guid.Empty || settings.ProfilePin.Length != 64 || !settings.ProfilePin.All(char.IsAsciiHexDigit)) throw new JsonException();
                 var credential = dependencies.ModelCredential
                     ?? new ManagedIdentityCredential(ManagedIdentityId.FromUserAssignedClientId(settings.ManagedIdentityClientId));
@@ -103,7 +106,14 @@ public static partial class RuntimeVerbs
                 ModelCapabilityReference reference;
                 ModelDeduplicationRequest? deduplication = null;
                 ModelWorkloadRequest? completion = null;
-                if (route == "embedding")
+                ModelAuthorityRequest? native = null;
+                if (route == "authority")
+                {
+                    native = await context.Request.ReadFromJsonAsync<ModelAuthorityRequest>(FactorySourceValidation.RecordJson, context.RequestAborted) ?? throw new JsonException();
+                    if (native.CheckId == Guid.Empty) throw new JsonException();
+                    reference = native.Capability;
+                }
+                else if (route == "embedding")
                 {
                     deduplication = await context.Request.ReadFromJsonAsync<ModelDeduplicationRequest>(FactoryGitHubJson.Options, context.RequestAborted) ?? throw new JsonException();
                     reference = deduplication.Capability;
@@ -114,8 +124,18 @@ public static partial class RuntimeVerbs
                     reference = completion.Capability;
                 }
                 authority = FactoryModelsValidation.ReadVerified(manifest, values, reference, dependencies.ModelClock.GetUtcNow());
-                IFactoryModelWorkloads workloads = new FactoryModelWorkloads(manifest, authority, credential, dependencies.ModelHttp ?? ModelHttp, dependencies.ModelClock);
-                object result = route == "embedding" ? await workloads.DeduplicateAsync(deduplication!.Items, context.RequestAborted)
+                var workloads = new FactoryModelWorkloads(manifest, authority, credential, dependencies.ModelHttp ?? ModelHttp, dependencies.ModelClock);
+                object result;
+                if (native is not null)
+                {
+                    var observations = new List<ModelRouteAuthority>();
+                    foreach (var required in authority.Routes!)
+                        observations.Add(await workloads.CheckRouteAsync(required, context.RequestAborted));
+                    var checkedAuthority = new ModelAuthorityResult(native.CheckId, reference, authority.Bindings![0].PrincipalId!, observations);
+                    FactoryModelsValidation.ValidateNativeAuthority(authority, native.CheckId, checkedAuthority);
+                    result = checkedAuthority;
+                }
+                else result = route == "embedding" ? await workloads.DeduplicateAsync(deduplication!.Items, context.RequestAborted)
                     : route == "synthesis" ? await workloads.SynthesizeAsync(completion!.Input, context.RequestAborted)
                     : await workloads.JudgeAsync(route, completion!.Input, context.RequestAborted);
                 var (latestManifest, _, latestValues) = await ReadAsync(configuration, context.RequestAborted);

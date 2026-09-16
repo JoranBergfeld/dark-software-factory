@@ -15,6 +15,20 @@ code identity calls the approved model host's `/synthesis` route; the model host
 uses its separate inference identity. Operator credentials never call the model
 provider. Existing native Entra consent and private connectivity must work.
 
+The model image must also implement code-only `POST /authority`, protocol 1.
+The code host uses this read-only route to check all five approved native
+accounts/deployments, exact inference assignments, role definitions and workload
+identity against their original provenance. It does not gain model-account ARM,
+inference or additional store permissions: the model host performs those reads
+under its existing model identity using the ordinary workload route verifier.
+An unexpired stored proof cannot substitute for these current checks.
+
+Older model images without this route block with `NativeModelAuthorityUnavailable`.
+Installing the tool does not upgrade a deployed image. Use compatible, reviewed
+digest-pinned images; inference never repairs consent, mutates create-once
+infrastructure, recreates hosts or accepts inherited access as replacement
+authority.
+
 No new identity, store, grant, signing-key access or governance writer is added.
 The already isolated `dsfs-<factory-id-N>` store holds two separate purposes:
 `source/*` acquisition metadata and `intent/*` derived analysis metadata. Its
@@ -56,6 +70,12 @@ using the same command with that `--page`. Each record includes its own findings
 limitations and, during verification, every claim judgment. Later summary pages
 do not erase earlier limitations. Status never writes, repairs or calls a model.
 It does recheck current authority, source identity and whole-inventory integrity.
+Removing a source current checkpoint while any source namespace records survive
+is `Unknown`, even if a completed intent draft survives. Recorded source
+uncertainty remains `Unknown`; genuinely pristine missing acquisition is
+`Blocked`. Neither case repairs state, reacquires source or replays analysis.
+Acquisition, status, analysis inventory and chunk materialization all share this
+current-checkpoint loss check.
 
 ## What completion means
 
@@ -128,6 +148,19 @@ automatic recovery from irreconcilable unknown work.
 Before releasing results, the host rechecks source and delegated product/model
 authority; the CLI also rechecks the final owner registry. `governs` is always
 false. Retained successful data is not current authority when those checks fail.
+`modelAuthority` exposes the final request-bound native check: protocol, fresh
+check ID, capability reference, model principal and all five routes' exact
+account/deployment/grant observations and role revisions. A replayed check ID,
+missing route, revoked/replaced grant or changed native configuration withholds
+the draft without overwriting its historical evidence.
+
+These are current **control-plane** checks, not new inference evidence or renewed
+capability proof. They perform twenty bounded native GETs per authority request,
+no model completions, embeddings or state writes, within the enclosing deadline.
+They do not prove current data-plane availability, quota or inference-network
+reachability; actual model calls retain their own checks and explicit failures.
+Native reads across Azure resources are not an atomic revocation transaction.
+Lost authority responses remain `Unknown`, with provider details withheld.
 
 ## Bounds, storage and limitations
 

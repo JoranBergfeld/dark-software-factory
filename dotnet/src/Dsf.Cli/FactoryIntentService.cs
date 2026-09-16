@@ -50,7 +50,7 @@ internal sealed partial class FactorySourceService
                 || result.State == IntentState.DraftReady && (response.StatusCode != HttpStatusCode.OK
                     || result.Progress is not { Dispatch: null, State: IntentState.DraftReady } complete
                     || complete.AvailableChunks < 1 || complete.AnalyzedChunks != complete.AvailableChunks || complete.CheckedChunks != complete.AvailableChunks
-                    || result.Draft is null || result.Claims.Count == 0 || result.Claims.Any(c => !c.Grounded || c.Conflicted)))
+                    || result.Draft is null || result.ModelAuthority is null || result.Claims.Count == 0 || result.Claims.Any(c => !c.Grounded || c.Conflicted)))
                 throw new JsonException();
             result.Draft?.Validate();
             await CheckNativeAsync(admission, source, manifest, github, values, effects, pending.Token);

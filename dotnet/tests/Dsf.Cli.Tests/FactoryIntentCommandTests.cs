@@ -72,6 +72,18 @@ public sealed class FactoryIntentCommandTests
             Assert.Contains("dsf onboard decide infer --owner-appconfig-endpoint", interactive.Output);
             Assert.Contains("Coordinate volunteer shifts", interactive.Output);
             Assert.Equal(writes, source.Source.Writes.Count);
+            Assert.Equal(5, ready.Result["modelAuthority"]!["routes"]!.AsArray().Count);
+            var manifest = JsonSerializer.Deserialize<FactoryManifest>(source.Source.Values[ProductConfigurationKeys.FactoryManifest], FactoryGitHubJson.Options)!;
+            var authority = FactoryModelsValidation.ReadPreparation(manifest, source.Source.Values);
+            var grant = authority.Grants!.Single(g => g.Scope == authority.Routes![0].Selection.AccountResourceId);
+            Assert.True(models.Resources.Remove(grant.Target));
+            var revoked = await machine.InvokeAsync("infer", "--status-only");
+            Assert.Equal(1, revoked.Exit);
+            Assert.Equal("Blocked", (string?)revoked.Result["state"]);
+            Assert.Null(revoked.Result["draft"]);
+            Assert.Equal(writes, source.Source.Writes.Count);
+            Assert.Equal(owner, machine.Store.Export());
+            Assert.Equal(governance, arm.Product.Export());
         }
     }
 
