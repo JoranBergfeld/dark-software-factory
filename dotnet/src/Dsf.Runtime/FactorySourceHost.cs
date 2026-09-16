@@ -25,7 +25,43 @@ public static partial class RuntimeVerbs
         app.MapPost("/acquire", acquire);
         app.MapPost("/status", status);
         app.MapPost("/materialize", materialize);
+        Func<HttpContext, Task<IResult>> infer = context => IntentAsync(context, false);
+        Func<HttpContext, Task<IResult>> intentStatus = context => IntentAsync(context, true);
+        app.MapPost("/infer", infer);
+        app.MapPost("/intent-status", intentStatus);
         return app;
+
+        async Task<IResult> IntentAsync(HttpContext context, bool status)
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            try
+            {
+                using var deadline = new CancellationTokenSource(FactoryIntentLimits.AdvanceBudget, dependencies.SourceClock);
+                using var pending = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted, deadline.Token);
+                var http = dependencies.SourceHttp ?? SourceHttp;
+                var credential = dependencies.SourceCredential
+                    ?? new ManagedIdentityCredential(ManagedIdentityId.FromUserAssignedClientId(settings.ManagedIdentityClientId));
+                var access = new FactorySourceAccess(settings, credential, http, dependencies.SourceClock);
+                await access.CheckAsync(pending.Token);
+                if (!NativeCaller(context, access.Manifest.Identity.AzureActorId, access.Manifest.Identity.TenantId, null))
+                    throw new JsonException();
+                var request = await context.Request.ReadFromJsonAsync<IntentRequest>(FactorySourceValidation.RecordJson, pending.Token) ?? throw new JsonException();
+                var result = await RuntimeWorkflow.InferCharterAsync(access, http, dependencies.SourceClock, request, status, pending.Token);
+                return Results.Json(result, FactoryGitHubJson.Options, statusCode: result.State == IntentState.DraftReady ? 200 : 409);
+            }
+            catch (IntentException e) { return Error(e.State, e.Message); }
+            catch (SourceAcquisitionException e) { return Error(FactoryIntentWorkflow.Map(e.State), e.Message); }
+            catch (OperationCanceledException)
+            { return Error(context.RequestAborted.IsCancellationRequested ? IntentState.Canceled : IntentState.Partial,
+                "Canceled or time budget exhausted; issued model dispatch may remain Unknown. Inspect private intent status; no forced retry."); }
+            catch (Exception e) when (e is JsonException or InvalidOperationException or ArgumentException or KeyNotFoundException or FormatException
+                or HttpRequestException or Azure.RequestFailedException or AuthenticationFailedException or ModelCapabilityException
+                or System.Text.RegularExpressions.RegexMatchTimeoutException)
+            { return Error(IntentState.Blocked, "Current verified model/source authority and native operator required. No draft released; provider details withheld."); }
+
+            static IResult Error(IntentState state, string detail) => Results.Json(
+                new IntentResult(state, detail, null, null, null, [], [], [], null), FactoryGitHubJson.Options, statusCode: 409);
+        }
 
         async Task<IResult> HandleAsync(HttpContext context, bool status, bool materialize = false)
         {

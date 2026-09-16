@@ -128,6 +128,15 @@ try
         && sourceHost.Output.Contains("AZURE_CLIENT_ID", StringComparison.Ordinal)
         && !sourceHost.Output.Contains("AZURE_OPENAI", StringComparison.Ordinal), "Installed source host is not isolated.");
 
+    var inferHelp = await Run("onboard", "decide", "infer", "--help");
+    Require(inferHelp.ExitCode == 0 && inferHelp.Output.Contains("--new-analysis", StringComparison.Ordinal)
+        && inferHelp.Output.Contains("--status-only", StringComparison.Ordinal), "Installed charter inference grammar is unavailable.");
+    File.WriteAllText(Path.Combine(scratch.FullName, "azure.log"), "");
+    var incompleteInfer = await Run("onboard", "decide", "infer", "--json");
+    Require(incompleteInfer.ExitCode == 1 && incompleteInfer.Output.Contains("\"state\": \"Blocked\"", StringComparison.Ordinal)
+        && incompleteInfer.Output.Contains("required", StringComparison.Ordinal), "Installed inference accepted missing explicit locators.");
+    Require(File.ReadAllText(Path.Combine(scratch.FullName, "azure.log")).Length == 0, "Incomplete inference reached Azure.");
+
     var foundationAsset = Path.Combine(payload, "assets", "infra", "onboard-foundation.json");
     var foundationBytes = File.ReadAllBytes(foundationAsset);
     File.Delete(foundationAsset);

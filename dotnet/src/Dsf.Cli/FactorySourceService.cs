@@ -9,7 +9,7 @@ using Dsf.Core.Runtime;
 
 namespace Dsf.Cli;
 
-internal sealed class FactorySourceService(IAzureCliRunner azure, HttpClient? http, TimeProvider clock)
+internal sealed partial class FactorySourceService(IAzureCliRunner azure, HttpClient? http, TimeProvider clock)
 {
     private static readonly HttpClient HostHttp = new(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = TimeSpan.FromSeconds(75) };
 

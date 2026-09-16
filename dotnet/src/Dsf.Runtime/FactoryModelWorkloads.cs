@@ -174,7 +174,7 @@ internal sealed class FactoryModelWorkloads(
             FactoryModelsValidation.Hash(output), output.Length, dimensions, groups);
     private static void ValidateInput(string input)
     {
-        if (string.IsNullOrWhiteSpace(input) || input.Length > 16384)
-            throw FactoryModelsValidation.Failure(ModelCapabilityReason.UnsupportedTarget, "input", "Nonempty input of at most 16384 characters required.");
+        if (string.IsNullOrWhiteSpace(input) || input.Length > 32768)
+            throw FactoryModelsValidation.Failure(ModelCapabilityReason.UnsupportedTarget, "input", "Nonempty input of at most 32768 characters required.");
     }
 }

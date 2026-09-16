@@ -224,6 +224,10 @@ immutable proof reference and proof hash. `FactoryModelsValidation.ReadVerified`
 checks current inactive governance, complete receipts, hashes and proof expiry.
 The host rechecks authority before returning results. Both proof and consumer
 routes use the same asynchronous `IFactoryModelWorkloads` implementation.
+Text inputs are bounded to 32,768 characters; completions remain bounded to 8192
+characters and must finish normally. [Charter inference](infer-product-charter.md)
+uses the actual synthesis route for both bounded drafting and original-source
+semantic checks. Those checks are not independent council deliberation.
 
 These are the implemented model/embedding interfaces for subsequent source
 analysis and readiness-preview slices. The existing greenfield lexical clusterer

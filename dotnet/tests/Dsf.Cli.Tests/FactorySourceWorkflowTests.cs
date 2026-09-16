@@ -173,6 +173,8 @@ internal sealed class SourceWorkflowTransport(FactoryFoundationTests.FoundationT
     internal bool LoseDeployment { get; set; }
     internal bool LoseAcquisition { get; set; }
     internal bool NetworkEtags { get; set; }
+    internal Func<SourceInventoryTransport, HttpMessageHandler>? WorkloadTransport { get; set; }
+    internal Action<string, string>? AfterHost { get; set; }
     internal Dictionary<string, string> Values() => JsonNode.Parse(foundation.Product.ListJson())!.AsArray()
         .ToDictionary(n => (string)n!["key"]!, n => (string)n!["value"]!);
     internal JsonNode Record(string key) => JsonNode.Parse(Values()[key])!;
@@ -185,11 +187,12 @@ internal sealed class SourceWorkflowTransport(FactoryFoundationTests.FoundationT
             Assert.NotNull(Source);
             Source.Values.Clear();
             foreach (var (key, value) in Values()) Source.Values.Add(key, value);
-            using var http = new HttpClient(Source, false);
+            using var workload = WorkloadTransport?.Invoke(Source);
+            using var http = new HttpClient(workload ?? Source, false);
             var runner = new SourceHostRunner(Source)
             {
                 Route = uri.AbsolutePath,
-                Request = await request.Content!.ReadFromJsonAsync<SourceAcquireRequest>(FactoryGitHubJson.Options, token) ?? throw new JsonException(),
+                Request = await request.Content!.ReadFromJsonAsync<JsonNode>(FactoryGitHubJson.Options, token) ?? throw new JsonException(),
             };
             var dependencies = RuntimeDependencies.Production() with
                 { WebHostRunner = runner, SourceHttp = http, SourceCredential = new SourceTestCredential(Source), SourceClock = Source.Clock };
@@ -197,6 +200,7 @@ internal sealed class SourceWorkflowTransport(FactoryFoundationTests.FoundationT
                 new StringWriter(), new StringWriter(), dependencies, token);
             HostDiagnostic = runner.Status + " " + runner.Body;
             Assert.Equal(0, exit);
+            AfterHost?.Invoke(uri.AbsolutePath, runner.Body);
             if (LoseAcquisition) throw new HttpRequestException("Lost source response");
             return new(runner.Status) { Content = new StringContent(runner.Body, System.Text.Encoding.UTF8, "application/json") };
         }

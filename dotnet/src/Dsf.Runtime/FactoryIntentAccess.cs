@@ -1,0 +1,114 @@
+using System.Net;
+using System.Net.Http.Headers;
+using System.Net.Http.Json;
+using System.Text.Json;
+using Azure.Core;
+using Dsf.Core.Onboarding;
+
+namespace Dsf.Runtime;
+
+internal sealed class IntentException(IntentState state, string reason) : Exception(reason)
+{
+    internal IntentState State { get; } = state;
+}
+
+internal sealed class FactoryIntentAccess(FactorySourceAccess source, HttpClient http, TimeProvider clock)
+{
+    internal FactoryModels Models { get; private set; } = null!;
+    internal ModelCapabilityReference Capability { get; private set; } = null!;
+    private string? pin;
+
+    internal async Task CheckAsync(CancellationToken token)
+    {
+        await source.CheckAsync(token);
+        var models = FactoryModelsValidation.ReadPreparation(source.Manifest, source.Values);
+        var reference = new ModelCapabilityReference(models.OperationId, models.ApprovalFingerprint,
+            models.LastProofReference ?? "", models.LastProofSha256 ?? "");
+        models = FactoryModelsValidation.ReadVerified(source.Manifest, source.Values, reference, clock.GetUtcNow());
+        if (models.Bindings![1] != source.Code || models.HostEndpoint is null)
+            throw new IntentException(IntentState.Blocked, "CurrentCodeModelBindingRequired");
+        var target = FactoryModelsValidation.HostTarget(models);
+        using var host = await source.ArmAsync(target, "2025-01-01", token);
+        using var auth = await source.ArmAsync(target + "/authconfigs/current", "2025-01-01", token);
+        foreach (var (resource, id) in new[] { (host.RootElement, target), (auth.RootElement, target + "/authconfigs/current") })
+        {
+            var observed = FactoryHostedWorkloadPolicy.ObserveModelHost(resource, id);
+            var effect = models.Effects!.Single(e => e.Target == id);
+            if (observed.Incarnation != effect.Incarnation || observed.Revision != effect.NativeRevision)
+                throw new IntentException(IntentState.Blocked, "ModelHostReceiptChanged");
+        }
+        var endpoint = FactoryHostedWorkloadPolicy.Validate(host.RootElement, auth.RootElement, models.Bindings[0], models.Bindings[2],
+            models.Configuration.RuntimeImage, "serve-models", source.Manifest.Identity.ProductKey, models.Configuration.ProductEndpoint,
+            source.Manifest.ProfilePin, source.Manifest.Identity.TenantId, models.Configuration.AudienceClientId,
+            [source.Manifest.Identity.AzureActorId, source.Code.PrincipalId!, models.Bindings[0].PrincipalId!]);
+        if (models.HostEndpoint != endpoint) throw new IntentException(IntentState.Blocked, "ModelHostEndpointChanged");
+        var current = FactoryModelsValidation.Hash(new { source.Manifest, source.Source, Models = models });
+        if (pin is not null && pin != current) throw new IntentException(IntentState.Blocked, "AnalysisAuthorityChanged");
+        pin = current;
+        Models = models;
+        Capability = reference;
+    }
+
+    internal async Task<ModelTextResult> CompleteAsync(string input, CancellationToken token)
+    {
+        try { return await RequestCompletionAsync(input, token); }
+        catch (Exception e) when (e is HttpRequestException or IOException || e is OperationCanceledException && !token.IsCancellationRequested)
+        { throw new IntentException(IntentState.Unknown, "ModelDispatchUnconfirmed; provider details withheld, no automatic retry."); }
+    }
+
+    private async Task<ModelTextResult> RequestCompletionAsync(string input, CancellationToken token)
+    {
+        await CheckAsync(token);
+        var access = await source.Credential.GetTokenAsync(
+            new TokenRequestContext(["api://" + Models.Configuration.AudienceClientId + "/.default"]), token);
+        using var request = new HttpRequestMessage(HttpMethod.Post, Models.HostEndpoint + "/synthesis")
+        {
+            Content = JsonContent.Create(new ModelWorkloadRequest(Capability, input), options: FactoryGitHubJson.Options),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", access.Token);
+        await CheckAsync(token);
+        using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token);
+        if (response.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.Unauthorized)
+            throw new IntentException(IntentState.Blocked, "ModelAccessOrCapabilityRejected");
+        if (response.StatusCode is not (HttpStatusCode.OK or HttpStatusCode.Conflict))
+            throw new IntentException(IntentState.Unknown, "ModelDispatchUnconfirmed");
+        await using var stream = await response.Content.ReadAsStreamAsync(token);
+        using var buffer = new MemoryStream();
+        var bytes = new byte[4096];
+        while (true)
+        {
+            var count = await stream.ReadAsync(bytes, token);
+            if (count == 0) break;
+            if (buffer.Length + count > 64 * 1024) throw new IntentException(IntentState.Failed, "ModelResponseLimit");
+            buffer.Write(bytes, 0, count);
+        }
+        if (response.StatusCode == HttpStatusCode.Conflict)
+        {
+            try
+            {
+                using var failure = JsonDocument.Parse(buffer.ToArray(), new JsonDocumentOptions { AllowDuplicateProperties = false });
+                if (failure.RootElement.TryGetProperty("reason", out var reason)
+                    && reason.ValueKind == JsonValueKind.String && Enum.TryParse<ModelCapabilityReason>(reason.GetString(), out var known)
+                    && Enum.IsDefined(known) && known != ModelCapabilityReason.None)
+                    throw new IntentException(known == ModelCapabilityReason.MalformedResponse ? IntentState.Failed
+                        : known == ModelCapabilityReason.NetworkUnavailable ? IntentState.Unknown : IntentState.Blocked, "Model" + known);
+            }
+            catch (JsonException) { throw new IntentException(IntentState.Unknown, "MalformedModelFailureEnvelope"); }
+            throw new IntentException(IntentState.Unknown, "ModelOutcomeUnconfirmed");
+        }
+        ModelTextResult result;
+        try { result = JsonSerializer.Deserialize<ModelTextResult>(buffer.ToArray(), FactorySourceValidation.RecordJson) ?? throw new JsonException(); }
+        catch (JsonException) { throw new IntentException(IntentState.Failed, "MalformedModelEnvelope"); }
+        var observation = result.Observation;
+        var route = Models.Routes![0].Selection;
+        if (observation is null || observation.Route != "synthesis" || observation.ConfigurationRevision != Models.ApprovalFingerprint
+            || observation.State != ModelCapabilityState.Verified || observation.Reason != ModelCapabilityReason.None
+            || observation.ResponseModel != route.Model && observation.ResponseModel != route.Model + "-" + route.Version
+            || observation.OutputSha256 != FactoryModelsValidation.Hash(result.Text) || observation.OutputCharacters != result.Text.Length
+            || observation.RequestId is not null && (!Guid.TryParse(observation.RequestId, out var requestId) || requestId == Guid.Empty)
+            || observation.Dimensions != 0 || observation.Groups.Count != 0)
+            throw new IntentException(IntentState.Failed, "InvalidModelObservation");
+        await CheckAsync(token);
+        return result;
+    }
+}

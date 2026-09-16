@@ -93,7 +93,7 @@ internal sealed class ModelsWorkflowTransport(FactoryFoundationTests.FoundationT
                     { actions = new[] { "Microsoft.Authorization/roleAssignments/write" }, notActions = Array.Empty<string>() } } })!);
             if (path.EndsWith("/denyassignments", StringComparison.Ordinal))
                 return Reply(HttpStatusCode.OK, new JsonObject { ["value"] = new JsonArray() });
-            if (path == Role) return Reply(HttpStatusCode.OK, JsonSerializer.SerializeToNode(new
+            if (path.EndsWith("/roledefinitions/" + Role.Split('/').Last(), StringComparison.Ordinal)) return Reply(HttpStatusCode.OK, JsonSerializer.SerializeToNode(new
             {
                 id = Role, properties = new { type = "CustomRole", permissions = new[] { new
                 {

@@ -121,23 +121,8 @@ internal sealed partial class FactoryModelsService
         return new(grant.Target, FactoryModelsValidation.Hash(properties), properties.GetProperty("createdOn").GetDateTimeOffset().ToString("O"));
     }
 
-    private static ModelResourceObservation ObserveHostResource(JsonElement resource, string target)
-    {
-        var system = resource.GetProperty("systemData");
-        var created = system.GetProperty("createdAt").GetDateTimeOffset();
-        if (!Same(resource.GetProperty("id").GetString(), target) || system.GetProperty("lastModifiedAt").GetDateTimeOffset() != created) throw new JsonException();
-        var properties = resource.GetProperty("properties");
-        var policy = target.EndsWith("/authconfigs/current", StringComparison.Ordinal);
-        return new(target, FactoryModelsValidation.Hash(new
-        {
-            target, created,
-            policy = policy ? properties : default(JsonElement?),
-            environment = !policy ? properties.GetProperty("managedEnvironmentId") : default(JsonElement?),
-            configuration = !policy ? properties.GetProperty("configuration") : default(JsonElement?),
-            template = !policy ? properties.GetProperty("template") : default(JsonElement?),
-            identity = resource.TryGetProperty("identity", out var identity) ? identity : default(JsonElement?),
-        }), created.ToString("O"));
-    }
+    private static ModelResourceObservation ObserveHostResource(JsonElement resource, string target) =>
+        FactoryHostedWorkloadPolicy.ObserveModelHost(resource, target);
 
     private async Task<string> CheckHostAsync(FactoryReservationResult admission, FactoryPreparationArm arm, CancellationToken token)
     {

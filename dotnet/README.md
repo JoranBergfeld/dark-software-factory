@@ -134,6 +134,10 @@ host, private source-progress store and exact grants. `source` advances bounded,
 immutable repository acquisition; `--status-only --page N` reads coverage and
 `--new-snapshot` explicitly selects changed source. No models or target execution.
 See [source acquisition and consumer APIs](../docs/site/get-started/acquire-source-inventory.md).
+`dsf onboard decide infer` advances bounded, revisioned charter inference and
+original-source semantic checks through the deployed code/model hosts.
+`--status-only --page N` exposes private coverage and review data. Drafts never
+govern or publish; [operator guide](../docs/site/get-started/infer-product-charter.md).
 
 `src/Dsf.Runtime` (`dsf-runtime`) is the deployed runtime entrypoint. The `dsf` front door
 automatically resolves the bundled host under `runtime/`, then forwards runtime verbs without an
@@ -160,8 +164,9 @@ assembly reference. `DSF_RUNTIME_HOST` remains an advanced override for a custom
   callers. Uses native Azure v1 inference and explicit managed identity, not
   legacy model defaults or developer credentials.
 - `serve-source` — dedicated inactive acquisition host; authenticated operator
-  `/acquire` and `/status`, code-only `/materialize`. Uses restricted GitHub tokens
-  and source-only App Configuration checkpoints, never retained raw source.
+  `/acquire`, `/status`, `/infer` and `/intent-status`, code-only `/materialize`.
+  Uses restricted GitHub tokens and separate source/intent namespaces in the
+  isolated App Configuration store, never a raw-source archive or governance writer.
 
 ## Runtime dependency composition
 

@@ -15,6 +15,7 @@
     <ProjectReference Include="..\..\src\Dsf.Runtime\Dsf.Runtime.csproj" />
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <Compile Include="..\Dsf.Runtime.Tests\SourceInventoryTransport.cs" Link="SourceInventoryTransport.cs" />
+    <Compile Include="..\Dsf.Runtime.Tests\IntentModelTransport.cs" Link="IntentModelTransport.cs" />
     <None Include="..\Dsf.Runtime.Tests\Fixtures\factory-github-authority.json" Link="Fixtures\factory-github-authority.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 

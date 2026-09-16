@@ -19,6 +19,7 @@ internal sealed class FactorySourceAccess(FactoryHostSettings settings, TokenCre
     internal FactorySource Source { get; private set; } = null!;
     internal FoundationOperation Code { get; private set; } = null!;
     internal TokenCredential Credential { get; private set; } = null!;
+    internal IReadOnlyDictionary<string, string> Values { get; private set; } = null!;
     private string? pinned;
 
     internal async Task CheckAsync(CancellationToken token)
@@ -114,6 +115,7 @@ internal sealed class FactorySourceAccess(FactoryHostSettings settings, TokenCre
         if (keys.Any(key => !current.TryGetValue(key, out var value) || value != values[key]))
             throw new SourceAcquisitionException(SourceState.Blocked, "AuthorityChanged");
         pinned = revision;
+        Values = current;
     }
 
     internal async Task<JsonDocument> ArmAsync(string target, string api, CancellationToken token)

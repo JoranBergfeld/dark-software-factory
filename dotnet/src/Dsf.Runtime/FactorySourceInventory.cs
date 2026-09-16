@@ -193,6 +193,32 @@ internal sealed class FactorySourceInventory(FactorySourceAccess access, HttpCli
         return await ReportAsync(page, "Historical acquisition coverage; no retained source or analysis.", token);
     }
 
+    internal async Task<SourceInventoryResult> ReadAnalysisInventoryAsync(CancellationToken cancellationToken)
+    {
+        using var deadline = new CancellationTokenSource(FactorySourceValidation.AdvanceBudget, clock);
+        using var pending = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline.Token);
+        var token = pending.Token;
+        root = await store.ReadAsync(RootKey, token) ?? throw new SourceAcquisitionException(SourceState.Blocked, "CompleteAcquisitionRequired");
+        progress = SourceProgressStore.Parse<SourceProgress>(root);
+        ValidateProgress();
+        await github.CheckSnapshotAsync(progress.Snapshot, token);
+        if (progress.State != SourceState.Acquired)
+            return new(progress.State, "CompleteAcquisitionRequired: " + progress.Reason, progress, [], null);
+        var records = await VerifyInventoryAsync(createProof: false, token);
+        var paths = new List<SourcePathCoverage>();
+        for (var i = 1; i < progress.Nodes; i++)
+        {
+            var node = await ReadNodeAsync(i, token, records);
+            var record = records.GetValueOrDefault(Key("results", i));
+            var result = record is null ? null : SourceProgressStore.Parse<SourcePathResult>(record);
+            paths.Add(new(node, result, await ReadChunksAsync(node, result, token, records)));
+        }
+        await github.CheckSnapshotAsync(progress.Snapshot, token);
+        await access.CheckAsync(token);
+        await FenceAsync(token);
+        return new(SourceState.Acquired, "Fresh whole-inventory integrity verified; not analysis.", progress, paths, null);
+    }
+
     public async Task<SourceMaterializedChunk> MaterializeAsync(SourceChunkReference reference, CancellationToken cancellationToken)
     {
         var token = cancellationToken;

@@ -11,6 +11,10 @@ namespace Dsf.Runtime;
 /// </summary>
 internal static class RuntimeWorkflow
 {
+    internal static Task<IntentResult> InferCharterAsync(FactorySourceAccess source, HttpClient http, TimeProvider clock,
+        IntentRequest request, bool status, CancellationToken token) =>
+        new FactoryIntentWorkflow(source, http, clock).RunAsync(request, status, token);
+
     private static readonly JsonSerializerOptions RegistrationJson = new() { AllowDuplicateProperties = false };
 
     public static async Task EnsureWorkAdmittedAsync(

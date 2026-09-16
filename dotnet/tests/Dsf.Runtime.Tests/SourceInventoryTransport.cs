@@ -239,14 +239,14 @@ internal sealed class SourceInventoryTransport : HttpMessageHandler
             {
                 Assert.Equal(HttpMethod.Get, request.Method);
                 var query = Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(uri.Query);
-                Assert.Equal("source/*", query["key"].ToString());
+                Assert.Contains(query["key"].ToString(), new[] { "source/*", "intent/*" });
                 Assert.Equal("*", query["label"].ToString());
                 var select = query.GetValueOrDefault("$select");
                 var keysOnly = select == "key";
                 Assert.True(keysOnly || select.Count == 0);
                 var page = query.TryGetValue("after", out var after)
                     ? int.Parse(Encoding.UTF8.GetString(Convert.FromBase64String(after.ToString())), System.Globalization.CultureInfo.InvariantCulture) : 0;
-                var keys = Progress.Keys.Where(k => k.StartsWith("source/", StringComparison.Ordinal)).Order(StringComparer.Ordinal).ToArray();
+                var keys = Progress.Keys.Where(k => k.StartsWith(query["key"].ToString()[..^1], StringComparison.Ordinal)).Order(StringComparer.Ordinal).ToArray();
                 var selected = page < EmptyProgressPages ? [] : keys.Skip((page - EmptyProgressPages) * ProgressPageSize).Take(ProgressPageSize).ToArray();
                 var response = Json(new { items = selected.Select(key => keysOnly ? (object)new { key }
                     : Setting(key, Progress[key].Value, Progress[key].Revision)).ToArray() });
@@ -323,7 +323,8 @@ internal sealed class SourceInventoryTransport : HttpMessageHandler
         throw new InvalidOperationException("Unexpected source request: " + uri.PathAndQuery);
     }
     private static object Setting(string key, string value, int etag) => new
-        { key, value, etag = etag.ToString(), label = (string?)null, content_type = "application/vnd.dsf.source+json;version=1", locked = false };
+        { key, value, etag = etag.ToString(), label = (string?)null,
+            content_type = key.StartsWith("intent/", StringComparison.Ordinal) ? "application/vnd.dsf.intent+json;version=1" : "application/vnd.dsf.source+json;version=1", locked = false };
     internal static HttpResponseMessage Json(object value, int status = 200) => new((HttpStatusCode)status)
         { Content = JsonContent.Create(value) };
 }

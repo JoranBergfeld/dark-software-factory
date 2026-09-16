@@ -16,8 +16,12 @@ internal sealed class SourceProgressStore
     private const int MaximumListingPages = 1024;
     private readonly ConfigurationClient client;
     private readonly Uri endpoint;
-    internal SourceProgressStore(FactorySourceAccess access, HttpClient http)
+    private readonly string purpose;
+    private string RecordContentType => purpose == "source" ? ContentType : "application/vnd.dsf.intent+json;version=1";
+    internal SourceProgressStore(FactorySourceAccess access, HttpClient http, string purpose = "source")
     {
+        if (purpose is not ("source" or "intent")) throw new ArgumentException("Unsupported progress namespace.", nameof(purpose));
+        this.purpose = purpose;
         var options = new ConfigurationClientOptions { Retry = { MaxRetries = 0 }, Transport = new HttpClientTransport(http) };
         endpoint = new(FactorySourceValidation.ProgressEndpoint(access.Manifest.Identity.FactoryId));
         client = new(endpoint, access.Credential, options);
@@ -46,7 +50,7 @@ internal sealed class SourceProgressStore
 
     private async IAsyncEnumerable<ConfigurationSetting> ListAsync(bool keysOnly, [EnumeratorCancellation] CancellationToken token)
     {
-        var selector = new SettingSelector { KeyFilter = "source/*", LabelFilter = "*" };
+        var selector = new SettingSelector { KeyFilter = purpose + "/*", LabelFilter = "*" };
         if (keysOnly) selector.Fields = SettingFields.Key;
         var pages = 0;
         await using var listing = client.GetConfigurationSettingsAsync(selector, token).AsPages().GetAsyncEnumerator(token);
@@ -65,7 +69,7 @@ internal sealed class SourceProgressStore
                 throw new SourceProgressException(SourceState.Unknown, "InvalidProgressListing");
             foreach (var setting in page.Values)
             {
-                if (setting.Key is null || !setting.Key.StartsWith("source/", StringComparison.Ordinal))
+                if (setting.Key is null || !setting.Key.StartsWith(purpose + "/", StringComparison.Ordinal))
                     throw new SourceProgressException(SourceState.Unknown, "InvalidProgressListing");
                 if (!keysOnly) Check(setting, setting.Key);
                 yield return setting;
@@ -78,7 +82,7 @@ internal sealed class SourceProgressStore
                 var query = Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(next.Query);
                 if (next.Scheme != endpoint.Scheme || next.Authority != endpoint.Authority || next.UserInfo.Length != 0
                     || next.Fragment.Length != 0 || next.AbsolutePath != "/kv"
-                    || query["key"].Count != 1 || query["key"] != "source/*" || query["label"] != "*"
+                    || query["key"].Count != 1 || query["key"] != purpose + "/*" || query["label"] != "*"
                     || keysOnly && query["$select"] != "key")
                     throw new SourceProgressException(SourceState.Unknown, "UntrustedProgressContinuation");
             }
@@ -110,7 +114,7 @@ internal sealed class SourceProgressStore
         var json = JsonSerializer.Serialize(value, FactoryGitHubJson.Options);
         if (RecordSize(key, json) > FactorySourceValidation.RecordBytes)
             throw new SourceAcquisitionException(SourceState.Partial, "MetadataRecordLimit");
-        var setting = new ConfigurationSetting(key, json, null, etag ?? default) { ContentType = ContentType };
+        var setting = new ConfigurationSetting(key, json, null, etag ?? default) { ContentType = RecordContentType };
         try
         {
             var result = etag is null ? await client.AddConfigurationSettingAsync(setting, token)
@@ -133,9 +137,9 @@ internal sealed class SourceProgressStore
         catch (JsonException) { throw new SourceProgressException(SourceState.Unknown, "InvalidProgressRecord"); }
     }
     internal static int RecordSize(string key, string value) => Encoding.UTF8.GetByteCount(key + value + ContentType) + 1024;
-    private static void Check(ConfigurationSetting record, string key)
+    private void Check(ConfigurationSetting record, string key)
     {
-        if (record.Key != key || record.Label is not null || record.ContentType != ContentType || record.ETag.ToString().Length == 0
+        if (record.Key != key || record.Label is not null || record.ContentType != RecordContentType || record.ETag.ToString().Length == 0
             || RecordSize(record.Key, record.Value) > FactorySourceValidation.RecordBytes)
             throw new SourceProgressException(SourceState.Unknown, "InvalidProgressRecord");
     }

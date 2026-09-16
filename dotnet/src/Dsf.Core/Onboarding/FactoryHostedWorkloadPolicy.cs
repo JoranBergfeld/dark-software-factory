@@ -4,6 +4,25 @@ namespace Dsf.Core.Onboarding;
 
 public static class FactoryHostedWorkloadPolicy
 {
+    public static ModelResourceObservation ObserveModelHost(JsonElement resource, string target)
+    {
+        var system = resource.GetProperty("systemData");
+        var created = system.GetProperty("createdAt").GetDateTimeOffset();
+        if (!string.Equals(resource.GetProperty("id").GetString(), target, StringComparison.OrdinalIgnoreCase)
+            || system.GetProperty("lastModifiedAt").GetDateTimeOffset() != created) throw new JsonException();
+        var properties = resource.GetProperty("properties");
+        var policy = target.EndsWith("/authconfigs/current", StringComparison.Ordinal);
+        return new(target, FactoryModelsValidation.Hash(new
+        {
+            target, created,
+            policy = policy ? properties : default(JsonElement?),
+            environment = !policy ? properties.GetProperty("managedEnvironmentId") : default(JsonElement?),
+            configuration = !policy ? properties.GetProperty("configuration") : default(JsonElement?),
+            template = !policy ? properties.GetProperty("template") : default(JsonElement?),
+            identity = resource.TryGetProperty("identity", out var identity) ? identity : default(JsonElement?),
+        }), created.ToString("O"));
+    }
+
     public static string Validate(JsonElement host, JsonElement auth, FoundationOperation identity, FoundationOperation hosting,
         string image, string verb, string product, string endpoint, string pin, string tenant, string audience, IReadOnlyList<string> callers)
     {

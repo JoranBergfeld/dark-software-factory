@@ -23,7 +23,7 @@ param productKey string
 @maxLength(37)
 param productConfigName string
 
-@description('Separate source-progress store, never a governance store.')
+@description('Isolated source/intent progress store; separate bounded namespaces, never product governance.')
 @minLength(37)
 @maxLength(37)
 param progressConfigName string
@@ -43,7 +43,7 @@ param tenantId string
 @maxLength(36)
 param audienceClientId string
 
-@description('Only this operator may advance acquisition; code MI may materialize verified chunks.')
+@description('Only this operator may advance acquisition or private charter inference; code MI may materialize verified chunks.')
 @minLength(36)
 @maxLength(36)
 param operatorPrincipalId string
@@ -58,7 +58,7 @@ param readerGrantName string
 @maxLength(36)
 param configGrantName string
 
-@description('Exactly reviewed source-store-only data-owner assignment ID.')
+@description('Exactly reviewed source/intent-store-only data-owner assignment ID; no governance writer.')
 @minLength(36)
 @maxLength(36)
 param progressGrantName string

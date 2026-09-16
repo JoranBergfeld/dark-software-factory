@@ -218,3 +218,10 @@ Operators cannot materialize through this route. In-process consumers dispose
 `SourceMaterializedChunk` to clear its buffer. Fixed byte ranges can split UTF-8
 code points: use a streaming decoder/reassemble contiguous ranges.
 Acquired flags never imply retained bytes, inferred intent or model analysis.
+
+After complete acquisition and current model proof, use the separate
+[grounded charter inference](infer-product-charter.md) command. The same
+digest-pinned code host exposes operator-only `/infer` and `/intent-status`;
+derived analysis has its own `intent/*` namespace and lifecycle limits in the
+isolated source store. Neither acquisition records nor their integrity protocol
+change. The code identity gains no additional Azure role or governance writer.

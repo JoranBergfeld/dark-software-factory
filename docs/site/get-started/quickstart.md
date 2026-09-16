@@ -29,6 +29,8 @@ After the reviewed boundary, reservation and inactive foundation, use
 mandatory deployed-source check; provisioning alone is not evidence readiness.
 Acquire repository coverage separately with
 [resumable source inventory](acquire-source-inventory.md); acquisition is not analysis.
+Then [infer a grounded private charter draft](infer-product-charter.md) for owner
+review; inference does not publish, adopt or activate.
 
 - A GitHub API token that can create repositories under the selected owner:
 
