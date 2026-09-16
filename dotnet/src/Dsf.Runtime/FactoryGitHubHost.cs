@@ -27,7 +27,7 @@ public static partial class RuntimeVerbs
         app.MapPost("/tokens/contents", readToken);
         app.MapPost("/tokens/issues", () => Results.Json(
             new GitHubAuthorityProof(GitHubAuthorityState.Blocked, "issue-write-token", "factory governance operator",
-                "No publication caller is eligible while inactive; activation and filing authorization are not implemented by this capability."),
+                "Publication is inactive; no caller is authorized to receive an issue-write token."),
             FactoryGitHubJson.Options, statusCode: 403));
         return app;
 
