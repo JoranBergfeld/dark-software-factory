@@ -331,32 +331,66 @@ internal sealed class SourceInventoryTransport : HttpMessageHandler
 
 internal sealed class SourceTestClock : TimeProvider
 {
+    private readonly object sync = new();
     private DateTimeOffset now = DateTimeOffset.Parse("2026-09-16T03:00:00Z");
     private readonly List<ClockTimer> timers = [];
     internal DateTimeOffset Now
     {
-        get => now;
-        set { now = value; foreach (var timer in timers.ToArray()) timer.Fire(); }
+        get { lock (sync) return now; }
+        set
+        {
+            ClockTimer[] pending;
+            lock (sync)
+            {
+                now = value;
+                pending = timers.ToArray();
+            }
+            foreach (var timer in pending) timer.Fire();
+        }
     }
     public override DateTimeOffset GetUtcNow() => Now;
     public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
     {
         var timer = new ClockTimer(this, callback, state);
-        timers.Add(timer);
-        timer.Change(dueTime, period);
+        lock (sync)
+        {
+            timer.Change(dueTime, period);
+            timers.Add(timer);
+        }
         return timer;
     }
     private sealed class ClockTimer(SourceTestClock clock, TimerCallback callback, object? state) : ITimer
     {
         private DateTimeOffset? due;
+        private bool disposed;
         public bool Change(TimeSpan dueTime, TimeSpan period)
         {
             Assert.Equal(Timeout.InfiniteTimeSpan, period);
-            due = dueTime == Timeout.InfiniteTimeSpan ? null : clock.Now + dueTime;
-            return true;
+            lock (clock.sync)
+            {
+                if (disposed) return false;
+                due = dueTime == Timeout.InfiniteTimeSpan ? null : clock.now + dueTime;
+                return true;
+            }
         }
-        internal void Fire() { if (due <= clock.Now) { due = null; callback(state); } }
-        public void Dispose() => clock.timers.Remove(this);
+        internal void Fire()
+        {
+            lock (clock.sync)
+            {
+                if (disposed || due is null || due > clock.now) return;
+                due = null;
+            }
+            callback(state);
+        }
+        public void Dispose()
+        {
+            lock (clock.sync)
+            {
+                disposed = true;
+                due = null;
+                clock.timers.Remove(this);
+            }
+        }
         public ValueTask DisposeAsync() { Dispose(); return ValueTask.CompletedTask; }
     }
 }
