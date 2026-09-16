@@ -21,6 +21,7 @@ internal sealed class SupplementalWorkflowTransport(FactoryFoundationTests.Found
     public bool BroaderRole { get; set; }
     public JsonNode? ExternalAssignment { get; set; }
     public Action<JsonNode>? ChangeProof { get; set; }
+    public Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>>? HostedProof { get; set; }
     public JsonNode Record(string key) => JsonNode.Parse((string)JsonNode.Parse(foundation.Product.ListJson())!.AsArray()
         .Single(r => (string?)r!["key"] == key)!["value"]!)!;
 
@@ -36,6 +37,7 @@ internal sealed class SupplementalWorkflowTransport(FactoryFoundationTests.Found
             Proofs++;
             if (BeforeProofAsync is not null) await BeforeProofAsync();
             OnProof?.Invoke();
+            if (HostedProof is not null) return await HostedProof(request, token);
             var call = JsonNode.Parse(await request.Content!.ReadAsStringAsync(token))!;
             var config = Record(ProductConfigurationKeys.FactorySupplemental)["configuration"]!;
             var kind = uri.Host.Split('.')[0];

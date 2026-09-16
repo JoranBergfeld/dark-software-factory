@@ -61,11 +61,11 @@ internal sealed partial class FactorySupplementalEvidence(
             if (result is null || !Uri.TryCreate(result.Url, UriKind.Absolute, out var url)
                 || url.Scheme != Uri.UriSchemeHttps || !url.IsDefaultPort || url.UserInfo.Length != 0
                 || string.IsNullOrWhiteSpace(result.Content) || result.Content.Length > 8192
-                || result.Content.Contains(secret, StringComparison.Ordinal) || SourceContentPolicy.Sensitive(result.Content)
+                || result.Content.Contains(secret, StringComparison.OrdinalIgnoreCase) || SourceContentPolicy.Sensitive(result.Content)
                 || result.Title?.Length > 512 || result.Url!.Length > 2048)
                 throw new SupplementalSourceException(SupplementalReason.MalformedResponse);
-            // Provider URLs can carry credentials or private query parameters. Persist only host and digest.
-            var reference = "webiq:https://" + url.IdnHost + "/#" + FactoryTelemetryValidation.Hash(result.Url);
+            // Even normalized hostnames can contain credentials; expose no provider-controlled URL text.
+            var reference = "webiq:sha256:" + FactoryTelemetryValidation.Hash(result.Url);
             return new SupplementalEvidenceItem(reference, result.Content);
         }).ToArray();
         var (currentSecret, currentRevision) = await SecretAsync(token);

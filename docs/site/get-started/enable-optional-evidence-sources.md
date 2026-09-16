@@ -208,9 +208,18 @@ product-vault version before and after the call. `WEBIQ_API_KEY` and other legac
 environment overrides cannot bypass this profile's vault/identity contract.
 Existing greenfield source overrides remain available on their original paths.
 
-Persisted references contain source-scoped identity/content digests, not provider
-credential-bearing URL parameters, raw source text, query/error echoes or secret
-values. Known credential material is rejected. Secret provenance distinguishes
+WebIQ evidence and proof references are opaque `webiq:sha256:<64 lowercase hex>`
+identifiers: DSF's shared SHA-256 hash of the original provider URL serialized as
+a JSON string. Original URL case/escaping remain part of that identity; no raw or
+normalized hostname, path, query or fragment is reflected. Consumers must not
+interpret these identifiers as navigable URLs. Older hostname-bearing WebIQ
+proofs are rejected before new proof persistence; use an updated source runtime
+through the separately reviewed configuration process, not an implicit image change.
+
+Persisted references contain source-scoped identity/content digests, not raw
+source text, query/error echoes or secret values. Credential-bearing content,
+including case variants of the vault key, blocks the entire observation rather
+than dropping rows or reporting partial results as complete. Secret provenance distinguishes
 the configured version and observed metadata digest; it never claims that DSF
 created the secret or invents a secret-creator field.
 

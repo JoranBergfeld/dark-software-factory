@@ -154,6 +154,7 @@ public static class FactorySupplementalValidation
             || proof.ObservedAt > now || proof.ObservedAt < now.AddMinutes(-2) || proof.Records.Count > 16
             || proof.Records.Any(r => r is null || !r.Reference.StartsWith(source.Kind + ":", StringComparison.Ordinal)
                 || r.Reference.Length > 320 || r.Reference.Any(char.IsControl)
+                || source.Kind == "webiq" && !Regex.IsMatch(r.Reference, "^webiq:sha256:[0-9a-f]{64}$")
                 || r.ContentSha256.Length != 64 || !r.ContentSha256.All(char.IsAsciiHexDigit))
             || proof.State == SupplementalState.ReadySupplemental
                 && (proof.NativeSourceRevision is not { Length: 64 } || !proof.NativeSourceRevision.All(char.IsAsciiHexDigit)

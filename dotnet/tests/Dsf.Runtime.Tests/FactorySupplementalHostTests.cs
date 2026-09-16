@@ -23,7 +23,7 @@ public sealed class FactorySupplementalHostTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Native_payload_and_returned_reference_bounds_never_release_partial_ready_evidence(bool oversizedPayload)
+    public async Task Opaque_references_fit_long_hostnames_without_relaxing_native_payload_bounds(bool oversizedPayload)
     {
         var host = string.Join('.', new string('a', 63), new string('b', 63), new string('c', 63), new string('d', 61));
         using var transport = new SupplementalTransport { WebPayload = JsonSerializer.Serialize(new { webResults = new[]
@@ -36,10 +36,11 @@ public sealed class FactorySupplementalHostTests
         await RuntimeCliApplication.InvokeAsync(["serve-supplemental"], Environment(), new StringWriter(), new StringWriter(),
             RuntimeDependencies.Production() with { WebHostRunner = runner, SourceHttp = http,
                 SourceCredential = new SupplementalCredential(), SourceClock = new SupplementalClock() }, CancellationToken.None);
-        Assert.Equal(HttpStatusCode.Conflict, runner.Status);
+        Assert.Equal(oversizedPayload ? HttpStatusCode.Conflict : HttpStatusCode.OK, runner.Status);
         var evidence = JsonNode.Parse(runner.Body)!;
-        Assert.Equal("CapacityExceeded", (string?)evidence["proof"]!["reason"]);
-        Assert.Empty(evidence["items"]!.AsArray());
+        Assert.Equal(oversizedPayload ? "CapacityExceeded" : "None", (string?)evidence["proof"]!["reason"]);
+        if (oversizedPayload) Assert.Empty(evidence["items"]!.AsArray());
+        else Assert.Matches("^webiq:sha256:[0-9a-f]{64}$", (string)evidence["items"]![0]!["reference"]!);
         Assert.True(Encoding.UTF8.GetByteCount(runner.Body) <= 8192);
     }
 
