@@ -59,7 +59,7 @@ public static class RuntimeCliApplication
         RuntimeDependencies dependencies)
     {
         var root = new RootCommand(
-            "Dark Software Factory — runtime host (run/sweep/serve-orchestrator/serve-agent/poll-outcomes/serve-github-auth/serve-telemetry)");
+            "Dark Software Factory — runtime host (run/sweep/serve-orchestrator/serve-agent/poll-outcomes/serve-github-auth/serve-telemetry/serve-models)");
         root.Subcommands.Add(BuildRunCommand(env, stdout, stderr, dependencies));
         root.Subcommands.Add(BuildSweepCommand(env, stdout, stderr, dependencies));
         root.Subcommands.Add(BuildServeOrchestratorCommand(env, stdout, stderr, dependencies));
@@ -99,6 +99,23 @@ public static class RuntimeCliApplication
             }
         });
         root.Subcommands.Add(telemetry);
+        var models = new Command("serve-models", "serve isolated inactive model capability workloads");
+        models.SetAction(async (_, token) =>
+        {
+            try
+            {
+                var settings = FactoryHostSettings.Read(env, "Factory models");
+                await using var host = RuntimeVerbs.BuildModelsHost(settings, dependencies);
+                await dependencies.WebHostRunner.RunAsync(host, token);
+                return Success;
+            }
+            catch (RuntimeVerbException exception)
+            {
+                await stderr.WriteLineAsync(exception.Message);
+                return Failure;
+            }
+        });
+        root.Subcommands.Add(models);
         return root;
     }
 

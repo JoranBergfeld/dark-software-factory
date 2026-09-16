@@ -21,6 +21,12 @@ public static class ProductConfigurationKeys
     public const string FactoryProfile = "dsf/factory/profile";
     public const string FactoryGitHubAuthority = "dsf/factory/github-authority";
     public const string FactoryTelemetry = "dsf/factory/telemetry";
+    public const string FactoryModels = "dsf/factory/models";
+    public static string ModelRoute(Guid operationId, int index) => $"dsf/factory/model-routes/{operationId:D}/{index:D4}";
+    public static string ModelBinding(Guid operationId, string name) => $"dsf/factory/model-bindings/{operationId:D}/{name}";
+    public static string ModelGrant(Guid operationId, int index) => $"dsf/factory/model-grants/{operationId:D}/{index:D4}";
+    public static string ModelOperation(Guid operationId, int index) => $"dsf/factory/model-operations/{operationId:D}/{index:D4}";
+    public static string ModelProof(Guid operationId, Guid checkId) => $"dsf/factory/model-proofs/{operationId:D}/{checkId:D}";
     public static string TelemetryOperation(Guid operationId, int index) =>
         $"dsf/factory/telemetry-operations/{operationId:D}/{index:D4}";
     public static string TelemetryProof(Guid operationId, Guid checkId) =>

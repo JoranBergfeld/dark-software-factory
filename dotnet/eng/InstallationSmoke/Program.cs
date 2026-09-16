@@ -41,6 +41,7 @@ try
         ["onboard-foundation"] = 0,
         ["product-github-private-key"] = 0,
         ["onboard-github-auth"] = 0,
+        ["onboard-models"] = 0,
     };
     foreach (var (name, minimumNestedDeployments) in templates)
     {
@@ -70,6 +71,36 @@ try
         Require(incomplete.ExitCode == 1 && incomplete.Output.Contains("\"state\": \"Failed\"", StringComparison.Ordinal),
             $"Installed onboarding command accepted incomplete explicit inputs: {incomplete.Output}");
     }
+
+    var modelsHelp = await Run("onboard", "decide", "models", "--help");
+    Require(modelsHelp.ExitCode == 0 && modelsHelp.Output.Contains("--model-topology", StringComparison.Ordinal)
+        && modelsHelp.Output.Contains("--verify-only", StringComparison.Ordinal),
+        "Installed models preparation/proof grammar is unavailable.");
+    var incompleteModels = await Run("onboard", "decide", "models", "--json");
+    Require(incompleteModels.ExitCode == 1 && incompleteModels.Output.Contains("--model-topology required", StringComparison.Ordinal)
+        && incompleteModels.Output.Contains("\"state\": \"Blocked\"", StringComparison.Ordinal),
+        "Installed models command accepted incomplete redirected inputs.");
+    var modelsAsset = Path.Combine(payload, "assets", "infra", "onboard-models.json");
+    var modelsBytes = File.ReadAllBytes(modelsAsset);
+    File.Delete(modelsAsset);
+    try
+    {
+        File.WriteAllText(Path.Combine(scratch.FullName, "azure.log"), "");
+        var missingModels = await Run("onboard", "decide", "models", "--owner-appconfig-endpoint", "https://owner.azconfig.io",
+            "--product", "packaging-smoke", "--tenant", "11111111-1111-1111-1111-111111111111",
+            "--subscription", "22222222-2222-2222-2222-222222222222", "--model-topology", "{}", "--json");
+        Require(missingModels.ExitCode == 1 && missingModels.Output.Contains("onboard-models.json", StringComparison.Ordinal),
+            "Installed model preparation must identify the missing asset.");
+        Require(File.ReadAllText(Path.Combine(scratch.FullName, "azure.log")).Length == 0,
+            "Model asset failure reached Azure authentication.");
+    }
+    finally { File.WriteAllBytes(modelsAsset, modelsBytes); }
+
+    var modelsHost = await Run("serve-models");
+    Require(modelsHost.ExitCode == 1 && modelsHost.Output.Contains("DSF_FACTORY_PROFILE_PIN", StringComparison.Ordinal)
+        && modelsHost.Output.Contains("AZURE_CLIENT_ID", StringComparison.Ordinal)
+        && !modelsHost.Output.Contains("AZURE_OPENAI", StringComparison.Ordinal),
+        "Installed CLI did not reach the bundled isolated model host.");
 
     var foundationAsset = Path.Combine(payload, "assets", "infra", "onboard-foundation.json");
     var foundationBytes = File.ReadAllBytes(foundationAsset);
@@ -205,7 +236,7 @@ try
         File.WriteAllBytes(missing, bytes);
     }
 
-    Console.WriteLine("Installed payload smoke passed: repository review, boundary plan, reservation/foundation/GitHub authority/status/resume, inactive runtime admission, six runtime verbs, eight ARM assets, provisioning preview, bootstrap, preflight.");
+    Console.WriteLine("Installed payload smoke passed: repository review, boundary plan, reservation/foundation/GitHub/models/status/resume, inactive runtime admission, seven runtime verbs, nine ARM assets, provisioning preview, bootstrap, preflight.");
     return 0;
 }
 finally

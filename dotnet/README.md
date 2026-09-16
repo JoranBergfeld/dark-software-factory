@@ -7,7 +7,7 @@ This directory is the active Dark Software Factory implementation.
 - `src/Dsf.Core` — shared domain, contracts, runtime settings, product records, and charters.
 - `src/Dsf.FeatureCouncil` — Feature Council conveyor and stations.
 - `src/Dsf.Cli` — packaged `dsf` global tool; factory provisioning, charter commands, runtime forwarding.
-- `src/Dsf.Runtime` — deployed runtime host for `run`, `sweep`, `serve-orchestrator`, `serve-agent`, `poll-outcomes`, and isolated `serve-github-auth`.
+- `src/Dsf.Runtime` — deployed runtime host for `run`, `sweep`, `serve-orchestrator`, `serve-agent`, `poll-outcomes`, and isolated `serve-github-auth`, `serve-telemetry`, `serve-models`.
 - `src/Dsf.ControlCenter` — governance web process (`dsf-control-center`).
 - `src/Dsf.AgentHost` — reusable source-agent host.
 - `src/Dsf.Testing` — deterministic test helpers; production projects must not reference it.
@@ -59,7 +59,7 @@ executables and require neither the SDK nor a separately installed .NET runtime.
 The CLI's build-only runtime dependency builds the matching runtime automatically,
 including for `dotnet run --project src/Dsf.Cli -- sweep --product <product>`.
 `eng/CliBundle.targets` publishes its dependency closure into `runtime/` and compiles
-the eight provisioning entrypoints into self-contained ARM JSON under `assets/infra/`.
+the ten provisioning entrypoints into self-contained ARM JSON under `assets/infra/`.
 Use one `-p:Version=<version>` for build, pack, and publish; when using `--no-build`,
 the configuration and version must match the preceding build.
 
@@ -118,6 +118,15 @@ Only the approved code identity can receive an ephemeral contents-read token;
 no inactive caller receives issue-write authority. See
 [GitHub authority](../docs/site/get-started/verify-factory-github-authority.md).
 
+`dsf onboard decide models` separately approves two factory model deployments,
+three existing diverse jurors, exact inference grants and the isolated model host.
+`--verify-only` then proves real synthesis, embedding-driven deduplication and every
+juror using the bound hosted identity. Interactive and explicit/redirected workflows
+share current governance and immutable reviewed references. Verified consumer
+endpoints reuse the same asynchronous workloads; no conveyor admission, persistent
+problem-index migration or council readiness is implied. See
+[required model capabilities](../docs/site/get-started/prove-model-capabilities.md).
+
 ## Runtime host
 
 `src/Dsf.Runtime` (`dsf-runtime`) is the deployed runtime entrypoint. The `dsf` front door
@@ -139,6 +148,11 @@ assembly reference. `DSF_RUNTIME_HOST` remains an advanced override for a custom
   not the legacy conveyor/model configuration. Its `/verify` endpoint returns
   proof; `/tokens/contents` requires the approved code caller; `/tokens/issues`
   denies publication. The CLI forwards to the matching bundled implementation.
+- `serve-models` — dedicated inactive model host behind native Entra ingress;
+  `/proof` checks all required routes, while `/synthesis`, `/deduplicate` and
+  `/jurors/{juror}` require verified capability references and exact approved
+  callers. Uses native Azure v1 inference and explicit managed identity, not
+  legacy model defaults or developer credentials.
 
 ## Runtime dependency composition
 

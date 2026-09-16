@@ -33,6 +33,8 @@ public sealed record FoundationOperation(
     public string? Condition { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? ConditionVersion { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? NativeRevision { get; init; }
 }
 
 public sealed record FactoryOnboardingProfile(
@@ -48,6 +50,8 @@ public sealed record FactoryManifest(
     public string? GitHubAuthorityApprovalFingerprint { get; init; }
     public Guid? TelemetryOperationId { get; init; }
     public string? TelemetryApprovalFingerprint { get; init; }
+    public Guid? ModelsOperationId { get; init; }
+    public string? ModelsApprovalFingerprint { get; init; }
 }
 
 public sealed record FactoryFoundationResult(

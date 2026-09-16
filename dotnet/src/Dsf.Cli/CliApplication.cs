@@ -222,6 +222,9 @@ public static partial class CliApplication
         var telemetryHost = new Command("serve-telemetry", "serve isolated inactive Azure Monitor telemetry proof (runtime)");
         telemetryHost.SetAction((_, token) => RuntimeShell(["serve-telemetry"], token));
         root.Subcommands.Add(telemetryHost);
+        var modelHost = new Command("serve-models", "serve isolated inactive model capability workloads (runtime)");
+        modelHost.SetAction((_, token) => RuntimeShell(["serve-models"], token));
+        root.Subcommands.Add(modelHost);
         root.Subcommands.Add(BuildCharterCommand(terminal, appConfig, charterRepository, charterStore));
 
         return root;

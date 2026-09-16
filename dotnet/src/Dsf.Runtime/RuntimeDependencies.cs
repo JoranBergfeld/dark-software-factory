@@ -47,6 +47,9 @@ public sealed record RuntimeDependencies(
     internal HttpClient? TelemetryHttp { get; init; }
     internal Azure.Core.TokenCredential? TelemetryCredential { get; init; }
     internal TimeProvider TelemetryClock { get; init; } = TimeProvider.System;
+    internal HttpClient? ModelHttp { get; init; }
+    internal Azure.Core.TokenCredential? ModelCredential { get; init; }
+    internal TimeProvider ModelClock { get; init; } = TimeProvider.System;
 
     /// <summary>Production dependencies resolved from the real process environment.</summary>
     public static RuntimeDependencies Production() => Production(CurrentEnvironment());

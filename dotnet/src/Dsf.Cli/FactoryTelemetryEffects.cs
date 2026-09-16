@@ -384,20 +384,9 @@ internal sealed partial class FactoryTelemetryService(IAzureCliRunner azure, Htt
                 "GET " + target + ": current evidence unavailable; Azure resource/RBAC administrator must reconcile. No adoption or repair.");
         return await DocumentAsync(response, token);
     }
-    private async Task<HttpResponseMessage> ArmAsync(FactoryReservationResult admission, HttpMethod method, string target,
+    private Task<HttpResponseMessage> ArmAsync(FactoryReservationResult admission, HttpMethod method, string target,
         string version, CancellationToken token, string? body = null, Guid? correlation = null)
-    {
-        var identity = admission.Identity!;
-        var credential = new OwnerReservationStore.OperatorCredential(azure, identity.TenantId, identity.SubscriptionId,
-            identity.AzureActorId, "https://management.azure.com/");
-        var access = await credential.GetTokenAsync(new TokenRequestContext(["https://management.azure.com/.default"]), token);
-        using var request = new HttpRequestMessage(method, "https://management.azure.com" + target
-            + (target.Contains('?', StringComparison.Ordinal) ? "&" : "?") + "api-version=" + version);
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", access.Token);
-        if (correlation is not null) request.Headers.Add("x-ms-client-request-id", correlation.Value.ToString());
-        if (body is not null) request.Content = new StringContent(body, Encoding.UTF8, "application/json");
-        return await (http ?? ProviderHttp).SendAsync(request, token);
-    }
+        => new FactoryPreparationArm(azure, http, admission.Identity!).SendAsync(method, target, version, token, body, correlation);
     private static JsonElement[] CompleteValues(JsonDocument document)
     {
         if (Optional(document.RootElement, "nextLink") is { Length: > 0 }) throw new JsonException("Incomplete provider collection.");
