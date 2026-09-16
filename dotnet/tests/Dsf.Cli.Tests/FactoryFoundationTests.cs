@@ -9,6 +9,131 @@ namespace Dsf.Cli.Tests;
 
 public sealed class FactoryFoundationTests
 {
+    public static IEnumerable<object[]> InvalidProviderGuids()
+    {
+        foreach (var field in new[] { "correlationId", "trackingId", "principalId", "clientId" })
+        foreach (var json in new[] { "null", "\"\"", "\"secret-provider-detail\"", "{\"secret-provider-detail\":true}",
+                     "42", "\"00000000-0000-0000-0000-000000000000\"" })
+            yield return [field, json];
+    }
+
+    [Theory]
+    [MemberData(nameof(InvalidProviderGuids))]
+    public async Task Required_provider_GUID_nulls_and_malformed_values_return_structured_unknown_after_dispatch(string field, string json)
+    {
+        var machine = new ReservationMachine(new ReservationTestStore());
+        var reviewed = await machine.Boundary.ReviewAsync();
+        var fingerprint = (string)reviewed.Plan["fingerprint"]!;
+        await machine.ReserveAsync(fingerprint);
+        var arm = new FoundationTransport(machine.Store)
+        { CompleteCreates = true, CompleteDeployment = true, GuidField = field, GuidValue = JsonNode.Parse(json), EnforceCorrelation = true };
+        machine.Boundary.Repository.ReservationHttp = new HttpClient(arm);
+
+        var (exit, result, terminal) = await machine.InvokeAsync("provision", "--reviewed-fingerprint", fingerprint);
+
+        Assert.Equal(1, exit);
+        Assert.Empty(terminal.Error);
+        Assert.Equal("Unknown", (string?)result["foundation"]?["state"]);
+        Assert.False((bool)result["foundation"]!["isBaseProvisioned"]!);
+        var operations = result["foundation"]!["operations"]!.AsArray();
+        Assert.True(operations.Count > 3);
+        Assert.Contains(operations, operation => (string?)operation!["state"] == "Completed");
+        Assert.Contains(operations, operation => (string?)operation!["state"] is "Unknown" or "Intent");
+        Assert.DoesNotContain("ArgumentNullException", terminal.Output + machine.Store.Export());
+        Assert.DoesNotContain("secret-provider-detail", terminal.Output + machine.Store.Export());
+        if (field == "correlationId")
+        {
+            var deployment = Assert.Single(operations, operation => ((string)operation!["target"]!).Contains("/deployments/", StringComparison.Ordinal));
+            Assert.Equal(201, (int?)deployment!["httpStatus"]);
+            Assert.False(string.IsNullOrEmpty((string?)deployment["providerRequestId"]));
+            Assert.Equal("Unknown", (string?)deployment["state"]);
+        }
+        if (field is "principalId" or "clientId")
+            Assert.Contains(operations, operation => ((string)operation!["target"]!).Contains("/components/", StringComparison.Ordinal)
+                && (string?)operation["state"] == "Completed");
+        var before = machine.Store.Export();
+        var (resumeExit, resumed, _) = await machine.InvokeAsync("resume");
+        Assert.Equal(1, resumeExit);
+        Assert.Equal("Unknown", (string?)resumed["foundation"]?["state"]);
+        Assert.Equal(1, (await machine.InvokeAsync("provision", "--reviewed-fingerprint", fingerprint)).Exit);
+        Assert.Equal(before, machine.Store.Export());
+        Assert.Equal(3, arm.Writes.Count);
+    }
+
+    [Theory]
+    [InlineData("widget", "PD5DALigD-w=")]
+    [InlineData("runs", "PD5DAA==")]
+    [InlineData("runs", "AAAAAAAAAAAAAAAAAAAAAA==")]
+    [InlineData("runs", "PD5DALigD_w=")]
+    [InlineData("runs", "PD5DALigD-x=")]
+    [InlineData("runs", "PD5DALigD w=")]
+    [InlineData("runs", "secret-provider-detail")]
+    [InlineData("runs", "")]
+    [InlineData("runs", null)]
+    public async Task Invalid_Cosmos_native_RIDs_keep_creation_unknown_and_never_reissue(string target, string? rid)
+    {
+        var machine = new ReservationMachine(new ReservationTestStore());
+        var reviewed = await machine.Boundary.ReviewAsync();
+        var fingerprint = (string)reviewed.Plan["fingerprint"]!;
+        await machine.ReserveAsync(fingerprint);
+        var arm = new FoundationTransport(machine.Store)
+        {
+            CompleteCreates = true, CompleteDeployment = true, CosmosNativeReceipts = true,
+            CosmosRidTarget = target, CosmosRidValue = rid,
+        };
+        machine.Boundary.Repository.ReservationHttp = new HttpClient(arm);
+
+        var (exit, result, terminal) = await machine.InvokeAsync("provision", "--reviewed-fingerprint", fingerprint);
+
+        Assert.Equal(1, exit);
+        Assert.Empty(terminal.Error);
+        Assert.Equal("Unknown", (string?)result["foundation"]?["state"]);
+        var suffix = target == "widget" ? "/sqldatabases/widget" : "/sqldatabases/widget/containers/" + target;
+        var receipt = Assert.Single(result["foundation"]!["operations"]!.AsArray(),
+            operation => ((string)operation!["target"]!).EndsWith(suffix, StringComparison.Ordinal));
+        Assert.NotEqual("Completed", (string?)receipt!["state"]);
+        Assert.Null(receipt["incarnation"]);
+        Assert.DoesNotContain("secret-provider-detail", terminal.Output + machine.Store.Export());
+        var before = machine.Store.Export();
+        Assert.Equal(1, (await machine.InvokeAsync("resume")).Exit);
+        Assert.Equal(before, machine.Store.Export());
+        Assert.Equal(3, arm.Writes.Count);
+    }
+
+    [Theory]
+    [InlineData(false, "PD5DAA==", "PD5DALigD-w=")]
+    [InlineData(true, "PD5D-w==", "PD5D-7igD-w=")]
+    public async Task Cosmos_native_RID_alphabet_is_preserved_in_database_and_container_receipts(
+        bool hyphenDatabase, string databaseRid, string containerRid)
+    {
+        var machine = new ReservationMachine(new ReservationTestStore());
+        var reviewed = await machine.Boundary.ReviewAsync();
+        var fingerprint = (string)reviewed.Plan["fingerprint"]!;
+        await machine.ReserveAsync(fingerprint);
+        var arm = new FoundationTransport(machine.Store)
+        { CompleteCreates = true, CompleteDeployment = true, CosmosNativeReceipts = true, HyphenDatabaseRid = hyphenDatabase };
+        machine.Boundary.Repository.ReservationHttp = new HttpClient(arm);
+
+        var (exit, result, terminal) = await machine.InvokeAsync("provision", "--reviewed-fingerprint", fingerprint);
+
+        Assert.Equal(0, exit);
+        Assert.Empty(terminal.Error);
+        Assert.Equal("Inactive", (string?)result["foundation"]?["state"]);
+        foreach (var (suffix, rid) in new[] { ("/sqldatabases/widget", databaseRid), ("/sqldatabases/widget/containers/runs", containerRid) })
+        {
+            var receipt = Assert.Single(result["foundation"]!["operations"]!.AsArray(),
+                operation => ((string)operation!["target"]!).EndsWith(suffix, StringComparison.Ordinal));
+            Assert.Equal("Completed", (string?)receipt!["state"]);
+            Assert.Equal("Created", (string?)receipt["disposition"]);
+            Assert.Equal("cosmos-rid-sha256:" + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(rid))),
+                (string?)receipt["incarnation"]);
+        }
+        var before = machine.Store.Export();
+        Assert.Equal(0, (await machine.InvokeAsync("resume")).Exit);
+        Assert.Equal(before, machine.Store.Export());
+        Assert.Equal(3, arm.Writes.Count);
+    }
+
     [Theory]
     [InlineData("missing-app-id")]
     [InlineData("invalid-app-id")]
@@ -688,8 +813,13 @@ public sealed class FactoryFoundationTests
         public string? CreateDamage { get; init; }
         public string ResourceStatusCode { get; init; } = "Created";
         public bool CosmosNativeReceipts { get; init; }
+        public bool HyphenDatabaseRid { get; init; }
+        public string? CosmosRidTarget { get; init; }
+        public string? CosmosRidValue { get; init; }
         public bool DeploymentFails { get; init; }
         public string? InsightsDamage { get; init; }
+        public string? GuidField { get; init; }
+        public JsonNode? GuidValue { get; init; }
         private readonly Dictionary<string, JsonNode> created = new(StringComparer.OrdinalIgnoreCase);
         public List<string> Writes { get; } = [];
 
@@ -741,7 +871,8 @@ public sealed class FactoryFoundationTests
                                 ["provisioningState"] = DeploymentFails && ((string)record["target"]!).Contains("/components/", StringComparison.Ordinal) ? "Failed" : "Succeeded",
                                 ["statusCode"] = ((string)record["target"]!).Contains("/microsoft.insights/components/", StringComparison.Ordinal)
                                     ? "OK" : ResourceStatusCode,
-                                ["trackingId"] = ResourceDamage == "invalid-tracking-id" ? "secret-provider-detail" : Guid.NewGuid().ToString(),
+                                ["trackingId"] = ProviderGuidValue("trackingId",
+                                    ResourceDamage == "invalid-tracking-id" ? "secret-provider-detail" : Guid.NewGuid().ToString()),
                                 ["targetResource"] = new JsonObject { ["id"] = (string)record["target"]! },
                             },
                         }).ToArray()),
@@ -784,8 +915,8 @@ public sealed class FactoryFoundationTests
                         ["properties"] = new JsonObject
                         {
                             ["provisioningState"] = "Succeeded",
-                            ["principalId"] = Guid.NewGuid().ToString(),
-                            ["clientId"] = Guid.NewGuid().ToString(),
+                            ["principalId"] = ProviderGuidValue("principalId", Guid.NewGuid().ToString()),
+                            ["clientId"] = ProviderGuidValue("clientId", Guid.NewGuid().ToString()),
                             ["tenantId"] = BoundaryPlanFixture.Tenant,
                         },
                     };
@@ -796,10 +927,22 @@ public sealed class FactoryFoundationTests
                     {
                         created[target].AsObject().Remove("systemData");
                         created[target].AsObject().Remove("etag");
+                        var nativeRid = target.Split('/').Last() switch
+                        {
+                            "working" => "PD5DALigD-g=",
+                            "records" => "PD5DALigD-k=",
+                            "lessons" => "PD5DALigD-o=",
+                            "charters" => "PD5DALigD-s=",
+                            "runs" => "PD5DALigD-w=",
+                            "learning" => "PD5DALigD-0=",
+                            _ => "PD5DAA==",
+                        };
+                        if (HyphenDatabaseRid)
+                            nativeRid = nativeRid == "PD5DAA==" ? "PD5D-w==" : nativeRid.Replace("PD5DAL", "PD5D-7", StringComparison.Ordinal);
                         created[target]["properties"]!["resource"] = new JsonObject
                         {
                             ["id"] = target.Split('/').Last(),
-                            ["_rid"] = Convert.ToBase64String(Guid.NewGuid().ToByteArray()),
+                            ["_rid"] = CosmosRidTarget == target.Split('/').Last() ? CosmosRidValue : nativeRid,
                             ["_ts"] = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
                         };
                     }
@@ -843,7 +986,11 @@ public sealed class FactoryFoundationTests
                 return JsonReply(HttpStatusCode.Created, new JsonObject
                 {
                     ["id"] = request.RequestUri.AbsolutePath,
-                    ["properties"] = new JsonObject { ["provisioningState"] = DeploymentFails ? "Failed" : "Succeeded", ["correlationId"] = Guid.NewGuid().ToString() },
+                    ["properties"] = new JsonObject
+                    {
+                        ["provisioningState"] = DeploymentFails ? "Failed" : "Succeeded",
+                        ["correlationId"] = ProviderGuidValue("correlationId", Guid.NewGuid().ToString()),
+                    },
                 });
             }
             if (CompleteCreates)
@@ -897,6 +1044,9 @@ public sealed class FactoryFoundationTests
 
             throw new HttpRequestException("secret-provider-detail");
         }
+
+        private JsonNode? ProviderGuidValue(string field, string value) =>
+            GuidField == field ? GuidValue?.DeepClone() : JsonValue.Create(value);
 
         private static HttpResponseMessage JsonReply(HttpStatusCode status, JsonNode body)
         {

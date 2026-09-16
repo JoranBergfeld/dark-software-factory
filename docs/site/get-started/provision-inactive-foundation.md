@@ -107,6 +107,11 @@ SDK writes with the recorded client request ID.
 Receipts distinguish actual creation, rejection and unproven outcomes. Fresh
 provider incarnation metadata, creation receipts, principal IDs and Cosmos
 resource IDs are used where available; tags and matching names never suffice.
+Cosmos native RIDs use `-` in place of `/`, not Base64URL's replacement for `+`.
+Validation checks four-byte database and eight-byte container identifiers while
+receipt hashes retain the original provider spelling. Required provider GUIDs
+that are absent, null, malformed or empty leave structured `Unknown` results and
+the recorded operation snapshot intact; they never authorize reissue.
 For AppInsights API `2020-02-02`, the native HTTP 200 receipt uses `AppId`
 and fresh `CreationDate`, bound to the recorded deployment operation, exact
 resource and approved factory workspace. Missing, malformed, older or contradictory

@@ -359,10 +359,19 @@ internal sealed partial class FactoryFoundationService(IAzureCliRunner azure, Ht
         }
         if (operation.Target.Contains("/deployments/", StringComparison.Ordinal))
         {
-            var correlation = Guid.Parse(properties.GetProperty("correlationId").GetString()!).ToString();
+            var correlation = ProviderGuid(properties, "correlationId").ToString();
             if (operation.ProviderCorrelationId is not null && operation.ProviderCorrelationId != correlation) throw new JsonException();
             updated = updated with { ProviderCorrelationId = correlation };
         }
         return updated;
+    }
+
+    private static Guid ProviderGuid(JsonElement resource, string property)
+    {
+        if (resource.ValueKind != JsonValueKind.Object || !resource.TryGetProperty(property, out var value)
+            || value.ValueKind != JsonValueKind.String || !Guid.TryParse(value.GetString(), out var parsed)
+            || parsed == Guid.Empty)
+            throw new JsonException();
+        return parsed;
     }
 }

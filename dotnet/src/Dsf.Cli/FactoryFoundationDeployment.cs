@@ -120,9 +120,9 @@ internal sealed partial class FactoryFoundationService
                 && intent.Target.Contains("/providers/microsoft.insights/components/", StringComparison.Ordinal))
             {
                 var native = resource.GetProperty("properties");
-                if (!Guid.TryParse(native.GetProperty("AppId").GetString(), out var appId)) throw new JsonException();
+                var appId = ProviderGuid(native, "AppId");
                 var createdAt = native.GetProperty("CreationDate").GetDateTimeOffset();
-                if (appId == Guid.Empty || createdAt < intent.StartedAt || createdAt > clock.GetUtcNow()
+                if (createdAt < intent.StartedAt || createdAt > clock.GetUtcNow()
                     || resource.GetProperty("type").GetString() != "Microsoft.Insights/components"
                     || native.GetProperty("provisioningState").GetString() != "Succeeded"
                     || !string.Equals(native.GetProperty("WorkspaceResourceId").GetString(),
@@ -153,13 +153,19 @@ internal sealed partial class FactoryFoundationService
                 && resource.GetProperty("properties").TryGetProperty("resource", out var cosmosResource))
             {
                 var rid = cosmosResource.GetProperty("_rid").GetString() ?? throw new JsonException();
-                if (rid.Length is < 4 or > 128 || Convert.FromBase64String(rid).Length == 0) throw new JsonException();
+                var decoded = new byte[intent.Target.Contains("/containers/", StringComparison.Ordinal) ? 8 : 4];
+                // Cosmos substitutes '-' for '/', not the '+' substitution used by Base64URL.
+                var normalized = rid.Replace('-', '/');
+                if (rid.Length != (decoded.Length + 2) / 3 * 4
+                    || !Convert.TryFromBase64String(normalized, decoded, out var length) || length != decoded.Length
+                    || Convert.ToBase64String(decoded) != normalized)
+                    throw new JsonException();
                 incarnation = "cosmos-rid-sha256:" + FactoryReservationRecords.Hash(rid);
             }
             if (string.IsNullOrWhiteSpace(incarnation)) throw new JsonException();
-            var trackingId = Guid.Parse(properties.GetProperty("trackingId").GetString()!);
+            var trackingId = ProviderGuid(properties, "trackingId");
             var operationId = receipt.GetProperty("operationId").GetString() ?? throw new JsonException();
-            if (trackingId == Guid.Empty || operationId.Length is < 1 or > 128
+            if (operationId.Length is < 1 or > 128
                 || operationId.Any(c => !char.IsAsciiHexDigit(c) && c != '-'))
                 throw new JsonException();
             var completed = intent with
@@ -176,10 +182,9 @@ internal sealed partial class FactoryFoundationService
             if (intent.LogicalIdentity is not null)
             {
                 var props = resource.GetProperty("properties");
-                var principal = Guid.Parse(props.GetProperty("principalId").GetString()!).ToString();
-                var client = Guid.Parse(props.GetProperty("clientId").GetString()!).ToString();
-                if (principal == Guid.Empty.ToString() || client == Guid.Empty.ToString()
-                    || props.GetProperty("tenantId").GetString() != anchor.Identity.TenantId || !principals.Add(principal))
+                var principal = ProviderGuid(props, "principalId").ToString();
+                var client = ProviderGuid(props, "clientId").ToString();
+                if (props.GetProperty("tenantId").GetString() != anchor.Identity.TenantId || !principals.Add(principal))
                     throw new JsonException();
                 completed = completed with { PrincipalId = principal, ClientId = client };
             }
