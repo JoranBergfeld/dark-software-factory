@@ -78,6 +78,14 @@ The CLI calls authenticated `POST /acquire` or `POST /status` on the deployed
 `serve-source` host. The host uses explicit code managed identity, obtains short-lived
 repo-restricted contents/metadata-read tokens from `/tokens/contents`, and refreshes
 them through that same authority. Tokens are never persisted.
+The managed-identity request remains `api://<approved-client-id>/.default`.
+Native Entra v1 custom-API tokens use `appid` with that API's URI or GUID audience;
+v2 tokens use `azp` with the API's GUID audience. Token version, code client/principal,
+tenant, managed-identity resource and lifetime must all match; other audiences and
+malformed/version-incompatible claims fail closed. Azure service audiences remain
+separately constrained to their requested resource URI. These checks supplement,
+not replace, current authority and native Entra authentication.
+See the [native access-token claims contract](https://learn.microsoft.com/en-us/entra/identity-platform/access-token-claims-reference).
 
 GitHub durable repository ID resolves the actual current name/default branch.
 The snapshot pins account/repository ID, observed default branch, commit and root

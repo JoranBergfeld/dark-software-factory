@@ -17,17 +17,30 @@ internal sealed class FactoryWorkloadCredential(TokenCredential inner, string te
                 new JsonDocumentOptions { AllowDuplicateProperties = false });
             var claims = document.RootElement;
             var now = clock.GetUtcNow();
+            var version = claims.GetProperty("ver").GetString();
+            var clientClaim = version switch { "1.0" => "appid", "2.0" => "azp", _ => throw new JsonException() };
             var clients = claims.EnumerateObject().Where(p => p.Name is "appid" or "azp").ToArray();
             if (claims.GetProperty("oid").GetString() != binding.PrincipalId || claims.GetProperty("tid").GetString() != tenant
-                || clients.Length != 1 || clients[0].Value.GetString() != binding.ClientId
+                || clients.Length != 1 || clients[0].Name != clientClaim || clients[0].Value.GetString() != binding.ClientId
                 || !string.Equals(claims.GetProperty("xms_mirid").GetString(), binding.ResourceId, StringComparison.OrdinalIgnoreCase)
                 || access.ExpiresOn <= now || claims.GetProperty("exp").GetInt64() <= now.ToUnixTimeSeconds()
                 || claims.GetProperty("nbf").GetInt64() > now.ToUnixTimeSeconds()
-                || claims.GetProperty("aud").GetString()?.TrimEnd('/') != context.Scopes.Single()[..^"/.default".Length].TrimEnd('/'))
+                || !AudienceMatches(claims.GetProperty("aud").GetString(), context.Scopes.Single(), version))
                 throw new JsonException();
         }
         catch (Exception e) when (e is JsonException or FormatException or IndexOutOfRangeException or KeyNotFoundException or InvalidOperationException)
         { throw FactoryModelsValidation.Failure(ModelCapabilityReason.IdentityMismatch, "workload-token", "Current unexpired native workload MI token must match principal/client/tenant/resource and audience; no developer credential proof."); }
         return access;
+    }
+
+    private static bool AudienceMatches(string? audience, string scope, string version)
+    {
+        if (!scope.EndsWith("/.default", StringComparison.Ordinal)) return false;
+        var resource = scope[..^"/.default".Length];
+        if (!resource.StartsWith("api://", StringComparison.Ordinal))
+            return audience?.TrimEnd('/') == resource.TrimEnd('/');
+        // The requested scope stays URI-shaped; native v2 custom-API audiences are client IDs.
+        return Guid.TryParseExact(resource["api://".Length..], "D", out var expected) && expected != Guid.Empty
+            && (version == "1.0" && audience == resource || Guid.TryParseExact(audience, "D", out var actual) && actual == expected);
     }
 }

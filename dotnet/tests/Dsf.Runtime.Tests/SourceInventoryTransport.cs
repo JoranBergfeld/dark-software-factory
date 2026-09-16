@@ -24,6 +24,7 @@ internal sealed class SourceInventoryTransport : HttpMessageHandler
     internal readonly Dictionary<string, byte[]> Blobs = new(StringComparer.Ordinal);
     internal readonly List<string> Requests = [];
     internal readonly List<string> Writes = [];
+    internal readonly List<JsonNode> BrokerClaims = [];
     internal string Branch = "actual-default";
     internal string Repository = "acme/renamed";
     internal string Head = Commit;
@@ -35,6 +36,7 @@ internal sealed class SourceInventoryTransport : HttpMessageHandler
     internal Action<HttpRequestMessage>? OnRequest { get; set; }
     internal Action<string, string>? AfterWrite { get; set; }
     internal bool V2Tokens { get; set; }
+    internal Action<JsonObject>? ChangeApiToken { get; set; }
     internal int GitHubStatus { get; set; } = 200;
     internal void ImportProgress(SourceInventoryTransport source)
     {
@@ -266,6 +268,8 @@ internal sealed class SourceInventoryTransport : HttpMessageHandler
         {
             Assert.Equal(HttpMethod.Post, request.Method);
             Assert.Equal("/tokens/contents", uri.AbsolutePath);
+            var payload = request.Headers.Authorization!.Parameter!.Split('.')[1].Replace('-', '+').Replace('_', '/');
+            BrokerClaims.Add(JsonNode.Parse(Convert.FromBase64String(payload.PadRight((payload.Length + 3) / 4 * 4, '=')))!);
             return Json(new { token = InstallationToken, expires_at = Clock.Now.AddMinutes(30),
                 repository_ids = new[] { 913 }, permissions = new { metadata = "read", contents = "read" } });
         }
@@ -329,14 +333,18 @@ internal sealed class SourceTestCredential(SourceInventoryTransport transport) :
 {
     public override AccessToken GetToken(TokenRequestContext request, CancellationToken token)
     {
+        var resource = request.Scopes.Single()[..^"/.default".Length];
+        var v2 = transport.V2Tokens && resource.StartsWith("api://", StringComparison.Ordinal);
         var value = JsonSerializer.SerializeToNode(new
         {
             oid = transport.GitHub.CodePrincipalId, tid = transport.Manifest.Identity.TenantId,
             appid = transport.GitHub.CodeClientId, xms_mirid = transport.Code.Target,
-            aud = request.Scopes.Single()[..^"/.default".Length], nbf = transport.Clock.Now.AddMinutes(-1).ToUnixTimeSeconds(),
+            ver = v2 ? "2.0" : "1.0",
+            aud = v2 ? resource["api://".Length..] : resource, nbf = transport.Clock.Now.AddMinutes(-1).ToUnixTimeSeconds(),
             exp = transport.Clock.Now.AddHours(1).ToUnixTimeSeconds(),
         })!;
-        if (transport.V2Tokens) { value["azp"] = value["appid"]!.DeepClone(); value.AsObject().Remove("appid"); }
+        if (v2) { value["azp"] = value["appid"]!.DeepClone(); value.AsObject().Remove("appid"); }
+        if (resource.StartsWith("api://", StringComparison.Ordinal)) transport.ChangeApiToken?.Invoke(value.AsObject());
         var claims = JsonSerializer.SerializeToUtf8Bytes(value);
         return new("test." + Convert.ToBase64String(claims).TrimEnd('=').Replace('+', '-').Replace('/', '_') + ".unsigned",
             transport.Clock.Now.AddHours(1));

@@ -202,10 +202,12 @@ public sealed class FactorySourceInventoryTests
         Assert.Empty(transport.Progress);
     }
 
-    [Fact]
-    public async Task Authority_changed_during_token_issuance_prevents_any_repository_request()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Authority_changed_during_token_issuance_prevents_any_repository_request(bool v2)
     {
-        using var transport = new SourceInventoryTransport();
+        using var transport = new SourceInventoryTransport { V2Tokens = v2 };
         transport.OnRequest = request =>
         {
             if (request.RequestUri!.AbsolutePath == "/tokens/contents") transport.Values.Remove(ProductConfigurationKeys.FactoryProfile);
@@ -235,8 +237,92 @@ public sealed class FactorySourceInventoryTests
         using var transport = new SourceInventoryTransport { V2Tokens = true };
         var result = await RunAsync(transport);
         Assert.Equal(HttpStatusCode.OK, result.Status);
+        Assert.NotEmpty(transport.BrokerClaims);
+        Assert.All(transport.BrokerClaims, claims =>
+        {
+            Assert.Equal("2.0", (string?)claims["ver"]);
+            Assert.Equal(transport.GitHub.AudienceClientId, (string?)claims["aud"]);
+            Assert.Equal(transport.GitHub.CodeClientId, (string?)claims["azp"]);
+            Assert.Equal(transport.GitHub.CodePrincipalId, (string?)claims["oid"]);
+            Assert.Equal(transport.Manifest.Identity.TenantId, (string?)claims["tid"]);
+            Assert.Null(claims["appid"]);
+        });
         Assert.DoesNotContain(transport.Requests, r => r.Contains("management.azure.com", StringComparison.Ordinal)
             && !r.Contains("/resourcegroups/", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Native_v1_custom_API_accepts_the_approved_URI_or_GUID(bool guidAudience)
+    {
+        using var transport = new SourceInventoryTransport();
+        transport.ChangeApiToken = claims =>
+        {
+            if (guidAudience) claims["aud"] = transport.GitHub.AudienceClientId;
+        };
+        Assert.Equal(HttpStatusCode.OK, (await RunAsync(transport)).Status);
+        Assert.NotEmpty(transport.BrokerClaims);
+        Assert.All(transport.BrokerClaims, claims =>
+        {
+            Assert.Equal("1.0", (string?)claims["ver"]);
+            Assert.Equal((guidAudience ? "" : "api://") + transport.GitHub.AudienceClientId, (string?)claims["aud"]);
+            Assert.Equal(transport.GitHub.CodeClientId, (string?)claims["appid"]);
+            Assert.Null(claims["azp"]);
+        });
+    }
+
+    [Theory]
+    [InlineData("foreign-guid")]
+    [InlineData("foreign-uri")]
+    [InlineData("uri-in-v2")]
+    [InlineData("audience-path")]
+    [InlineData("audience-array")]
+    [InlineData("audience-missing")]
+    [InlineData("client")]
+    [InlineData("tenant")]
+    [InlineData("principal")]
+    [InlineData("identity")]
+    [InlineData("expired")]
+    [InlineData("not-yet-valid")]
+    [InlineData("duplicate-client")]
+    [InlineData("v1-azp")]
+    [InlineData("v2-appid")]
+    [InlineData("version-missing")]
+    [InlineData("version-unknown")]
+    [InlineData("version-number")]
+    public async Task Native_custom_API_rejects_foreign_malformed_or_version_incompatible_claims(string damage)
+    {
+        using var transport = new SourceInventoryTransport { V2Tokens = true };
+        transport.ChangeApiToken = claims =>
+        {
+            switch (damage)
+            {
+                case "foreign-guid": claims["aud"] = transport.GitHub.CodeClientId; break;
+                case "foreign-uri": claims["aud"] = "api://" + transport.GitHub.CodeClientId; break;
+                case "uri-in-v2": claims["aud"] = "api://" + transport.GitHub.AudienceClientId; break;
+                case "audience-path": claims["aud"] = "api://" + transport.GitHub.AudienceClientId + "/other"; break;
+                case "audience-array": claims["aud"] = new JsonArray(transport.GitHub.AudienceClientId); break;
+                case "audience-missing": claims.Remove("aud"); break;
+                case "client": claims["azp"] = transport.GitHub.AudienceClientId; break;
+                case "tenant": claims["tid"] = Guid.Empty.ToString(); break;
+                case "principal": claims["oid"] = transport.Manifest.Identity.AzureActorId; break;
+                case "identity": claims["xms_mirid"] = transport.Code.Target + "-foreign"; break;
+                case "expired": claims["exp"] = transport.Clock.Now.AddSeconds(-1).ToUnixTimeSeconds(); break;
+                case "not-yet-valid": claims["nbf"] = transport.Clock.Now.AddMinutes(1).ToUnixTimeSeconds(); break;
+                case "duplicate-client": claims["appid"] = transport.GitHub.CodeClientId; break;
+                case "v1-azp": claims["ver"] = "1.0"; break;
+                case "v2-appid": claims["appid"] = claims["azp"]!.DeepClone(); claims.Remove("azp"); break;
+                case "version-missing": claims.Remove("ver"); break;
+                case "version-unknown": claims["ver"] = "3.0"; break;
+                case "version-number": claims["ver"] = 2; break;
+            }
+        };
+        var result = await RunAsync(transport);
+        Assert.Equal("Blocked", (string?)JsonNode.Parse(result.Body)!["state"]);
+        Assert.Empty(transport.BrokerClaims);
+        Assert.Empty(transport.Progress);
+        Assert.DoesNotContain(transport.Requests, r => r.Contains("api.github.com", StringComparison.Ordinal));
     }
 
     [Fact]

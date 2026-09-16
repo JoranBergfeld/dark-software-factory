@@ -35,6 +35,8 @@ public sealed class FactoryModelsHostTests
     [InlineData("timeout", "juror-2", "NetworkUnavailable")]
     [InlineData("expired-token", "synthesis", "IdentityMismatch")]
     [InlineData("wrong-token", "synthesis", "IdentityMismatch")]
+    [InlineData("wrong-token-audience", "synthesis", "IdentityMismatch")]
+    [InlineData("wrong-token-version", "synthesis", "IdentityMismatch")]
     [InlineData("truncated", "synthesis", "MalformedResponse")]
     [InlineData("embedding-dimensions", "embedding", "MalformedResponse")]
     [InlineData("embedding-empty", "embedding", "MalformedResponse")]
@@ -325,9 +327,10 @@ public sealed class FactoryModelsHostTests
             {
                 oid = transport.Scenario == "wrong-token" ? "11111111-ffff-ffff-ffff-ffffffffffff" : binding.PrincipalId,
                 appid = binding.ClientId, tid = transport.Manifest.Identity.TenantId,
+                ver = transport.Scenario == "wrong-token-version" ? "2.0" : "1.0",
                 xms_mirid = binding.Target, exp = (transport.Scenario == "expired-token" ? now.AddSeconds(-1) : now.AddHours(1)).ToUnixTimeSeconds(),
                 nbf = now.AddMinutes(-1).ToUnixTimeSeconds(),
-                aud = context.Scopes.Single()[..^"/.default".Length],
+                aud = transport.Scenario == "wrong-token-audience" ? binding.ClientId : context.Scopes.Single()[..^"/.default".Length],
             };
             return ValueTask.FromResult(new AccessToken("test." + Convert.ToBase64String(JsonSerializer.SerializeToUtf8Bytes(claims))
                 .TrimEnd('=').Replace('+', '-').Replace('/', '_') + ".test", now.AddHours(1)));

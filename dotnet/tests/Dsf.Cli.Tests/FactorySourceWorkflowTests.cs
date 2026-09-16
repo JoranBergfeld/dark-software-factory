@@ -78,9 +78,10 @@ public sealed class FactorySourceWorkflowTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Operator_prepares_source_only_store_and_code_host_then_real_host_acquires_under_its_own_identity(bool networkEtags)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task Operator_prepares_source_only_store_and_code_host_then_real_host_acquires_under_its_own_identity(bool networkEtags, bool v2)
     {
         var (machine, arm, previous) = await ReadyAsync();
         using (previous)
@@ -93,6 +94,8 @@ public sealed class FactorySourceWorkflowTests
             Assert.Empty(transport.Deployments);
             var prepared = await machine.InvokeAsync("source", [.. Preparation, "--approve", (string)preview.Result["source"]!["approvalFingerprint"]!]);
             Assert.True((string?)prepared.Result["source"]?["stage"] == "prepared", prepared.Terminal.Output);
+            Assert.NotNull(transport.Source);
+            transport.Source.V2Tokens = v2;
             var acquired = await machine.InvokeAsync("source");
             Assert.True(acquired.Exit == 0, acquired.Terminal.Output + string.Join("\n", transport.Source!.Requests.TakeLast(5)) + "\n" + transport.HostDiagnostic);
             Assert.Equal("Acquired", (string?)acquired.Result["state"]);
@@ -104,6 +107,12 @@ public sealed class FactorySourceWorkflowTests
             Assert.DoesNotContain("First party application documentation", arm.Product.Export());
             Assert.NotEmpty(transport.Source!.Progress);
             Assert.All(transport.Source.Writes, key => Assert.StartsWith("source/", key));
+            Assert.NotEmpty(transport.Source.BrokerClaims);
+            Assert.All(transport.Source.BrokerClaims, claims =>
+            {
+                Assert.Equal(v2 ? "2.0" : "1.0", (string?)claims["ver"]);
+                Assert.Equal((v2 ? "" : "api://") + transport.Source.GitHub.AudienceClientId, (string?)claims["aud"]);
+            });
         }
     }
 
