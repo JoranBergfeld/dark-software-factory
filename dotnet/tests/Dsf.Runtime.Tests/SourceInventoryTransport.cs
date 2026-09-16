@@ -34,6 +34,7 @@ internal sealed class SourceInventoryTransport : HttpMessageHandler
     internal FactorySource Authority;
     internal readonly SourceTestClock Clock = new();
     internal Action<HttpRequestMessage>? OnRequest { get; set; }
+    internal Func<HttpRequestMessage, CancellationToken, Task>? BeforeRequestAsync { get; set; }
     internal Action<string, string>? AfterWrite { get; set; }
     internal bool V2Tokens { get; set; }
     internal Action<JsonObject>? ChangeApiToken { get; set; }
@@ -225,6 +226,7 @@ internal sealed class SourceInventoryTransport : HttpMessageHandler
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
+        if (BeforeRequestAsync is not null) await BeforeRequestAsync(request, token);
         OnRequest?.Invoke(request);
         var uri = request.RequestUri!;
         Requests.Add(request.Method + " " + uri.Host + uri.PathAndQuery);

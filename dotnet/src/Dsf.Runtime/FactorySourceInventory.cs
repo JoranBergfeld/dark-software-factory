@@ -5,6 +5,8 @@ using Dsf.Core.Onboarding;
 
 namespace Dsf.Runtime;
 
+internal sealed record SourceInventoryReference(SourceSnapshot Snapshot, string IntegritySha256);
+
 internal sealed class FactorySourceInventory(FactorySourceAccess access, HttpClient http, TimeProvider clock, bool charterReview = false) : IFactorySourceMaterializer
 {
     private readonly SourceProgressStore store = new(access, http);
@@ -198,7 +200,7 @@ internal sealed class FactorySourceInventory(FactorySourceAccess access, HttpCli
         return await ReportAsync(page, "Historical acquisition coverage; no retained source or analysis.", token);
     }
 
-    internal async Task<SourceInventoryResult> ReadAnalysisInventoryAsync(CancellationToken cancellationToken)
+    internal async Task<SourceInventoryResult> ReadAnalysisInventoryAsync(CancellationToken cancellationToken, SourceInventoryReference? analyzed = null)
     {
         using var deadline = new CancellationTokenSource(FactorySourceValidation.AdvanceBudget, clock);
         using var pending = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline.Token);
@@ -210,6 +212,17 @@ internal sealed class FactorySourceInventory(FactorySourceAccess access, HttpCli
         if (progress.State != SourceState.Acquired)
             return new(progress.State, "CompleteAcquisitionRequired: " + progress.Reason, progress, [], null);
         var records = await VerifyInventoryAsync(createProof: false, token);
+        if (analyzed is not null)
+        {
+            if (progress.Snapshot != analyzed.Snapshot)
+            {
+                progress = HistoricalAnalysisProgress(analyzed, records);
+                ValidateProgress();
+                await VerifyInventoryAsync(createProof: false, token, records);
+            }
+            if (progress.IntegritySha256 != analyzed.IntegritySha256)
+                throw new SourceAcquisitionException(SourceState.Unknown, "AnalysisInventoryBindingMismatch");
+        }
         var paths = new List<SourcePathCoverage>();
         for (var i = 1; i < progress.Nodes; i++)
         {
@@ -224,14 +237,38 @@ internal sealed class FactorySourceInventory(FactorySourceAccess access, HttpCli
         return new(SourceState.Acquired, "Fresh whole-inventory integrity verified; not analysis.", progress, paths, null);
     }
 
-    internal async Task<CharterSource> ReadCharterAsync(CancellationToken token)
+    private SourceProgress HistoricalAnalysisProgress(SourceInventoryReference analyzed, IReadOnlyDictionary<string, ConfigurationSetting> records)
     {
-        var complete = await ReadAnalysisInventoryAsync(token);
+        var prefix = "source/" + analyzed.Snapshot.Id + "/";
+        if (!charterReview || !records.Where(p => p.Key.StartsWith(prefix + "history/", StringComparison.Ordinal))
+                .Select(p => SourceProgressStore.Parse<SelectionHistory>(p.Value))
+                .Any(h => h.Snapshot == analyzed.Snapshot && h.IntegritySha256 == analyzed.IntegritySha256))
+            throw new SourceAcquisitionException(SourceState.Unknown, "MissingAnalyzedSourceHistory");
+        var nodes = records.Where(p => p.Key.StartsWith(prefix + "nodes/", StringComparison.Ordinal))
+            .Select(p => SourceProgressStore.Parse<SourceNode>(p.Value)).ToArray();
+        var results = records.Where(p => p.Key.StartsWith(prefix + "results/", StringComparison.Ordinal))
+            .Select(p => SourceProgressStore.Parse<SourcePathResult>(p.Value)).ToArray();
+        // Reconstruct coverage, not a new acquisition. The original analysis digest and stored proof must verify every inventory record.
+        return progress! with
+        {
+            Snapshot = analyzed.Snapshot, IntegritySha256 = analyzed.IntegritySha256, Reason = "HistoricalAnalysisInventory",
+            Nodes = nodes.Length, TreeCursor = nodes.Length, ContentCursor = nodes.Length, ChildCursor = 0, ChunkCursor = 0,
+            Files = nodes.Count(n => n.Mode != "040000"),
+            Acquired = results.Count(r => r.State == SourcePathState.Acquired),
+            Excluded = results.Count(r => r.State == SourcePathState.Excluded),
+            Failed = results.Count(r => r.State == SourcePathState.Failed),
+            NecessaryGaps = results.Count(r => r.Exclusion is SourceExclusion.Sensitive or SourceExclusion.Unavailable or SourceExclusion.External),
+        };
+    }
+
+    internal async Task<CharterSource> ReadCharterAsync(SourceInventoryReference analyzed, CancellationToken token)
+    {
+        var complete = await ReadAnalysisInventoryAsync(token, analyzed);
         if (complete.State != SourceState.Acquired) throw new SourceAcquisitionException(complete.State, complete.Detail);
         var charter = await github.CurrentCharterAsync(complete.Progress!.Snapshot, token);
-        await github.CheckSnapshotAsync(complete.Progress!.Snapshot, token);
         await access.CheckAsync(token);
         await FenceAsync(token);
+        await github.CheckExactSnapshotAsync(charter.Snapshot, token);
         return charter with
         {
             AnalyzedCharterBlob = complete.Paths.SingleOrDefault(p => p.Node.Path == Dsf.Core.Charters.CharterMarkdown.CharterPath)?.Node.ObjectId,
@@ -344,14 +381,16 @@ internal sealed class FactorySourceInventory(FactorySourceAccess access, HttpCli
         return chunks;
     }
 
-    private async Task<IReadOnlyDictionary<string, ConfigurationSetting>> VerifyInventoryAsync(bool createProof, CancellationToken token)
+    private async Task<IReadOnlyDictionary<string, ConfigurationSetting>> VerifyInventoryAsync(bool createProof, CancellationToken token,
+        IReadOnlyDictionary<string, ConfigurationSetting>? verifiedNamespace = null)
     {
-        var records = await store.ReadNamespaceAsync(token);
+        var records = verifiedNamespace ?? await store.ReadNamespaceAsync(token);
         if (!records.TryGetValue(RootKey, out var current) || current.ETag != root!.ETag || current.Value != root.Value)
             throw new SourceAcquisitionException(SourceState.Unknown, "ProgressOwnershipChanged");
         var bytes = FactorySourceValidation.RecordBytes + records.Where(p => p.Key != RootKey)
             .Sum(p => (long)SourceProgressStore.RecordSize(p.Key, p.Value.Value));
-        if (records.Count > progress!.Records || bytes > progress.MetadataBytes)
+        var accounting = SourceProgressStore.Parse<SourceProgress>(current);
+        if (records.Count > accounting.Records || bytes > accounting.MetadataBytes)
             throw new SourceAcquisitionException(SourceState.Unknown, "ProgressAccountingMismatch");
         var files = 0;
         var acquired = 0;
@@ -360,7 +399,7 @@ internal sealed class FactorySourceInventory(FactorySourceAccess access, HttpCli
         var gaps = 0;
         var chunkCount = 0;
         var paths = new HashSet<string>(StringComparer.Ordinal);
-        for (var i = 0; i < progress.Nodes; i++)
+        for (var i = 0; i < progress!.Nodes; i++)
         {
             token.ThrowIfCancellationRequested();
             var node = await ReadNodeAsync(i, token, records);

@@ -34,13 +34,16 @@ internal sealed class GitHubSourceSnapshot(FactorySourceAccess access, TimeProvi
     internal async Task CheckSnapshotAsync(SourceSnapshot snapshot, CancellationToken token)
     {
         var current = await PinAsync(token);
-        await CheckObservedSnapshotAsync(snapshot, current, token);
+        await CheckObservedSnapshotAsync(snapshot, current, charterReview, token);
     }
+
+    internal async Task CheckExactSnapshotAsync(SourceSnapshot snapshot, CancellationToken token) =>
+        await CheckObservedSnapshotAsync(snapshot, await PinAsync(token), allowCharterChanges: false, token);
 
     private static string SnapshotId(Guid factory, Guid operation, long repository, string branch, string commit, string tree) =>
         FactoryModelsValidation.Hash(new { factory, OperationId = operation, RepositoryId = repository, Branch = branch, commit, tree });
 
-    private async Task CheckObservedSnapshotAsync(SourceSnapshot snapshot, SourceSnapshot current, CancellationToken token)
+    private async Task CheckObservedSnapshotAsync(SourceSnapshot snapshot, SourceSnapshot current, bool allowCharterChanges, CancellationToken token)
     {
         if (current.RepositoryId != snapshot.RepositoryId || current.AccountId != snapshot.AccountId || current.DefaultBranch != snapshot.DefaultBranch
             || snapshot.OperationId != access.Source.OperationId || snapshot.ObservedAt == default || snapshot.ObservedAt > clock.GetUtcNow()
@@ -49,7 +52,7 @@ internal sealed class GitHubSourceSnapshot(FactorySourceAccess access, TimeProvi
             throw new SourceAcquisitionException(SourceState.Blocked, "SourceIdentityChanged");
         if (current.Id != snapshot.Id)
         {
-            if (!charterReview) throw new SourceAcquisitionException(SourceState.Blocked, "SourceIdentityChanged");
+            if (!allowCharterChanges) throw new SourceAcquisitionException(SourceState.Blocked, "SourceIdentityChanged");
             await CheckCharterOnlyAsync(snapshot, current, token);
         }
     }
@@ -88,7 +91,7 @@ internal sealed class GitHubSourceSnapshot(FactorySourceAccess access, TimeProvi
     internal async Task<CharterSource> CurrentCharterAsync(SourceSnapshot analyzed, CancellationToken token)
     {
         var current = await PinAsync(token);
-        await CheckObservedSnapshotAsync(analyzed, current, token);
+        await CheckObservedSnapshotAsync(analyzed, current, charterReview, token);
         var entries = await TreeAsync(current, new(current.Id, 0, "", "040000", current.RootTree, null), token);
         var directory = entries.SingleOrDefault(n => n.Path == ".dsf");
         SourceNode? file = null;

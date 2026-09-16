@@ -41,20 +41,38 @@ internal sealed class FactoryIntentWorkflow(FactorySourceAccess source, HttpClie
         return review with { ModelAuthority = access.CurrentAuthority };
     }
 
+    internal Task<CharterSource> ReadReviewedCharterAsync(CancellationToken token) =>
+        inventory.ReadCharterAsync(new(progress.Snapshot, progress.SourceIntegritySha256), token);
+
     internal async Task<IntentResult> RunAsync(IntentRequest request, bool status, CancellationToken token)
     {
         if (request.Page is < 0 or >= FactoryIntentLimits.MaximumPage
             || status && request.NewAnalysis) throw new IntentException(IntentState.Blocked, "InvalidIntentRequest");
         await access.CheckAsync(token);
-        acquisition = await inventory.ReadAnalysisInventoryAsync(token);
+        SourceInventoryReference? analyzed = null;
+        if (charterReview)
+        {
+            records = await store.ReadNamespaceAsync(token);
+            root = records.GetValueOrDefault(CurrentKey);
+            if (root is not null)
+            {
+                progress = SourceProgressStore.Parse<IntentProgress>(root);
+                ValidateProgress();
+                analyzed = new(progress.Snapshot, progress.SourceIntegritySha256);
+            }
+        }
+        acquisition = await inventory.ReadAnalysisInventoryAsync(token, analyzed);
         if (acquisition.State != SourceState.Acquired)
             return new(acquisition.State == SourceState.Partial ? IntentState.Blocked : Map(acquisition.State),
                 acquisition.Detail, null, acquisition.Progress, null, [], [], [], null);
         chunks = acquisition.Paths.SelectMany(path => path.Chunks.Select(chunk => (path, chunk))).ToArray();
         if (chunks.Length is < 1 or > FactoryIntentLimits.MaximumChunks)
             return new(IntentState.Partial, "AnalysisChunkLimit; no source silently omitted.", null, acquisition.Progress, null, [], [], [], null);
-        records = await store.ReadNamespaceAsync(token);
-        root = records.GetValueOrDefault(CurrentKey);
+        if (!charterReview)
+        {
+            records = await store.ReadNamespaceAsync(token);
+            root = records.GetValueOrDefault(CurrentKey);
+        }
         if (root is null)
         {
             if (records.Count != 0) throw new IntentException(IntentState.Unknown, "MissingAuthoritativeAnalysisCheckpoint");
@@ -339,7 +357,8 @@ internal sealed class FactoryIntentWorkflow(FactorySourceAccess source, HttpClie
     }
     private async Task CheckSourceAsync(CancellationToken token)
     {
-        var current = await inventory.ReadAnalysisInventoryAsync(token);
+        var current = await inventory.ReadAnalysisInventoryAsync(token,
+            charterReview ? new(progress.Snapshot, progress.SourceIntegritySha256) : null);
         if (current.State != SourceState.Acquired)
             throw new SourceAcquisitionException(current.State, current.Detail);
         if (current.Progress?.Snapshot != progress.Snapshot

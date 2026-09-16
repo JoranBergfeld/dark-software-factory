@@ -117,6 +117,17 @@ just a selected page. The current charter bytes are reacquired and screened.
 `evidence.source.reconciliation` distinguishes `ExactAnalyzedSource` from
 `CompleteCharterOnly`; original analysis provenance is retained separately.
 
+The comparison basis is the inventory and integrity commitment pinned by the
+validated analysis, never a newer acquisition selected by another worker.
+Historical inventory records, selection history and the complete integrity proof
+are reverified when acquisition advances. Missing or changed original metadata
+is `Unknown`, not permission to substitute the current inventory. A separately
+acquired charter-only merge can still be reviewed and adopted without new analysis.
+Before releasing fetched charter bytes, the source host checks their exact
+snapshot again. Even another charter-only or same-tree commit observed during
+that read blocks release and requires a fresh review; it cannot validate stale
+bytes through historical reconciliation.
+
 Substantive code/document differences, changed default branch, necessary unread
 source or material charter edits block adoption. Acquire complete current source
 with `source --new-snapshot`, run `infer --new-analysis` and its bounded advances,

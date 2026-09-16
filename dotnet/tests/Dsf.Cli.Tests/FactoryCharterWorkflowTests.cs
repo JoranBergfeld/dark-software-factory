@@ -12,6 +12,201 @@ namespace Dsf.Cli.Tests;
 
 public sealed class FactoryCharterWorkflowTests
 {
+    [Theory]
+    [InlineData("missing-proof")]
+    [InlineData("missing-page")]
+    [InlineData("changed-page")]
+    [InlineData("missing-history")]
+    [InlineData("unread-current")]
+    public async Task Historical_analysis_does_not_bypass_original_integrity_or_current_acquisition(string damage)
+    {
+        using var scenario = await CharterScenario.ReadyAsync(CharterScenario.ExistingCharter);
+        var reviewed = await scenario.Machine.InvokeAsync("charter", "--adopt", "--existing");
+        var adopted = await scenario.Machine.InvokeAsync("charter", "--adopt", "--existing", "--approve", (string)reviewed.Result["revision"]!);
+        Assert.Equal(0, adopted.Exit);
+        var prefix = "source/" + (string)reviewed.Result["evidence"]!["analysis"]!["progress"]!["snapshot"]!["id"]! + "/";
+        var current = scenario.Source.Source!;
+        current.Head = new string('e', 40);
+        if (damage == "unread-current")
+            current.RootTree = current.Tree((".dsf", "040000", current.Tree(("charter.md", "100644", current.Blob(CharterScenario.ExistingCharter)))),
+                ("README.md", "100644", current.Blob("version https://git-lfs.github.com/spec/v1\noid sha256:" + new string('a', 64) + "\nsize 300000")));
+        Assert.Equal(damage == "unread-current" ? 1 : 0, (await scenario.Machine.InvokeAsync("source", "--new-snapshot")).Exit);
+        scenario.Reconstruct();
+        var source = scenario.Source.Source!;
+        source.ProgressPageSize = 1;
+        var page = prefix + "nodes/00000002";
+        if (damage == "changed-page")
+        {
+            var original = source.Progress[page];
+            source.Progress[page] = (original.Value, original.Revision + 1);
+        }
+        else if (damage != "unread-current") source.Progress.Remove(damage switch
+        {
+            "missing-proof" => prefix + "integrity/00000000",
+            "missing-history" => prefix + "history/00000000",
+            _ => page,
+        });
+        var originalProduct = scenario.Arm.Product.Export();
+        var sourceWrites = source.Writes.Count;
+        var result = await scenario.Machine.InvokeAsync("charter", "--status-only");
+        Assert.Equal(damage == "unread-current" ? "Blocked" : "Unknown", (string?)result.Result["state"]);
+        Assert.Null(result.Result["adoption"]);
+        Assert.Null(result.Result["evidence"]);
+        Assert.Equal(adopted.Result["adoption"]!["revision"]!.ToJsonString(), result.Result["historicalAdoption"]!["revision"]!.ToJsonString());
+        Assert.False((bool)result.Result["activated"]!);
+        Assert.Equal(originalProduct, scenario.Arm.Product.Export());
+        Assert.Equal(sourceWrites, source.Writes.Count);
+        Assert.Empty(scenario.GitHubWrites);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Review_binds_original_analysis_when_an_independent_worker_acquires_a_new_snapshot(bool materialChange)
+    {
+        using var scenario = await CharterScenario.ReadyAsync();
+        var original = await scenario.Machine.InvokeAsync("charter");
+        Assert.Equal(0, original.Exit);
+        scenario.Reconstruct();
+        var source = scenario.Source.Source!;
+        var originalCheckpoint = source.Progress["intent/current"];
+        var originalProduct = scenario.Arm.Product.Export();
+        var sourceWrites = source.Writes.Count;
+        var advanced = false;
+        var modelCalls = 0;
+        scenario.Source.WorkloadTransport = transport => new FactoryIntentCommandTests.IntentCliWorkloadTransport(transport, scenario.Models, input =>
+        {
+            modelCalls++;
+            return IntentModelFixture.Complete(input);
+        });
+        source.BeforeRequestAsync = async (request, token) =>
+        {
+            if (request.RequestUri!.Host != new Uri(source.ProgressEndpoint).Host
+                || Uri.UnescapeDataString(request.RequestUri.AbsolutePath) != "/kv/intent/current") return;
+            source.BeforeRequestAsync = null;
+            advanced = true;
+            source.Head = new string('e', 40);
+            scenario.CurrentCharter = (string)original.Result["review"]!["after"]!;
+            source.RootTree = source.Tree((".dsf", "040000", source.Tree(("charter.md", "100644", source.Blob(scenario.CurrentCharter)))),
+                ("README.md", "100644", source.Blob(materialChange ? "A materially different application." : IntentModelFixture.SourceText)));
+            var acquired = await scenario.Machine.InvokeAsync("source", "--new-snapshot").WaitAsync(TimeSpan.FromSeconds(30), token);
+            Assert.True(acquired.Exit == 0, acquired.Terminal.Output);
+            Assert.Equal(originalCheckpoint, source.Progress["intent/current"]);
+        };
+        var reviewed = await scenario.Machine.InvokeAsync("charter");
+        Assert.True(advanced);
+        Assert.Equal(originalCheckpoint, source.Progress["intent/current"]);
+        Assert.All(source.Writes.Skip(sourceWrites), key => Assert.StartsWith("source/", key));
+        Assert.Equal(originalProduct, scenario.Arm.Product.Export());
+        Assert.Empty(scenario.GitHubWrites);
+        Assert.Null(reviewed.Result["adoption"]);
+        Assert.False((bool)reviewed.Result["activated"]!);
+        if (materialChange)
+        {
+            Assert.Equal("Blocked", (string?)reviewed.Result["state"]);
+            Assert.Contains("MaterialSourceChanged", reviewed.Terminal.Output);
+            Assert.Null(reviewed.Result["review"]);
+            Assert.Null(reviewed.Result["evidence"]);
+        }
+        else
+        {
+            Assert.True(reviewed.Exit == 0, reviewed.Terminal.Output);
+            var evidence = reviewed.Result["evidence"]!;
+            Assert.Equal(original.Result["evidence"]!["analysis"]!["progress"]!.ToJsonString(), evidence["analysis"]!["progress"]!.ToJsonString());
+            Assert.Equal(SourceInventoryTransport.Commit, (string?)evidence["analysis"]?["acquisition"]?["snapshot"]?["commit"]);
+            Assert.Equal(new string('e', 40), (string?)evidence["source"]?["snapshot"]?["commit"]);
+            Assert.Equal("CompleteCharterOnly", (string?)evidence["source"]?["reconciliation"]);
+            Assert.Null(evidence["source"]?["analyzedCharterBlob"]);
+            Assert.Equal(scenario.CurrentCharter, (string?)evidence["source"]?["content"]);
+        }
+        scenario.Reconstruct();
+        var repeated = await scenario.Machine.InvokeAsync("charter");
+        Assert.Equal(materialChange ? "Blocked" : "Reviewed", (string?)repeated.Result["state"]);
+        Assert.Equal(originalProduct, scenario.Arm.Product.Export());
+        Assert.Equal(originalCheckpoint, scenario.Source.Source!.Progress["intent/current"]);
+        Assert.Empty(scenario.GitHubWrites);
+        Assert.Equal(0, modelCalls);
+    }
+
+    [Theory]
+    [InlineData("invalid-charter", "Blocked", false)]
+    [InlineData("invalid-charter", "Blocked", true)]
+    [InlineData("same-tree-new-commit", "Blocked", false)]
+    [InlineData("missing-progress", "Unknown", false)]
+    public async Task Adoption_withholds_charter_bytes_when_the_final_source_observation_moves(string movement, string expected, bool priorAdoption)
+    {
+        using var scenario = await CharterScenario.ReadyAsync(CharterScenario.ExistingCharter);
+        var review = await scenario.Machine.InvokeAsync("charter", "--adopt", "--existing");
+        Assert.Equal(0, review.Exit);
+        JsonNode? historical = null;
+        if (priorAdoption)
+        {
+            var adopted = await scenario.Machine.InvokeAsync("charter", "--adopt", "--existing", "--approve", (string)review.Result["revision"]!);
+            Assert.Equal(0, adopted.Exit);
+            historical = adopted.Result["adoption"];
+        }
+        var source = scenario.Source.Source!;
+        var originalHead = source.Head;
+        var originalTree = source.RootTree;
+        var rootKey = source.Progress.Keys.Single(key => key.StartsWith("source/", StringComparison.Ordinal) && key.EndsWith("/current", StringComparison.Ordinal));
+        var originalProgress = source.Progress[rootKey];
+        var changedTree = movement == "invalid-charter"
+            ? source.Tree((".dsf", "040000", source.Tree(("charter.md", "100644", source.Blob("invalid current charter")))),
+                ("README.md", "100644", source.Blob(IntentModelFixture.SourceText)))
+            : originalTree;
+        var fetched = false;
+        var fetchedCommitRead = false;
+        var changed = false;
+        var observations = 0;
+        source.AfterBlobResponse = () => fetched = true;
+        source.OnRequest = request =>
+        {
+            if (!fetched || changed || request.RequestUri!.Host != "api.github.com") return;
+            if (request.RequestUri.AbsolutePath == "/repos/acme/renamed/git/commits/" + originalHead)
+                fetchedCommitRead = true;
+            else if (fetchedCommitRead && request.RequestUri.AbsolutePath == "/repositories/913")
+            {
+                changed = true;
+                observations++;
+                if (movement == "missing-progress") source.Progress.Remove(rootKey);
+                else
+                {
+                    source.Head = new string('e', 40);
+                    source.RootTree = changedTree;
+                }
+            }
+        };
+        scenario.Source.AfterHost = (path, _) =>
+        {
+            if (path != "/charter-review") return;
+            source.Head = originalHead;
+            source.RootTree = originalTree;
+            source.Progress[rootKey] = originalProgress;
+            fetched = fetchedCommitRead = changed = false;
+        };
+        var originalProduct = scenario.Arm.Product.Export();
+        var result = await scenario.Machine.InvokeAsync("charter", "--adopt", "--existing", "--approve", (string)review.Result["revision"]!);
+        Assert.True(observations > 0);
+        Assert.Equal(expected, (string?)result.Result["state"]);
+        Assert.Null(result.Result["adoption"]);
+        Assert.Null(result.Result["review"]);
+        Assert.False((bool)result.Result["activated"]!);
+        if (priorAdoption)
+        {
+            var status = await scenario.Machine.InvokeAsync("charter", "--status-only");
+            Assert.Equal(expected, (string?)status.Result["state"]);
+            Assert.Null(status.Result["adoption"]);
+            Assert.Equal(historical!["revision"]!.ToJsonString(), status.Result["historicalAdoption"]?["revision"]?.ToJsonString());
+        }
+        Assert.Equal(originalProduct, scenario.Arm.Product.Export());
+        Assert.Empty(scenario.GitHubWrites);
+        scenario.Reconstruct();
+        Assert.Equal(originalProduct, scenario.Arm.Product.Export());
+        if (!priorAdoption)
+            Assert.DoesNotContain(JsonNode.Parse(scenario.Arm.Product.ListJson())!.AsArray(),
+                record => ((string)record!["key"]!).StartsWith("dsf/factory/charter/adoptions/", StringComparison.Ordinal));
+    }
+
     [Fact]
     public async Task Unchanged_onboarding_charter_with_CRLF_is_adopted_with_its_original_native_identity()
     {
@@ -599,8 +794,10 @@ public sealed class FactoryCharterWorkflowTests
         Assert.Equal("Published", (string?)resumed.Result["state"]);
         Assert.Equal(3, scenario.GitHubWrites.Count);
     }
-    [Fact]
-    public async Task Human_charter_only_merge_is_reviewed_and_adopted_without_an_endless_new_analysis_PR_loop()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Human_charter_only_merge_is_reviewed_and_adopted_without_an_endless_new_analysis_PR_loop(bool acquireMergedSnapshot)
     {
         using var scenario = await CharterScenario.ReadyAsync();
         var preview = await scenario.Machine.InvokeAsync("charter");
@@ -610,6 +807,9 @@ public sealed class FactoryCharterWorkflowTests
         var pending = await scenario.Machine.InvokeAsync("charter", "--adopt");
         Assert.Equal("Blocked", (string?)pending.Result["state"]);
         scenario.HumanMerge();
+        if (acquireMergedSnapshot)
+            Assert.Equal(0, (await scenario.Machine.InvokeAsync("source", "--new-snapshot")).Exit);
+        scenario.Reconstruct();
         var merged = await scenario.Machine.InvokeAsync("charter", "--adopt");
         Assert.True(merged.Exit == 0, merged.Terminal.Output + merged.Terminal.Error);
         Assert.Equal("Reviewed", (string?)merged.Result["state"]);
@@ -619,9 +819,13 @@ public sealed class FactoryCharterWorkflowTests
         Assert.True(adopted.Exit == 0, adopted.Terminal.Output + adopted.Terminal.Error);
         Assert.Equal("Adopted", (string?)adopted.Result["state"]);
         Assert.Equal(analysis, (string?)adopted.Result["adoption"]?["analysisRevision"]);
+        Assert.Equal(SourceInventoryTransport.Commit, (string?)adopted.Result["evidence"]?["analysis"]?["progress"]?["snapshot"]?["commit"]);
+        Assert.Equal(new string('c', 40), (string?)adopted.Result["adoption"]?["sourceCommit"]);
+        Assert.Equal("CompleteCharterOnly", (string?)adopted.Result["evidence"]?["source"]?["reconciliation"]);
         Assert.Equal("HumanMerged", (string?)adopted.Result["adoption"]?["route"]);
         Assert.False((bool)adopted.Result["activated"]!);
         Assert.Equal(3, scenario.GitHubWrites.Count);
+        scenario.Reconstruct();
         var status = await scenario.Machine.InvokeAsync("charter", "--status-only");
         Assert.Equal("Adopted", (string?)status.Result["state"]);
         Assert.NotNull(status.Result["adoption"]);
