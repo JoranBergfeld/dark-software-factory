@@ -7,7 +7,7 @@ This directory is the active Dark Software Factory implementation.
 - `src/Dsf.Core` — shared domain, contracts, runtime settings, product records, and charters.
 - `src/Dsf.FeatureCouncil` — Feature Council conveyor and stations.
 - `src/Dsf.Cli` — packaged `dsf` global tool; factory provisioning, charter commands, runtime forwarding.
-- `src/Dsf.Runtime` — deployed runtime host for `run`, `sweep`, `serve-orchestrator`, `serve-agent`, `poll-outcomes`, and isolated `serve-github-auth`, `serve-telemetry`, `serve-models`.
+- `src/Dsf.Runtime` — deployed runtime host for `run`, `sweep`, `serve-orchestrator`, `serve-agent`, `poll-outcomes`, and isolated `serve-github-auth`, `serve-telemetry`, `serve-models`, `serve-source`.
 - `src/Dsf.ControlCenter` — governance web process (`dsf-control-center`).
 - `src/Dsf.AgentHost` — reusable source-agent host.
 - `src/Dsf.Testing` — deterministic test helpers; production projects must not reference it.
@@ -59,7 +59,7 @@ executables and require neither the SDK nor a separately installed .NET runtime.
 The CLI's build-only runtime dependency builds the matching runtime automatically,
 including for `dotnet run --project src/Dsf.Cli -- sweep --product <product>`.
 `eng/CliBundle.targets` publishes its dependency closure into `runtime/` and compiles
-the ten provisioning entrypoints into self-contained ARM JSON under `assets/infra/`.
+the eleven provisioning entrypoints into self-contained ARM JSON under `assets/infra/`.
 Use one `-p:Version=<version>` for build, pack, and publish; when using `--no-build`,
 the configuration and version must match the preceding build.
 
@@ -129,6 +129,12 @@ problem-index migration or council readiness is implied. See
 
 ## Runtime host
 
+`dsf onboard decide source --prepare` separately approves the code-only source
+host, private source-progress store and exact grants. `source` advances bounded,
+immutable repository acquisition; `--status-only --page N` reads coverage and
+`--new-snapshot` explicitly selects changed source. No models or target execution.
+See [source acquisition and consumer APIs](../docs/site/get-started/acquire-source-inventory.md).
+
 `src/Dsf.Runtime` (`dsf-runtime`) is the deployed runtime entrypoint. The `dsf` front door
 automatically resolves the bundled host under `runtime/`, then forwards runtime verbs without an
 assembly reference. `DSF_RUNTIME_HOST` remains an advanced override for a custom host executable.
@@ -153,6 +159,9 @@ assembly reference. `DSF_RUNTIME_HOST` remains an advanced override for a custom
   `/jurors/{juror}` require verified capability references and exact approved
   callers. Uses native Azure v1 inference and explicit managed identity, not
   legacy model defaults or developer credentials.
+- `serve-source` — dedicated inactive acquisition host; authenticated operator
+  `/acquire` and `/status`, code-only `/materialize`. Uses restricted GitHub tokens
+  and source-only App Configuration checkpoints, never retained raw source.
 
 ## Runtime dependency composition
 

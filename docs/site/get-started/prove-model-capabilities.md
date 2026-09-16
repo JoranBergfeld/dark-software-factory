@@ -1,5 +1,8 @@
 # Prove required model capabilities
 
+Source acquisition is separate: [acquire resumable source inventory](acquire-source-inventory.md)
+uses readonly GitHub authority and does not invoke these models.
+
 `dsf onboard decide models` prepares and proves the complete required model topology
 after a [proven inactive foundation](provision-inactive-foundation.md). It creates
 only two factory-owned model deployments, exact reviewed grants, and an isolated

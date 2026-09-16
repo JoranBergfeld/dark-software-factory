@@ -42,6 +42,7 @@ try
         ["product-github-private-key"] = 0,
         ["onboard-github-auth"] = 0,
         ["onboard-models"] = 0,
+        ["onboard-source"] = 0,
     };
     foreach (var (name, minimumNestedDeployments) in templates)
     {
@@ -101,6 +102,31 @@ try
         && modelsHost.Output.Contains("AZURE_CLIENT_ID", StringComparison.Ordinal)
         && !modelsHost.Output.Contains("AZURE_OPENAI", StringComparison.Ordinal),
         "Installed CLI did not reach the bundled isolated model host.");
+
+    var sourceHelp = await Run("onboard", "decide", "source", "--help");
+    Require(sourceHelp.ExitCode == 0 && sourceHelp.Output.Contains("--new-snapshot", StringComparison.Ordinal)
+        && sourceHelp.Output.Contains("--source-audience", StringComparison.Ordinal), "Installed source grammar is unavailable.");
+    var incompleteSource = await Run("onboard", "decide", "source", "--json");
+    Require(incompleteSource.ExitCode == 1 && incompleteSource.Output.Contains("\"state\": \"Blocked\"", StringComparison.Ordinal),
+        "Installed source command accepted incomplete redirected inputs.");
+    var sourceAsset = Path.Combine(payload, "assets", "infra", "onboard-source.json");
+    var sourceBytes = File.ReadAllBytes(sourceAsset);
+    File.Delete(sourceAsset);
+    try
+    {
+        File.WriteAllText(Path.Combine(scratch.FullName, "azure.log"), "");
+        var missingSource = await Run("onboard", "decide", "source", "--prepare", "--owner-appconfig-endpoint", "https://owner.azconfig.io",
+            "--product", "packaging-smoke", "--tenant", "11111111-1111-1111-1111-111111111111",
+            "--subscription", "22222222-2222-2222-2222-222222222222", "--json");
+        Require(missingSource.ExitCode == 1 && missingSource.Output.Contains("onboard-source.json", StringComparison.Ordinal),
+            "Installed source preparation must identify its missing asset.");
+        Require(File.ReadAllText(Path.Combine(scratch.FullName, "azure.log")).Length == 0, "Source asset failure reached Azure authentication.");
+    }
+    finally { File.WriteAllBytes(sourceAsset, sourceBytes); }
+    var sourceHost = await Run("serve-source");
+    Require(sourceHost.ExitCode == 1 && sourceHost.Output.Contains("DSF_FACTORY_PROFILE_PIN", StringComparison.Ordinal)
+        && sourceHost.Output.Contains("AZURE_CLIENT_ID", StringComparison.Ordinal)
+        && !sourceHost.Output.Contains("AZURE_OPENAI", StringComparison.Ordinal), "Installed source host is not isolated.");
 
     var foundationAsset = Path.Combine(payload, "assets", "infra", "onboard-foundation.json");
     var foundationBytes = File.ReadAllBytes(foundationAsset);
@@ -236,7 +262,7 @@ try
         File.WriteAllBytes(missing, bytes);
     }
 
-    Console.WriteLine("Installed payload smoke passed: repository review, boundary plan, reservation/foundation/GitHub/models/status/resume, inactive runtime admission, seven runtime verbs, nine ARM assets, provisioning preview, bootstrap, preflight.");
+    Console.WriteLine($"Installed payload smoke passed: repository review, boundary plan, reservation/foundation/GitHub/models/source/status/resume, inactive runtime admission, eight runtime verbs, {templates.Count} ARM assets, provisioning preview, bootstrap, preflight.");
     return 0;
 }
 finally

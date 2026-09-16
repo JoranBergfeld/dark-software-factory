@@ -116,6 +116,23 @@ public static class RuntimeCliApplication
             }
         });
         root.Subcommands.Add(models);
+        var source = new Command("serve-source", "serve isolated inactive pinned source acquisition");
+        source.SetAction(async (_, token) =>
+        {
+            try
+            {
+                var settings = FactoryHostSettings.Read(env, "Factory source");
+                await using var host = RuntimeVerbs.BuildSourceHost(settings, dependencies);
+                await dependencies.WebHostRunner.RunAsync(host, token);
+                return Success;
+            }
+            catch (RuntimeVerbException exception)
+            {
+                await stderr.WriteLineAsync(exception.Message);
+                return Failure;
+            }
+        });
+        root.Subcommands.Add(source);
         return root;
     }
 

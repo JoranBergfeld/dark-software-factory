@@ -136,7 +136,7 @@ internal sealed class FactoryModelWorkloads(
     private async Task<HttpResponseMessage> SendAsync(string uri, object? body, string route, CancellationToken token)
     {
         var scope = body is null ? "https://management.azure.com/.default" : "https://ai.azure.com/.default";
-        var access = await new FactoryModelCredential(credential, manifest.Identity.TenantId, authority.Bindings![0], clock)
+        var access = await new FactoryWorkloadCredential(credential, manifest.Identity.TenantId, authority.Bindings![0], clock)
             .GetTokenAsync(new TokenRequestContext([scope]), token);
         using var request = new HttpRequestMessage(body is null ? HttpMethod.Get : HttpMethod.Post, uri);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", access.Token);

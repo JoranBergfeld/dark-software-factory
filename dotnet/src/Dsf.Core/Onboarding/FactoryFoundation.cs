@@ -52,6 +52,8 @@ public sealed record FactoryManifest(
     public string? TelemetryApprovalFingerprint { get; init; }
     public Guid? ModelsOperationId { get; init; }
     public string? ModelsApprovalFingerprint { get; init; }
+    public Guid? SourceOperationId { get; init; }
+    public string? SourceApprovalFingerprint { get; init; }
 }
 
 public sealed record FactoryFoundationResult(

@@ -227,6 +227,9 @@ public static partial class CliApplication
         var modelHost = new Command("serve-models", "serve isolated inactive model capability workloads (runtime)");
         modelHost.SetAction((_, token) => RuntimeShell(["serve-models"], token));
         root.Subcommands.Add(modelHost);
+        var sourceHost = new Command("serve-source", "serve isolated inactive pinned source acquisition (runtime)");
+        sourceHost.SetAction((_, token) => RuntimeShell(["serve-source"], token));
+        root.Subcommands.Add(sourceHost);
         root.Subcommands.Add(BuildCharterCommand(terminal, appConfig, charterRepository, charterStore));
 
         return root;

@@ -69,6 +69,7 @@ nav:
       - Verify factory GitHub authority: get-started/verify-factory-github-authority.md
       - Prove scoped application telemetry: get-started/prove-application-telemetry.md
       - Prove required model capabilities: get-started/prove-model-capabilities.md
+      - Acquire resumable source inventory: get-started/acquire-source-inventory.md
       - Provision a factory: get-started/provision-a-factory.md
       - Implement the application: get-started/implement-application.md
       - Operate it: get-started/operate.md

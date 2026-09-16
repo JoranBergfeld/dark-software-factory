@@ -181,6 +181,10 @@ deployments, even after cancellation, lost responses or lease age. Known
 in-flight deployments are polled during the original invocation without another
 PUT. Uncertain creation effects cannot be forced through or given a new identity.
 
+The code identity consumes this authority through
+[resumable source inventory](acquire-source-inventory.md), not an operator checkout
+or the legacy broad GitHub credential provider.
+
 After all five effects are proven, refresh access evidence explicitly, including
 after an administrator resolves existing consent, propagation or network access:
 

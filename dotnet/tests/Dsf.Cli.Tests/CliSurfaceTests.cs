@@ -7,6 +7,18 @@ namespace Dsf.Cli.Tests;
 public sealed class CliSurfaceTests
 {
     [Fact]
+    public async Task Source_host_front_door_requires_its_own_pinned_code_identity_without_legacy_credentials()
+    {
+        var result = await DsfProcess.RunAsync("serve-source");
+        Assert.Equal(1, result.ExitCode);
+        Assert.Contains("Factory source", result.Stderr);
+        Assert.Contains("DSF_FACTORY_PROFILE_PIN", result.Stderr);
+        Assert.Contains("AZURE_CLIENT_ID", result.Stderr);
+        Assert.DoesNotContain("AZURE_OPENAI", result.Stderr);
+        Assert.Empty(result.Stdout);
+    }
+
+    [Fact]
     public async Task Model_host_front_door_uses_the_bundled_runtime_without_legacy_credentials()
     {
         var result = await DsfProcess.RunAsync("serve-models");
@@ -74,6 +86,7 @@ public sealed class CliSurfaceTests
               serve-github-auth      serve the isolated, inactive factory GitHub authentication module (runtime)
               serve-telemetry        serve isolated inactive Azure Monitor telemetry proof (runtime)
               serve-models           serve isolated inactive model capability workloads (runtime)
+              serve-source           serve isolated inactive pinned source acquisition (runtime)
               charter                manage the product charter (.dsf/charter.md)
 
 

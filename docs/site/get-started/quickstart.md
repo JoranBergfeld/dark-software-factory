@@ -27,6 +27,8 @@ It does not run the greenfield commands below or complete onboarding.
 After the reviewed boundary, reservation and inactive foundation, use
 [scoped application telemetry proof](prove-application-telemetry.md) for the
 mandatory deployed-source check; provisioning alone is not evidence readiness.
+Acquire repository coverage separately with
+[resumable source inventory](acquire-source-inventory.md); acquisition is not analysis.
 
 - A GitHub API token that can create repositories under the selected owner:
 

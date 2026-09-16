@@ -22,6 +22,8 @@ public static class ProductConfigurationKeys
     public const string FactoryGitHubAuthority = "dsf/factory/github-authority";
     public const string FactoryTelemetry = "dsf/factory/telemetry";
     public const string FactoryModels = "dsf/factory/models";
+    public const string FactorySource = "dsf/factory/source";
+    public static string SourceOperation(Guid operationId, int index) => $"dsf/factory/source-operations/{operationId:D}/{index:D4}";
     public static string ModelRoute(Guid operationId, int index) => $"dsf/factory/model-routes/{operationId:D}/{index:D4}";
     public static string ModelBinding(Guid operationId, string name) => $"dsf/factory/model-bindings/{operationId:D}/{name}";
     public static string ModelGrant(Guid operationId, int index) => $"dsf/factory/model-grants/{operationId:D}/{index:D4}";

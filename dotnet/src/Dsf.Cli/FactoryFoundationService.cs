@@ -331,7 +331,8 @@ internal sealed partial class FactoryFoundationService(IAzureCliRunner azure, Ht
             var product = new OwnerReservationStore(pointer.ProductEndpoint!, admission.Identity!.TenantId, admission.Identity.SubscriptionId, azure, http);
             result = await FactoryGitHubAuthorityService.InspectAsync(result, product, token);
             result = await FactoryTelemetryService.InspectAsync(result, product, clock, token);
-            return await FactoryModelsService.InspectAsync(result, product, clock, token);
+            result = await FactoryModelsService.InspectAsync(result, product, clock, token);
+            return await FactorySourceService.InspectAsync(result, product, token);
         }
         catch (Exception e) when (e is ReservationStoreException or JsonException or InvalidOperationException)
         { return result with { State = FactoryReservationState.Unknown, Detail = "Factory capability receipt integrity unavailable; no dispatch or greenfield fallback." }; }
