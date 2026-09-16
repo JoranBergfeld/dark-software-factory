@@ -969,6 +969,10 @@ internal sealed class RepositoryReviewFixture : HttpMessageHandler, IGhCliRunner
     public Dictionary<string, GhInvocationResult> Responses { get; } = new()
     {
         ["user"] = new(0, """{"id":12,"login":"reviewer"}""", ""),
+        ["repositories/913"] = new(0, """
+                {"id":913,"owner":{"id":81,"login":"acme"},"name":"renamed","default_branch":"release/2026",
+                 "visibility":"private","archived":false,"disabled":false,"has_issues":true}
+                """, ""),
         ["repos/acme/old-name"] = new(0, """
                 {"id":913,"owner":{"id":81,"login":"acme"},"name":"renamed","default_branch":"release/2026",
                  "visibility":"private","archived":false,"disabled":false,"has_issues":true}

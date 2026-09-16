@@ -25,6 +25,10 @@ public sealed record FactoryGitHubAuthority(
     public string? HostingEnvironmentId { get; init; }
     public string? HostResourceId { get; init; }
     public string? HostEndpoint { get; init; }
+    public string? FactoryResourceGroupId { get; init; }
+    public Guid FoundationOperationId { get; init; }
+    public IReadOnlyDictionary<string, string> BindingReceiptHashes { get; init; } = new Dictionary<string, string>();
+    public IReadOnlyDictionary<string, string> CompletedEffectHashes { get; init; } = new Dictionary<string, string>();
     public int OperationCount { get; init; }
     public string Detail { get; init; } = "Inactive authentication preparation only; publication is not authorized.";
     public GitHubAuthorityProof? Proof { get; init; }
@@ -58,6 +62,7 @@ public static class FactoryGitHubJson
         AllowDuplicateProperties = false,
         RespectNullableAnnotations = true,
         RespectRequiredConstructorParameters = true,
+        IgnoreReadOnlyProperties = true,
         UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
         Converters = { new JsonStringEnumConverter(allowIntegerValues: false) },
     };

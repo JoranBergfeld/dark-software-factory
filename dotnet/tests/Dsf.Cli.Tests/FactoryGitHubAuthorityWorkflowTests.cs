@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using System.Text.Json;
 using System.Net;
 using System.Text;
 using Xunit;
@@ -7,6 +8,137 @@ namespace Dsf.Cli.Tests;
 
 public sealed class FactoryGitHubAuthorityWorkflowTests
 {
+    [Fact]
+    public async Task Lost_receipt_visibility_during_observation_does_not_promote_authority()
+    {
+        var (machine, arm) = await FoundationAsync();
+        var preview = await machine.InvokeAsync("github", Preparation);
+        using var transport = new AuthorityWorkflowTransport(arm) { Complete = true };
+        transport.OnVerification = () => transport.HideCopyReceipt = true;
+        machine.Boundary.Repository.ReservationHttp = new HttpClient(transport);
+        var result = await machine.InvokeAsync("github", [.. Preparation, "--approve",
+            (string)preview.Result["gitHubAuthority"]!["approvalFingerprint"]!]);
+        Assert.Equal("Unknown", (string?)result.Result["gitHubAuthority"]!["state"]);
+        Assert.Contains("GitHub authentication", result.Result["foundation"]!["pendingStages"]!.ToJsonString());
+        Assert.Single(transport.Copies);
+    }
+
+    [Theory]
+    [InlineData("renamed")]
+    [InlineData("branch-changed")]
+    [InlineData("metadata-race")]
+    [InlineData("label-conflict")]
+    [InlineData("wrong-id")]
+    [InlineData("revoked")]
+    public async Task Reverification_resolves_deployed_durable_identity_before_current_repository_review(string scenario)
+    {
+        var (machine, arm) = await FoundationAsync();
+        var preview = await machine.InvokeAsync("github", Preparation);
+        using var transport = new AuthorityWorkflowTransport(arm) { Complete = true };
+        machine.Boundary.Repository.ReservationHttp = new HttpClient(transport);
+        Assert.Equal(0, (await machine.InvokeAsync("github", [.. Preparation, "--approve",
+            (string)preview.Result["gitHubAuthority"]!["approvalFingerprint"]!])).Exit);
+        var ownerBefore = machine.Store.Export();
+        transport.RepositoryName = scenario == "branch-changed" ? "acme/renamed" : "acme/renamed-again";
+        transport.DefaultBranch = "release/2027";
+        MoveRepository(machine.Boundary.Repository, scenario == "metadata-race" ? "acme/racing-name" : transport.RepositoryName,
+            transport.DefaultBranch);
+        if (scenario == "wrong-id") transport.RepositoryId = 999;
+        if (scenario == "label-conflict")
+            machine.Boundary.Repository.Responses["repos/" + transport.RepositoryName + "/labels/dsf%3Aproposal"] =
+                new(0, """{"id":91,"name":"dsf:proposal","color":"123456","description":"Delivery assignment."}""", "");
+        if (scenario == "revoked") { transport.HostDenied = true; transport.Fault = "host-repository-denied"; }
+        machine.Boundary.Repository.Invocations.Clear();
+        transport.OnVerification = () => Assert.Empty(machine.Boundary.Repository.Invocations);
+        var refreshed = await machine.InvokeAsync("github", "--verify-only");
+        Assert.Equal(scenario is "metadata-race" or "wrong-id" ? "Unknown" : scenario is "revoked" or "label-conflict" ? "Blocked" : "Verified",
+            (string?)refreshed.Result["gitHubAuthority"]!["state"]);
+        if (scenario is "renamed" or "branch-changed")
+        {
+            Assert.Equal(0, refreshed.Exit);
+            Assert.Equal(transport.RepositoryName, (string?)refreshed.Result["gitHubAuthority"]!["proof"]!["repository"]);
+            Assert.Equal(transport.DefaultBranch, (string?)refreshed.Result["gitHubAuthority"]!["proof"]!["defaultBranch"]);
+            Assert.Contains(machine.Boundary.Repository.Invocations, i => i[^1] == "repositories/913");
+        }
+        if (scenario == "revoked")
+        {
+            Assert.Contains("GET /repositories/913", refreshed.Terminal.Output);
+            Assert.Contains("GitHub installation administrator", refreshed.Terminal.Output);
+        }
+        Assert.DoesNotContain(machine.Boundary.Repository.Invocations, i => i[^1] == "repos/acme/renamed");
+        Assert.Single(transport.Copies);
+        Assert.Equal(2, transport.Grants.Count);
+        Assert.Equal(2, transport.Deployments.Count);
+        Assert.Equal(ownerBefore, machine.Store.Export());
+    }
+
+    private static void MoveRepository(RepositoryReviewFixture repository, string name, string branch)
+    {
+        var metadata = JsonNode.Parse(repository.Responses["repos/acme/renamed"].StandardOutput)!;
+        metadata["name"] = name.Split('/')[1];
+        metadata["default_branch"] = branch;
+        foreach (var key in repository.Responses.Keys.Where(k => k.StartsWith("repos/acme/renamed/", StringComparison.Ordinal)).ToArray())
+            repository.Responses[key.Replace("repos/acme/renamed/", "repos/" + name + "/", StringComparison.Ordinal)] = repository.Responses[key];
+        repository.Responses["repos/" + name] = new(0, metadata.ToJsonString(), "");
+        repository.Responses["repositories/913"] = new(0, metadata.ToJsonString(), "");
+        if (name != "acme/renamed")
+        {
+            metadata["id"] = 999;
+            repository.Responses["repos/acme/renamed"] = new(0, metadata.ToJsonString(), "");
+        }
+        repository.AppResponses["/repos/" + name + "/installation"] = (HttpStatusCode.OK, """{"id":42}""");
+    }
+
+    [Theory]
+    [InlineData("source-group", "Blocked")]
+    [InlineData("metadata-group", "Verified")]
+    [InlineData("metadata-direct", "Verified")]
+    [InlineData("membership-unreadable", "Unknown")]
+    [InlineData("role-unreadable", "Unknown")]
+    [InlineData("scope-invalid", "Unknown")]
+    [InlineData("scope-incomplete", "Unknown")]
+    [InlineData("partial-membership", "Unknown")]
+    [InlineData("unrelated-group", "Verified")]
+    public async Task Effective_key_access_evidence_distinguishes_secret_metadata_and_unknown(string scenario, string state)
+    {
+        var (machine, arm) = await FoundationAsync();
+        var preview = await machine.InvokeAsync("github", Preparation);
+        var approved = preview.Result["gitHubAuthority"]!;
+        var principal = scenario == "source-group" ? (string)approved["otherWorkloadPrincipalIds"]![1]!
+            : scenario == "unrelated-group" ? "ffffffff-ffff-ffff-ffff-ffffffffffff" : (string)approved["codePrincipalId"]!;
+        using var transport = new AuthorityWorkflowTransport(arm)
+        {
+            Complete = true, GroupKeyWorkload = scenario == "metadata-direct" ? null : principal,
+            InheritedKeyPrincipal = scenario == "metadata-direct" ? principal : null,
+            GroupPermission = scenario.StartsWith("metadata", StringComparison.Ordinal) || scenario == "scope-incomplete" ? "metadata" : "secret", Fault = scenario,
+        };
+        machine.Boundary.Repository.ReservationHttp = new HttpClient(transport);
+        var result = await machine.InvokeAsync("github", [.. Preparation, "--approve", (string)approved["approvalFingerprint"]!]);
+        Assert.Equal(state, (string?)(result.Result["gitHubAuthority"]?["state"] ?? result.Result["state"]));
+        Assert.Equal(state == "Verified" ? 0 : 1, result.Exit);
+        if (state != "Verified") Assert.Empty(transport.Copies);
+        Assert.DoesNotContain("secret-provider-detail", result.Terminal.Output);
+    }
+
+    [Fact]
+    public async Task Transitive_group_secret_access_at_subscription_blocks_before_copying()
+    {
+        var (machine, arm) = await FoundationAsync();
+        var preview = await machine.InvokeAsync("github", Preparation);
+        using var transport = new AuthorityWorkflowTransport(arm)
+        {
+            Complete = true, GroupKeyWorkload = (string)preview.Result["gitHubAuthority"]!["codePrincipalId"]!,
+        };
+        machine.Boundary.Repository.ReservationHttp = new HttpClient(transport);
+        var before = arm.Product.Export();
+        var result = await machine.InvokeAsync("github", [.. Preparation, "--approve",
+            (string)preview.Result["gitHubAuthority"]!["approvalFingerprint"]!]);
+        Assert.Equal("Blocked", (string?)result.Result["state"]);
+        Assert.Contains("group", (string?)result.Result["detail"], StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(transport.Copies);
+        Assert.Equal(before, arm.Product.Export());
+    }
+
     [Theory]
     [InlineData("--approve", "not-the-approved-fingerprint")]
     [InlineData("--source-key-version", "ffffffffffffffffffffffffffffffff")]
@@ -58,6 +190,7 @@ public sealed class FactoryGitHubAuthorityWorkflowTests
         Assert.Equal(initiallyDenied ? 1 : 0, initial.Exit);
         transport.HostDenied = false;
         transport.RepositoryName = "acme/renamed-again";
+        MoveRepository(machine.Boundary.Repository, transport.RepositoryName, transport.DefaultBranch);
         var inspected = await machine.InvokeAsync("status");
         Assert.Equal(initiallyDenied ? "Blocked" : "Verified", (string?)inspected.Result["gitHubAuthority"]!["state"]);
         Assert.Equal(1, transport.Verifications);
@@ -188,6 +321,8 @@ public sealed class FactoryGitHubAuthorityWorkflowTests
     [InlineData("unaccepted-risk")]
     [InlineData("missing-copy-provenance")]
     [InlineData("wrong-role-definition")]
+    [InlineData("binding-identity")]
+    [InlineData("approval")]
     public async Task Status_does_not_infer_verified_authority_from_an_invalid_capability_record(string damage)
     {
         var (machine, arm) = await FoundationAsync();
@@ -197,7 +332,9 @@ public sealed class FactoryGitHubAuthorityWorkflowTests
         Assert.Equal(0, (await machine.InvokeAsync("github", [.. Preparation, "--approve",
             (string)preview.Result["gitHubAuthority"]!["approvalFingerprint"]!])).Exit);
         var serialized = JsonNode.Parse(arm.Product.Export())!.AsObject();
-        var key = damage is "unproven-key" or "missing-copy-provenance"
+        var key = damage == "binding-identity"
+            ? serialized.First(p => p.Key.Contains("/github-bindings/", StringComparison.Ordinal) && p.Key.EndsWith("/auth", StringComparison.Ordinal)).Key
+            : damage is "unproven-key" or "missing-copy-provenance"
             ? serialized.First(p => p.Key.StartsWith("dsf/factory/github-operations/", StringComparison.Ordinal) && p.Key.EndsWith("/0000", StringComparison.Ordinal)).Key
             : damage == "wrong-role-definition" ? serialized.First(p => p.Key.StartsWith("dsf/factory/github-operations/", StringComparison.Ordinal)
                 && p.Key.EndsWith("/0001", StringComparison.Ordinal)).Key
@@ -211,6 +348,8 @@ public sealed class FactoryGitHubAuthorityWorkflowTests
         if (damage == "unaccepted-risk") value["acceptedSigningRisk"] = false;
         if (damage == "missing-copy-provenance") value["providerOperationId"] = null;
         if (damage == "wrong-role-definition") value["roleDefinitionId"] = "/unapproved/4633458b-17de-408a-b874-0445c86b69e6";
+        if (damage == "binding-identity") value["principalId"] = "ffffffff-ffff-ffff-ffff-ffffffffffff";
+        if (damage == "approval") value["approvalFingerprint"] = new string('0', 64);
         record["value"] = value.ToJsonString();
         serialized[key] = record.ToJsonString();
         var remote = new FactoryFoundationTests.FoundationTransport(machine.Store)
@@ -541,9 +680,18 @@ public sealed class FactoryGitHubAuthorityWorkflowTests
         public bool AsyncDeployments { get; init; }
         public bool HostDenied { get; set; }
         public string RepositoryName { get; set; } = "acme/renamed";
+        public string DefaultBranch { get; set; } = "release/2026";
+        public long RepositoryId { get; set; } = 913;
+        public Action? OnVerification { get; set; }
+        public bool HideCopyReceipt { get; set; }
         public bool RecreatedIdentity { get; init; }
-        public string? Fault { get; init; }
+        public string? Fault { get; set; }
         public string? InheritedKeyPrincipal { get; init; }
+        public string? GroupKeyWorkload { get; init; }
+        public string GroupPermission { get; init; } = "secret";
+        private const string GroupId = "12345678-1234-1234-1234-123456789abc";
+        private const string KeyRole = "/subscriptions/" + BoundaryPlanFixture.Subscription
+            + "/providers/microsoft.authorization/roledefinitions/12345678-1234-1234-1234-123456789def";
         public CancellationTokenSource? CancelAfterCopy { get; init; }
         public int Verifications { get; private set; }
         public List<JsonNode> Copies { get; } = [];
@@ -553,6 +701,9 @@ public sealed class FactoryGitHubAuthorityWorkflowTests
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
         {
             var path = request.RequestUri!.AbsolutePath;
+            if (HideCopyReceipt && request.Method == HttpMethod.Get && Uri.UnescapeDataString(path).Contains("/github-operations/", StringComparison.Ordinal)
+                && Uri.UnescapeDataString(path).EndsWith("/0000", StringComparison.Ordinal))
+                return new(HttpStatusCode.NotFound);
             if (RecreatedIdentity && path.Contains("/userassignedidentities/", StringComparison.Ordinal))
             {
                 using var original = await fallback.SendAsync(request, token);
@@ -563,6 +714,7 @@ public sealed class FactoryGitHubAuthorityWorkflowTests
             if (request.RequestUri.Host == "github.internal.azurecontainerapps.io")
             {
                 Verifications++;
+                OnVerification?.Invoke();
                 Assert.Equal("/verify", path);
                 Assert.Equal(HttpMethod.Post, request.Method);
                 if (Fault == "host-governance-denied")
@@ -575,12 +727,12 @@ public sealed class FactoryGitHubAuthorityWorkflowTests
                 var proof = new JsonObject
                 {
                     ["state"] = HostDenied ? "Blocked" : "Verified",
-                    ["operation"] = HostDenied ? "GET /app/installations/42" : "deployed-github-authentication",
+                    ["operation"] = HostDenied ? Fault == "host-repository-denied" ? "GET /repositories/913" : "GET /app/installations/42" : "deployed-github-authentication",
                     ["responsibleAdmin"] = HostDenied ? "GitHub installation administrator" : "none",
                     ["detail"] = "Synthetic transport evidence, not live staging proof.",
                     ["factoryId"] = authority["factoryId"]!.DeepClone(), ["operationId"] = authority["operationId"]!.DeepClone(),
                     ["observedAt"] = "2026-09-15T23:00:00Z", ["appId"] = 7, ["installationId"] = 42, ["accountId"] = 81,
-                    ["repositoryId"] = 913, ["repository"] = RepositoryName, ["defaultBranch"] = "trunk",
+                    ["repositoryId"] = RepositoryId, ["repository"] = RepositoryName, ["defaultBranch"] = DefaultBranch,
                     ["installationRepositorySelection"] = "selected",
                     ["grantedPermissions"] = authority["expectedPermissions"]!.DeepClone(),
                     ["appPermissions"] = authority["expectedAppPermissions"]!.DeepClone(),
@@ -598,11 +750,38 @@ public sealed class FactoryGitHubAuthorityWorkflowTests
             if (resources.TryGetValue(path, out var resource) && request.Method == HttpMethod.Get) return Reply(resource);
             if (path.EndsWith("/providers/microsoft.authorization/permissions", StringComparison.OrdinalIgnoreCase))
                 return Reply(JsonNode.Parse("""{"value":[{"actions":["*"],"notActions":[],"dataActions":[],"notDataActions":[]}]}""")!);
-            if (InheritedKeyPrincipal is not null && path.Contains("/vaults/", StringComparison.Ordinal)
+            if (path == KeyRole)
+            {
+                if (Fault == "role-unreadable") return new(HttpStatusCode.Forbidden);
+                return Reply(new JsonObject { ["id"] = KeyRole, ["properties"] = new JsonObject
+                { ["permissions"] = new JsonArray(new JsonObject
+                { ["actions"] = new JsonArray(), ["notActions"] = new JsonArray(), ["notDataActions"] = new JsonArray(),
+                    ["dataActions"] = new JsonArray(GroupPermission == "metadata"
+                        ? "Microsoft.KeyVault/vaults/secrets/readMetadata/action" : "Microsoft.KeyVault/vaults/secrets/getSecret/action") }) } });
+            }
+            if ((InheritedKeyPrincipal is not null || GroupKeyWorkload is not null) && path.Contains("/vaults/", StringComparison.Ordinal)
                 && path.EndsWith("/providers/microsoft.authorization/roleassignments", StringComparison.OrdinalIgnoreCase)
                 && request.RequestUri.Query.Contains("atScope", StringComparison.Ordinal))
+            {
+                var query = Uri.UnescapeDataString(request.RequestUri.Query);
+                if (Fault == "membership-unreadable" && query.Contains("assignedTo", StringComparison.Ordinal))
+                    return new(HttpStatusCode.Forbidden) { Content = new StringContent("secret-provider-detail") };
+                if (Fault == "partial-membership" && query.Contains("assignedTo", StringComparison.Ordinal))
+                    return Reply(JsonNode.Parse("""{"value":[],"nextLink":"https://management.azure.com/next"}""")!);
+                // ARM resolves code MI -> security group -> containing security group, without Graph calls.
+                if (query.Contains("assignedTo", StringComparison.Ordinal)
+                    && !query.Contains("assignedTo('" + (GroupKeyWorkload ?? InheritedKeyPrincipal) + "')", StringComparison.Ordinal))
+                    return Reply(JsonNode.Parse("""{"value":[]}""")!);
+                var scope = Fault == "scope-incomplete" ? "/subscriptions"
+                    : "/subscriptions/" + (Fault == "scope-invalid" ? "ffffffff-ffff-ffff-ffff-ffffffffffff" : BoundaryPlanFixture.Subscription);
                 return Reply(new JsonObject { ["value"] = new JsonArray(new JsonObject
-                { ["properties"] = new JsonObject { ["principalId"] = InheritedKeyPrincipal } }) });
+                {
+                    ["id"] = scope + "/providers/microsoft.authorization/roleassignments/12345678-1234-1234-1234-123456789aaa",
+                    ["properties"] = new JsonObject { ["principalId"] = GroupKeyWorkload is not null ? GroupId : InheritedKeyPrincipal,
+                        ["principalType"] = GroupKeyWorkload is not null ? "Group" : "ServicePrincipal", ["scope"] = scope,
+                        ["roleDefinitionId"] = KeyRole, ["condition"] = null },
+                }) });
+            }
             if (path.EndsWith("/providers/microsoft.authorization/roleassignments", StringComparison.OrdinalIgnoreCase)
                 || path.EndsWith("/providers/microsoft.authorization/denyassignments", StringComparison.OrdinalIgnoreCase))
                 return Reply(JsonNode.Parse("""{"value":[]}""")!);

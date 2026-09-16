@@ -14,24 +14,134 @@ namespace Dsf.Runtime.Tests;
 public sealed class FactoryGitHubAuthorityTests
 {
     [Theory]
+    [InlineData("binding-delete")]
+    [InlineData("binding-client")]
+    [InlineData("grant-corrupt")]
+    [InlineData("host-foreign")]
+    [InlineData("stale-operation")]
+    [InlineData("approval")]
+    [InlineData("effect-reference")]
+    [InlineData("null-effect-references")]
+    [InlineData("observation-only")]
+    public async Task Code_tokens_require_complete_current_approval_and_binding_receipts(string damage)
+    {
+        using var transport = new AuthorityTransport();
+        using var http = new HttpClient(transport);
+        var (configuration, manifest) = AuthorityConfiguration(transport);
+        await using var app = RuntimeVerbs.BuildGitHubAuthenticationHost(Settings(manifest, transport),
+            TestDependencies.Build() with { GitHubAuthorityHttp = http,
+                GitHubAuthorityCredential = new SyntheticCredential(), GitHubAuthorityClock = new AuthorityClock() }, "127.0.0.1", 0);
+        await app.StartAsync();
+        try
+        {
+            using var client = new HttpClient { BaseAddress = new Uri(app.Urls.Single()) };
+            CodeHeaders(client.DefaultRequestHeaders, transport, manifest);
+            using var before = await client.PostAsync("/tokens/contents", null);
+            Assert.True(before.IsSuccessStatusCode, await before.Content.ReadAsStringAsync());
+            var key = damage.StartsWith("binding", StringComparison.Ordinal)
+                ? configuration.Values.Keys.Single(k => k.Contains("/github-bindings/", StringComparison.Ordinal) && k.EndsWith("/auth", StringComparison.Ordinal))
+                : damage is "grant-corrupt" or "host-foreign"
+                    ? configuration.Values.Keys.Single(k => k.Contains("/github-operations/", StringComparison.Ordinal)
+                        && k.EndsWith(damage == "grant-corrupt" ? "/0001" : "/0003", StringComparison.Ordinal))
+                    : damage == "stale-operation" ? ProductConfigurationKeys.FactoryManifest : ProductConfigurationKeys.FactoryGitHubAuthority;
+            var record = JsonNode.Parse(configuration.Values[key])!;
+            if (damage == "binding-delete") configuration.Values.Remove(key);
+            else
+            {
+                if (damage == "binding-client") record["clientId"] = "ffffffff-ffff-ffff-ffff-ffffffffffff";
+                if (damage == "grant-corrupt") record["principalId"] = "ffffffff-ffff-ffff-ffff-ffffffffffff";
+                if (damage == "host-foreign") record["factoryId"] = "ffffffff-ffff-ffff-ffff-ffffffffffff";
+                if (damage == "stale-operation") record["gitHubAuthorityOperationId"] = "ffffffff-ffff-ffff-ffff-ffffffffffff";
+                if (damage == "approval") record["approvalFingerprint"] = new string('0', 64);
+                if (damage == "effect-reference") record["completedEffectHashes"]!["0"] = new string('0', 64);
+                if (damage == "null-effect-references") record["completedEffectHashes"] = null;
+                if (damage == "observation-only") { record["state"] = "Partial"; record["stage"] = "host-verification"; record["proof"] = null; }
+                configuration.Values[key] = record.ToJsonString();
+            }
+            transport.Paths.Clear();
+            using var denied = await client.PostAsync("/tokens/contents", null);
+            Assert.Equal(HttpStatusCode.Forbidden, denied.StatusCode);
+            Assert.DoesNotContain(AuthorityTransport.InstallationToken, await denied.Content.ReadAsStringAsync());
+            Assert.All(transport.Paths, path => Assert.Equal("/kv", path));
+        }
+        finally { await app.StopAsync(); }
+    }
+
+    [Fact]
+    public async Task Incomplete_effects_allow_only_operator_non_token_recovery_observation()
+    {
+        using var transport = new AuthorityTransport();
+        using var http = new HttpClient(transport);
+        var (configuration, manifest) = AuthorityConfiguration(transport);
+        configuration.Values.Remove(configuration.Values.Keys.Single(k =>
+            k.Contains("/github-operations/", StringComparison.Ordinal) && k.EndsWith("/0000", StringComparison.Ordinal)));
+        await using var app = RuntimeVerbs.BuildGitHubAuthenticationHost(Settings(manifest, transport),
+            TestDependencies.Build() with { GitHubAuthorityHttp = http,
+                GitHubAuthorityCredential = new SyntheticCredential(), GitHubAuthorityClock = new AuthorityClock() }, "127.0.0.1", 0);
+        await app.StartAsync();
+        try
+        {
+            using var code = new HttpClient { BaseAddress = new Uri(app.Urls.Single()) };
+            CodeHeaders(code.DefaultRequestHeaders, transport, manifest);
+            using var unauthorized = await code.PostAsync("/verify", null);
+            Assert.Equal(HttpStatusCode.Forbidden, unauthorized.StatusCode);
+            using var operatorClient = VerificationClient(app.Urls.Single(), transport);
+            using var observed = await operatorClient.PostAsync("/verify", null);
+            Assert.True(observed.IsSuccessStatusCode, await observed.Content.ReadAsStringAsync());
+            Assert.DoesNotContain(AuthorityTransport.InstallationToken, await observed.Content.ReadAsStringAsync());
+            using var denied = await code.PostAsync("/tokens/contents", null);
+            Assert.Equal(HttpStatusCode.Forbidden, denied.StatusCode);
+            Assert.Empty(configuration.Writes);
+        }
+        finally { await app.StopAsync(); }
+    }
+
+    [Fact]
+    public async Task Removing_a_proven_key_copy_receipt_revokes_code_token_issuance()
+    {
+        using var transport = new AuthorityTransport();
+        using var http = new HttpClient(transport);
+        var (configuration, manifest) = AuthorityConfiguration(transport);
+        await using var app = RuntimeVerbs.BuildGitHubAuthenticationHost(Settings(manifest, transport),
+            TestDependencies.Build() with { GitHubAuthorityHttp = http,
+                GitHubAuthorityCredential = new SyntheticCredential(), GitHubAuthorityClock = new AuthorityClock() }, "127.0.0.1", 0);
+        await app.StartAsync();
+        try
+        {
+            using var client = new HttpClient { BaseAddress = new Uri(app.Urls.Single()) };
+            CodeHeaders(client.DefaultRequestHeaders, transport, manifest);
+            using var before = await client.PostAsync("/tokens/contents", null);
+            Assert.True(before.IsSuccessStatusCode, await before.Content.ReadAsStringAsync());
+            var receipt = configuration.Values.Keys.Single(k => k.Contains("/github-operations/", StringComparison.Ordinal) && k.EndsWith("/0000", StringComparison.Ordinal));
+            Assert.True(configuration.Values.Remove(receipt));
+            transport.Paths.Clear();
+            using var after = await client.PostAsync("/tokens/contents", null);
+            Assert.Equal(HttpStatusCode.Forbidden, after.StatusCode);
+            Assert.DoesNotContain(AuthorityTransport.InstallationToken, await after.Content.ReadAsStringAsync());
+            Assert.All(transport.Paths, path => Assert.Equal("/kv", path));
+        }
+        finally { await app.StopAsync(); }
+    }
+
+    [Theory]
     [InlineData(null)]
     [InlineData("")]
     public async Task Auth_preparation_never_turns_a_missing_pin_into_optional_governance(string? pin)
     {
         using var transport = new AuthorityTransport();
         using var http = new HttpClient(transport);
-        _ = AuthorityConfiguration(transport);
+        var (_, manifest) = AuthorityConfiguration(transport);
         var dependencies = TestDependencies.Build() with
         {
             GitHubAuthorityHttp = http, GitHubAuthorityCredential = new SyntheticCredential(), GitHubAuthorityClock = new AuthorityClock(),
         };
         await using var app = RuntimeVerbs.BuildGitHubAuthenticationHost(
-            new("acme", "https://dsfo-11111111111111111111111111111111.azconfig.io", pin!, AuthorityTransport.ClientId),
+            Settings(manifest, transport) with { ProfilePin = pin! },
             dependencies, "127.0.0.1", 0);
         await app.StartAsync();
         try
         {
-            using var client = new HttpClient { BaseAddress = new Uri(app.Urls.Single()) };
+            using var client = VerificationClient(app.Urls.Single(), transport);
             using var response = await client.PostAsync("/verify", null);
             Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
             Assert.All(transport.Paths, path => Assert.Equal("/kv", path));
@@ -50,12 +160,12 @@ public sealed class FactoryGitHubAuthorityTests
             GitHubAuthorityHttp = http, GitHubAuthorityCredential = new SyntheticCredential(), GitHubAuthorityClock = new AuthorityClock(),
         };
         await using var app = RuntimeVerbs.BuildGitHubAuthenticationHost(
-            new("acme", "https://dsfo-11111111111111111111111111111111.azconfig.io", (string)manifest["profilePin"]!, AuthorityTransport.ClientId),
+            Settings(manifest, transport),
             dependencies, "127.0.0.1", 0);
         await app.StartAsync();
         try
         {
-            using var client = new HttpClient { BaseAddress = new Uri(app.Urls.Single()) };
+            using var client = VerificationClient(app.Urls.Single(), transport);
             using var response = await client.PostAsync("/verify", null);
             Assert.True(response.IsSuccessStatusCode, await response.Content.ReadAsStringAsync());
             Assert.Contains("/kv", transport.Paths);
@@ -83,6 +193,9 @@ public sealed class FactoryGitHubAuthorityTests
     [InlineData("expanded-installation", "Blocked")]
     [InlineData("unrestricted-token-selection", "Unknown")]
     [InlineData("malformed", "Unknown")]
+    [InlineData("metadata-race", "Unknown")]
+    [InlineData("wrong-repository-metadata", "Blocked")]
+    [InlineData("denied-repository", "Blocked")]
     public async Task Deployed_verification_never_promotes_denied_or_unverifiable_provider_evidence(string damage, string state)
     {
         using var transport = new AuthorityTransport { Damage = damage };
@@ -93,12 +206,12 @@ public sealed class FactoryGitHubAuthorityTests
             GitHubAuthorityHttp = http, GitHubAuthorityCredential = new SyntheticCredential(), GitHubAuthorityClock = new AuthorityClock(),
         };
         await using var app = RuntimeVerbs.BuildGitHubAuthenticationHost(
-            new("acme", "https://dsfo-11111111111111111111111111111111.azconfig.io", (string)manifest["profilePin"]!, AuthorityTransport.ClientId),
+            Settings(manifest, transport),
             dependencies, "127.0.0.1", 0);
         await app.StartAsync();
         try
         {
-            using var client = new HttpClient { BaseAddress = new Uri(app.Urls.Single()) };
+            using var client = VerificationClient(app.Urls.Single(), transport);
             using var response = await client.PostAsync("/verify", null);
             Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
             var body = await response.Content.ReadAsStringAsync();
@@ -135,8 +248,7 @@ public sealed class FactoryGitHubAuthorityTests
             GitHubAuthorityClock = new AuthorityClock(),
         };
         await using var app = RuntimeVerbs.BuildGitHubAuthenticationHost(
-            new("acme", "https://dsfo-11111111111111111111111111111111.azconfig.io",
-                (string)manifest["profilePin"]!, AuthorityTransport.ClientId),
+            Settings(manifest, transport),
             dependencies, "127.0.0.1", 0);
         await app.StartAsync();
         try
@@ -145,20 +257,13 @@ public sealed class FactoryGitHubAuthorityTests
             using var request = new HttpRequestMessage(HttpMethod.Post, "/tokens/" + permission);
             if (authenticated)
             {
-                request.Headers.Add("X-MS-CLIENT-PRINCIPAL-IDP", "aad");
-                request.Headers.Add("X-MS-CLIENT-PRINCIPAL-ID", "99999999-9999-9999-9999-999999999999");
-                var claims = JsonNode.Parse("""
-                    {"auth_typ":"aad","claims":[
-                        {"typ":"oid","val":"99999999-9999-9999-9999-999999999999"},
-                        {"typ":"tid","val":"33333333-3333-3333-3333-333333333333"},
-                        {"typ":"appid","val":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"}
-                    ]}
-                    """)!;
+                var claims = CodeHeaders(request.Headers, transport, manifest);
                 if (claimsDamage == "principal") claims["claims"]![0]!["val"] = "unapproved";
                 if (claimsDamage == "tenant") claims["claims"]![1]!["val"] = "unapproved";
                 if (claimsDamage == "client") claims["claims"]![2]!["val"] = "unapproved";
                 if (claimsDamage == "v2") claims["claims"]![2]!["typ"] = "azp";
                 if (claimsDamage == "duplicate") claims["claims"]!.AsArray().Add(claims["claims"]![0]!.DeepClone());
+                request.Headers.Remove("X-MS-CLIENT-PRINCIPAL");
                 request.Headers.Add("X-MS-CLIENT-PRINCIPAL", claimsDamage == "malformed" ? "invalid-base64"
                     : Convert.ToBase64String(Encoding.UTF8.GetBytes(claims.ToJsonString())));
             }
@@ -183,30 +288,51 @@ public sealed class FactoryGitHubAuthorityTests
 
     private static (TestDependencies.PersistedRuntimeConfiguration Configuration, JsonNode Manifest) AuthorityConfiguration(AuthorityTransport transport)
     {
-        var configuration = RuntimeAdmissionTests.Onboarding();
+        var configuration = new TestDependencies.PersistedRuntimeConfiguration();
+        foreach (var (key, value) in AuthorityTransport.ReadFixture()) configuration.Values.Add(key, value);
         configuration.Values["dsf/factory/github-authority"] = transport.Authority.ToJsonString();
         var manifest = JsonNode.Parse(configuration.Values[ProductConfigurationKeys.FactoryManifest])!;
-        manifest["gitHubAuthorityOperationId"] = "66666666-6666-6666-6666-666666666666";
-        configuration.Values[ProductConfigurationKeys.FactoryManifest] = manifest.ToJsonString();
         transport.Configuration = configuration.Values;
         return (configuration, manifest);
+    }
+
+    private static FactoryGitHubHostSettings Settings(JsonNode manifest, AuthorityTransport transport) =>
+        new((string)manifest["identity"]!["productKey"]!,
+            "https://dsfo-" + Guid.Parse((string)manifest["identity"]!["factoryId"]!).ToString("N") + ".azconfig.io",
+            (string)manifest["profilePin"]!, (string)transport.Authority["authClientId"]!);
+
+    private static HttpClient VerificationClient(string url, AuthorityTransport transport)
+    {
+        var client = new HttpClient { BaseAddress = new Uri(url) };
+        CodeHeaders(client.DefaultRequestHeaders, transport, JsonNode.Parse(AuthorityTransport.ReadFixture()[ProductConfigurationKeys.FactoryManifest])!, true);
+        return client;
+    }
+
+    private static JsonNode CodeHeaders(System.Net.Http.Headers.HttpRequestHeaders headers, AuthorityTransport transport, JsonNode manifest, bool operatorCaller = false)
+    {
+        var principal = (operatorCaller ? manifest["identity"]!["azureActorId"]! : transport.Authority["codePrincipalId"]!).GetValue<string>();
+        headers.Add("X-MS-CLIENT-PRINCIPAL-IDP", "aad");
+        headers.Add("X-MS-CLIENT-PRINCIPAL-ID", principal);
+        var claims = JsonSerializer.SerializeToNode(new { auth_typ = "aad", claims = new[]
+        {
+            new { typ = "oid", val = principal },
+            new { typ = "tid", val = (string)manifest["identity"]!["tenantId"]! },
+            new { typ = "appid", val = (string)transport.Authority["codeClientId"]! },
+        } })!;
+        headers.Add("X-MS-CLIENT-PRINCIPAL", Convert.ToBase64String(Encoding.UTF8.GetBytes(claims.ToJsonString())));
+        return claims;
     }
 
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Deployed_path_verifies_actual_App_installation_and_effective_single_repository_read_token(bool broaderRequestedPermissions)
+    public async Task Deployed_path_verifies_approved_App_scope_but_rejects_changed_approval_inputs(bool broaderRequestedPermissions)
     {
         using var transport = new AuthorityTransport { BroaderRequestedPermissions = broaderRequestedPermissions };
         if (broaderRequestedPermissions)
             transport.Authority["expectedAppPermissions"] = JsonNode.Parse("""{"metadata":"read","contents":"write","issues":"write","pull_requests":"write"}""");
         using var http = new HttpClient(transport);
-        var configuration = RuntimeAdmissionTests.Onboarding();
-        configuration.Values["dsf/factory/github-authority"] = transport.Authority.ToJsonString();
-        var manifest = JsonNode.Parse(configuration.Values[ProductConfigurationKeys.FactoryManifest])!;
-        manifest["gitHubAuthorityOperationId"] = "66666666-6666-6666-6666-666666666666";
-        configuration.Values[ProductConfigurationKeys.FactoryManifest] = manifest.ToJsonString();
-        transport.Configuration = configuration.Values;
+        var (configuration, manifest) = AuthorityConfiguration(transport);
         var dependencies = TestDependencies.Build(configurationSettingsGateway: configuration) with
         {
             GitHubAuthorityHttp = http,
@@ -214,14 +340,20 @@ public sealed class FactoryGitHubAuthorityTests
             GitHubAuthorityClock = new AuthorityClock(),
         };
         await using var app = RuntimeVerbs.BuildGitHubAuthenticationHost(
-            new("acme", "https://dsfo-11111111111111111111111111111111.azconfig.io",
-                (string)manifest["profilePin"]!, AuthorityTransport.ClientId), dependencies, "127.0.0.1", 0);
+            Settings(manifest, transport), dependencies, "127.0.0.1", 0);
         await app.StartAsync();
         try
         {
-            using var client = new HttpClient { BaseAddress = new Uri(app.Urls.Single()) };
+            using var client = VerificationClient(app.Urls.Single(), transport);
             using var response = await client.PostAsync("/verify", null);
             var body = await response.Content.ReadAsStringAsync();
+            if (broaderRequestedPermissions)
+            {
+                Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+                Assert.All(transport.Paths, path => Assert.Equal("/kv", path));
+                Assert.DoesNotContain(AuthorityTransport.InstallationToken, body);
+                return;
+            }
             Assert.True(response.IsSuccessStatusCode, body);
             var proof = JsonNode.Parse(body)!;
             Assert.Equal("Verified", (string?)proof["state"]);
@@ -242,6 +374,33 @@ public sealed class FactoryGitHubAuthorityTests
     }
 
     [Fact]
+    public async Task Deployed_repository_lookup_uses_durable_ID_and_current_renamed_branch_paths()
+    {
+        using var transport = new AuthorityTransport { RepositoryName = "acme/renamed-again", DefaultBranch = "release/2027" };
+        using var http = new HttpClient(transport);
+        var (_, manifest) = AuthorityConfiguration(transport);
+        await using var app = RuntimeVerbs.BuildGitHubAuthenticationHost(Settings(manifest, transport),
+            TestDependencies.Build() with { GitHubAuthorityHttp = http, GitHubAuthorityCredential = new SyntheticCredential(),
+                GitHubAuthorityClock = new AuthorityClock() }, "127.0.0.1", 0);
+        await app.StartAsync();
+        try
+        {
+            using var client = VerificationClient(app.Urls.Single(), transport);
+            using var response = await client.PostAsync("/verify", null);
+            var body = await response.Content.ReadAsStringAsync();
+            Assert.True(response.IsSuccessStatusCode, body);
+            var proof = JsonNode.Parse(body)!;
+            Assert.Equal(transport.RepositoryName, (string?)proof["repository"]);
+            Assert.Equal(transport.DefaultBranch, (string?)proof["defaultBranch"]);
+            Assert.Equal(2, transport.Paths.Count(p => p == "/repositories/913"));
+            Assert.Contains("/repos/acme/renamed-again/git/ref/heads/release%2F2027", transport.Paths);
+            Assert.DoesNotContain(transport.Paths, p => p.StartsWith("/repos/acme/renamed/", StringComparison.Ordinal));
+            Assert.DoesNotContain(AuthorityTransport.InstallationToken, body);
+        }
+        finally { await app.StopAsync(); }
+    }
+
+    [Fact]
     public async Task Deployed_verification_refuses_missing_authoritative_manifest()
     {
         using var transport = new AuthorityTransport();
@@ -253,7 +412,7 @@ public sealed class FactoryGitHubAuthorityTests
         await app.StartAsync();
         try
         {
-            using var client = new HttpClient { BaseAddress = new Uri(app.Urls.Single()) };
+            using var client = VerificationClient(app.Urls.Single(), transport);
             using var response = await client.PostAsync("/verify", null);
             Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
             Assert.Contains("governance", await response.Content.ReadAsStringAsync());
@@ -291,35 +450,17 @@ internal sealed class SyntheticCredential : TokenCredential
 
 internal sealed class AuthorityTransport : HttpMessageHandler
 {
-    public const string ClientId = "77777777-7777-7777-7777-777777777777";
     public const string InstallationToken = "synthetic-installation-token-never-persist";
     private readonly RSA key = RSA.Create(2048);
     public string? Damage { get; init; }
     public bool BroaderRequestedPermissions { get; init; }
+    public string RepositoryName { get; init; } = "acme/renamed";
+    public string DefaultBranch { get; init; } = "trunk";
     public List<string> Paths { get; } = [];
     public IReadOnlyDictionary<string, string> Configuration { get; set; } = new Dictionary<string, string>();
-    public JsonObject Authority { get; } = JsonNode.Parse("""
-        {
-          "schemaVersion":1,"factoryId":"11111111-1111-1111-1111-111111111111",
-          "operationId":"66666666-6666-6666-6666-666666666666",
-          "planFingerprint":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-          "state":"Partial","stage":"host-verification",
-          "appId":7,"installationId":42,"accountId":81,"repositoryId":913,
-          "expectedPermissions":{"metadata":"read","contents":"read","issues":"write"},
-          "expectedAppPermissions":{"metadata":"read","contents":"read","issues":"write"},
-          "expectedInstallationRepositorySelection":"selected",
-          "sourceVaultId":"/subscriptions/44444444-4444-4444-4444-444444444444/resourcegroups/owner/providers/microsoft.keyvault/vaults/owner",
-          "sourceSecretVersion":"abcdef0123456789abcdef0123456789",
-          "destinationVaultId":"/subscriptions/44444444-4444-4444-4444-444444444444/resourcegroups/factory/providers/microsoft.keyvault/vaults/factory",
-          "destinationSecretUri":"https://factory.vault.azure.net/secrets/github-app-private-key/0123456789abcdef0123456789abcdef",
-          "authIdentityId":"/subscriptions/44444444-4444-4444-4444-444444444444/resourcegroups/factory/providers/microsoft.managedidentity/userassignedidentities/github",
-          "authPrincipalId":"88888888-8888-8888-8888-888888888888",
-          "authClientId":"77777777-7777-7777-7777-777777777777",
-          "codePrincipalId":"99999999-9999-9999-9999-999999999999",
-          "codeClientId":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-          "acceptedSigningRisk":true
-        }
-        """)!.AsObject();
+    public static Dictionary<string, string> ReadFixture() => JsonSerializer.Deserialize<Dictionary<string, string>>(
+        File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", "factory-github-authority.json")))!;
+    public JsonObject Authority { get; } = JsonNode.Parse(ReadFixture()[ProductConfigurationKeys.FactoryGitHubAuthority])!.AsObject();
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
     {
         var path = request.RequestUri!.AbsolutePath;
@@ -331,7 +472,7 @@ internal sealed class AuthorityTransport : HttpMessageHandler
             return Reply(new { items = Configuration.Select(p => new
             { key = p.Key, label = (string?)null, value = p.Value, etag = "synthetic-etag", content_type = "application/json", locked = false }).ToArray() });
         }
-        if (request.RequestUri.Host == "factory.vault.azure.net")
+        if (request.RequestUri.Host == new Uri((string)Authority["destinationSecretUri"]!).Host)
         {
             Assert.Equal(HttpMethod.Get, request.Method);
             Assert.Equal("/secrets/github-app-private-key/0123456789abcdef0123456789abcdef", path);
@@ -344,14 +485,14 @@ internal sealed class AuthorityTransport : HttpMessageHandler
             }
             Assert.Equal("synthetic-managed-identity-token", request.Headers.Authorization.Parameter);
             return Reply(new { value = key.ExportPkcs8PrivateKeyPem(),
-                id = "https://factory.vault.azure.net" + path, attributes = new { enabled = true } });
+                id = (string)Authority["destinationSecretUri"]!, attributes = new { enabled = true } });
         }
         Assert.Equal("api.github.com", request.RequestUri.Host);
         var installation = new { id = 42, app_id = 7, account = new { id = 81, login = "acme", type = "Organization" },
             repository_selection = "selected", suspended_at = (string?)null,
             permissions = new { metadata = "read", contents = "read", issues = "write" } };
-        var repository = new { id = 913, full_name = "acme/renamed", name = "renamed",
-            owner = new { id = 81, login = "acme" }, default_branch = "trunk", archived = false, disabled = false, has_issues = true };
+        var repository = new { id = 913, full_name = RepositoryName, name = RepositoryName.Split('/')[1],
+            owner = new { id = 81, login = "acme" }, default_branch = DefaultBranch, archived = false, disabled = false, has_issues = true };
         if (request.Method == HttpMethod.Post)
         {
             Assert.Equal("/app/installations/42/access_tokens", path);
@@ -368,10 +509,12 @@ internal sealed class AuthorityTransport : HttpMessageHandler
             "/app" when BroaderRequestedPermissions => Reply(new { id = 7, slug = "owner-app",
                 permissions = new { metadata = "read", contents = "write", issues = "write", pull_requests = "write" } }),
             "/app" => Reply(new { id = 7, slug = "owner-app", permissions = installation.permissions }),
-            "/app/installations/42" or "/repos/acme/renamed/installation" => Reply(installation),
+            "/app/installations/42" => Reply(installation),
+            _ when path == "/repos/" + RepositoryName + "/installation" => Reply(installation),
             "/installation/repositories" => Reply(new { total_count = 1, repositories = new[] { repository } }),
             "/repositories/913" => Reply(repository),
-            "/repos/acme/renamed/git/ref/heads/trunk" => Reply(new { @ref = "refs/heads/trunk", @object = new { type = "commit", sha = new string('a', 40) } }),
+            _ when path == "/repos/" + RepositoryName + "/git/ref/heads/" + Uri.EscapeDataString(DefaultBranch)
+                => Reply(new { @ref = "refs/heads/" + DefaultBranch, @object = new { type = "commit", sha = new string('a', 40) } }),
             _ => throw new InvalidOperationException("Unexpected provider path: " + path),
         };
     }
@@ -382,11 +525,15 @@ internal sealed class AuthorityTransport : HttpMessageHandler
         if (Damage == "denied-contents" && path.Contains("/git/ref/", StringComparison.Ordinal)
             || Damage == "denied-installation" && path == "/app/installations/42"
             || Damage == "denied-membership" && path == "/repos/acme/renamed/installation"
+            || Damage == "denied-repository" && path == "/repositories/913"
             || Damage == "denied-key" && path.StartsWith("/secrets/", StringComparison.Ordinal))
             return new(HttpStatusCode.Forbidden) { Content = new StringContent("secret-provider-detail") };
         if (Damage == "malformed" && path == "/app")
             return new(HttpStatusCode.OK) { Content = new StringContent("{secret-provider-detail") };
         if (Damage == "wrong-app" && path == "/app") body["id"] = 8;
+        if (Damage == "wrong-repository-metadata" && path == "/repositories/913") body["id"] = 999;
+        if (Damage == "metadata-race" && path == "/repositories/913" && Paths.Count(p => p == path) > 1)
+            body["default_branch"] = "racing-branch";
         if (Damage == "disabled-key" && path.StartsWith("/secrets/", StringComparison.Ordinal)) body["attributes"]!["enabled"] = false;
         if (Damage == "expanded-installation" && path == "/app/installations/42") body["repository_selection"] = "all";
         if (Damage == "suspended" && path == "/app/installations/42") body["suspended_at"] = "2026-09-15T00:00:00Z";

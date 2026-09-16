@@ -49,22 +49,22 @@ public static partial class RuntimeVerbs
                     values.GetValueOrDefault(ProductConfigurationKeys.FactoryManifest),
                     values.GetValueOrDefault(ProductConfigurationKeys.FactoryProfile),
                     settings.Product, settings.ProductEndpoint, settings.ProfilePin);
-                var authority = JsonSerializer.Deserialize<FactoryGitHubAuthority>(
-                    values.GetValueOrDefault(ProductConfigurationKeys.FactoryGitHubAuthority) ?? throw new JsonException(),
-                    FactoryGitHubJson.Options) ?? throw new JsonException();
-                if (authority.SchemaVersion != 1 || authority.FactoryId != manifest.Identity.FactoryId
-                    || authority.OperationId == Guid.Empty || authority.OperationId != manifest.GitHubAuthorityOperationId
-                    || authority.PlanFingerprint != manifest.Identity.PlanFingerprint
-                    || authority.RepositoryId != manifest.Identity.RepositoryId
-                    || authority.AuthClientId != settings.ManagedIdentityClientId
-                    || authority.Stage is not ("host-verification" or "verified") || !authority.AcceptedSigningRisk
-                    || authority.AppId <= 0 || authority.InstallationId <= 0 || authority.AccountId <= 0
-                    || !Guid.TryParse(authority.AuthPrincipalId, out var principal) || principal == Guid.Empty
-                    || authority.AuthPrincipalId == authority.CodePrincipalId)
-                    throw new JsonException();
-                if (issueReadToken && !CodeCaller(context, authority, manifest.Identity.TenantId))
-                    return Results.Json(new GitHubAuthorityProof(GitHubAuthorityState.Blocked, "contents-read-token",
-                        "factory identity administrator", "Native authenticated caller is not the approved code-intent workload."),
+                var authority = FactoryGitHubAuthorityValidation.ReadPreparation(manifest, values);
+                if (authority.AuthClientId != settings.ManagedIdentityClientId) throw new JsonException();
+                FactoryGitHubAuthorityValidation.ValidateObservation(authority);
+                if (issueReadToken)
+                {
+                    FactoryGitHubAuthorityValidation.ReadCompletedEffects(authority, values);
+                    FactoryGitHubAuthorityValidation.ValidateVerified(authority);
+                }
+                if (!NativeCaller(context, issueReadToken ? authority.CodePrincipalId : manifest.Identity.AzureActorId,
+                    manifest.Identity.TenantId, issueReadToken ? authority.CodeClientId : null))
+                    return Results.Json(new GitHubAuthorityProof(GitHubAuthorityState.Blocked,
+                        issueReadToken ? "contents-read-token" : "deployed-github-authentication",
+                        "factory identity administrator", "Native authenticated caller is not the approved "
+                            + (issueReadToken ? "code-intent workload." : "verification operator."))
+                        { FactoryId = authority.FactoryId, OperationId = authority.OperationId,
+                            ObservedAt = dependencies.GitHubAuthorityClock.GetUtcNow() },
                         FactoryGitHubJson.Options, statusCode: 403);
                 var verifier = new FactoryGitHubVerifier(dependencies.GitHubAuthorityHttp ?? GitHubAuthorityHttp,
                     credential, dependencies.GitHubAuthorityClock);
@@ -87,12 +87,12 @@ public static partial class RuntimeVerbs
         }
     }
 
-    private static bool CodeCaller(HttpContext context, FactoryGitHubAuthority authority, string tenant)
+    private static bool NativeCaller(HttpContext context, string objectId, string tenant, string? clientId)
     {
         // Only the dedicated ACA ingress with its pinned native Entra authConfig may expose this host.
         // ACA removes caller-supplied principal headers and injects these after validating the bearer token.
         if (context.Request.Headers["X-MS-CLIENT-PRINCIPAL-IDP"] != "aad"
-            || context.Request.Headers["X-MS-CLIENT-PRINCIPAL-ID"] != authority.CodePrincipalId
+            || context.Request.Headers["X-MS-CLIENT-PRINCIPAL-ID"] != objectId
             || !context.Request.Headers.TryGetValue("X-MS-CLIENT-PRINCIPAL", out var encoded) || encoded.Count != 1
             || encoded[0] is not { Length: > 0 and <= 16384 } value)
             return false;
@@ -101,9 +101,9 @@ public static partial class RuntimeVerbs
             var principal = JsonSerializer.Deserialize<JsonElement>(Convert.FromBase64String(value), FactoryGitHubJson.Options);
             if (principal.GetProperty("auth_typ").GetString() != "aad") return false;
             var claims = principal.GetProperty("claims").EnumerateArray().ToArray();
-            return Claim("oid", "http://schemas.microsoft.com/identity/claims/objectidentifier") == authority.CodePrincipalId
+            return Claim("oid", "http://schemas.microsoft.com/identity/claims/objectidentifier") == objectId
                 && Claim("tid", "http://schemas.microsoft.com/identity/claims/tenantid") == tenant
-                && Claim("appid", "azp") == authority.CodeClientId;
+                && (clientId is null || Claim("appid", "azp") == clientId);
 
             string? Claim(string first, string second)
             {

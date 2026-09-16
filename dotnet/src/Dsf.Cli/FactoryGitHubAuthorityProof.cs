@@ -10,23 +10,78 @@ internal sealed partial class FactoryGitHubAuthorityService
 {
     private async Task VerifyKeyIsolationAsync(FactoryReservationIdentity identity, FactoryGitHubAuthority preview, CancellationToken token)
     {
-        var unrelated = preview.OtherWorkloadPrincipalIds.Append(preview.CodePrincipalId).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        foreach (var scope in new[] { preview.DestinationVaultId, preview.DestinationVaultId + "/secrets/github-app-private-key" })
+        var scope = preview.DestinationVaultId + "/secrets/github-app-private-key";
+        var ancestorScopes = new[] { scope, preview.DestinationVaultId, preview.FactoryResourceGroupId,
+            "/subscriptions/" + identity.SubscriptionId, "/" };
+        foreach (var workload in preview.OtherWorkloadPrincipalIds.Append(preview.CodePrincipalId).Distinct(StringComparer.OrdinalIgnoreCase))
         {
-            using var response = await ArmAsync(HttpMethod.Get,
-                scope + "/providers/microsoft.authorization/roleassignments?$filter=atScope()", "2022-04-01", null, identity, null, token);
-            if (response.StatusCode != HttpStatusCode.OK)
-                throw new ReservationStoreException(FactoryReservationState.Blocked,
-                    "GET inherited key access unavailable at " + scope + "; factory Azure grantor must establish workload isolation before key copy.");
-            using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync(token));
-            if (json.RootElement.TryGetProperty("nextLink", out var next) && next.ValueKind != JsonValueKind.Null && next.GetString() != "")
-                throw new ReservationStoreException(FactoryReservationState.Blocked, "Inherited key access inventory is incomplete; Azure grantor must reconcile before copying.");
-            if (json.RootElement.GetProperty("value").EnumerateArray().Any(r =>
-                unrelated.Contains(r.GetProperty("properties").GetProperty("principalId").GetString() ?? throw new JsonException())))
-                throw new ReservationStoreException(FactoryReservationState.Blocked,
-                    "Known inherited/standing non-authentication workload access at " + scope
-                    + "; factory Azure grantor must reconcile. No signing key copied, grant overwritten or broader isolation claimed.");
+            var operation = $"GET {scope}/providers/microsoft.authorization/roleassignments?$filter=atScope()+and+assignedTo('{workload}')";
+            try
+            {
+                if (!Guid.TryParse(workload, out var principal) || principal == Guid.Empty) throw new JsonException();
+                using var response = await ArmAsync(HttpMethod.Get, operation[4..], "2022-04-01", null, identity, null, token);
+                if (response.StatusCode != HttpStatusCode.OK) throw new JsonException();
+                using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync(token));
+                if (json.RootElement.TryGetProperty("nextLink", out var next) && next.ValueKind != JsonValueKind.Null && next.GetString() != "")
+                    throw new JsonException();
+                foreach (var assignment in json.RootElement.GetProperty("value").EnumerateArray())
+                {
+                    var properties = assignment.GetProperty("properties");
+                    var assigned = properties.GetProperty("principalId").GetString();
+                    var type = properties.GetProperty("principalType").GetString();
+                    var assignedScope = properties.GetProperty("scope").GetString() ?? throw new JsonException();
+                    var id = assignment.GetProperty("id").GetString() ?? throw new JsonException();
+                    if (!Guid.TryParse(assigned, out var assignedId) || assignedId == Guid.Empty
+                        || type is not ("Group" or "ServicePrincipal") || type == "ServicePrincipal" && assignedId != principal
+                        || !(ancestorScopes.Contains(assignedScope, StringComparer.OrdinalIgnoreCase)
+                            || Regex.IsMatch(assignedScope, "^/providers/microsoft.management/managementgroups/[-a-zA-Z0-9_.()]+$", RegexOptions.IgnoreCase))
+                        || !Guid.TryParse(id.Split('/').Last(), out var assignmentId) || assignmentId == Guid.Empty
+                        || !id.Equals(assignedScope.TrimEnd('/') + "/providers/microsoft.authorization/roleassignments/" + assignmentId, StringComparison.OrdinalIgnoreCase)
+                        || properties.TryGetProperty("condition", out var condition)
+                            && condition.ValueKind != JsonValueKind.Null && !string.IsNullOrEmpty(condition.GetString()))
+                        throw new JsonException();
+                    var definition = properties.GetProperty("roleDefinitionId").GetString() ?? throw new JsonException();
+                    if (!Regex.IsMatch(definition,
+                        "^(/subscriptions/[0-9a-f-]{36}|/providers/microsoft.management/managementgroups/[-a-z0-9_.()]+)?/providers/microsoft.authorization/roledefinitions/[0-9a-f-]{36}$",
+                        RegexOptions.IgnoreCase) || !Guid.TryParse(definition.Split('/').Last(), out _))
+                        throw new JsonException();
+                    operation = "GET " + definition;
+                    using var role = await ArmAsync(HttpMethod.Get, definition, "2022-04-01", null, identity, null, token);
+                    if (role.StatusCode != HttpStatusCode.OK) throw new JsonException();
+                    using var roleJson = JsonDocument.Parse(await role.Content.ReadAsStringAsync(token));
+                    if (!string.Equals(roleJson.RootElement.GetProperty("id").GetString(), definition, StringComparison.OrdinalIgnoreCase))
+                        throw new JsonException();
+                    foreach (var permission in roleJson.RootElement.GetProperty("properties").GetProperty("permissions").EnumerateArray())
+                    {
+                        var data = Strings("dataActions");
+                        var excludedData = Strings("notDataActions");
+                        var actions = Strings("actions");
+                        var excluded = Strings("notActions");
+                        if (Allows(data, excludedData, "Microsoft.KeyVault/vaults/secrets/getSecret/action")
+                            || Allows(actions, excluded, "Microsoft.Authorization/roleAssignments/write")
+                            || Allows(actions, excluded, "Microsoft.KeyVault/vaults/accessPolicies/write")
+                            || Allows(actions, excluded, "Microsoft.KeyVault/vaults/write"))
+                            throw new ReservationStoreException(FactoryReservationState.Blocked,
+                                $"ARM assignedTo reports inherited {type} {assigned} key-read or access-changing authority for workload {workload} at {assignedScope}; "
+                                + "factory Azure grantor must reconcile. No signing key copied or group/operator authority adopted.");
+                        string[] Strings(string name) => permission.GetProperty(name).EnumerateArray()
+                            .Select(v => v.GetString() ?? throw new JsonException()).ToArray();
+                    }
+                }
+            }
+            catch (Exception e) when (e is JsonException or InvalidOperationException or KeyNotFoundException or HttpRequestException
+                or OwnerReservationStore.AuthenticationFailedException)
+            {
+                throw new ReservationStoreException(FactoryReservationState.Unknown,
+                    operation + $": effective membership/role/scope evidence unavailable for workload {workload}; "
+                    + "Azure RBAC/directory administrator must resolve. No consent, grant or key copy.");
+            }
         }
+
+        static bool Allows(string[] actions, string[] excluded, string operation) =>
+            actions.Any(p => Matches(p, operation)) && !excluded.Any(p => Matches(p, operation));
+        static bool Matches(string pattern, string operation) =>
+            Regex.IsMatch(operation, "^" + Regex.Escape(pattern).Replace("\\*", ".*", StringComparison.Ordinal) + "$", RegexOptions.IgnoreCase);
     }
 
     private async Task VerifyBaseBindingsAsync(FactoryReservationResult admission, FactoryGitHubAuthority preview, CancellationToken token)
@@ -190,9 +245,7 @@ internal sealed partial class FactoryGitHubAuthorityService
         if (grants.RootElement.TryGetProperty("nextLink", out var next) && next.ValueKind != JsonValueKind.Null && next.GetString() != "")
             throw new JsonException();
         var bindings = grants.RootElement.GetProperty("value").EnumerateArray().Where(g =>
-            g.GetProperty("properties").GetProperty("principalId").GetString() is { } principal
-            && (principal == authority!.AuthPrincipalId || principal == authority.CodePrincipalId
-                || authority.OtherWorkloadPrincipalIds.Contains(principal))).ToArray();
+            g.GetProperty("properties").GetProperty("principalId").GetString() == authority!.AuthPrincipalId).ToArray();
         if (bindings.Length != 0)
             throw new ReservationStoreException(FactoryReservationState.Blocked,
                 "Preexisting/shared workload grants require Azure grantor reconciliation at " + scope + "; not newly owned, no replacement.");
@@ -249,28 +302,8 @@ internal sealed partial class FactoryGitHubAuthorityService
             || proof.ObservedAt < clock.GetUtcNow().AddMinutes(-5) || proof.ObservedAt > clock.GetUtcNow().AddMinutes(1))
             throw new JsonException();
         if (proof.State != GitHubAuthorityState.Verified) return;
-        if (!HasVerifiedScope(authority, proof) || proof.TokenExpiresAt <= clock.GetUtcNow())
+        if (!FactoryGitHubAuthorityValidation.HasVerifiedScope(authority, proof) || proof.TokenExpiresAt <= clock.GetUtcNow())
             throw new JsonException();
     }
 
-    private static bool HasVerifiedScope(FactoryGitHubAuthority authority, GitHubAuthorityProof proof)
-    {
-        return !(proof.State != GitHubAuthorityState.Verified || proof.Operation != "deployed-github-authentication"
-            || proof.FactoryId != authority.FactoryId || proof.OperationId != authority.OperationId
-            || proof.AppId != authority.AppId || proof.InstallationId != authority.InstallationId
-            || proof.AccountId != authority.AccountId || proof.RepositoryId != authority.RepositoryId
-            || proof.AuthPrincipalId != authority.AuthPrincipalId || proof.KeyVersionUri != authority.DestinationSecretUri
-            || proof.ObservedAt == default || proof.TokenExpiresAt is null || proof.TokenExpiresAt <= proof.ObservedAt
-            || proof.TokenExpiresAt.Value - proof.ObservedAt > TimeSpan.FromHours(1).Add(TimeSpan.FromSeconds(30))
-            || string.IsNullOrWhiteSpace(proof.Repository) || string.IsNullOrWhiteSpace(proof.DefaultBranch)
-            || proof.InstallationRepositorySelection is not ("selected" or "all")
-            || proof.InstallationRepositorySelection != authority.ExpectedInstallationRepositorySelection
-            || !Matches(proof.AppPermissions, authority.ExpectedAppPermissions)
-            || !Matches(proof.GrantedPermissions, authority.ExpectedPermissions)
-            || proof.EffectivePermissions?.Count != 2 || proof.EffectivePermissions.GetValueOrDefault("metadata") != "read"
-            || proof.EffectivePermissions.GetValueOrDefault("contents") != "read");
-
-        static bool Matches(IReadOnlyDictionary<string, string>? actual, IReadOnlyDictionary<string, string> expected) =>
-            actual is not null && actual.Count == expected.Count && actual.All(p => expected.GetValueOrDefault(p.Key) == p.Value);
-    }
 }

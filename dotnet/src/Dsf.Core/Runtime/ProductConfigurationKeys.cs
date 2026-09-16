@@ -5,6 +5,8 @@ namespace Dsf.Core.Runtime;
 /// <summary>Canonical App Configuration key, label, and value conventions for product-scoped factory settings.</summary>
 public static class ProductConfigurationKeys
 {
+    public static string GitHubAuthorityBinding(Guid operationId, string binding) =>
+        $"dsf/factory/github-bindings/{operationId:D}/{binding}";
     public const string NoLabel = "\0";
     public const string AnyLabel = "*";
 

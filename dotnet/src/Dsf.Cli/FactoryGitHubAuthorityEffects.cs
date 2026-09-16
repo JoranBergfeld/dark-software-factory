@@ -54,11 +54,18 @@ internal sealed partial class FactoryGitHubAuthorityService(
             }
             authority = preview with { OperationId = Guid.NewGuid(), Stage = "key-copy", Detail = Risk, AcceptedSigningRisk = true };
             await store.WriteAsync(manifestRecord.Key,
-                FactoryReservationRecords.Serialize(manifest with { GitHubAuthorityOperationId = authority.OperationId }),
+                FactoryReservationRecords.Serialize(manifest with { GitHubAuthorityOperationId = authority.OperationId,
+                    GitHubAuthorityApprovalFingerprint = authority.ApprovalFingerprint }),
                 manifestRecord.ETag, token);
             manifestIntentConfirmed = true;
             root = await store.WriteAsync(ProductConfigurationKeys.FactoryGitHubAuthority,
                 FactoryReservationRecords.Serialize(authority), null, token);
+            foreach (var (name, hash) in authority.BindingReceiptHashes)
+            {
+                var binding = admission.Foundation!.Operations.Single(o => FactoryGitHubAuthorityValidation.ReceiptHash(o) == hash);
+                await store.WriteAsync(ProductConfigurationKeys.GitHubAuthorityBinding(authority.OperationId, name),
+                    FactoryReservationRecords.Serialize(binding), null, token);
+            }
             var group = new FactoryFoundationAssets(identity, admission.Plan!.Selection).Group;
             using var template = JsonDocument.Parse(File.ReadAllText(new ProvisioningAssets().Resolve("product-github-private-key.json")));
             var body = JsonSerializer.Serialize(new
@@ -136,9 +143,11 @@ internal sealed partial class FactoryGitHubAuthorityService(
             using var hostJson = JsonDocument.Parse(await hostResponse.Content.ReadAsStringAsync(token));
             var fqdn = hostJson.RootElement.GetProperty("properties").GetProperty("configuration").GetProperty("ingress").GetProperty("fqdn").GetString();
             if (fqdn is null || !Regex.IsMatch(fqdn, "^[a-z0-9.-]+\\.azurecontainerapps\\.io$")) throw new JsonException();
-            authority = authority with { HostEndpoint = "https://" + fqdn, Stage = "host-verification" };
+            authority = authority with { HostEndpoint = "https://" + fqdn, Stage = "host-verification",
+                CompletedEffectHashes = operations.ToDictionary(o => o.Index.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    FactoryGitHubAuthorityValidation.ReceiptHash) };
             await SaveAsync(store, token);
-            await VerifyDeployedAsync(store, identity, token);
+            await VerifyDeployedAsync(store, admission, token);
             return CapabilityResult(admission);
         }
 
@@ -301,13 +310,15 @@ internal sealed partial class FactoryGitHubAuthorityService(
             || authority.RepositoryId != admission.RepositoryId || authority.OperationCount is < 0 or > 32
             || !Enum.IsDefined(authority.State))
             throw new JsonException();
+        var values = await ReadGitHubRecordsAsync(product, authority, token);
+        authority = FactoryGitHubAuthorityValidation.ReadPreparation(manifest, values);
         var operations = new List<FoundationOperation>();
         var state = authority.State;
         for (var i = 0; i < authority.OperationCount; i++)
         {
-            var receipt = await product.ReadAsync(ProductConfigurationKeys.GitHubAuthorityOperation(authority.OperationId, i), token);
-            if (receipt is null) { state = GitHubAuthorityState.Unknown; break; }
-            var operation = FactoryReservationRecords.Parse<FoundationOperation>(receipt.Value);
+            if (!values.TryGetValue(ProductConfigurationKeys.GitHubAuthorityOperation(authority.OperationId, i), out var receipt))
+            { state = GitHubAuthorityState.Unknown; break; }
+            var operation = FactoryReservationRecords.Parse<FoundationOperation>(receipt);
             if (operation.Kind != OperationKind || operation.FactoryId != authority.FactoryId
                 || operation.OperationId != authority.OperationId || operation.Index != i || !Enum.IsDefined(operation.State))
                 throw new JsonException();
@@ -320,10 +331,8 @@ internal sealed partial class FactoryGitHubAuthorityService(
         }
         if (state == GitHubAuthorityState.Verified)
         {
-            ValidateCompletedEffects(admission, authority, operations);
-            if (authority.Stage != "verified" || authority.Proof is not { State: GitHubAuthorityState.Verified } proof
-                || !HasVerifiedScope(authority, proof))
-                throw new JsonException();
+            FactoryGitHubAuthorityValidation.ReadCompletedEffects(authority, values);
+            FactoryGitHubAuthorityValidation.ValidateVerified(authority);
         }
         return admission with
         {
@@ -334,5 +343,17 @@ internal sealed partial class FactoryGitHubAuthorityService(
             Foundation = state == GitHubAuthorityState.Verified ? admission.Foundation with
                 { PendingStages = admission.Foundation.PendingStages.Where(s => s != "GitHub authentication").ToArray() } : admission.Foundation,
         };
+    }
+
+    private static async Task<Dictionary<string, string>> ReadGitHubRecordsAsync(OwnerReservationStore store,
+        FactoryGitHubAuthority authority, CancellationToken token)
+    {
+        var values = new Dictionary<string, string>(StringComparer.Ordinal);
+        var keys = new[] { ProductConfigurationKeys.FactoryGitHubAuthority, ProductConfigurationKeys.FactoryManifest }
+            .Concat(FactoryGitHubAuthorityValidation.BindingNames.Select(name => ProductConfigurationKeys.GitHubAuthorityBinding(authority.OperationId, name)))
+            .Concat(Enumerable.Range(0, 5).Select(i => ProductConfigurationKeys.GitHubAuthorityOperation(authority.OperationId, i)));
+        foreach (var key in keys)
+            if (await store.ReadAsync(key, token) is { } value) values.Add(key, value.Value);
+        return values;
     }
 }

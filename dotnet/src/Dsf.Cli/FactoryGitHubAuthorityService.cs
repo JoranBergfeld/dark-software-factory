@@ -6,10 +6,7 @@ namespace Dsf.Cli;
 
 internal sealed partial class FactoryGitHubAuthorityService
 {
-    internal const string Risk = "The factory key holder can mint broader App-authorized tokens. "
-        + "Downscoping is normal discipline, NOT signing-key containment. GitHub issue-write is coarser than DSF allowed behavior; "
-        + "no publication caller is eligible while inactive. Only the GitHub authentication module receives the signing key. "
-        + "Approve the exact copy, bindings and host separately; no owner rotation, permission upgrades or repository writes.";
+    internal const string Risk = FactoryGitHubAuthorityValidation.SigningRisk;
 
     internal static FactoryGitHubAuthority Preview(FactoryReservationResult admission,
         string? sourceVaultId, string? version, string? image, string? audience)
@@ -58,8 +55,14 @@ internal sealed partial class FactoryGitHubAuthorityService
             HostingEnvironmentId = hosting.Target,
             BindingIncarnations = new[] { auth, code, vault, hosting }.Concat(otherIdentities).ToDictionary(o => o.Target, o => o.Incarnation!),
             OtherWorkloadPrincipalIds = otherIdentities.Select(o => o.PrincipalId ?? throw new JsonException()).ToArray(),
+            FactoryResourceGroupId = assets.Group, FoundationOperationId = admission.Foundation.OperationId,
+            BindingReceiptHashes = new Dictionary<string, FoundationOperation>
+            {
+                ["auth"] = auth, ["code"] = code, ["council"] = otherIdentities[0], ["source"] = otherIdentities[1],
+                ["vault"] = vault, ["hosting"] = hosting,
+            }.ToDictionary(p => p.Key, p => FactoryGitHubAuthorityValidation.ReceiptHash(p.Value)),
         };
-        return draft with { ApprovalFingerprint = FactoryReservationRecords.Hash(FactoryReservationRecords.Serialize(draft)) };
+        return draft with { ApprovalFingerprint = FactoryGitHubAuthorityValidation.ApprovalFingerprint(draft) };
 
         FoundationOperation Proven(Func<FoundationOperation, bool> predicate)
         {

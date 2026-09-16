@@ -41,6 +41,7 @@ public sealed record FactoryManifest(
     string ProfilePin)
 {
     public Guid? GitHubAuthorityOperationId { get; init; }
+    public string? GitHubAuthorityApprovalFingerprint { get; init; }
 }
 
 public sealed record FactoryFoundationResult(

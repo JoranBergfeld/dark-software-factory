@@ -10,12 +10,14 @@ internal sealed record RepositoryAttachmentReviewRequest(
     string? OwnerAppConfigEndpoint,
     string? OwnerKeyVaultUri)
 {
+    public long? DurableRepositoryId { get; init; }
     public string? AutomationOwner { get; init; }
     public IReadOnlyDictionary<RepositoryMutationClass, RepositoryAutomationDeclaration> AutomationDeclarations { get; init; } =
         new Dictionary<RepositoryMutationClass, RepositoryAutomationDeclaration>();
 
     public void Validate()
     {
+        if (DurableRepositoryId is <= 0) throw new InvalidOperationException("Durable repository ID must be positive.");
         ValidateEndpoint(OwnerAppConfigEndpoint, "--owner-appconfig-endpoint", ".azconfig.io");
         ValidateEndpoint(OwnerKeyVaultUri, "--owner-keyvault-uri", ".vault.azure.net");
     }
@@ -107,7 +109,9 @@ internal sealed partial class RepositoryAttachmentReviewer(IGhCliRunner gh, IOwn
             return new(1, DateTimeOffset.UtcNow, null,
                 [Incomplete("operator-identity", "GitHub returned incomplete operator identity metadata.")]);
         }
-        var result = ReadGitHub($"repos/{request.Repository}", cancellationToken);
+        var repositoryRoute = request.DurableRepositoryId is { } repositoryId
+            ? $"repositories/{repositoryId.ToString(CultureInfo.InvariantCulture)}" : $"repos/{request.Repository}";
+        var result = ReadGitHub(repositoryRoute, cancellationToken);
         if (result.Body is not { } value)
         {
             return new RepositoryAttachmentReview(1, DateTimeOffset.UtcNow, null,
@@ -130,11 +134,15 @@ internal sealed partial class RepositoryAttachmentReviewer(IGhCliRunner gh, IOwn
                 [Incomplete("repository-metadata", "GitHub returned incomplete repository identity/settings; no default branch was inferred.")]) { Operator = actor };
         }
         var compatible = !observed.Archived && !observed.Disabled && observed.HasIssues;
+        if (request.DurableRepositoryId is { } expectedId && observed.Id != expectedId)
+            return new(1, DateTimeOffset.UtcNow, observed,
+                [new("repository-identity", RepositoryReviewState.Blocked, $"GET {repositoryRoute} returned a different durable identity.",
+                    "repository administrator", "Reconcile repository identity outside DSF; no retargeting.")]) { Operator = actor };
         var access = await new OwnerRepositoryAccessReviewer(owner, appHttp).ReviewAsync(request, observed, cancellationToken);
         var findings = new List<RepositoryReviewFinding>();
         var labels = ReviewLabels(observed, findings, cancellationToken);
         var automation = ReviewAutomation(request, observed, findings, cancellationToken);
-        var current = ReadGitHub($"repos/{observed.Owner}/{observed.Name}", cancellationToken);
+        var current = ReadGitHub(request.DurableRepositoryId is not null ? repositoryRoute : $"repos/{observed.Owner}/{observed.Name}", cancellationToken);
         try
         {
             if (current.Body is not { } currentBody)

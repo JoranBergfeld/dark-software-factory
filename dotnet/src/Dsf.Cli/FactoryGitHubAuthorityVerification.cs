@@ -17,16 +17,16 @@ internal sealed partial class FactoryGitHubAuthorityService
         var store = ProductStore(admission);
         try
         {
-            ValidateCompletedEffects(admission, admission.GitHubAuthority, admission.GitHubOperations);
             root = await store.ReadAsync(ProductConfigurationKeys.FactoryGitHubAuthority, token) ?? throw new JsonException();
             if (root.Value != FactoryReservationRecords.Serialize(admission.GitHubAuthority)) throw new JsonException();
             var manifest = FactoryReservationRecords.Parse<FactoryManifest>(
                 (await store.ReadAsync(ProductConfigurationKeys.FactoryManifest, token))?.Value ?? throw new JsonException());
             if (manifest.GitHubAuthorityOperationId != admission.GitHubAuthority.OperationId) throw new JsonException();
-            authority = admission.GitHubAuthority;
+            var values = await ReadGitHubRecordsAsync(store, admission.GitHubAuthority, token);
+            authority = FactoryGitHubAuthorityValidation.ReadPreparation(manifest, values);
+            var completed = FactoryGitHubAuthorityValidation.ReadCompletedEffects(authority, values);
             manifestIntentConfirmed = true;
-            operations.AddRange(admission.GitHubOperations);
-            await VerifyRepositoryAutomationAsync(admission, token);
+            operations.AddRange(completed);
             await VerifyBaseBindingsAsync(admission, authority, token);
             await VerifyKeyIsolationAsync(admission.Identity!, authority, token);
             await VerifyNativeHostPolicyAsync(admission.Identity!, authority.HostResourceId!, token);
@@ -40,7 +40,7 @@ internal sealed partial class FactoryGitHubAuthorityService
                 || "https://" + current.GetProperty("properties").GetProperty("configuration").GetProperty("ingress").GetProperty("fqdn").GetString() != authority.HostEndpoint)
                 throw new ReservationStoreException(FactoryReservationState.Blocked,
                     "GET deployed authentication host incarnation/endpoint changed; factory administrator must reconcile. No adoption or replacement.");
-            await VerifyDeployedAsync(store, admission.Identity!, token);
+            await VerifyDeployedAsync(store, admission, token);
             return CapabilityResult(admission);
         }
         catch (ReservationStoreException e)
@@ -52,24 +52,37 @@ internal sealed partial class FactoryGitHubAuthorityService
         { return await CloseAsync(admission, store, GitHubAuthorityState.Unknown, "Deployed verification evidence unavailable or invalid; factory operator must inspect held authority.", token); }
     }
 
-    private async Task VerifyRepositoryAutomationAsync(FactoryReservationResult admission, CancellationToken token)
+    private async Task VerifyRepositoryAutomationAsync(FactoryReservationResult admission, CancellationToken token, GitHubAuthorityProof? proof = null)
     {
         var selection = admission.Plan!.Selection;
         var repository = admission.Plan.RepositoryReview.Repository!;
         var current = await (reviewer ?? RepositoryAttachmentReviewer.Create()).ReviewAsync(
-            new RepositoryAttachmentReviewRequest(repository.Owner + "/" + repository.Name,
+            new RepositoryAttachmentReviewRequest(proof?.Repository ?? repository.Owner + "/" + repository.Name,
                 selection.OwnerAppConfigEndpoint, selection.OwnerKeyVaultUri)
-            { AutomationDeclarations = selection.AutomationDeclarations, AutomationOwner = selection.AutomationOwner }, token);
+            { DurableRepositoryId = admission.RepositoryId, AutomationDeclarations = selection.AutomationDeclarations,
+                AutomationOwner = selection.AutomationOwner }, token);
+        if (current.Repository is not { } observed || observed.Id != admission.RepositoryId)
+            throw new ReservationStoreException(current.State == RepositoryReviewState.Unknown ? FactoryReservationState.Unknown : FactoryReservationState.Blocked,
+                $"GET /repositories/{admission.RepositoryId} current metadata unavailable or identity differs. Responsible administrator: repository administrator / operator. No retargeting or access repair.");
+        if (proof is not null && (observed.Owner + "/" + observed.Name != proof.Repository || observed.DefaultBranch != proof.DefaultBranch)
+            || current.Findings.SingleOrDefault(f => f.Check == "repository-stability")?.State != RepositoryReviewState.Confirmed)
+            throw new ReservationStoreException(FactoryReservationState.Unknown,
+                $"GET /repositories/{admission.RepositoryId} metadata changed or is unverifiable across deployed proof and automation review. Responsible administrator: repository administrator / operator. Repeat read-only verification; no settings changes.");
+        var invalidLabel = current.Labels.FirstOrDefault(label => label.SemanticState != RepositoryReviewState.Confirmed);
+        if (invalidLabel is not null)
+            throw new ReservationStoreException(invalidLabel.SemanticState == RepositoryReviewState.Unknown ? FactoryReservationState.Unknown : FactoryReservationState.Blocked,
+                $"GET /repos/{observed.Owner}/{observed.Name}/labels/{Uri.EscapeDataString(invalidLabel.Name)} meaning/access is not clear. Responsible administrator: repository label / automation owner. No label changes.");
         var publication = current.Automation.SingleOrDefault(r => r.Mutation == RepositoryMutationClass.ProposalIssue);
-        if (current.Repository?.Id != admission.RepositoryId || publication?.State != RepositoryReviewState.Confirmed)
+        if (observed.Archived || observed.Disabled || !observed.HasIssues || publication?.State != RepositoryReviewState.Confirmed)
             throw new ReservationStoreException(publication?.State == RepositoryReviewState.Unknown
                     ? FactoryReservationState.Unknown : FactoryReservationState.Blocked,
                 "GET current repository automation inventory for ProposalIssue is not clear. Responsible administrator: "
-                + selection.AutomationOwner + ". Existing triggers/settings stay unchanged; no key copy or grants.");
+                + selection.AutomationOwner + ". Existing triggers/settings stay unchanged; any previously dispatched preparation effects remain inspectable.");
     }
 
-    private async Task VerifyDeployedAsync(OwnerReservationStore store, FactoryReservationIdentity identity, CancellationToken token)
+    private async Task VerifyDeployedAsync(OwnerReservationStore store, FactoryReservationResult admission, CancellationToken token)
     {
+        var identity = admission.Identity!;
         var credential = new OwnerReservationStore.OperatorCredential(azure, identity.TenantId, identity.SubscriptionId,
             identity.AzureActorId, "api://" + authority!.AudienceClientId);
         AccessToken access;
@@ -105,6 +118,15 @@ internal sealed partial class FactoryGitHubAuthorityService
                     + proof.ResponsibleAdmin + ". " + proof.Detail);
             ValidateProof(authority, proof);
             if (!response.IsSuccessStatusCode && proof.State == GitHubAuthorityState.Verified) throw new JsonException();
+            if (proof.State == GitHubAuthorityState.Verified)
+            {
+                await VerifyRepositoryAutomationAsync(admission, token, proof);
+                var values = await ReadGitHubRecordsAsync(store, authority, token);
+                var manifest = FactoryReservationRecords.Parse<FactoryManifest>(values[ProductConfigurationKeys.FactoryManifest]);
+                var current = FactoryGitHubAuthorityValidation.ReadPreparation(manifest, values);
+                if (FactoryReservationRecords.Serialize(current) != FactoryReservationRecords.Serialize(authority)) throw new JsonException();
+                FactoryGitHubAuthorityValidation.ReadCompletedEffects(current, values);
+            }
             authority = authority with { State = proof.State, Proof = proof,
                 Stage = proof.State == GitHubAuthorityState.Verified ? "verified" : "host-verification", Detail = proof.Detail + " " + Risk };
             await SaveAsync(store, token);
@@ -114,34 +136,4 @@ internal sealed partial class FactoryGitHubAuthorityService
     private FactoryReservationResult CapabilityResult(FactoryReservationResult admission) =>
         Result(admission, authority!.State, authority.Detail);
 
-    private static void ValidateCompletedEffects(FactoryReservationResult admission, FactoryGitHubAuthority authority,
-        IReadOnlyList<FoundationOperation> operations)
-    {
-        if (!authority.AcceptedSigningRisk || authority.ApprovalFingerprint is not { Length: 64 }
-            || authority.ApprovalFingerprint.Any(c => !char.IsAsciiHexDigit(c))
-            || operations.Count != 5 || operations.Any(o => o.State != FoundationOperationState.Completed
-            || o.Disposition != FoundationResourceDisposition.Created || string.IsNullOrWhiteSpace(o.Incarnation)
-            || o.ClientRequestId == Guid.Empty || o.StartedAt == default || o.RequestSha256.Length != 64))
-            throw new JsonException();
-        foreach (var index in new[] { 0, 3, 4 })
-            if (string.IsNullOrWhiteSpace(operations[index].ProviderOperationId)
-                || !Guid.TryParse(operations[index].ProviderRequestId, out var request) || request == Guid.Empty
-                || !Guid.TryParse(operations[index].ProviderCorrelationId, out var correlation) || correlation == Guid.Empty)
-                throw new JsonException();
-        var assets = new FactoryFoundationAssets(admission.Identity!, admission.Plan!.Selection);
-        var deployment = assets.Group + "/providers/microsoft.resources/deployments/gh-" + authority.OperationId.ToString("N");
-        var roles = "/subscriptions/" + admission.Identity!.SubscriptionId + "/providers/microsoft.authorization/roledefinitions/";
-        if (operations[0].Target != deployment + "-key" || operations[0].Endpoint != authority.DestinationSecretUri
-            || operations[0].ResourceId != authority.DestinationVaultId + "/secrets/github-app-private-key"
-            || operations[1].RoleScope != operations[0].ResourceId
-            || operations[2].RoleScope != assets.Group + "/providers/microsoft.appconfiguration/configurationstores/dsfo-" + authority.FactoryId.ToString("N")
-            || operations[1].PrincipalId != authority.AuthPrincipalId || operations[2].PrincipalId != authority.AuthPrincipalId
-            || operations[1].RoleDefinitionId != roles + "4633458b-17de-408a-b874-0445c86b69e6"
-            || operations[2].RoleDefinitionId != roles + "516239f1-63e1-4d78-a4de-a74fb236a071"
-            || operations[1].Condition is not null || operations[2].Condition is not null
-            || operations[3].Target != deployment + "-host" || operations[3].ResourceId != authority.HostResourceId
-            || operations[4].Target != authority.HostResourceId + "/authconfigs/current"
-            || operations[4].DeploymentTarget != operations[3].Target || operations[4].ClientRequestId != operations[3].ClientRequestId)
-            throw new JsonException();
-    }
 }

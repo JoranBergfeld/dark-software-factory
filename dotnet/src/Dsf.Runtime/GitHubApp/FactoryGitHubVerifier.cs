@@ -91,6 +91,15 @@ internal sealed class FactoryGitHubVerifier(HttpClient http, TokenCredential cre
             operation = $"GET /repos/{name}/installation";
             var membership = await RequestAsync(operation, jwt, null, token);
             ValidateInstallation(membership, authority);
+            operation = $"GET /repositories/{authority.RepositoryId}";
+            var current = await RequestAsync(operation, access, null, token);
+            if (current.GetProperty("id").GetInt64() != authority.RepositoryId
+                || current.GetProperty("owner").GetProperty("id").GetInt64() != authority.AccountId
+                || current.GetProperty("full_name").GetString() != name || current.GetProperty("default_branch").GetString() != branch
+                || current.GetProperty("archived").GetBoolean() != repository.GetProperty("archived").GetBoolean()
+                || current.GetProperty("disabled").GetBoolean() != repository.GetProperty("disabled").GetBoolean()
+                || current.GetProperty("has_issues").GetBoolean() != repository.GetProperty("has_issues").GetBoolean())
+                throw new JsonException("Repository metadata changed during observation.");
             verifiedReadToken = access;
             return new(GitHubAuthorityState.Verified, "deployed-github-authentication", "none",
                 "Observed versioned factory key access and actual GitHub identity, installation membership and restricted read token. "
