@@ -53,8 +53,9 @@ internal sealed partial class FactorySupplementalEvidence(
     private async Task<(IReadOnlyList<SupplementalEvidenceItem>, string)> WebAsync(CancellationToken token)
     {
         var (secret, revision) = await SecretAsync(token);
-        var results = await new WebIqSearchGateway(http, new Uri("https://api.microsoft.ai/v3/search/web"))
-            .SearchAsync(secret, configuration.Source.Query, token);
+        var response = await new WebIqSearchGateway(http, new Uri("https://api.microsoft.ai/v3/search/web"))
+            .RetrieveAsync(secret, configuration.Source.Query, token);
+        var results = response.WebResults ?? throw new SupplementalSourceException(SupplementalReason.MalformedResponse);
         if (results.Count > 16) throw new SupplementalSourceException(SupplementalReason.CapacityExceeded);
         var items = results.Select(result =>
         {

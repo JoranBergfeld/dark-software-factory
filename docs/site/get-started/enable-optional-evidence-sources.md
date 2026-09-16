@@ -183,6 +183,12 @@ Omit `--input` and `--approve` for verification. Omit `--verify-only` as well fo
 read-only status. Status reports historical observations; it is not a new access
 or connectivity check. Changing/removing an approved source is outside this
 create-once capability, not an implicit fallback to Azure-only.
+Shared `dsf onboard decide status` and `resume`, as well as supplemental
+inspection/verification, require a proven-pristine supplemental namespace before
+treating absent selection records as no opt-in. Surviving receipts or proofs after
+root/pin loss, unreadable metadata or an incomplete namespace listing yield
+`Unknown` without writes, source reconstruction or recreation. Truly pristine
+Azure-only inspection does not contact optional source services.
 
 ## Proof, recovery and limits
 
@@ -207,6 +213,11 @@ activity and source-scoped document identities. WebIQ uses the published SDK
 product-vault version before and after the call. `WEBIQ_API_KEY` and other legacy
 environment overrides cannot bypass this profile's vault/identity contract.
 Existing greenfield source overrides remain available on their original paths.
+This strict profile requires an actual nonnull `webResults` array: `[]` is honest
+empty coverage, while null, missing, wrong-type or malformed results block proof.
+Partial responses never become complete evidence. The legacy greenfield adapter's
+SDK-compatible null-as-empty behavior is unchanged; strict proof consumes the
+same typed response without that compatibility conversion.
 
 WebIQ evidence and proof references are opaque `webiq:sha256:<64 lowercase hex>`
 identifiers: DSF's shared SHA-256 hash of the original provider URL serialized as

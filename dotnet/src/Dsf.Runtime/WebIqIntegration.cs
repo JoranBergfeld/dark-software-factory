@@ -51,7 +51,12 @@ internal sealed class WebIqSearchGateway(HttpClient? httpClient = null, Uri? end
     private readonly Uri searchEndpoint = endpoint ?? new(
         (httpClient?.BaseAddress?.AbsoluteUri ?? DefaultBaseUrl).TrimEnd('/') + "/search/web");
 
+    // Preserve legacy null-as-empty semantics; strict proof consumes RetrieveAsync directly.
     public async Task<IReadOnlyList<WebIqResult>> SearchAsync(
+        string apiKey, string query, CancellationToken cancellationToken)
+        => (await RetrieveAsync(apiKey, query, cancellationToken)).WebResults ?? [];
+
+    internal async Task<WebIqSearchResponse> RetrieveAsync(
         string apiKey, string query, CancellationToken cancellationToken)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, searchEndpoint)
@@ -98,7 +103,7 @@ internal sealed class WebIqSearchGateway(HttpClient? httpClient = null, Uri? end
             }
 
             // WebRequest/WebResponse have no continuation parameter or token in SDK 0.1.8.
-            return parsed.WebResults ?? [];
+            return parsed;
         }
     }
 }

@@ -22,8 +22,12 @@ internal sealed partial class FactorySupplementalService(IAzureCliRunner azure, 
     {
         var store = Store(admission);
         await ReadGovernanceAsync(admission, store, token);
-        if (manifest.SupplementalOperationId is not null) throw new JsonException();
-        await store.RequirePristineAsync("dsf/factory/supplemental", token);
+        await RequireUnselectedAsync(manifest, store, token);
+    }
+    private static Task RequireUnselectedAsync(FactoryManifest manifest, OwnerReservationStore store, CancellationToken token)
+    {
+        if (manifest.SupplementalOperationId is not null || manifest.SupplementalApprovalFingerprint is not null) throw new JsonException();
+        return store.RequirePristineAsync(ProductConfigurationKeys.FactorySupplemental, token);
     }
     internal async Task<FactoryReservationResult> PrepareAsync(FactoryReservationResult admission, FactorySupplemental preview,
         string approval, CancellationToken token)
@@ -36,7 +40,7 @@ internal sealed partial class FactorySupplementalService(IAzureCliRunner azure, 
             var record = await ReadGovernanceAsync(admission, store, token);
             if (manifest.SupplementalOperationId is not null || await store.ReadAsync(ProductConfigurationKeys.FactorySupplemental, token) is not null)
                 throw new ReservationStoreException(FactoryReservationState.Blocked, "Supplemental selection already held; no implicit removal, replacement or retry.");
-            await store.RequirePristineAsync("dsf/factory/supplemental", token);
+            await RequireUnselectedAsync(manifest, store, token);
             current = preview with { OperationId = Guid.NewGuid(), Stage = "preparation" };
             CheckCapacity(current, manifest);
             await CheckNativeAsync(admission, token);

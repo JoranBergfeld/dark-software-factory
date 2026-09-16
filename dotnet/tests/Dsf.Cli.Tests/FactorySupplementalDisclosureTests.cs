@@ -32,6 +32,14 @@ public sealed class FactorySupplementalDisclosureTests
     [InlineData("content-case", true)]
     [InlineData("mixed-invalid", true)]
     [InlineData("provider-error", true)]
+    [InlineData("empty-array", false)]
+    [InlineData("null-results", true)]
+    [InlineData("missing-results", true)]
+    [InlineData("object-results", true)]
+    [InlineData("string-results", true)]
+    [InlineData("null-row", true)]
+    [InlineData("partial-array", true)]
+    [InlineData("partial-status", true)]
     public async Task Real_host_cli_and_serialized_provenance_never_disclose_provider_reflected_key(string scenario, bool blocked)
     {
         var url = scenario switch
@@ -51,6 +59,13 @@ public sealed class FactorySupplementalDisclosureTests
             rows.Add(new JsonObject { ["url"] = "https://example.com/second", ["content"] = Secret });
         var payload = new JsonObject { ["webResults"] = rows };
         if (scenario == "provider-error") payload["errorCode"] = Secret;
+        if (scenario == "empty-array") rows.Clear();
+        if (scenario == "null-results") payload["webResults"] = null;
+        if (scenario == "missing-results") payload.Remove("webResults");
+        if (scenario == "object-results") payload["webResults"] = new JsonObject();
+        if (scenario == "string-results") payload["webResults"] = Secret;
+        if (scenario == "null-row") rows.Add((JsonNode?)null);
+        if (scenario == "partial-array") payload["partial"] = true;
         var (machine, arm) = await FactoryTelemetryWorkflowTests.FoundationAsync();
         using var transport = new SupplementalWorkflowTransport(arm);
         machine.Boundary.Repository.ReservationHttp = new HttpClient(transport);
@@ -63,7 +78,12 @@ public sealed class FactorySupplementalDisclosureTests
             var environment = host["properties"]!["template"]!["containers"]![0]!["env"]!.AsArray()
                 .ToDictionary(e => (string)e!["name"]!, e => (string?)e!["value"]);
             var config = JsonSerializer.Deserialize<SupplementalHostConfiguration>(environment["DSF_SUPPLEMENTAL_CONFIG"]!, FactoryGitHubJson.Options)!;
-            using var upstream = new WebTransport(config, payload.ToJsonString(), scenario == "provider-error" ? HttpStatusCode.Forbidden : HttpStatusCode.OK);
+            using var upstream = new WebTransport(config, payload.ToJsonString(), scenario switch
+            {
+                "provider-error" => HttpStatusCode.Forbidden,
+                "partial-status" => HttpStatusCode.PartialContent,
+                _ => HttpStatusCode.OK,
+            });
             using var http = new HttpClient(upstream);
             using var output = new StringWriter();
             using var error = new StringWriter();
@@ -75,7 +95,7 @@ public sealed class FactorySupplementalDisclosureTests
                     SourceHttp = http, SourceClock = new ReservationClock(),
                 }, token);
             Assert.Equal(0, exit);
-            Assert.Equal(blocked ? 4 : 6, upstream.Requests.Count);
+            Assert.Equal(runner.ProofStatus == HttpStatusCode.OK ? 6 : 4, upstream.Requests.Count);
             AssertSecretAbsent(output.ToString() + error + string.Join('\n', upstream.Requests));
             observations.Add(runner);
             return new HttpResponseMessage(runner.ProofStatus)
@@ -102,7 +122,18 @@ public sealed class FactorySupplementalDisclosureTests
         var evidence = JsonNode.Parse(observation.Evidence)!;
         if (blocked)
         {
-            Assert.Equal(scenario == "provider-error" ? "PermissionDenied" : "MalformedResponse", (string?)proof["reason"]);
+            Assert.Equal(scenario switch
+            {
+                "provider-error" => "PermissionDenied",
+                "partial-array" or "partial-status" => "Incomplete",
+                _ => "MalformedResponse",
+            }, (string?)proof["reason"]);
+            Assert.Empty(proof["records"]!.AsArray());
+            Assert.Empty(evidence["items"]!.AsArray());
+        }
+        else if (scenario == "empty-array")
+        {
+            Assert.Equal("Empty", (string?)proof["reason"]);
             Assert.Empty(proof["records"]!.AsArray());
             Assert.Empty(evidence["items"]!.AsArray());
         }

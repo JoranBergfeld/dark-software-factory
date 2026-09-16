@@ -230,9 +230,11 @@ internal sealed partial class FactorySupplementalService
         var manifest = FactoryGovernance.ReadInactiveManifest(manifestRecord.Value, profile?.Value, admission.Identity!.ProductKey,
             admission.Foundation!.ProductEndpoint!, admission.Foundation.ProfilePin);
         var root = await store.ReadAsync(ProductConfigurationKeys.FactorySupplemental, token);
-        if (root is null && manifest.SupplementalOperationId is null)
+        if (root is null)
+        {
+            await RequireUnselectedAsync(manifest, store, token);
             return admission;
-        if (root is null) throw new JsonException("Selected supplemental record missing; no Azure-only fallback.");
+        }
         var selected = FactorySupplementalValidation.Read(manifest, root.Value);
         if (selected.Stage is "prepared" or "checking" or "observed")
         {
