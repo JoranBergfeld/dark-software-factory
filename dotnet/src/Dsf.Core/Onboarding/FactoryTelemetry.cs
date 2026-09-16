@@ -108,7 +108,7 @@ public static class FactoryTelemetryValidation
     public static string Hash<T>(T value) => Convert.ToHexStringLower(SHA256.HashData(
         Encoding.UTF8.GetBytes(JsonSerializer.Serialize(value, FactoryGitHubJson.Options))));
     public static bool IsProviderOperationId(string? value) =>
-        value is { Length: >= 1 and <= 128 } && value.All(c => char.IsAsciiHexDigit(c) || c == '-');
+        value is { Length: >= 1 and <= FactoryTelemetryLimits.ProviderOperationIdCharacters } && value.All(c => char.IsAsciiHexDigit(c) || c == '-');
     public static string Query(string table) => SupportedTables.Contains(table)
         ? table + " | project TimeGenerated, _ResourceId, _ItemId, TenantId, Type" : throw new JsonException("Unsupported Analytics table.");
     public static string StaleQuery(string table) => SupportedTables.Contains(table)

@@ -163,6 +163,30 @@ The authoritative product manifest pins `telemetryOperationId` and
 All records are unlabelled, conditional and bounded by the 10 KiB service budget;
 oversized/incomplete data is rejected, not truncated.
 
+Admission budgets the **full lifecycle**, not just configuration: the authority
+envelope with both historical/current proof references, every creation receipt,
+and one maximal native reference per selected backend/table in the proof and query
+observations. Sizes use the actual DTO JSON encoding, key, unlabelled marker,
+content type and the store's 1024-byte service-metadata allowance. Exactly 10240
+total bytes is permitted; 10241 is rejected. The final manifest intent is also
+checked before its conditional write.
+
+If any upper bound cannot fit, preview/approval fails **before telemetry intent,
+grants or host creation**. No partition schema, truncation, automatic table removal,
+scope shrink or reconfiguration is introduced. A smaller selection requires its
+own supported review; this command never rewrites the reserved plan to make it fit.
+This may conservatively reject a selection whose first sparse response would fit:
+later observations must fit too.
+
+Variable fields share enforced bounds: 128 characters per native item ID (including
+worst-case JSON escaping), canonical GUID query request IDs, 128 ASCII hex/dash
+characters per deployment operation ID, 261 characters per HTTPS host endpoint,
+and 1024 JSON-encoded content bytes per diagnostic string. Ready **and** non-Ready
+proofs have at most one record/query observation per reviewed backend/table, with
+bounded counts and exact scoped references. Oversized payloads are rejected, not
+stored as partial evidence; oversized diagnostic text produces an explicit bounded
+rejection notice. Existing record keys and schema versions are unchanged.
+
 | Record | Meaning |
 | --- | --- |
 | `dsf/factory/telemetry` | Immutable reviewed source/backend/query/window configuration, foundation bindings, exact grants, image/template revision, current capability state and hash-bound proof references |
@@ -194,9 +218,14 @@ check ID. It then inspects current bindings/grants/policy, invokes the real host
 and repeats the current checks before recording proof and conditionally promoting
 the result. The host independently re-reads pinned governance and complete effect
 receipts after querying. Missing or changed exact grants cannot be excused by
-working access. Cancellation or failed final persistence leaves the confirmed
-hold, not an old Ready cache. An unconfirmed initial hold permits no check and
-claims neither successful revocation nor an atomic global stop.
+working access. A hold is confirmed only after the exact conditional write and
+its response are verified. Cancellation before that attempt reports **no hold
+confirmed/no revocation asserted**; a lost or canceled write response reports an
+unconfirmed outcome even when the write might have committed. Earlier Ready
+records may remain. After confirmation, cancellation reports only that a hold
+**was** confirmed, not that it still remains under concurrency. An unconfirmed
+initial hold permits no source check and claims neither successful revocation nor
+an atomic global stop.
 
 An interactive confirmation is not a durable governance lease. Before recording
 preparation intent and before every grant/host dispatch, the CLI re-reads shared

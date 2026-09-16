@@ -266,7 +266,8 @@ internal sealed partial class FactoryTelemetryService
             || !Strings(validation, "allowedAudiences").Order().SequenceEqual(new[] { config.AudienceClientId, "api://" + config.AudienceClientId }.Order()))
             throw new ReservationStoreException(FactoryReservationState.Blocked, "GET " + target + "/authconfigs/current: exact native Entra/operator isolation is not proven; identity administrator must reconcile.");
         var fqdn = ingress.GetProperty("fqdn").GetString();
-        if (fqdn is null || !Regex.IsMatch(fqdn, "^[a-z0-9.-]+\\.azurecontainerapps\\.io$")) throw new JsonException();
+        if (fqdn is null || fqdn.Length + "https://".Length > FactoryTelemetryLimits.HostEndpointCharacters
+            || !Regex.IsMatch(fqdn, "\\A[a-z0-9.-]+\\.azurecontainerapps\\.io\\z")) throw new JsonException();
         return "https://" + fqdn;
     }
 
@@ -289,6 +290,7 @@ internal sealed partial class FactoryTelemetryService
     private void ValidateProof(TelemetryProof proof)
     {
         var config = authority!.Configuration;
+        FactoryTelemetryLimits.ValidateProof(config, proof);
         var now = clock.GetUtcNow();
         if (!Enum.IsDefined(proof.State) || !Enum.IsDefined(proof.Reason) || proof.FactoryId != config.FactoryId
             || proof.OperationId != authority.OperationId || proof.ConfigurationRevision != authority.ApprovalFingerprint
@@ -329,7 +331,7 @@ internal sealed partial class FactoryTelemetryService
             if (record.WorkspaceId != backend.WorkspaceId || !backend.Tables.Contains(record.Table)
                 || !backend.ApplicationResourceIds.Contains(record.ApplicationResourceId, StringComparer.OrdinalIgnoreCase)
                 || record.RecordTime < proof.WindowStart || record.RecordTime > proof.WindowEnd || record.ObservedRecords < 1
-                || string.IsNullOrWhiteSpace(record.ItemId) || record.ItemId.Length > 128 || record.ItemId.Any(char.IsControl)) throw new JsonException();
+                || string.IsNullOrWhiteSpace(record.ItemId) || record.ItemId.Length > FactoryTelemetryLimits.ItemIdCharacters || record.ItemId.Any(char.IsControl)) throw new JsonException();
         }
     }
 

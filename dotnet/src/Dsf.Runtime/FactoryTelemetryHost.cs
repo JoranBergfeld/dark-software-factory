@@ -35,6 +35,7 @@ public static partial class RuntimeVerbs
                     throw new JsonException();
                 var proof = await new FactoryTelemetryQuery(credential, dependencies.TelemetryHttp, dependencies.TelemetryClock)
                     .ObserveAsync(manifest, authority, context.RequestAborted);
+                FactoryTelemetryLimits.ValidateProof(authority.Configuration, proof);
                 var (currentManifest, currentAuthority) = await ReadAsync(configuration, context.RequestAborted);
                 if (FactoryTelemetryValidation.Hash(manifest) != FactoryTelemetryValidation.Hash(currentManifest)
                     || FactoryTelemetryValidation.Hash(authority) != FactoryTelemetryValidation.Hash(currentAuthority))

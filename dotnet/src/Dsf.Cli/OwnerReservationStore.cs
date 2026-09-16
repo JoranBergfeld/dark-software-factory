@@ -85,11 +85,14 @@ internal sealed class OwnerReservationStore
 
     public static void CheckSize(string key, string label, string value)
     {
-        // Count UTF-8 keys/labels/value/content-type and conservatively budget service metadata.
-        if (Encoding.UTF8.GetByteCount(key) + Encoding.UTF8.GetByteCount(label)
-            + Encoding.UTF8.GetByteCount(value) + Encoding.UTF8.GetByteCount(ContentType) + 1024 > RecordLimit)
+        if (RecordSizeBytes(key, label, value) > RecordLimit)
             throw new ReservationStoreException(FactoryReservationState.Failed, "Reservation record exceeds the bounded 10 KB App Configuration budget; nothing was truncated.");
     }
+
+    // Count UTF-8 keys/labels/value/content-type and conservatively budget service metadata.
+    public static int RecordSizeBytes(string key, string label, string value) =>
+        Encoding.UTF8.GetByteCount(key) + Encoding.UTF8.GetByteCount(label)
+        + Encoding.UTF8.GetByteCount(value) + Encoding.UTF8.GetByteCount(ContentType) + 1024;
 
     internal sealed class AuthenticationFailedException : Exception;
 

@@ -44,8 +44,9 @@ internal sealed partial class FactoryTelemetryService
             admission.Foundation.ProductEndpoint!, image, client.ToString(), seconds, FactoryTelemetryValidation.QueryRevision)
         { HostTemplateSha256 = FactoryReservationRecords.Hash(File.ReadAllBytes(new ProvisioningAssets().Resolve("onboard-telemetry.json"))) };
         configuration = configuration with { AccessGrants = FactoryTelemetryValidation.Grants(configuration, identity.SubscriptionId) };
-        OwnerReservationStore.CheckSize("preview", "\0", FactoryReservationRecords.Serialize(configuration));
-        return new(1, Guid.Empty, FactoryTelemetryValidation.Hash(configuration), configuration, TelemetryState.Partial, "preview");
+        var preview = new FactoryTelemetry(1, Guid.Empty, FactoryTelemetryValidation.Hash(configuration), configuration, TelemetryState.Partial, "preview");
+        CheckCapacity(preview);
+        return preview;
 
         FoundationOperation Proven(Func<FoundationOperation, bool> predicate)
         {

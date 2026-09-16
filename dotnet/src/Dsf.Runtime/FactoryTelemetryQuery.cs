@@ -89,10 +89,10 @@ internal sealed class FactoryTelemetryQuery(TokenCredential credential, HttpClie
                         || !string.Equals(row.GetString(3), backend.WorkspaceId, StringComparison.OrdinalIgnoreCase)
                         || row.GetString(4) != table)
                         throw new QueryFailure(TelemetryReason.WrongScope);
-                    if (item.Length is < 1 or > 128 || item.Any(char.IsControl)) throw new JsonException();
+                    if (string.IsNullOrWhiteSpace(item) || item.Length > FactoryTelemetryLimits.ItemIdCharacters || item.Any(char.IsControl)) throw new JsonException();
                     if (newest is null || newest.RecordTime < time)
                         newest = new(backend.ResourceId, backend.WorkspaceId, table,
-                            resource.ToLowerInvariant(), time, item, result.Table.Rows.Count);
+                            backend.ApplicationResourceIds.Single(id => string.Equals(id, resource, StringComparison.OrdinalIgnoreCase)), time, item, result.Table.Rows.Count);
                 }
                 var id = response.GetRawResponse().Headers.TryGetValue("x-ms-request-id", out var header)
                     && Guid.TryParse(header, out var parsed) ? parsed.ToString() : null;

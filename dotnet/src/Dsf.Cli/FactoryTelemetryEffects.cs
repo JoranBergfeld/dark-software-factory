@@ -13,6 +13,8 @@ internal sealed partial class FactoryTelemetryService(IAzureCliRunner azure, Htt
 {
     private static readonly HttpClient ProviderHttp = new(new HttpClientHandler { AllowAutoRedirect = false });
     private const string OperationKind = "decide-telemetry-operation";
+    internal const string NoConfirmedHold = "No readiness hold confirmed; hold not attempted; no revocation asserted. Previous Ready may remain; inspect current authority.";
+    private enum HoldProgress { NotAttempted, Unconfirmed, Confirmed }
     private FactoryTelemetry? authority;
     private ConfigurationSetting? root;
     private bool registryDispatchStarted;
@@ -27,6 +29,7 @@ internal sealed partial class FactoryTelemetryService(IAzureCliRunner azure, Htt
         var store = Store(admission);
         try
         {
+            CheckCapacity(preview);
             await CheckBindingsAsync(admission, preview, token);
             await CheckIsolationAsync(admission, preview, token);
             foreach (var grant in preview.Configuration.AccessGrants) await CheckDelegationAsync(admission, grant, token);
@@ -34,11 +37,13 @@ internal sealed partial class FactoryTelemetryService(IAzureCliRunner azure, Htt
             if (manifest.TelemetryOperationId is not null)
                 throw new ReservationStoreException(FactoryReservationState.Unknown, "Telemetry intent already held; no new dispatch or replacement.");
             var requested = preview with { OperationId = Guid.NewGuid(), Stage = "preparation" };
-            registryDispatchStarted = true;
-            await store.WriteAsync(manifestRecord.Key, FactoryReservationRecords.Serialize(manifest with
+            var manifestValue = FactoryReservationRecords.Serialize(manifest with
             {
                 TelemetryOperationId = requested.OperationId, TelemetryApprovalFingerprint = approval,
-            }), manifestRecord.ETag, token);
+            });
+            OwnerReservationStore.CheckSize(manifestRecord.Key, ProductConfigurationKeys.NoLabel, manifestValue);
+            registryDispatchStarted = true;
+            await store.WriteAsync(manifestRecord.Key, manifestValue, manifestRecord.ETag, token);
             authority = requested;
             await EnsureCurrentAuthorityAsync(admission, store, token);
             root = await store.WriteAsync(ProductConfigurationKeys.FactoryTelemetry, FactoryReservationRecords.Serialize(authority), null, token);
@@ -59,10 +64,12 @@ internal sealed partial class FactoryTelemetryService(IAzureCliRunner azure, Htt
 
     internal async Task<FactoryReservationResult> CheckAsync(FactoryReservationResult admission, CancellationToken token)
     {
+        if (token.IsCancellationRequested) return Result(admission, TelemetryState.Canceled, NoConfirmedHold);
         if (admission.Telemetry is not { Stage: "prepared" or "checking" or "observed" } existing)
             return admission with { State = FactoryReservationState.Blocked,
                 Detail = "Check requires completed provenance-proven source grants and host. Unknown preparation stays held; no create retry." };
         var store = Store(admission);
+        var hold = HoldProgress.NotAttempted;
         var promotionStarted = false;
         try
         {
@@ -79,7 +86,12 @@ internal sealed partial class FactoryTelemetryService(IAzureCliRunner azure, Htt
             effects.AddRange(ReadEffects(existing, values, completed: true));
             authority = existing with { State = TelemetryState.Partial, Stage = "checking", CheckId = Guid.NewGuid(),
                 Detail = "Current readiness held pending source verification; previous proof is historical." };
-            try { await SaveAsync(store, token); }
+            hold = HoldProgress.Unconfirmed;
+            try
+            {
+                await SaveAsync(store, token);
+                hold = HoldProgress.Confirmed;
+            }
             catch (ReservationStoreException exception)
             { return Result(admission, TelemetryState.Unknown, "Hold not confirmed; no proof request or revocation asserted. Factory App Configuration administrator must reconcile conditional authority. " + exception.Message); }
             await CheckBindingsAsync(admission, authority, token);
@@ -141,7 +153,12 @@ internal sealed partial class FactoryTelemetryService(IAzureCliRunner azure, Htt
         catch (OperationCanceledException) when (token.IsCancellationRequested)
         { return Result(admission, TelemetryState.Canceled, promotionStarted
             ? "Check canceled during readiness promotion; final authority/hold is unconfirmed. Inspect current records; no revocation or atomic global stop claimed."
-            : "Check canceled; confirmed readiness hold remains, historical proof is not current. No effects retried."); }
+            : hold switch
+            {
+                HoldProgress.Confirmed => "Check canceled after a readiness hold was confirmed; current authority may have changed. No current hold or revocation asserted; inspect current authority. No effects retried.",
+                HoldProgress.Unconfirmed => "No readiness hold confirmed; conditional hold outcome is unknown; no revocation asserted. Inspect current authority.",
+                _ => NoConfirmedHold,
+            }); }
         catch (Exception e) when (ProviderFailure(e))
         { return await CloseAsync(admission, store, TelemetryState.Unknown,
             "NOT READY: deployed proof/current authority unavailable or malformed. Network/Entra/evidence administrator must inspect the exact source endpoint and held records; no operator query fallback.", token); }
@@ -297,6 +314,8 @@ internal sealed partial class FactoryTelemetryService(IAzureCliRunner azure, Htt
 
     private async Task SaveAsync(OwnerReservationStore store, CancellationToken token)
     {
+        if (!FactoryTelemetryLimits.FitsDetail(authority!.Detail))
+            throw new ReservationStoreException(FactoryReservationState.Unknown, "Telemetry diagnostic exceeds its lifecycle bound; rejected, not truncated.");
         registryDispatchStarted = true;
         root = await store.WriteAsync(ProductConfigurationKeys.FactoryTelemetry, Persisted(authority!), root!.ETag, token);
     }
@@ -306,6 +325,11 @@ internal sealed partial class FactoryTelemetryService(IAzureCliRunner azure, Htt
     private async Task<FactoryReservationResult> CloseAsync(FactoryReservationResult admission, OwnerReservationStore store,
         TelemetryState state, string detail, CancellationToken token)
     {
+        if (!FactoryTelemetryLimits.FitsDetail(detail))
+        {
+            state = TelemetryState.Unknown;
+            detail = "NOT READY: diagnostic exceeds its lifecycle bound and was rejected, not truncated. Inspect the held operation records; no new dispatch authorized.";
+        }
         if (root is not null && authority is not null && !token.IsCancellationRequested)
         {
             authority = authority with { State = state, Detail = detail };
@@ -318,7 +342,7 @@ internal sealed partial class FactoryTelemetryService(IAzureCliRunner azure, Htt
 
     private FactoryReservationResult Result(FactoryReservationResult admission, TelemetryState state, string detail) =>
         admission with { State = state == TelemetryState.Ready ? FactoryReservationState.Reserved : Enum.Parse<FactoryReservationState>(state.ToString()),
-            Detail = detail, Telemetry = authority is null ? admission.Telemetry : authority with { State = state, Detail = detail },
+            Detail = detail, Telemetry = (authority ?? admission.Telemetry) is { } current ? current with { State = state, Detail = detail } : null,
             HasRegistryEffects = admission.HasRegistryEffects || registryDispatchStarted,
             Foundation = Pending(admission.Foundation, state) };
 

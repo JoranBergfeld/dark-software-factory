@@ -22,12 +22,15 @@ internal sealed class TelemetryWorkflowTransport(FactoryFoundationTests.Foundati
     public bool DenyGrant { get; init; }
     public bool DenyHost { get; init; }
     public bool InvalidDeploymentOperationId { get; init; }
+    public bool LongProviderOperationIds { get; init; }
+    public string Fqdn { get; init; } = "telemetry.private.azurecontainerapps.io";
     public bool MixedTables { get; init; }
     public JsonNode? ProtectionLevel { get; set; } = JsonValue.Create("General");
     public JsonNode? DataAuthorizationMode { get; set; } = JsonValue.Create(false);
     public bool OmitProtectionLevel { get; set; }
     public bool OmitDataAuthorizationMode { get; set; }
     public Action? OnProof { get; set; }
+    public Action<HttpRequestMessage>? OnRequest { get; set; }
     public Action<int>? OnGrant { get; set; }
     public Action<JsonNode>? ChangeProof { get; init; }
     public JsonNode Manifest => Record(ProductConfigurationKeys.FactoryManifest);
@@ -38,6 +41,7 @@ internal sealed class TelemetryWorkflowTransport(FactoryFoundationTests.Foundati
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
     {
+        OnRequest?.Invoke(request);
         var uri = request.RequestUri!;
         var path = uri.AbsolutePath.ToLowerInvariant();
         if (uri.Host.EndsWith(".azconfig.io", StringComparison.Ordinal)) return await prior.SendAsync(request, token);
@@ -120,7 +124,7 @@ internal sealed class TelemetryWorkflowTransport(FactoryFoundationTests.Foundati
             if (path.EndsWith("/operations", StringComparison.Ordinal))
                 return Reply(HttpStatusCode.OK, new JsonObject { ["value"] = new JsonArray(Resources.Values.Where(v =>
                     ((string?)v["id"])?.Contains("/microsoft.app/containerapps/", StringComparison.Ordinal) == true).Select((v, i) => (JsonNode)new JsonObject
-                    { ["operationId"] = InvalidDeploymentOperationId ? "secret-provider-detail" : i.ToString(), ["properties"] = new JsonObject { ["targetResource"] = new JsonObject { ["id"] = (string)v["id"]! },
+                    { ["operationId"] = InvalidDeploymentOperationId ? "secret-provider-detail" : (LongProviderOperationIds ? new string('a', 127) : "") + i.ToString(), ["properties"] = new JsonObject { ["targetResource"] = new JsonObject { ["id"] = (string)v["id"]! },
                         ["provisioningOperation"] = "Create", ["provisioningState"] = "Succeeded", ["statusCode"] = "Created",
                         ["trackingId"] = Guid.NewGuid().ToString() } }).ToArray()) });
             var priorResponse = await prior.SendAsync(request, token);
@@ -164,7 +168,7 @@ internal sealed class TelemetryWorkflowTransport(FactoryFoundationTests.Foundati
             ["properties"] = new JsonObject { ["managedEnvironmentId"] = config.HostingEnvironment.Target,
                 ["configuration"] = new JsonObject { ["activeRevisionsMode"] = "Single",
                     ["ingress"] = new JsonObject { ["external"] = true, ["allowInsecure"] = false, ["targetPort"] = 8080,
-                        ["fqdn"] = "telemetry.private.azurecontainerapps.io" } },
+                        ["fqdn"] = Fqdn } },
                 ["template"] = new JsonObject { ["containers"] = new JsonArray(new JsonObject
                     { ["name"] = "telemetry", ["image"] = config.RuntimeImage, ["command"] = new JsonArray("dotnet", "dsf-runtime.dll"),
                         ["args"] = new JsonArray("serve-telemetry"), ["env"] = new JsonArray(

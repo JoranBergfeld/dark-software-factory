@@ -93,7 +93,8 @@ public static partial class CliApplication
             catch (BoundaryInputException e) { result = new(FactoryReservationState.Failed, e.Message); }
             catch (ReservationStoreException e) { result = new(e.State, e.Message); }
             catch (OperationCanceledException) when (token.IsCancellationRequested)
-            { result = new(FactoryReservationState.Canceled, "Canceled; effects remain inspectable, no rollback."); }
+            { result = new(FactoryReservationState.Canceled, parse.GetValue(verifyOnly)
+                ? FactoryTelemetryService.NoConfirmedHold : "Canceled; effects remain inspectable, no rollback."); }
             catch (Exception e) when (e is JsonException or FormatException or InvalidOperationException)
             { result = new(FactoryReservationState.Unknown, "Trusted telemetry selection/authority unavailable; administrator must inspect, no effects or fallback."); }
             terminal.WriteLine(JsonSerializer.Serialize(result, ReviewJson));

@@ -13,6 +13,29 @@ namespace Dsf.Runtime.Tests;
 public sealed class FactoryTelemetryHostTests
 {
     [Theory]
+    [InlineData(128, true)]
+    [InlineData(129, false)]
+    public async Task Native_reference_growth_respects_the_capacity_bound_without_truncation(int length, bool ready)
+    {
+        using var transport = new TelemetryTransport { ItemId = new string('\uffff', length) };
+        using var http = new HttpClient(transport);
+        var runner = new TelemetryRunner(transport);
+        await RuntimeCliApplication.InvokeAsync(["serve-telemetry"], transport.Environment,
+            new StringWriter(), new StringWriter(), TestDependencies.Build(webHostRunner: runner) with
+            {
+                TelemetryHttp = http, TelemetryCredential = new TelemetryCredential(transport), TelemetryClock = new TelemetryClock(),
+            }, CancellationToken.None);
+        Assert.Equal(ready ? HttpStatusCode.OK : HttpStatusCode.Conflict, runner.Response);
+        var proof = JsonNode.Parse(runner.Body)!;
+        if (ready) Assert.Equal(transport.ItemId, (string?)proof["records"]![0]!["itemId"]);
+        else
+        {
+            Assert.Equal("MalformedResponse", (string?)proof["reason"]);
+            Assert.Empty(proof["records"]!.AsArray());
+        }
+    }
+
+    [Theory]
     [InlineData("profile-deleted")]
     [InlineData("profile-corrupt")]
     [InlineData("manifest-deleted")]
@@ -387,6 +410,7 @@ public sealed class FactoryTelemetryHostTests
         public List<JsonNode> Queries { get; } = [];
         public int ConfigurationReads { get; private set; }
         public string Scenario { get; init; } = "valid";
+        public string ItemId { get; init; } = "record-123";
         public Action? OnQuery { get; set; }
         public string? Label { get; init; }
         public JsonNode? ProtectionLevel { get; set; } = JsonValue.Create("General");
@@ -496,7 +520,7 @@ public sealed class FactoryTelemetryHostTests
                 : new[] { new[] { Scenario is "stale" or "before-boundary" ? "2026-09-15T11:59:59.9999999Z"
                     : Scenario == "after-window" ? "2026-09-16T12:00:00.0000001Z"
                     : freshnessSeconds == 1800 ? "2026-09-16T11:30:00Z" : "2026-09-15T12:00:00Z",
-                    Scenario == "wrong-scope" ? Component + "-other" : backend.ApplicationResourceIds[0], Scenario == "missing-id" ? "" : "record-123",
+                    Scenario == "wrong-scope" ? Component + "-other" : backend.ApplicationResourceIds[0], Scenario == "missing-id" ? "" : ItemId,
                     Scenario == "wrong-workspace" ? "ffffffff-ffff-ffff-ffff-ffffffffffff" : backend.WorkspaceId,
                     Scenario == "wrong-table" ? "AzureActivity" : "AppRequests" } };
             if (Scenario == "ragged-row") rows[0] = [.. rows[0], "secret-provider-detail"];
