@@ -283,7 +283,7 @@ CLI verbs and are not yet created by provisioning assets.
 
 | Runtime command | Host suffix | Workload identity | POST route | Native Entra caller |
 | --- | --- | --- | --- | --- |
-| `serve-preview` | `-preview` | Original COUNCIL UAMI only | `/source-context`, `/model-authority`, `/telemetry-evidence`, `/supplemental-evidence` | Factory's approved Azure operator only |
+| `serve-preview` | `-preview` | Original COUNCIL UAMI only | `/source-context`, `/model-authority`, `/telemetry-evidence`, `/supplemental-evidence`, `/inputs` | Factory's approved Azure operator only |
 | `serve-preview` (selected supplemental callback) | `-preview` | Original COUNCIL UAMI only | `/supplemental-authority` | Requested selected source's original principal **and client** only |
 | `serve-source-context` | `-context` | Original CODE UAMI only | `/council-context` | Original COUNCIL principal **and client** only |
 | `serve-preview-models` (explicit selection) | `-preview-models` | Original COUNCIL UAMI only | `/evaluate` | Original COUNCIL principal **and client** only |
@@ -586,9 +586,127 @@ fails rather than truncates. These sequential checks are not global grant
 discovery or cross-provider atomic fencing.
 
 This operation is read-only: no publication, activation, source removal,
-configuration repair, checkpoint or readiness claim. Aggregate trusted inputs,
-bounded combined evidence selection, actual conveyor execution and durable
-readiness proof remain subsequent work.
+configuration repair, checkpoint or readiness claim. The aggregate operation
+below composes these consumers; actual conveyor execution and durable readiness
+proof remain subsequent work.
+
+#### Trusted aggregate input capture
+
+The approved operator calls `POST /inputs` on `serve-preview`, with the same
+three-field `PreviewCapabilityRequest`. No caller-authored context, observations
+or model results are accepted as inputs. The actual authenticated COUNCIL host
+invokes `RuntimeVerbs.AcquirePreviewInputsAsync` and the shared `RuntimeWorkflow`.
+That workflow uses the existing source `/council-context`, telemetry `/evidence`,
+every selected supplemental `/evidence` (including source-specific authority
+callbacks), and model `/evaluate` with route `authority`. Identities, native
+permissions and current protected capability checks are unchanged.
+
+`FactoryPreviewConfiguration.inputs` is an explicit operator-reviewed
+`PreviewInputConfiguration`; omission is blocked with
+`ApprovedPreviewInputsRequired:configuration.inputs`. Its complete policy and
+judgment enter the capability fingerprint and manifest approval pin. There is
+no runtime fallback to environment or operator-global judgment settings.
+Milestone 3 must display and approve these exact values, alongside the existing
+model topology, telemetry query/projection/freshness and selected sources:
+
+```json
+{
+  "inputs": {
+    "policy": {
+      "revision": "council-input-capture-v1",
+      "maximumObservations": 32,
+      "observationCharacters": 8192,
+      "snapshotBytes": 1048576,
+      "requestSeconds": 1800
+    },
+    "judgment": {
+      "rounds": 2,
+      "threshold": 0.6,
+      "lenses": [
+        { "name": "value", "weight": 1 },
+        { "name": "cost", "weight": 1 },
+        { "name": "feasibility", "weight": 1 },
+        { "name": "security", "weight": 1 },
+        { "name": "strategic-fit", "weight": 1 }
+      ]
+    }
+  }
+}
+```
+
+The example judgment explicitly records repository defaults:
+`DeliberationSettings.Create()` and `S5Council.DefaultThreshold`. Reviewed
+judgment may instead select one or two rounds, a finite threshold in `[0,1]`,
+and one to five unique enabled lenses from that list, with finite positive
+weights; list order is significant. The versioned capacity/time policy must
+match exactly. Unsupported values are blocked, not clipped or normalized.
+The immutable reviewed runtime image also pins implementation/prompt defaults.
+
+Success is HTTP 200 with `PreviewInputSnapshot`, state **Captured**, not Ready.
+It retains the actual manifest/capability and native-governance revisions,
+complete adopted charter and original adoption evidence, complete current
+analysis/chunks/grounded claims/unknowns, original analysis inventory integrity
+and current source reconciliation. `context` is the actual
+`CouncilEvaluationContext`: application/environment/backend scope, original
+evidence references/content hashes, verified model configuration and all five
+native route selections/families, and the reviewed judgment.
+
+`observations` contains genuine projected telemetry fields serialized as
+content, followed by all selected supplemental content; it never creates a
+candidate or a metadata-derived application summary. Original telemetry
+row/item/time/query/content hashes and proof, supplemental proof/native
+revisions and the separately protected supplemental configuration are retained.
+WebIQ references remain opaque `webiq:sha256:...` identifiers, not navigable
+provider URLs. `input:{requestId}#/...` observation references locate content
+inside this returned snapshot; they do **not** claim it has been persisted.
+`revision` hashes the complete snapshot with only its own `revision` field
+blank; `CalculateRevision()` supports checking the serialized handoff.
+
+Collection uses two source-context reads and two native model-authority reads.
+It also consumes telemetry and each selected supplemental twice, using the
+second pass to re-observe source/native authority while **retaining first-pass
+content and timestamps**. Ordinary new telemetry rows do not invalidate
+still-fresh captured rows. Final current source/adoption/configuration,
+permissions, source/model revisions and capability must agree. Only a fresh
+source-read observation timestamp and model-check request nonce are excluded
+from material source comparisons; original values remain in the snapshot.
+Analysis revisions, inventory, content, uncertainty, adopted pointers and all
+other material fields remain fenced. The original captured source proofs must
+still be fresh at release; rereading never renews their timestamps.
+
+Truly pristine Azure-only has no supplemental hosts, settings, grants or
+upstream requests. Selected empty results remain valid and present; selected
+failures/orphaned or unreadable history block the aggregate. At least one
+actual fresh attributable telemetry record per required backend remains
+mandatory. All existing native schema, completeness, confinement, receipt,
+grant and sensitive-content checks apply; no source is silently removed.
+
+The whole authenticated `/inputs` request has a 1,800-second deadline.
+Each source-context fetch and existing model/telemetry/supplemental consumer
+retains a 180-second budget; source internals retain their stricter budgets.
+The production coordinator HTTP client has no competing implicit timeout;
+an injected timeout below 180 seconds is explicitly blocked. Existing
+three-minute telemetry and two-minute supplemental proof validity still
+apply: a long collection may fail freshness rather than revive old evidence.
+The combined snapshot is at most 1 MiB, with at most 32 observations of 8,192
+characters each; application/backend scopes are bounded to 32 identifiers of
+512 characters. Existing per-source bounds still apply. Exceeding **any**
+bound withholds the whole result as Partial; nothing is dropped or truncated.
+Noncurrent, malformed and unconfirmed inputs preserve explicit
+Blocked/Partial/Failed/Canceled/Unknown results without captured content.
+Whole-request deadline exhaustion is Unknown, not operator cancellation.
+
+For in-process checkpoint 2c orchestration, `AcquirePreviewInputsAsync` returns
+`PreviewInputAcquisition`: `Snapshot` plus the real bound
+`IFactoryPreviewModelWorkloads` in `Models`. The latter is JSON-ignored;
+HTTP serializes only the snapshot, never credentials/client objects. Its two
+authority observations have no inference outputs and count toward the existing
+64-observation consumer budget. Later calls still revalidate current authority
+and enforce unknown-dispatch safeguards. This operation performs **no**
+synthesis, embedding, grounding, lenses, jury or conveyor execution and writes
+no progress/run/proof/governance/publication/activation state. Checkpoint 2c
+must consume these inputs with the actual conveyor and conditionally persist
+bounded inputs, provenance and complete revision-bound evaluation proof.
 
 #### Reviewed deployment contract
 
@@ -630,6 +748,15 @@ supplemental routes; its native allowed-principal list becomes the operator
 Application authorization keeps all operator routes operator-only and
 callbacks source-kind/client-bound. This is a reviewed preview-host policy,
 not implicit image drift or an expansion of legacy inactive endpoints.
+
+Aggregate capture adds **no host, identity, ARM action, role assignment, resource
+scope or environment setting**. Its COUNCIL image must explicitly include
+`/inputs` in the reviewed plan; the protected `configuration.inputs` record
+extension above must be approved and fingerprinted. All participating images,
+audiences, native caller policies and exact scopes/actions listed here remain
+mandatory; the aggregate adds no direct source/backend or governance-write
+privilege. Operator routes remain operator-only even when selected-source
+principals are present in native ingress authorization for callbacks.
 
 Each new host must use the approved immutable image, original private managed
 environment, one assigned UAMI, `dotnet dsf-runtime.dll`, and its exact command
@@ -827,9 +954,10 @@ resources are checked by exact properties and deployment receipts, not invented
 timestamps. These are point-in-time checks, **not cross-provider atomic fencing**,
 global tenant permission discovery or a proof of successful Cosmos data-plane
 persistence. This path writes no governance, source progress, preview/run state,
-GitHub issue/PR/label, handoff or activation. Aggregate evidence acquisition,
-conveyor composition and persisted readiness proof remain separate integration
-work; generic inactive `run`, `sweep`, HTTP and dry-run admission is unchanged.
+GitHub issue/PR/label, handoff or activation. Aggregate evidence acquisition is
+implemented; conveyor composition and persisted readiness proof remain
+checkpoint 2c work. Generic inactive `run`, `sweep`, HTTP and dry-run admission
+is unchanged.
 
 **See also:** the [loop overview](the-loop.md), the next phase
 [Creation phase](creation.md), and the decision-path redesign in

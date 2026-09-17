@@ -25,6 +25,8 @@ public sealed record FactoryPreviewConfiguration(
     public PreviewSupplementalConfiguration? Supplemental { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? SupplementalRevision { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public PreviewInputConfiguration? Inputs { get; init; }
 }
 
 public sealed record FactoryPreviewCapability(
@@ -200,6 +202,7 @@ public static class FactoryPreviewValidation
             || !FactorySourceValidation.Hash(config.MetadataRoleRevision))
             throw new PreviewCapabilityException(FactoryCharterState.Blocked, "PreviewApprovalOrCurrentInputsChanged");
         FactorySourceValidation.ValidateSelection(new(config.RuntimeImage, config.AudienceClientId));
+        if (config.Inputs is not null) FactoryPreviewInputValidation.Validate(config.Inputs);
         if (config.ModelEvaluation is { } evaluation)
         {
             if (evaluation.Purpose != PreviewModelHostConfiguration.PurposeName) throw new JsonException();

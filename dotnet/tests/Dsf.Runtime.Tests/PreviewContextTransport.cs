@@ -58,7 +58,8 @@ internal sealed partial class PreviewContextTransport : HttpMessageHandler
         """;
 
     internal static async Task<PreviewContextTransport> CreateAsync(bool modelEvaluation = false, bool telemetryEvidence = false,
-        bool mixedTables = false, bool multipleBackends = false, string? telemetryTable = null, IReadOnlyList<string>? supplementals = null)
+        bool mixedTables = false, bool multipleBackends = false, string? telemetryTable = null, IReadOnlyList<string>? supplementals = null,
+        bool aggregateInputs = false)
     {
         var result = new PreviewContextTransport { Intent = await IntentWorkflowTransport.CreateAsync() };
         result.inner = new(result.Intent, false);
@@ -99,11 +100,11 @@ internal sealed partial class PreviewContextTransport : HttpMessageHandler
         for (var i = 0; i < parts.Length; i++) source.Values[ProductConfigurationKeys.CharterAdoptionPayload(adoption.Revision, i)] = JsonSerializer.Serialize(parts[i], json);
         if (telemetryEvidence) await result.PrepareTelemetryAsync(mixedTables, multipleBackends, telemetryTable);
         if (supplementals is not null) await result.PrepareSupplementalsAsync(supplementals);
-        result.Prepare(adoption.Revision, modelEvaluation);
+        result.Prepare(adoption.Revision, modelEvaluation, aggregateInputs);
         return result;
     }
 
-    private void Prepare(Guid adoption, bool modelEvaluation)
+    private void Prepare(Guid adoption, bool modelEvaluation, bool aggregateInputs)
     {
         var manifest = JsonSerializer.Deserialize<FactoryManifest>(Source.Values[ProductConfigurationKeys.FactoryManifest], FactoryGitHubJson.Options)!;
         Models = FactoryModelsValidation.ReadPreparation(manifest, Source.Values);
@@ -145,7 +146,9 @@ internal sealed partial class PreviewContextTransport : HttpMessageHandler
         { ModelEvaluation = modelEvaluation ? new(PreviewModelHostConfiguration.PurposeName,
             "example.azurecr.io/dsf/runtime@sha256:" + new string('8', 64), "acacacac-acac-acac-acac-acacacacacac") : null,
             Telemetry = TelemetrySelection, Supplemental = SupplementalConfiguration,
-            SupplementalRevision = SupplementalConfiguration is null ? null : FactoryModelsValidation.Hash(SupplementalConfiguration) };
+            SupplementalRevision = SupplementalConfiguration is null ? null : FactoryModelsValidation.Hash(SupplementalConfiguration),
+            Inputs = aggregateInputs ? new(FactoryPreviewInputValidation.Policy, new(2, Dsf.FeatureCouncil.Conveyor.Stations.S5Council.DefaultThreshold,
+                DeliberationSettings.Create().Lenses.Select(l => new CouncilLensConfiguration(l.Name, l.Weight)).ToArray())) : null };
         if (SupplementalConfiguration is not null)
             Source.Values[FactoryPreviewSupplementalValidation.ConfigurationKey(operation)] = JsonSerializer.Serialize(SupplementalConfiguration, FactoryGitHubJson.Options);
         foreach (var pair in resources)
@@ -265,6 +268,7 @@ internal sealed partial class PreviewContextTransport : HttpMessageHandler
 
     internal async Task<PreviewContextRunner> RunAsync(bool coordinator = false, string? caller = null, string? client = null, object? request = null)
     {
+        var requests = Requests.Count;
         var writes = Source.Writes.Count;
         var inference = Intent.Models.Inference.Count;
         var runner = new PreviewContextRunner(Source)
@@ -286,7 +290,7 @@ internal sealed partial class PreviewContextTransport : HttpMessageHandler
         Assert.Equal(writes, Source.Writes.Count);
         Assert.Equal(inference, Intent.Models.Inference.Count);
         Assert.DoesNotContain(Requests, r => r.Method is "PUT" or "PATCH" or "DELETE");
-        Assert.DoesNotContain(Requests, r => r.Method == "POST" && r.Uri.AbsolutePath is not ("/council-context" or "/authority" or "/tokens/contents"));
+        Assert.DoesNotContain(Requests.Skip(requests), r => r.Method == "POST" && r.Uri.AbsolutePath is not ("/council-context" or "/authority" or "/tokens/contents"));
         return runner;
     }
 
@@ -300,6 +304,7 @@ internal sealed partial class PreviewContextTransport : HttpMessageHandler
         worker.Source.RootTree = first.Source.RootTree;
         worker.Source.Head = first.Source.Head;
         worker.Source.Clock.Now = first.Source.Clock.Now;
+        worker.EnforceCouncilScopes = first.EnforceCouncilScopes;
         worker.Source.Blobs.Clear();
         foreach (var pair in first.Source.Blobs) worker.Source.Blobs[pair.Key] = Convert.FromBase64String(Convert.ToBase64String(pair.Value));
         foreach (var (before, after) in new[] { (first.Source.Trees, worker.Source.Trees), (first.Source.Resources, worker.Source.Resources),

@@ -128,6 +128,7 @@ internal sealed partial class PreviewContextTransport
     internal async Task<PreviewContextRunner> RunTelemetryAsync(bool coordinator = false, string? caller = null, string? client = null,
         PreviewCapabilityRequest? request = null)
     {
+        var requests = Requests.Count;
         var writes = Source.Writes.Count;
         var inference = Intent.Models.Inference.Count;
         var runner = new PreviewContextRunner(Source) { Route = coordinator ? "/telemetry-evidence" : "/evidence",
@@ -143,7 +144,7 @@ internal sealed partial class PreviewContextTransport
         Assert.Equal(writes, Source.Writes.Count);
         Assert.Equal(inference, Intent.Models.Inference.Count);
         Assert.DoesNotContain(Requests, r => r.Method is "PUT" or "PATCH" or "DELETE");
-        Assert.DoesNotContain(Requests, r => r.Method == "POST" && r.Uri.AbsolutePath != "/evidence" && r.Uri.Host != "api.loganalytics.io");
+        Assert.DoesNotContain(Requests.Skip(requests), r => r.Method == "POST" && r.Uri.AbsolutePath != "/evidence" && r.Uri.Host != "api.loganalytics.io");
         return runner;
     }
 

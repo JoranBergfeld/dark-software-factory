@@ -35,19 +35,21 @@ public static partial class RuntimeVerbs
             app.MapPost("/telemetry-evidence", (Func<HttpContext, Task<IResult>>)(context => HandleAsync(context, telemetryEvidence: true)));
             app.MapPost("/supplemental-evidence", (Func<HttpContext, Task<IResult>>)(context => HandleAsync(context, supplementalEvidence: true)));
             app.MapPost("/supplemental-authority", (Func<HttpContext, Task<IResult>>)(context => HandleAsync(context, supplementalAuthority: true)));
+            app.MapPost("/inputs", (Func<HttpContext, Task<IResult>>)(context => HandleAsync(context, inputs: true)));
         }
         return app;
 
         async Task<IResult> HandleAsync(HttpContext context, bool modelAuthority = false, bool telemetryEvidence = false,
-            bool supplementalEvidence = false, bool supplementalAuthority = false)
+            bool supplementalEvidence = false, bool supplementalAuthority = false, bool inputs = false)
         {
             context.Response.Headers.CacheControl = "no-store";
+            var clock = kind == PreviewHostKind.SourceContext ? dependencies.SourceClock : dependencies.PreviewClock;
+            using var deadline = new CancellationTokenSource(inputs ? TimeSpan.FromSeconds(FactoryPreviewInputValidation.Policy.RequestSeconds)
+                : FactoryPreviewValidation.RequestBudget, clock);
+            using var pending = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted, deadline.Token);
             try
             {
                 if (context.Request.Headers["X-MS-CLIENT-PRINCIPAL-IDP"] != "aad") throw new PreviewCapabilityException(FactoryCharterState.Blocked, "NativeCallerRequired");
-                var clock = kind == PreviewHostKind.SourceContext ? dependencies.SourceClock : dependencies.PreviewClock;
-                using var deadline = new CancellationTokenSource(FactoryPreviewValidation.RequestBudget, clock);
-                using var pending = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted, deadline.Token);
                 var token = pending.Token;
                 var optional = supplementalAuthority ? await context.Request.ReadFromJsonAsync<PreviewSupplementalRequest>(FactorySourceValidation.RecordJson, token)
                     ?? throw new JsonException() : null;
@@ -67,6 +69,13 @@ public static partial class RuntimeVerbs
                 if (!NativeCaller(context, kind == PreviewHostKind.SourceContext ? capability.Council.PrincipalId! : capability.Manifest.Identity.AzureActorId,
                     capability.Manifest.Identity.TenantId, kind == PreviewHostKind.SourceContext ? capability.Council.ClientId : null))
                     throw new PreviewCapabilityException(FactoryCharterState.Blocked, "ApprovedPreviewCallerRequired");
+                if (inputs)
+                {
+                    var acquired = await AcquirePreviewInputsAsync(settings, dependencies, request, token);
+                    if (acquired.Snapshot.CapabilityRevision != capability.Revision)
+                        throw new PreviewCapabilityException(FactoryCharterState.Blocked, "PreviewCapabilityChangedDuringInputRead");
+                    return Results.Json(acquired.Snapshot, FactoryGitHubJson.Options);
+                }
                 if (modelAuthority)
                 {
                     var models = await OpenPreviewModelsAsync(settings, dependencies, request, token);
@@ -118,6 +127,9 @@ public static partial class RuntimeVerbs
                 return Results.Content(System.Text.Encoding.UTF8.GetString(bytes), "application/json",
                     statusCode: result.State == FactoryCharterState.Adopted ? 200 : 409);
             }
+            catch (Exception e) when (inputs && e is PreviewCapabilityException or OperationCanceledException
+                && deadline.IsCancellationRequested && !context.RequestAborted.IsCancellationRequested)
+            { return Error(FactoryCharterState.Unknown, "PreviewInputCollectionDeadlineExceeded", 409); }
             catch (PreviewCapabilityException e) { return Error(e.State, e.Message, 403); }
             catch (SupplementalSourceException e) when (e.Reason == SupplementalReason.CapacityExceeded)
             { return Error(FactoryCharterState.Partial, "PreviewContextCapacityExceeded", 409); }
@@ -132,7 +144,7 @@ public static partial class RuntimeVerbs
             Results.Json(new PreviewContextFailure(state, reason), FactoryGitHubJson.Options, statusCode: status);
     }
 
-    private static async Task<PreviewSourceContext> ReadPreviewSourceAsync(PreviewCapabilitySnapshot capability, PreviewCapabilityRequest input,
+    internal static async Task<PreviewSourceContext> ReadPreviewSourceAsync(PreviewCapabilitySnapshot capability, PreviewCapabilityRequest input,
         TokenCredential credential, HttpClient http, CancellationToken token)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, capability.SourceContextEndpoint + "/council-context")
@@ -164,7 +176,7 @@ public static partial class RuntimeVerbs
     private static bool Unconfirmed(FactoryCharterState state) =>
         state is FactoryCharterState.Partial or FactoryCharterState.Blocked or FactoryCharterState.Failed or FactoryCharterState.Canceled or FactoryCharterState.Unknown;
 
-    private static void ValidatePreviewContext(PreviewCapabilitySnapshot capability, SourceCharterContextResult result)
+    internal static void ValidatePreviewContext(PreviewCapabilitySnapshot capability, SourceCharterContextResult result)
     {
         if (result.Adoption is null || result.Current is null
             || result.Adoption.Adoption.Revision != capability.Capability.Configuration.AdoptedCharterRevision

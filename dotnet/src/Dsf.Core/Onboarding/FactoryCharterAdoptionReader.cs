@@ -57,10 +57,21 @@ public static class FactoryCharterAdoptionReader
         var analysis = evidence.Analysis;
         var source = evidence.Source;
         if (analysis.State != IntentState.DraftReady || analysis.Governs || analysis.Draft is null
-            || analysis.Progress is not { Dispatch: null, State: IntentState.DraftReady } progress
-            || progress.AvailableChunks <= 0 || progress.AnalyzedChunks != progress.AvailableChunks
+            || analysis.Progress is not { Dispatch: null, PendingSelection: null, State: IntentState.DraftReady,
+                ModelOutcome: IntentModelOutcome.Confirmed } progress
+            || progress.Revision == Guid.Empty || progress.Snapshot.FactoryId != adoption.FactoryId
+            || progress.Snapshot.RepositoryId != source.Snapshot.RepositoryId
+            || progress.AvailableChunks is < 1 or > FactoryIntentLimits.MaximumChunks || progress.AnalyzedChunks != progress.AvailableChunks
             || progress.CheckedChunks != progress.AvailableChunks || analysis.ModelAuthority is null
-            || analysis.Claims.Any(c => !c.Grounded || c.Conflicted) || analysis.NextPage is not null
+            || analysis.Acquisition is not { State: SourceState.Acquired, CompleteRootTree: true, NecessaryGaps: 0 } acquisition
+            || acquisition.Snapshot != progress.Snapshot || acquisition.IntegritySha256 != progress.SourceIntegritySha256
+            || analysis.Claims.Count == 0 || analysis.Claims.Any(c => c is null || !c.Grounded || c.Conflicted)
+            || analysis.Chunks.Count != 2 * progress.AvailableChunks
+            || analysis.Chunks.Any(c => c is null || c.Revision != progress.Revision || c.Source.SnapshotId != progress.Snapshot.Id
+                || (c.Dispatch.Checking ? c.Verification?.Complete != true : c.Candidate?.Complete != true))
+            || analysis.Chunks.Count(c => c.Dispatch.Checking) != progress.AvailableChunks
+            || analysis.Chunks.Select(c => (c.Dispatch.Checking, c.Dispatch.Index)).Distinct().Count() != analysis.Chunks.Count
+            || analysis.Limitations.Any(string.IsNullOrWhiteSpace) || analysis.NextPage is not null
             || analysis.NextExclusionPage is not null || source.Snapshot.FactoryId != adoption.FactoryId
             || source.Content is null || source.Blob != adoption.CharterBlob
             || CharterMarkdown.GitBlobSha(source.Content) != adoption.CharterBlob
