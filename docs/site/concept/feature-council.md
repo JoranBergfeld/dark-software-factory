@@ -239,6 +239,24 @@ not establish safe replay of an in-flight or unconfirmed external call. Runtime
 composition must provide current authority, protected persistence, dispatch
 accounting and a separately validated revision-bound readiness proof.
 
+The runtime's Cosmos run-store adapter must be explicitly configured for
+`OnboardingPreview`; its default remains `Greenfield`. Onboarding checkpoints use
+native create-only inserts and `If-Match` replacements, never upsert or
+read-then-write emulation. Their `/product` partition, run ID, protocol, complete
+serialized evaluation checksum and native response ETag must match. All context,
+claims, grounding, model observations, review and intended publication fields
+survive a process restart. A missing profile cannot downgrade those records to
+greenfield. Documents are limited to **2,080,768 UTF-8 bytes**, reserving 16 KiB
+below Cosmos's 2 MiB item limit for native metadata.
+
+Checkpoint storage requires an explicit workload credential, not a developer
+credential-chain fallback. Denial, CAS conflict, preflight capacity and unknown
+acknowledgment remain distinct failures. After an unconfirmed read/write the
+same store instance refuses further writes for that run; this is not a remote
+lease, revocation receipt or cross-provider transaction. Cancellation is not
+rollback. Reconstructed artifacts and checksums establish neither current
+readiness nor safe replay of external model dispatches.
+
 **See also:** the [loop overview](the-loop.md), the next phase
 [Creation phase](creation.md), and the decision-path redesign in
 [ADR 0011](https://github.com/JoranBergfeld/dark-software-factory/blob/main/docs/adr/0011-feature-council-deliberative-redesign.md)

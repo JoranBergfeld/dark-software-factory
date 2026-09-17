@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using Azure.Core;
 using Azure.Identity;
+using Dsf.Core.Onboarding;
 using Dsf.FeatureCouncil.Conveyor;
 
 namespace Dsf.Runtime;
@@ -15,6 +16,14 @@ namespace Dsf.Runtime;
 /// </summary>
 internal interface ICosmosDocumentGateway
 {
+    Task<CosmosCheckpoint?> ReadCheckpointAsync(
+        string endpoint, string database, string container, string partitionKey, string id, CancellationToken token) =>
+        throw new NotSupportedException("This gateway does not support bounded versioned checkpoints.");
+
+    Task<CosmosCheckpoint> WriteCheckpointAsync(
+        string endpoint, string database, string container, string partitionKey, string id, string json, string? etag, CancellationToken token) =>
+        throw new NotSupportedException("This gateway does not support native conditional checkpoints.");
+
     Task UpsertAsync(
         string endpoint,
         string database,
@@ -88,13 +97,14 @@ internal interface ICosmosDocumentGateway
 /// same <see cref="DefaultAzureCredential"/> path as the rest of the runtime so a
 /// Container App needs no keys and no interactive login.
 /// </summary>
-internal sealed class AzureCosmosDocumentGateway(TokenCredential? credential = null, HttpClient? httpClient = null)
+internal sealed partial class AzureCosmosDocumentGateway(TokenCredential? credential = null, HttpClient? httpClient = null)
     : ICosmosDocumentGateway
 {
     private const string CosmosApiVersion = "2018-12-31";
     private static readonly string[] Scopes = ["https://cosmos.azure.com/.default"];
 
     private readonly TokenCredential credential = credential ?? new DefaultAzureCredential();
+    private readonly bool explicitCredential = credential is not null;
     private readonly HttpClient httpClient = httpClient ?? new HttpClient();
 
     public async Task UpsertAsync(
@@ -286,13 +296,17 @@ internal sealed class AzureCosmosDocumentGateway(TokenCredential? credential = n
 /// run id, so the run's evidence, decisions, checkpoints and audit trail survive
 /// the process and can be resumed and governed afterwards.
 /// </summary>
-internal sealed class CosmosRunStore(
+internal sealed partial class CosmosRunStore(
     string endpoint,
     string database,
     string container,
     string product,
-    ICosmosDocumentGateway gateway) : IRunStore
+    ICosmosDocumentGateway gateway,
+    ConveyorProfile expectedProfile = ConveyorProfile.Greenfield) : IRunStore
 {
+    private readonly ConveyorProfile expectedProfile = Enum.IsDefined(expectedProfile)
+        ? expectedProfile : throw new ArgumentOutOfRangeException(nameof(expectedProfile));
+    private readonly Dictionary<string, string> checkpointVersions = new(StringComparer.Ordinal);
     private static readonly JsonSerializerOptions SerializerOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -301,6 +315,7 @@ internal sealed class CosmosRunStore(
     public async Task SaveAsync(ConveyorRun run, string station, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(run);
+        if (run.Profile != expectedProfile) throw new InvalidOperationException("Run profile does not match the configured Cosmos store.");
 
         var document = JsonSerializer.Serialize(
             new
@@ -308,6 +323,13 @@ internal sealed class CosmosRunStore(
                 id = run.Id,
                 product,
                 station,
+                profile = run.Profile.ToString(),
+                onboardingProtocol = run.Profile == ConveyorProfile.OnboardingPreview ? 1 : 0,
+                onboardingChecksum = run.Profile == ConveyorProfile.OnboardingPreview ? FactoryModelsValidation.Hash(run) : null,
+                run.EvaluationContext,
+                run.EvaluationRevision,
+                run.SynthesisEvaluations,
+                run.ModelObservations,
                 status = run.Status.ToString().ToLowerInvariant(),
                 trigger = run.Trigger.ToString().ToLowerInvariant(),
                 dryRun = run.DryRun,
@@ -320,6 +342,10 @@ internal sealed class CosmosRunStore(
                 {
                     proposal.Id,
                     proposal.Title,
+                    proposal.Body,
+                    proposal.Synthesis,
+                    proposal.Grounding,
+                    proposal.IntendedPublication,
                     proposal.SourceKinds,
                     proposal.IntentKey,
                     proposal.Confidence,
@@ -335,6 +361,9 @@ internal sealed class CosmosRunStore(
                     preview.Title,
                     preview.IntentKey,
                     preview.Labels,
+                    preview.Body,
+                    preview.Assignees,
+                    preview.Disposition,
                 }),
                 failureReason = run.FailureReason,
                 audit = run.Audit.Select(record => new { record.Station, record.Message }),
@@ -342,6 +371,11 @@ internal sealed class CosmosRunStore(
             },
             SerializerOptions);
 
+        if (expectedProfile == ConveyorProfile.OnboardingPreview)
+        {
+            await SaveOnboardingCheckpointAsync(run.Id, document, cancellationToken);
+            return;
+        }
         try
         {
             await gateway.UpsertAsync(endpoint, database, container, product, run.Id, document, cancellationToken);
@@ -365,6 +399,8 @@ internal sealed class CosmosRunStore(
     public async Task<ConveyorRun?> LoadAsync(string runId, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(runId);
+        if (expectedProfile == ConveyorProfile.OnboardingPreview)
+            return await LoadOnboardingCheckpointAsync(runId, cancellationToken);
 
         string? json;
         try
@@ -379,7 +415,10 @@ internal sealed class CosmosRunStore(
                 exception);
         }
 
-        return json is null ? null : Deserialize(json);
+        if (json is null) return null;
+        var run = Deserialize(json);
+        if (run.Profile != expectedProfile) throw new InvalidOperationException("Stored run profile does not match the configured Cosmos store.");
+        return run;
     }
 
     /// <summary>Rebuilds a <see cref="ConveyorRun"/> from the document <see cref="SaveAsync"/> wrote.</summary>
@@ -387,16 +426,31 @@ internal sealed class CosmosRunStore(
     {
         using var document = JsonDocument.Parse(json);
         var root = document.RootElement;
+        var storedProfile = root.TryGetProperty("profile", out var profile)
+            ? Enum.Parse<ConveyorProfile>(profile.GetString()!, ignoreCase: true) : ConveyorProfile.Greenfield;
+        var onboardingFields = root.TryGetProperty("onboardingProtocol", out var protocol) && protocol.GetInt32() != 0
+            || HasValue("onboardingChecksum") || HasValue("evaluationContext") || HasValue("evaluationRevision")
+            || HasItems("synthesisEvaluations") || HasItems("modelObservations")
+            || root.TryGetProperty("proposals", out var storedProposals)
+                && storedProposals.EnumerateArray().Any(proposal => proposal.TryGetProperty("synthesis", out var synthesis)
+                    && synthesis.ValueKind != JsonValueKind.Null);
+        if (!Enum.IsDefined(storedProfile) || onboardingFields && storedProfile != ConveyorProfile.OnboardingPreview)
+            throw new InvalidOperationException("Stored onboarding profile is missing or inconsistent; no greenfield downgrade.");
 
         var run = new ConveyorRun
         {
             Id = root.GetProperty("id").GetString()!,
+            Profile = storedProfile,
+            EvaluationContext = ReadOptional<CouncilEvaluationContext>(root, "evaluationContext"),
+            EvaluationRevision = ReadOptional<string>(root, "evaluationRevision"),
             Trigger = Enum.Parse<TriggerKind>(root.GetProperty("trigger").GetString()!, ignoreCase: true),
             ProductHints = ReadStrings(root, "productHints"),
             SourceKinds = ReadStrings(root, "sourceKinds"),
             DryRun = root.GetProperty("dryRun").GetBoolean(),
         };
         run.Status = Enum.Parse<RunStatus>(root.GetProperty("status").GetString()!, ignoreCase: true);
+        run.SynthesisEvaluations.AddRange(ReadOptional<SynthesisEvaluation[]>(root, "synthesisEvaluations") ?? []);
+        run.ModelObservations.AddRange(ReadOptional<EvaluationModelObservation[]>(root, "modelObservations") ?? []);
         run.Fingerprint = root.TryGetProperty("fingerprint", out var fingerprint)
             ? fingerprint.GetString() ?? string.Empty
             : string.Empty;
@@ -446,6 +500,10 @@ internal sealed class CosmosRunStore(
                     ReadStrings(item, "evidenceReferences"))
                 {
                     IntentKey = item.GetProperty("intentKey").GetString() ?? string.Empty,
+                    Body = ReadOptional<string>(item, "body"),
+                    Synthesis = ReadOptional<SynthesizedProposal>(item, "synthesis"),
+                    Grounding = ReadOptional<GroundingEvaluation>(item, "grounding"),
+                    IntendedPublication = ReadOptional<IssuePreview>(item, "intendedPublication"),
                     Confidence = item.GetProperty("confidence").GetDouble(),
                     Verdict = reviewError is null ? verdict ?? ProposalVerdict.Error : ProposalVerdict.Error,
                     ClusterEvidence = item.TryGetProperty("clusterEvidence", out var cluster)
@@ -479,7 +537,13 @@ internal sealed class CosmosRunStore(
                 run.PreviewedIssues.Add(new IssuePreview(
                     item.GetProperty("title").GetString()!,
                     item.GetProperty("intentKey").GetString()!,
-                    ReadStrings(item, "labels")));
+                    ReadStrings(item, "labels"))
+                {
+                    Body = ReadOptional<string>(item, "body"),
+                    Assignees = ReadOptional<string[]>(item, "assignees") ?? [],
+                    Disposition = item.TryGetProperty("disposition", out var disposition)
+                        ? disposition.Deserialize<ProposalVerdict>(SerializerOptions) : ProposalVerdict.Pending,
+                });
             }
         }
 
@@ -494,7 +558,15 @@ internal sealed class CosmosRunStore(
         }
 
         return run;
+
+        bool HasValue(string name) => root.TryGetProperty(name, out var value) && value.ValueKind != JsonValueKind.Null;
+        bool HasItems(string name) => HasValue(name) && root.GetProperty(name).GetArrayLength() != 0;
     }
+
+    private static T? ReadOptional<T>(JsonElement parent, string property) where T : class =>
+        parent.TryGetProperty(property, out var value) && value.ValueKind != JsonValueKind.Null
+            ? value.Deserialize<T>(SerializerOptions) ?? throw new JsonException("Invalid stored evaluation field.")
+            : null;
 
     private static IReadOnlyList<string> ReadStrings(JsonElement parent, string property) =>
         parent.TryGetProperty(property, out var array) ? ReadStrings(array) : [];

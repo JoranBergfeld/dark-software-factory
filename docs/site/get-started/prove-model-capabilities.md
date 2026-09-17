@@ -206,7 +206,11 @@ The response model must match the reviewed native model/version, not a family
 prefix. Truncated or malformed responses never become substitute completions.
 
 Embedding responses must cover every input exactly once, with finite, nonzero
-vectors of the reviewed dimension. Those vectors actually drive deterministic
+vectors of the reviewed dimension. Batches contain **one to 32** observations.
+A singleton still makes one native inference request with exactly one input and
+returns its caller-owned ID as a singleton group; it is never padded with a
+duplicate or fabricated observation. Empty batches and malformed singleton
+vectors fail explicitly. Those vectors actually drive deterministic
 complete-link cosine grouping at **0.90**, not a lexical substitute. The grouping
 service retains all caller-owned IDs; it neither generates nor persists new
 problem identities. Capability inputs demonstrate the route, not embedding

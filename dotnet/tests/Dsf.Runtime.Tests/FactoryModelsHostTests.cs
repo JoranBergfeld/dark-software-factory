@@ -13,6 +13,51 @@ namespace Dsf.Runtime.Tests;
 public sealed class FactoryModelsHostTests
 {
     [Theory]
+    [InlineData("single", 200, 1)]
+    [InlineData("empty", 409, 0)]
+    [InlineData("embedding-dimensions", 409, 1)]
+    [InlineData("embedding-zero", 409, 1)]
+    [InlineData("embedding-empty", 409, 1)]
+    public async Task One_genuine_observation_uses_one_native_embedding_input_without_padding(
+        string scenario, int status, int workloadCalls)
+    {
+        const string observation = "A coordinator's overlapping volunteer assignment was rejected by the deployed assignment endpoint.";
+        using var transport = new ModelHostTransport();
+        using var http = new HttpClient(transport);
+        var runner = new ModelHostRunner(transport)
+        {
+            Consume = true,
+            BeforeConsume = request =>
+            {
+                transport.Inference.Clear();
+                transport.Scenario = scenario;
+                request["items"] = scenario == "empty" ? new JsonArray()
+                    : new JsonArray(JsonSerializer.SerializeToNode(new ModelText("captured-record", observation), FactoryGitHubJson.Options));
+            },
+        };
+
+        await RuntimeCliApplication.InvokeAsync(["serve-models"], transport.Environment, new StringWriter(), new StringWriter(),
+            RuntimeDependencies.Production() with
+            { WebHostRunner = runner, ModelHttp = http, ModelCredential = new ModelCredential(transport), ModelClock = transport.Clock },
+            CancellationToken.None);
+
+        Assert.Equal((HttpStatusCode)status, runner.ConsumerStatus);
+        Assert.Equal(workloadCalls, transport.Inference.Count);
+        if (workloadCalls != 0)
+            Assert.Equal(observation, (string?)Assert.Single(Assert.Single(transport.Inference)["input"]!.AsArray()));
+        if (scenario == "single")
+        {
+            var result = JsonSerializer.Deserialize<ModelDeduplicationResult>(runner.ConsumerBody, FactoryGitHubJson.Options)!;
+            Assert.Equal("captured-record", Assert.Single(Assert.Single(result.Groups)));
+            Assert.Equal(1536, result.Observation.Dimensions);
+            Assert.Equal("embedding", result.Observation.Route);
+            Assert.Equal(transport.Authority.ApprovalFingerprint, result.Observation.ConfigurationRevision);
+            Assert.Equal(FactoryModelsValidation.Hash(JsonSerializer.Serialize(result.Groups)), result.Observation.OutputSha256);
+        }
+        else Assert.DoesNotContain("\"groups\"", runner.ConsumerBody);
+    }
+
+    [Theory]
     [InlineData("current", 200)]
     [InlineData("wrong-caller", 403)]
     [InlineData("changed-config", 403)]
@@ -550,7 +595,7 @@ public sealed class FactoryModelsHostTests
             {
                 Assert.Equal("/openai/v1/embeddings", request.RequestUri.AbsolutePath);
                 var count = body["input"]!.AsArray().Count;
-                Assert.InRange(count, 2, 32);
+                Assert.InRange(count, 1, 32);
                 var vectors = Enumerable.Range(0, count).Select(i => i switch
                 { 0 => Vector(1, 0, route.Dimensions), 1 => Vector(0.99, 0.01, route.Dimensions), _ => Vector(0, 1, route.Dimensions) }).ToArray();
                 if (Scenario == "embedding-empty") vectors = [];

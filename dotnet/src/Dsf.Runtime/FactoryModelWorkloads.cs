@@ -54,10 +54,10 @@ internal sealed class FactoryModelWorkloads(
 
     public async Task<ModelDeduplicationResult> DeduplicateAsync(IReadOnlyList<ModelText> input, CancellationToken token)
     {
-        if (input.Count is < 2 or > 32 || input.Any(i => i is null || string.IsNullOrWhiteSpace(i.Id) || i.Id.Length > 64
+        if (input.Count is < 1 or > 32 || input.Any(i => i is null || string.IsNullOrWhiteSpace(i.Id) || i.Id.Length > 64
                 || i.Id.Any(c => !char.IsAsciiLetterOrDigit(c) && c is not ('-' or '_')))
             || input.Select(i => i.Id).Distinct(StringComparer.Ordinal).Count() != input.Count)
-            throw FactoryModelsValidation.Failure(ModelCapabilityReason.UnsupportedTarget, "embedding", "Two to 32 distinct bounded caller-owned IDs required; dedup never invents problem identities.");
+            throw FactoryModelsValidation.Failure(ModelCapabilityReason.UnsupportedTarget, "embedding", "One to 32 distinct bounded caller-owned IDs required; dedup never invents problem identities.");
         foreach (var item in input) ValidateInput(item.Text);
         var route = authority.Routes![1];
         await CheckRouteAsync(route, token);
