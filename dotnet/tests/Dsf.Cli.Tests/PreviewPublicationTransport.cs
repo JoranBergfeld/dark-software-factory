@@ -19,24 +19,43 @@ internal sealed partial class PreviewPreparationTransport
     internal string? SeedFailure { get; set; }
     internal Action? BeforeSeed { get; set; }
     internal string LastPreviewResponse = "";
+    internal readonly List<string> HostFailures = [];
 
     private async Task<HttpResponseMessage> PreviewHostAsync(HttpRequestMessage request, CancellationToken token, bool modelProof = false)
     {
-        var runner = new PreviewRunner(this, request.RequestUri!.AbsolutePath, request.Content is null ? "" : await request.Content.ReadAsStringAsync(token));
-        using var http = new HttpClient(this, false);
-        var binding = scenario.Arm.CreatedResources.Values.Single(r => ((string?)r["id"])?.EndsWith("-council", StringComparison.Ordinal) == true);
+        var runner = new PreviewRunner(this, request.RequestUri!.AbsolutePath, request.Content is null ? "" : await request.Content.ReadAsStringAsync(token),
+            request.Headers.Authorization?.Parameter);
+        using var http = new HttpClient(this, false) { Timeout = Timeout.InfiniteTimeSpan };
+        var council = scenario.Arm.CreatedResources.Values.Single(r => ((string?)r["id"])?.EndsWith("-council", StringComparison.Ordinal) == true);
         var settings = new Dictionary<string, string?>
         {
             ["DSF_PRODUCT"] = Manifest.Identity.ProductKey, ["AZURE_APPCONFIG_ENDPOINT"] = Authority.Configuration.ProductEndpoint,
-            ["DSF_FACTORY_PROFILE_PIN"] = Manifest.ProfilePin, ["AZURE_CLIENT_ID"] = (string?)binding["properties"]!["clientId"],
+            ["DSF_FACTORY_PROFILE_PIN"] = Manifest.ProfilePin, ["AZURE_CLIENT_ID"] = (string?)council["properties"]!["clientId"],
         };
+        var verb = "serve-models";
+        var binding = council;
+        if (!modelProof)
+        {
+            var native = HostedResources.Single(r => (string?)r["properties"]?["configuration"]?["ingress"]?["fqdn"] == request.RequestUri.Host);
+            var container = native["properties"]!["template"]!["containers"]![0]!;
+            verb = (string)container["args"]![0]!;
+            settings = container["env"]!.AsArray().ToDictionary(e => (string)e!["name"]!, e => (string?)e!["value"]);
+            var identity = native["identity"]!["userAssignedIdentities"]!.AsObject().Single().Key;
+            binding = scenario.Arm.CreatedResources.Values.Concat(Telemetry.Resources.Values).Concat(supplemental?.Resources.Values ?? Enumerable.Empty<JsonNode>())
+                .Single(r => string.Equals((string?)r["id"], identity, StringComparison.OrdinalIgnoreCase));
+        }
+        scenario.Source.Source!.Values = Values();
+        var credential = new PreviewCredential(this, binding);
         var error = new StringWriter();
-        var exit = await RuntimeCliApplication.InvokeAsync([modelProof ? "serve-models" : "serve-preview"], settings, new StringWriter(), error,
-            RuntimeDependencies.Production() with { PreviewHttp = http, PreviewCredential = new PreviewCredential(this),
-                PreviewClock = scenario.Source.Source!.Clock, ModelHttp = http, ModelCredential = new PreviewCredential(this),
-                ModelClock = scenario.Source.Source.Clock, WebHostRunner = runner }, token);
+        var exit = await RuntimeCliApplication.InvokeAsync([verb], settings, new StringWriter(), error,
+            RuntimeDependencies.Production() with { PreviewHttp = http, PreviewCredential = credential,
+                PreviewClock = scenario.Source.Source.Clock, ModelHttp = http, ModelCredential = credential,
+                ModelClock = scenario.Source.Source.Clock, SourceHttp = http, SourceCredential = credential,
+                SourceClock = scenario.Source.Source.Clock, TelemetryHttp = http, TelemetryCredential = credential,
+                TelemetryClock = scenario.Source.Source.Clock, WebHostRunner = runner }, token);
         Assert.True(exit == 0, error.ToString());
         LastPreviewResponse = runner.Body;
+        if (runner.Status != HttpStatusCode.OK) HostFailures.Add(verb + ": " + runner.Body);
         return new(runner.Status) { Content = new StringContent(runner.Body, Encoding.UTF8, "application/json") };
     }
 
@@ -46,6 +65,10 @@ internal sealed partial class PreviewPreparationTransport
         var authority = FactoryModelsValidation.ReadPreparation(Manifest, Values());
         var route = authority.Routes!.Single(r => r.Selection.Deployment == (string?)body["model"]).Selection;
         HttpResponseMessage response;
+        var prompt = (string?)body["messages"]?[0]?["content"];
+        var probe = prompt?.Contains("CAPABILITY PROBE", StringComparison.Ordinal) == true
+            || route.Name == "embedding" && body["input"]!.AsArray().All(v => ((string)v!).Contains("CAPABILITY PROBE", StringComparison.Ordinal));
+        if (!probe) return NativeEvaluationResponse(route, body, prompt);
         if (route.Name == "embedding")
         {
             Assert.Equal("/openai/v1/embeddings", request.RequestUri!.AbsolutePath);
@@ -67,7 +90,8 @@ internal sealed partial class PreviewPreparationTransport
 
     private async Task<HttpResponseMessage> SeedAsync(HttpRequestMessage request, CancellationToken token)
     {
-        Assert.Contains("/colls/council-preview/docs", request.RequestUri!.AbsolutePath);
+        Assert.True(request.RequestUri!.AbsolutePath.Contains("/colls/council-preview/docs", StringComparison.Ordinal)
+            || request.RequestUri.AbsolutePath.Contains("/colls/runs/docs", StringComparison.Ordinal));
         Assert.Equal("[\"" + Manifest.Identity.ProductKey + "\"]", request.Headers.GetValues("x-ms-documentdb-partitionkey").Single());
         Assert.False(request.Headers.Contains("x-ms-documentdb-is-upsert"));
         var path = request.RequestUri.AbsolutePath;
@@ -76,13 +100,23 @@ internal sealed partial class PreviewPreparationTransport
             var body = JsonNode.Parse(await request.Content!.ReadAsStringAsync(token))!;
             path += "/" + (string)body["id"]!;
             if (SeedDocuments.ContainsKey(path)) return new(HttpStatusCode.Conflict);
-            BeforeSeed?.Invoke();
-            SeedCreates++;
+            if (path.Contains("/council-preview/", StringComparison.Ordinal)) { BeforeSeed?.Invoke(); SeedCreates++; }
             body["_rid"] = "PD5DALigD00BAAAAAAAAAA==";
             body["_etag"] = "\"" + Guid.NewGuid().ToString("D") + "\"";
             SeedDocuments.Add(path, body.ToJsonString());
             if (SeedFailure == "lost") throw new HttpRequestException("lost-private-native-seed-response");
             if (SeedFailure == "canceled") throw new OperationCanceledException(token);
+        }
+        else if (request.Method == HttpMethod.Put)
+        {
+            if (!SeedDocuments.TryGetValue(path, out var before)) return new(HttpStatusCode.NotFound);
+            var original = JsonNode.Parse(before)!;
+            if ((string?)original["_etag"] != request.Headers.GetValues("If-Match").Single()) return new(HttpStatusCode.PreconditionFailed);
+            var body = JsonNode.Parse(await request.Content!.ReadAsStringAsync(token))!;
+            body["_rid"] = original["_rid"]!.DeepClone();
+            body["_etag"] = "\"" + Guid.NewGuid().ToString("D") + "\"";
+            SeedDocuments[path] = body.ToJsonString();
+            AfterEvaluationWrite?.Invoke(body);
         }
         else Assert.Equal(HttpMethod.Get, request.Method);
         if (!SeedDocuments.TryGetValue(path, out var text)) return new(HttpStatusCode.NotFound);
@@ -92,12 +126,11 @@ internal sealed partial class PreviewPreparationTransport
         return response;
     }
 
-    private sealed class PreviewCredential(PreviewPreparationTransport transport) : TokenCredential
+    private sealed class PreviewCredential(PreviewPreparationTransport transport, JsonNode identity) : TokenCredential
     {
         public override AccessToken GetToken(TokenRequestContext context, CancellationToken token) => GetTokenAsync(context, token).Result;
         public override ValueTask<AccessToken> GetTokenAsync(TokenRequestContext context, CancellationToken token)
         {
-            var identity = transport.Scenario.Arm.CreatedResources.Values.Single(r => ((string?)r["id"])?.EndsWith("-council", StringComparison.Ordinal) == true);
             var claims = new { oid = (string?)identity["properties"]!["principalId"], appid = (string?)identity["properties"]!["clientId"],
                 tid = transport.Manifest.Identity.TenantId, xms_mirid = (string?)identity["id"], ver = "1.0",
                 aud = context.Scopes.Single()[..^"/.default".Length],
@@ -108,7 +141,7 @@ internal sealed partial class PreviewPreparationTransport
         }
     }
 
-    private sealed class PreviewRunner(PreviewPreparationTransport transport, string path, string payload) : IWebHostRunner
+    private sealed class PreviewRunner(PreviewPreparationTransport transport, string path, string payload, string? bearer) : IWebHostRunner
     {
         internal HttpStatusCode Status;
         internal string Body = "";
@@ -119,12 +152,21 @@ internal sealed partial class PreviewPreparationTransport
             await app.StartAsync(token);
             try
             {
-                using var client = new HttpClient { BaseAddress = new Uri(app.Urls.Single()) };
+                using var client = new HttpClient { BaseAddress = new Uri(app.Urls.Single()), Timeout = Timeout.InfiniteTimeSpan };
+                var principal = transport.Manifest.Identity.AzureActorId;
+                string? application = null;
+                if (bearer?.StartsWith("test.", StringComparison.Ordinal) == true)
+                {
+                    var encoded = bearer.Split('.')[1].Replace('-', '+').Replace('_', '/');
+                    var claims = JsonNode.Parse(Convert.FromBase64String(encoded.PadRight((encoded.Length + 3) / 4 * 4, '=')))!;
+                    principal = (string)claims["oid"]!;
+                    application = (string?)claims["appid"];
+                }
                 client.DefaultRequestHeaders.Add("X-MS-CLIENT-PRINCIPAL-IDP", "aad");
-                client.DefaultRequestHeaders.Add("X-MS-CLIENT-PRINCIPAL-ID", transport.Manifest.Identity.AzureActorId);
+                client.DefaultRequestHeaders.Add("X-MS-CLIENT-PRINCIPAL-ID", principal);
                 client.DefaultRequestHeaders.Add("X-MS-CLIENT-PRINCIPAL", Convert.ToBase64String(JsonSerializer.SerializeToUtf8Bytes(new
-                { auth_typ = "aad", claims = new[] { new { typ = "oid", val = transport.Manifest.Identity.AzureActorId },
-                    new { typ = "tid", val = transport.Manifest.Identity.TenantId } } })));
+                { auth_typ = "aad", claims = new[] { new { typ = "oid", val = principal },
+                    new { typ = "tid", val = transport.Manifest.Identity.TenantId }, new { typ = "appid", val = application ?? "" } } })));
                 using var response = await client.PostAsync(path, new StringContent(payload, Encoding.UTF8, "application/json"), token);
                 Status = response.StatusCode;
                 Body = await response.Content.ReadAsStringAsync(token);

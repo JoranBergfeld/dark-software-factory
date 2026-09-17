@@ -1,9 +1,11 @@
-# Prepare council preview infrastructure
+# Run a supervised council preview
 
 `dsf onboard decide preview` reviews and provisions native preparation.
 Its explicit `--configure` continuation publishes the protected capability,
 conditionally creates the native execution seed through the real COUNCIL host,
-and requires separate approval of that returned seed. Neither
+and requires separate approval of that returned seed. `--evaluate` then runs
+the actual Feature Council; `--evaluation` inspects persisted results without
+writing. Neither
 `ConfirmedNotReady` nor `ConfiguredAwaitingEvaluation` means readiness or
 completed onboarding. No issue, PR, label, delivery or activation effect occurs.
 
@@ -96,7 +98,7 @@ the exact query, projection, source configuration and freshness revisions.
 It does not silently rewrite the existing telemetry proof query or claim
 exhaustive sampling. Judgment settings allow 1-2 rounds, a threshold in
 `[0,1]`, and 1-5 distinct supported lenses with positive finite weights.
-These are reviewed future evaluation inputs, not evidence of evaluation.
+These are reviewed evaluation inputs, not evidence of evaluation.
 
 Complete read-only plan:
 
@@ -161,7 +163,8 @@ dsf onboard decide preview --status \
 
 Exit `0` means a successful review, confirmed preparation, returned seed awaiting
 approval, or verified configuration awaiting evaluation;
-failure states exit `1`, cancellation `130`. `currentReady` is always false.
+failure states exit `1`, cancellation `130`. Preparation/configuration
+`currentReady` is always false.
 Status verifies serialized journal integrity and current native receipts
 without any state, deployment, publication or activation write. It retains
 historical preparation when current authority is no longer confirmed.
@@ -273,7 +276,103 @@ material model/source/configuration, charter/adoption, selected-source and
 native resource changes still block. Current checks are point-in-time, not
 cross-provider atomicity.
 
-**Remaining operator integration:** CLI evaluation/output consumption of
-`/evaluate` and `/evaluation`, final connected evaluation scenarios and fresh
-installed-tool acceptance. Runtime evaluation/proof APIs already exist;
-configuration and a native seed alone are not completed readiness.
+## Evaluate intentionally
+
+Final configuration output supplies `evaluationRequest.operationId` and
+`evaluationRequest.approvalFingerprint`. Use these **capability** pins, not
+either earlier publication-review fingerprint. Evaluation is an explicit
+action; preparation and status never start it.
+
+```bash
+dsf onboard decide preview --evaluate \
+  --owner-appconfig-endpoint https://OWNER.azconfig.io \
+  --product PRODUCT --tenant TENANT_GUID --subscription SUBSCRIPTION_GUID \
+  --operation CONFIGURED_OPERATION_GUID \
+  --approve CONFIGURED_CAPABILITY_APPROVAL_FINGERPRINT --json
+```
+
+All six values are required for redirected/`--json` execution. Missing,
+malformed or conflicting input causes no provider access or write. Interactive
+use prompts for missing values; it does not infer approval. Effective Azure
+and GitHub operator authority and exact current native preparation are checked
+before contacting the protected COUNCIL `/evaluate` route.
+
+The runtime acquires current adopted intent, supporting complete analysis and
+unknowns, exact application/environment scope, genuine fresh application
+records, every selected supplemental source, and verified native model routes.
+It runs the existing conveyor in `OnboardingPreview`, with dry-run publication
+and no issue filer or activation authority. Structured synthesis must actually
+produce a candidate; semantic grounding must revisit original evidence and
+counterevidence. Every enabled lens/round and all three distinct-family jurors
+must complete. An empty selected optional source is valid; absent mandatory
+application evidence is not.
+
+Unanimous GO, either split, and unanimous NO-GO all qualify **only when fully
+evaluated**. The result is `ReadyAwaitingActivation`, not activated or onboarding
+complete. Early stop, empty/debounced input, malformed/unsupported claims,
+missing jurors/rounds, unavailable models and partial/uncertain state cannot
+produce readiness.
+
+The output is complete bounded JSON in both terminal and redirected use:
+
+| Field | Inspect |
+| --- | --- |
+| `readiness`, `reason`, `nextActor` | Current outcome and responsible next actor; never infer readiness from run status alone. |
+| `evaluation.inputs.context` | Adopted charter, analysis/unknowns, application boundary, exact source/model/judgment revisions. |
+| `evaluation.inputs.telemetry`, `.supplemental`, `.observations` | Original scoped records, freshness/query/source proofs, content hashes and nonnavigable WebIQ identifiers. |
+| `evaluation.run.proposals[].grounding` | Individual supported claims, actual supporting quotes, counterevidence and residual uncertainty; citation existence alone is insufficient. |
+| `evaluation.run.proposals[].councilReview` | Enabled lens rounds, typed recommendation and each of the three jurors' model identity, judgment and rationale. |
+| `evaluation.run.proposals[].intendedPublication` | Exact proposed title/body, only `dsf:proposal`, no assignees; nothing was filed or handed off. |
+| `evaluation.proof`, `.receipt`, `.dispatches` | Revision-bound durable proof, native run receipt and accounted native model observations. |
+
+Evaluation and inspection exit `0` only for current
+`ReadyAwaitingActivation`; otherwise `1`, or `130` for reported cancellation.
+`Unknown` means an outcome or current authority is unconfirmed, not safe to
+retry. Failed readiness leaves resources and accrued model/storage costs intact.
+
+## Inspect or continue the original evaluation
+
+Read-only inspection uses the same explicit locators and capability pins:
+
+```bash
+dsf onboard decide preview --evaluation \
+  --owner-appconfig-endpoint https://OWNER.azconfig.io \
+  --product PRODUCT --tenant TENANT_GUID --subscription SUBSCRIPTION_GUID \
+  --operation CONFIGURED_OPERATION_GUID \
+  --approve CONFIGURED_CAPABILITY_APPROVAL_FINGERPRINT --json
+```
+
+This invokes `/evaluation`; it never creates a seed, executes synthesis/jury,
+writes checkpoints or publishes anything. Do not use preparation's
+`--configure --status` to inspect an already-used seed.
+
+The runtime validates the complete durable proof and current required
+authority. Captured evidence becoming stale or material charter, analysis,
+source, model, selection, configuration or native-grant drift withholds
+current readiness. New telemetry rows do not invalidate still-fresh captured
+records. Where current authority permits inspection, historical results remain
+in `evaluation`, but only outer `currentReady: true` denotes current readiness.
+If authority cannot establish access to the original operation, inspection
+fails closed rather than reconstructing or replacing history. Final currentness
+checks are point-in-time, not cross-provider atomicity.
+
+An explicitly compatible continuation uses the original evaluation command
+with `--resume`. It retains original captured context, operation/request IDs,
+native checkpoints and confirmed model observations. Duplicate completed
+evaluation rechecks its existing proof without inference or state writes.
+Lost/canceled dispatch outcomes remain quarantined; a lease expiring is not
+proof that a remote request stopped. No forced retry, alternate operation,
+root reset, deletion, upsert or automatic recovery is available.
+
+The CLI permits 9,000 seconds for chained current checks and the runtime's
+5,400-second execution budget; no hidden 100-second default HTTP timeout
+overrides that allowance. Runtime execution has at most 62 native model
+dispatches and a 120-second juror budget. Responses are at most 4 MiB.
+The approved input/execution policies pin additional evidence, context and
+native-document limits. Overflow, cancellation or timeout is incomplete or
+unknown, never silently truncated or successful.
+
+This command persists bounded preview/provenance and readonly intended
+publication. Full retention/export (#215), activation/live publication (#216)
+and uncertain-effect recovery (#217) remain separate; no command here grants
+their authority.

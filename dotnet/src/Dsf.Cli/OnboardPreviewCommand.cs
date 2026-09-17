@@ -12,20 +12,30 @@ public static partial class CliApplication
     private static Command BuildPreviewCommand(ICliTerminal terminal, RepositoryAttachmentReviewer? reviewer,
         IAzureCliRunner? azure, HttpClient? http, TimeProvider? clock)
     {
-        var command = new Command("preview", "review and prepare isolated council preview infrastructure; never activate or publish");
+        var command = new Command("preview", "prepare, evaluate and inspect supervised council readiness; never activate or publish");
         var endpoint = StringOption("--owner-appconfig-endpoint", "trusted owner endpoint");
         var product = StringOption("--product", "reserved product");
         var tenant = StringOption("--tenant", "reserved tenant");
         var subscription = StringOption("--subscription", "reserved subscription");
         var configuration = StringOption("--preview-config", "complete nonsecret preview preparation selection JSON");
-        var approval = StringOption("--approve", "explicit exact current native preparation fingerprint");
+        var approval = StringOption("--approve", "exact reviewed preparation/publication fingerprint, or configured capability approval for evaluation");
         var status = BoolOption("--status", "read retained preparation and current native receipts without writes");
-        var resume = BoolOption("--resume", "conditionally continue released known-undispatched steps of the original approved plan");
+        var resume = BoolOption("--resume", "continue the original compatible preparation or --evaluate operation; never replay uncertain effects");
         var configure = BoolOption("--configure", "review/approve protected capability publication, then the exact returned native execution seed");
-        var json = BoolOption("--json", "structured nonsecret preparation review; never prompt");
-        AddOptions(command, endpoint, product, tenant, subscription, configuration, approval, status, resume, configure, json);
+        var evaluate = BoolOption("--evaluate", "execute the exact configured supervised evaluation; --resume retains the original operation");
+        var evaluation = BoolOption("--evaluation", "inspect the original evaluation and current readiness without writes or inference");
+        var operation = StringOption("--operation", "exact configured preview operation ID; required for evaluation and inspection");
+        var json = BoolOption("--json", "structured nonsecret preview plan, preparation or complete evaluation; never prompt");
+        AddOptions(command, endpoint, product, tenant, subscription, configuration, approval, status, resume, configure, evaluate, evaluation, operation, json);
         command.SetAction(async (parse, token) =>
         {
+            if (parse.GetValue(evaluate) || parse.GetValue(evaluation) || parse.GetValue(operation) is not null)
+                return await InvokePreviewEvaluationAsync(terminal, reviewer, azure, http, clock,
+                    parse.GetValue(endpoint), parse.GetValue(product), parse.GetValue(tenant), parse.GetValue(subscription),
+                    parse.GetValue(operation), parse.GetValue(approval), parse.GetValue(evaluation),
+                    parse.GetValue(evaluate) == parse.GetValue(evaluation) || parse.GetValue(configure) || parse.GetValue(status)
+                        || parse.GetValue(configuration) is not null || parse.GetValue(resume) && !parse.GetValue(evaluate),
+                    terminal.Capabilities.IsInteractive && !parse.GetValue(json), token);
             PreviewPreparationResult result;
             var interactive = terminal.Capabilities.IsInteractive && !parse.GetValue(json);
             try

@@ -86,7 +86,8 @@ internal sealed class TelemetryWorkflowTransport(FactoryFoundationTests.Foundati
                     .Concat(ExternalAssignment is null ? Array.Empty<JsonNode>() : new[] { ExternalAssignment.DeepClone() }).ToArray()) });
             }
             if (path.Contains("/roledefinitions/", StringComparison.Ordinal))
-                return Reply(HttpStatusCode.OK, new JsonObject { ["id"] = path, ["properties"] = new JsonObject
+                return Reply(HttpStatusCode.OK, new JsonObject { ["id"] = "/subscriptions/" + BoundaryPlanFixture.Subscription
+                    + "/providers/microsoft.authorization/roledefinitions/" + path.Split('/').Last(), ["properties"] = new JsonObject
                 {
                     ["type"] = "BuiltInRole", ["permissions"] = JsonSerializer.SerializeToNode(new[] { new
                     {

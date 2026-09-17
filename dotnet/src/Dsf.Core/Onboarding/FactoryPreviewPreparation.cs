@@ -66,12 +66,14 @@ public sealed record PreviewPreparationResult(PreviewPreparationState State, str
     public PreviewPublicationReview? Publication { get; init; }
     public PreviewPublicationJournal? PublicationState { get; init; }
     public string? ApprovalFingerprint => Publication?.ApprovalFingerprint ?? Plan?.Fingerprint;
+    public PreviewCapabilityRequest? EvaluationRequest => State == PreviewPreparationState.ConfiguredAwaitingEvaluation && Publication is not null
+        ? Publication.SeedRequest with { RequestId = FactoryPreviewPublication.RequestId(Publication.SeedRequest.OperationId, "evaluation") } : null;
     public bool CurrentReady => false;
     public string NextActor => State switch
     {
         PreviewPreparationState.ConfirmedNotReady => "Operator: review the --configure continuation; capability and native execution-seed approvals remain separate.",
         PreviewPreparationState.SeedAwaitingApproval => "Operator: inspect and approve the exact returned native seed and execution configuration fingerprint.",
-        PreviewPreparationState.ConfiguredAwaitingEvaluation => "Operator: supervised evaluation remains separate; configuration is not readiness or activation.",
+        PreviewPreparationState.ConfiguredAwaitingEvaluation => "Operator: invoke --evaluate with evaluationRequest operationId and approvalFingerprint; configuration is not readiness or activation.",
         PreviewPreparationState.Reviewed when Publication is not null => "Operator: approve this exact protected publication and native seed intent, or leave the review read-only.",
         PreviewPreparationState.Unknown => "Azure/configuration administrator: reconcile original request IDs and retained keys; no replay, name adoption or reset.",
         _ => "Operator: review exact native preparation and prerequisites; capability publication and execution-seed approval remain separate.",

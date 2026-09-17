@@ -887,8 +887,10 @@ this asset and creates the reviewed scoped native metadata assignments.
 It records conditional preparation intent and exact native creation receipts.
 Existing exact custom metadata role definitions remain explicit administrator
 prerequisites, not definitions the command creates or broadens.
-Capability/manifest publication, operator-approved native seed binding and
-evaluation CLI consumption remain unwired. Do not deploy the asset manually
+The separately approved `--configure` continuation publishes capability/manifest
+pins and binds the actual operator-approved native seed. Explicit `--evaluate`
+and readonly `--evaluation` consume the existing protected runtime workflow.
+Do not deploy the asset manually
 as a substitute: ARM deployment alone cannot establish current capability,
 readiness or activation. Its SQL identifier
 parameters must come from the shared reviewed target helpers, not Bicep
@@ -956,8 +958,9 @@ handoff described above, after creating and checking those original resources
 and grants. No seed can be calculated from an ARM container creation receipt.
 CLI forwarding, installation, reviewed planning and native provisioning are
 implemented, including conditional capability/manifest publication and native
-seed approval. Operator evaluation integration remains milestone 3;
-retention/export, activation/publication and
+seed approval, actual CLI evaluation and readonly inspection. Fully evaluated
+GO, SPLIT and NO-GO produce only `ReadyAwaitingActivation`; retained proof is
+not activation authority. Retention/export, activation/publication and
 recovery remain separate tickets.
 
 The native preparation journal is separate from the protected runtime

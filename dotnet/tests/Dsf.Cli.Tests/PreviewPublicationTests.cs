@@ -75,15 +75,16 @@ public sealed class PreviewPublicationTests
         Assert.Equal(retained, transport.Scenario.Arm.Product.Export());
     }
 
-    internal static async Task<PreviewPreparationTransport> PreparedAsync()
+    internal static async Task<PreviewPreparationTransport> PreparedAsync(bool web = false)
     {
         var transport = await PreviewPreparationTransport.CreateAsync();
+        if (web) await transport.SelectWebAsync();
         var machine = transport.Scenario.Machine;
         var plan = await machine.InvokeAsync("preview", "--preview-config", transport.Selection.ToJsonString());
-        Assert.True(plan.Exit == 0, (string?)plan.Result["detail"]);
+        Assert.True(plan.Exit == 0, plan.Terminal.Output + plan.Terminal.Error);
         var applied = await machine.InvokeAsync("preview", "--preview-config", transport.Selection.ToJsonString(),
             "--approve", (string)plan.Result["approvalFingerprint"]!);
-        Assert.True(applied.Exit == 0, (string?)applied.Result["detail"]);
+        Assert.True(applied.Exit == 0, (string?)applied.Result["detail"] + "\n" + string.Join("\n", transport.Requests.TakeLast(12)));
         return transport;
     }
 }

@@ -41,8 +41,10 @@ try
         ["onboard-foundation"] = 0,
         ["product-github-private-key"] = 0,
         ["onboard-github-auth"] = 0,
+        ["onboard-telemetry"] = 0,
         ["onboard-models"] = 0,
         ["onboard-source"] = 0,
+        ["onboard-supplemental"] = 0,
         ["onboard-preview-workloads"] = 0,
     };
     foreach (var (name, minimumNestedDeployments) in templates)
@@ -141,6 +143,18 @@ try
     }
     Require(File.ReadAllText(Path.Combine(scratch.FullName, "azure.log")).Length == 0,
         "Preview hosts reached Azure before their required settings were present.");
+
+    var previewHelp = await Run("onboard", "decide", "preview", "--help");
+    Require(previewHelp.ExitCode == 0 && new[] { "--configure", "--evaluate", "--evaluation", "--operation", "--approve", "--resume" }
+        .All(option => previewHelp.Output.Contains(option, StringComparison.Ordinal)), "Installed preview workflow grammar is incomplete.");
+    foreach (var action in new[] { "--configure", "--evaluate", "--evaluation" })
+    {
+        var incompletePreview = await Run("onboard", "decide", "preview", action, "--json");
+        Require(incompletePreview.ExitCode == 1 && incompletePreview.Output.Contains("Blocked", StringComparison.Ordinal)
+            && incompletePreview.Output.Contains("required", StringComparison.Ordinal),
+            $"Installed preview accepted incomplete redirected inputs: {incompletePreview.Output}");
+    }
+    Require(File.ReadAllText(Path.Combine(scratch.FullName, "azure.log")).Length == 0, "Incomplete preview reached Azure.");
 
     var inferHelp = await Run("onboard", "decide", "infer", "--help");
     Require(inferHelp.ExitCode == 0 && inferHelp.Output.Contains("--new-analysis", StringComparison.Ordinal)

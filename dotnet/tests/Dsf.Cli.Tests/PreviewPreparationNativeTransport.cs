@@ -66,19 +66,33 @@ internal sealed partial class PreviewPreparationTransport
                 Add(account + "/sqlroleassignments/" + Value(parameter), new JsonObject
                 { ["principalId"] = councilPrincipal, ["roleDefinitionId"] = role, ["scope"] = account + "/dbs/" + product + "/colls/" + name });
             var endpoint = "https://" + prefix + "-preview.private.azurecontainerapps.io";
+            var optionalSources = values["supplementalSources"]!["value"]!.AsArray();
+            JsonNode OptionalIdentity(JsonNode selected) => supplemental!.Resources.Values.Single(r =>
+                ((string?)r["id"])?.Contains("/userassignedidentities/", StringComparison.Ordinal) == true
+                && ((string)r["id"]!).EndsWith("/" + prefix + "-" + (string)selected["kind"]!, StringComparison.Ordinal));
             foreach (var (suffix, verb, nativeIdentity, client, image, audience, callers) in new[]
             {
-                ("preview", "serve-preview", (string)council["id"]!, councilClient, Value("runtimeImage"), Value("audienceClientId"), new[] { Value("operatorPrincipalId") }),
+                ("preview", "serve-preview", (string)council["id"]!, councilClient, Value("runtimeImage"), Value("audienceClientId"),
+                    new[] { Value("operatorPrincipalId") }.Concat(optionalSources.Select(s => (string)OptionalIdentity(s!)["properties"]!["principalId"]!)).ToArray()),
                 ("context", "serve-source-context", (string)code["id"]!, (string)code["properties"]!["clientId"]!, Value("runtimeImage"), Value("audienceClientId"), new[] { councilPrincipal }),
                 ("preview-models", "serve-preview-models", (string)council["id"]!, councilClient, Value("modelRuntimeImage"), Value("modelAudienceClientId"), new[] { councilPrincipal }),
                 ("preview-telemetry", "serve-preview-telemetry", telemetryIdentity.Target, telemetryIdentity.ClientId!, Value("telemetryRuntimeImage"), Value("telemetryAudienceClientId"), new[] { councilPrincipal }),
-            })
+            }.Concat(optionalSources.Select(s => ("preview-" + (string)s!["kind"]!, "serve-preview-supplemental",
+                (string)OptionalIdentity(s!)["id"]!, (string)OptionalIdentity(s!)["properties"]!["clientId"]!,
+                (string)s!["runtimeImage"]!, (string)s!["audienceClientId"]!, new[] { councilPrincipal }))))
             {
                 var host = group + "/providers/microsoft.app/containerapps/" + prefix + "-" + suffix;
                 var env = new JsonArray();
                 foreach (var pair in new[] { ("DSF_PRODUCT", product), ("AZURE_APPCONFIG_ENDPOINT", Value("productEndpoint")),
                     ("DSF_FACTORY_PROFILE_PIN", Value("profilePin")), ("AZURE_CLIENT_ID", client) })
                     env.Add(new JsonObject { ["name"] = pair.Item1, ["value"] = pair.Item2 });
+                var selected = optionalSources.SingleOrDefault(s => suffix == "preview-" + (string)s!["kind"]!);
+                if (selected is not null)
+                {
+                    env.Add(new JsonObject { ["name"] = "DSF_SUPPLEMENTAL_CONFIG", ["value"] = (string)selected["workloadConfiguration"]! });
+                    env.Add(new JsonObject { ["name"] = "DSF_PREVIEW_COORDINATOR", ["value"] = JsonSerializer.Serialize(
+                        new PreviewSupplementalCoordinator(endpoint, Value("audienceClientId"), councilPrincipal, councilClient), FactoryGitHubJson.Options) });
+                }
                 Add(host, new JsonObject
                 {
                     ["provisioningState"] = "Succeeded", ["managedEnvironmentId"] = group + "/providers/microsoft.app/managedenvironments/" + prefix + "-hosting",

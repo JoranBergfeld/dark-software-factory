@@ -203,9 +203,10 @@ internal sealed partial class FactoryPreviewPreparationService
                 throw Unknown("ExactPreviewStateContainerGrantRequired");
         }
         using var body = JsonDocument.Parse(plan.WorkloadBody);
-        foreach (var kind in FactoryPreviewValidation.HostKinds(plan.Configuration))
+        var configuration = plan.Configuration with { Supplemental = plan.SupplementalConfiguration };
+        foreach (var kind in FactoryPreviewValidation.HostKinds(configuration))
         {
-            var optional = plan.Configuration.Supplemental?.Hosts.SingleOrDefault(h => FactoryPreviewSupplementalValidation.HostKind(h.Kind) == kind);
+            var optional = configuration.Supplemental?.Hosts.SingleOrDefault(h => FactoryPreviewSupplementalValidation.HostKind(h.Kind) == kind);
             var target = FactoryPreviewValidation.HostTarget(group, identity.FactoryId, kind);
             var host = resources[target];
             var auth = resources[target + "/authconfigs/current"];
@@ -222,7 +223,7 @@ internal sealed partial class FactoryPreviewPreparationService
                 _ => "serve-preview-supplemental",
             };
             var callers = kind == PreviewHostKind.Council
-                ? new[] { identity.AzureActorId }.Concat(plan.Configuration.Supplemental?.Hosts.Select(h => h.PrincipalId) ?? []).ToArray()
+                ? new[] { identity.AzureActorId }.Concat(configuration.Supplemental?.Hosts.Select(h => h.PrincipalId) ?? []).ToArray()
                 : [plan.Bindings["council"].PrincipalId!];
             Dictionary<string, string>? extra = optional is null ? null : new()
             {

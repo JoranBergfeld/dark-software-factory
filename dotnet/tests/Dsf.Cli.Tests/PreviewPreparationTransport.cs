@@ -40,7 +40,7 @@ internal sealed partial class PreviewPreparationTransport(CharterScenario scenar
             "--approve", (string)adopted.Result["revision"]!)).Exit);
         var transport = new PreviewPreparationTransport(scenario);
         transport.telemetry = new(transport.Telemetry, false);
-        scenario.Machine.Boundary.Repository.ReservationHttp = new HttpClient(transport, false);
+        scenario.Machine.Boundary.Repository.ReservationHttp = new HttpClient(transport, false) { Timeout = Timeout.InfiniteTimeSpan };
         var plan = await scenario.Machine.InvokeAsync("telemetry", FactoryTelemetryWorkflowTests.Preparation);
         var prepared = await scenario.Machine.InvokeAsync("telemetry", [.. FactoryTelemetryWorkflowTests.Preparation,
             "--approve", (string)plan.Result["telemetry"]!["approvalFingerprint"]!]);
@@ -62,19 +62,25 @@ internal sealed partial class PreviewPreparationTransport(CharterScenario scenar
         Requests.Enqueue((request.Method.Method, request.RequestUri!));
         var uri = request.RequestUri!;
         var path = uri.AbsolutePath;
-        if (uri.Host.EndsWith("-preview.private.azurecontainerapps.io", StringComparison.Ordinal))
+        if (uri.Host == "source.private.azurecontainerapps.io") return await source.SendAsync(request, token);
+        if (HostedResources.Any(r => (string?)r["properties"]?["configuration"]?["ingress"]?["fqdn"] == uri.Host))
             return await PreviewHostAsync(request, token);
         if (uri.Host == "models.private.azurecontainerapps.io") return await PreviewHostAsync(request, token, modelProof: true);
         if (uri.Host == "shared-models.services.ai.azure.com") return await ModelProbeAsync(request, token);
-        if (uri.Host.EndsWith("-cosmos.documents.azure.com", StringComparison.Ordinal))
+        if (uri.Host.EndsWith("-cosmos.documents.azure.com", StringComparison.Ordinal)
+            && (path.Contains("/colls/council-preview/", StringComparison.Ordinal) || path.Contains("/colls/runs/", StringComparison.Ordinal)))
             return await SeedAsync(request, token);
         if (uri.Host == "management.azure.com" && request.Method == HttpMethod.Put)
         {
             var body = JsonNode.Parse(await request.Content!.ReadAsStringAsync(token))!;
             if (path.Contains("/deployments/preview-", StringComparison.Ordinal)
-                || (string?)body["properties"]?["roleDefinitionId"] is CouncilRole or TelemetryRole)
+                || (string?)body["properties"]?["roleDefinitionId"] is CouncilRole or TelemetryRole or WebRole)
                 return await CreatePreviewAsync(request, body, token);
+            if (supplementalNative is not null && ((string?)body["properties"]?["roleDefinitionId"])?.EndsWith(
+                "/" + FactorySupplementalValidation.SecretsRole, StringComparison.Ordinal) == true)
+                return await supplementalNative.SendAsync(request, token);
         }
+        if (await OptionalNativeAsync(request, token) is { } optionalResponse) return optionalResponse;
         if (uri.Host == "telemetry.private.azurecontainerapps.io")
         {
             Assert.Equal("/proof", path);
@@ -93,17 +99,7 @@ internal sealed partial class PreviewPreparationTransport(CharterScenario scenar
             return new(runner.Status) { Content = new StringContent(runner.Body, Encoding.UTF8, "application/json") };
         }
         if (uri.Host == "api.loganalytics.io")
-        {
-            Assert.Equal(HttpMethod.Post, request.Method);
-            var query = await request.Content!.ReadFromJsonAsync<JsonNode>(cancellationToken: token);
-            Assert.Equal("AppRequests | project TimeGenerated, _ResourceId, _ItemId, TenantId, Type", (string?)query!["query"]);
-            TelemetryQueries++;
-            return Reply(new { tables = new[] { new { name = "PrimaryResult",
-                columns = new[] { new { name = "TimeGenerated", type = "datetime" }, new { name = "_ResourceId", type = "string" },
-                    new { name = "_ItemId", type = "string" }, new { name = "TenantId", type = "string" }, new { name = "Type", type = "string" } },
-                rows = new[] { new[] { scenario.Source.Source!.Clock.Now.AddMinutes(-1).ToString("O"),
-                    FactoryTelemetryWorkflowTests.Component, "genuine-application-record-214", "44444444-4444-4444-4444-444444444444", "AppRequests" } } } } });
-        }
+            return await ApplicationQueryAsync(request, token);
         if (uri.Host == "management.azure.com" && request.Method == HttpMethod.Get)
         {
             if (path.EndsWith("/sqlroleassignments", StringComparison.Ordinal))
@@ -114,6 +110,9 @@ internal sealed partial class PreviewPreparationTransport(CharterScenario scenar
             if (path.Contains("/roledefinitions/", StringComparison.Ordinal))
             {
                 var roleId = path.Split('/').Last();
+                var originalRole = scenario.Source.Source!.Resources.SingleOrDefault(p =>
+                    p.Key.EndsWith("/roledefinitions/" + roleId, StringComparison.OrdinalIgnoreCase)).Value;
+                if (originalRole is not null) return Reply(originalRole);
                 if (roleId is "f1111111-1111-1111-1111-111111111111" or "f2222222-2222-2222-2222-222222222222")
                     path = roleId[1] == '1' ? CouncilRole : TelemetryRole;
             }
@@ -127,6 +126,7 @@ internal sealed partial class PreviewPreparationTransport(CharterScenario scenar
                 var scope = path[..^"/providers/microsoft.authorization/roleassignments".Length];
                 var all = Resources.Concat(scenario.Source.Resources).Concat(scenario.Models.Resources)
                     .Concat(Telemetry.Resources).Concat(scenario.Source.Source!.Resources)
+                    .Concat(supplemental?.Resources ?? new Dictionary<string, JsonNode>())
                     .Where(p => p.Key.Contains("/providers/microsoft.authorization/roleassignments/", StringComparison.OrdinalIgnoreCase))
                     .DistinctBy(p => p.Key, StringComparer.OrdinalIgnoreCase).Select(p => p.Value);
                 var assigned = System.Text.RegularExpressions.Regex.Match(filter, @"assignedTo\('([0-9a-f-]+)'\)");
@@ -157,9 +157,11 @@ internal sealed partial class PreviewPreparationTransport(CharterScenario scenar
             if (path.StartsWith(BoundaryPlanFixture.Logs.ToLowerInvariant() + "/tables/", StringComparison.Ordinal))
                 return Reply(new { id = path, name = path.Split('/').Last(), properties = new { plan = "Analytics", protectionLevel = "General" } });
         }
-        if (uri.Host.EndsWith(".azconfig.io", StringComparison.Ordinal)) return await source.SendAsync(request, token);
+        if (uri.Host.EndsWith(".azconfig.io", StringComparison.Ordinal) && uri.Host != new Uri(scenario.Source.Source!.ProgressEndpoint).Host)
+            return await source.SendAsync(request, token);
         if (uri.Host == "management.azure.com") return await telemetry!.SendAsync(request, token);
-        return await source.SendAsync(request, token);
+        using var backend = new HttpMessageInvoker(scenario.Source.WorkloadTransport!(scenario.Source.Source!), true);
+        return await backend.SendAsync(request, token);
     }
 
     private sealed class Credential(PreviewPreparationTransport transport) : TokenCredential
@@ -204,7 +206,7 @@ internal sealed partial class PreviewPreparationTransport(CharterScenario scenar
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing) { source.Dispose(); models.Dispose(); telemetry?.Dispose(); Telemetry.Dispose(); scenario.Dispose(); }
+        if (disposing) { source.Dispose(); models.Dispose(); telemetry?.Dispose(); Telemetry.Dispose(); supplementalNative?.Dispose(); supplemental?.Dispose(); scenario.Dispose(); }
         base.Dispose(disposing);
     }
 }

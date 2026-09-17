@@ -78,7 +78,8 @@ internal sealed class SupplementalWorkflowTransport(FactoryFoundationTests.Found
             {
                 var metadata = path.EndsWith("77777777-7777-7777-7777-777777777777", StringComparison.Ordinal);
                 var search = path.EndsWith(Dsf.Core.Onboarding.FactorySupplementalValidation.SearchDataRole, StringComparison.Ordinal);
-                return Reply(HttpStatusCode.OK, JsonSerializer.SerializeToNode(new { id = path, properties = new
+                return Reply(HttpStatusCode.OK, JsonSerializer.SerializeToNode(new { id = metadata ? path
+                    : "/subscriptions/" + BoundaryPlanFixture.Subscription + "/providers/microsoft.authorization/roledefinitions/" + path.Split('/').Last(), properties = new
                 {
                     type = metadata ? "CustomRole" : "BuiltInRole", permissions = new[] { new { actions = metadata ? new[]
                     {
