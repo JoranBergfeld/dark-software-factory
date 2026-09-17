@@ -53,6 +53,9 @@ public sealed record RuntimeDependencies(
     internal HttpClient? SourceHttp { get; init; }
     internal Azure.Core.TokenCredential? SourceCredential { get; init; }
     internal TimeProvider SourceClock { get; init; } = TimeProvider.System;
+    internal HttpClient? PreviewHttp { get; init; }
+    internal Azure.Core.TokenCredential? PreviewCredential { get; init; }
+    internal TimeProvider PreviewClock { get; init; } = TimeProvider.System;
 
     /// <summary>Production dependencies resolved from the real process environment.</summary>
     public static RuntimeDependencies Production() => Production(CurrentEnvironment());

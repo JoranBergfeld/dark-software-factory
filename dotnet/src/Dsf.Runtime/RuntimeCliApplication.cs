@@ -133,6 +133,27 @@ public static class RuntimeCliApplication
             }
         });
         root.Subcommands.Add(source);
+        foreach (var kind in new[] { Dsf.Core.Onboarding.PreviewHostKind.Council, Dsf.Core.Onboarding.PreviewHostKind.SourceContext })
+        {
+            var preview = new Command(kind == Dsf.Core.Onboarding.PreviewHostKind.Council ? "serve-preview" : "serve-source-context",
+                "serve protected nonpublishing council source-context consumption");
+            preview.SetAction(async (_, token) =>
+            {
+                try
+                {
+                    var settings = FactoryHostSettings.Read(env, "Supervised preview");
+                    await using var host = RuntimeVerbs.BuildPreviewHost(settings, dependencies, kind);
+                    await dependencies.WebHostRunner.RunAsync(host, token);
+                    return Success;
+                }
+                catch (RuntimeVerbException exception)
+                {
+                    await stderr.WriteLineAsync(exception.Message);
+                    return Failure;
+                }
+            });
+            root.Subcommands.Add(preview);
+        }
         var supplemental = new Command("serve-supplemental", "serve isolated optional evidence proof; no governance or private source-store access");
         supplemental.SetAction(async (_, token) =>
         {

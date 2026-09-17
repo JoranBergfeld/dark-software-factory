@@ -336,6 +336,7 @@ internal sealed class SourceInventoryTransport : HttpMessageHandler
     private static object Setting(string key, string value, int etag) => new
         { key, value, etag = etag.ToString(), label = (string?)null,
             content_type = key.StartsWith(FactoryCharterLimits.AuditPrefix, StringComparison.Ordinal) ? FactoryCharterLimits.RecordContentType
+                : key.StartsWith("dsf/factory/preview", StringComparison.Ordinal) ? FactoryPreviewValidation.RecordContentType
                 : key.StartsWith("intent/", StringComparison.Ordinal) ? "application/vnd.dsf.intent+json;version=1" : "application/vnd.dsf.source+json;version=1", locked = false };
     internal static HttpResponseMessage Json(object value, int status = 200) => new((HttpStatusCode)status)
         { Content = JsonContent.Create(value) };

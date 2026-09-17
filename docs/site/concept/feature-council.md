@@ -262,8 +262,8 @@ The source workload exposes a shared implementation API,
 its own verified code-intent identity. It uses the actual source/inventory and
 intent workflows, including the original analyzed inventory, complete analysis,
 current native model authority and exact fetched-charter fence. A council
-identity cannot be substituted for that source identity. No council-facing HTTP
-route or preview admission is granted by this API.
+identity cannot be substituted for that source identity. The implementation
+API itself grants no preview admission.
 
 Its protected App Configuration reader reuses Core's
 `FactoryCharterAdoptionReader` with the existing operator adoption path.
@@ -274,6 +274,157 @@ history remains unknown. The result distinguishes retained adoption evidence
 from current source context and performs no adoption, publication, activation
 or source-progress writes. These sequential native checks are not a
 cross-provider transaction or a complete council readiness assessment.
+
+### Protected council source-context consumption
+
+Two **runtime** commands provide connected, read-only consumption. They are
+not `dsf` CLI verbs and are not yet created by provisioning assets.
+
+| Runtime command | Host suffix | Workload identity | POST route | Native Entra caller |
+| --- | --- | --- | --- | --- |
+| `serve-preview` | `-preview` | Original COUNCIL UAMI only | `/source-context` | Factory's approved Azure operator only |
+| `serve-source-context` | `-context` | Original CODE UAMI only | `/council-context` | Original COUNCIL principal **and client** only |
+
+Both accept `PreviewCapabilityRequest`: `operationId`, `approvalFingerprint`,
+and a nonempty `requestId`. `RuntimeCliApplication` runs the real hosts through
+`IWebHostRunner`; `IFactoryPreviewCapability.CheckAsync` validates current
+protected and native authority. The source route then calls
+`RuntimeVerbs.ReadSourceCharterContextAsync` and the shared `RuntimeWorkflow`.
+The council proxy acquires its own COUNCIL token for `api://{audience}/.default`;
+it never forwards an operator token, borrows CODE credentials, or reads the
+private source-progress store.
+
+Success is HTTP 200 with `PreviewSourceContext`: matching request/operation/
+approval, `capabilityRevision`, and current `SourceCharterContextResult`.
+This includes exact adopted charter, complete analyzed source and uncertainty,
+original inventory integrity, current reconciliation, and native model authority.
+It is **not a completed council evaluation, readiness proof or activation**.
+Noncurrent source results retain explicit Partial/Blocked/Failed/Canceled/Unknown
+state without context. Admission and bounded failures use
+`PreviewContextFailure` (`state`, sanitized `reason`), never provider diagnostics.
+Requests are limited to 4 KiB, complete responses to 4 MiB; overflows fail rather
+than truncate. The outer request budget is 180 seconds, enclosing the existing
+150-second source-reading budget and capability checks. Responses use `no-store`.
+
+The current capability is stored in product App Configuration, not the owner
+registry. No runtime principal receives governance-write permission.
+
+| Protected record | Contract |
+| --- | --- |
+| `dsf/factory/preview` | Protocol 1 `FactoryPreviewCapability`, kind `decide-preview-capability`, explicit `Prepared` state, operation, approving Azure operator/time, configuration hash and all effect hashes |
+| `dsf/factory/preview-bindings/{operation:D}/{name}` | Original completed `FoundationOperation`; names `council`, `code`, `hosting`, `account`, `database`, `runs` |
+| `dsf/factory/preview-operations/{operation:D}/{index:D4}` | Completed creation receipt, kind `decide-preview-operation`, exact target/API, request hash, provider IDs, deployment operation and current native revision |
+| Factory manifest | Both `previewOperationId` and `previewApprovalFingerprint` must match the protected capability and request |
+
+Preview records are unlabeled and use content type
+`application/vnd.dsf.preview+json;version=1`. Native record metadata, including
+ETags, is bounded and retained in revision comparisons; replacing identical
+content with a different ETag invalidates an in-flight read. Missing records,
+fields, labels, record types or native receipts cannot default to approval.
+
+`FactoryPreviewConfiguration` pins protocol/purpose
+`supervised-proposal-preview-v1`, factory/profile/plan, the manifest basis
+(excluding only its two preview pins), source and model configuration/deployment
+revisions, adopted-charter revision, immutable runtime image, audience client ID,
+metadata role definition/revision, and all six original binding hashes.
+Source/model routes and model proof still undergo their existing current
+validation; a retained proof is not substituted for live native authority.
+Both hosts recheck capability before releasing successful context. Source
+revision/fetched-charter/adoption fences remain inside the actual shared reader.
+
+#### Reviewed deployment contract
+
+Let `G` be the original factory resource group, `F` the factory GUID in lowercase
+32-character form, `P = df-{first 14 characters of F}`, and `K` the product key.
+The operator-reviewed plan must explicitly create **new** Container Apps
+`G/providers/microsoft.app/containerapps/{P}-preview` and `{P}-context`.
+Original source/model hosts, images, caller lists and creation receipts remain
+unchanged: `/charter-review` remains operator-only; `/materialize` remains
+CODE-only. No telemetry, supplemental or model endpoint is expanded here.
+
+Each new host must use the approved immutable image, original private managed
+environment, one assigned UAMI, `dotnet dsf-runtime.dll`, and its exact command
+from the table. Native ACA auth must require HTTPS/Entra/Return401, the exact
+tenant, both GUID and `api://GUID` audiences, and only the listed principal.
+No excluded paths, groups, token store, extra identities, secrets, mounts,
+init containers, service bindings or Dapr. Ingress port is 8080; revision mode
+is Single. Each host has exactly:
+
+```text
+DSF_PRODUCT=K
+AZURE_APPCONFIG_ENDPOINT=https://dsfo-F.azconfig.io
+DSF_FACTORY_PROFILE_PIN=<original protected profile pin>
+AZURE_CLIENT_ID=<that host's original CODE or COUNCIL client ID>
+```
+
+COUNCIL retains its already approved product-config Data Reader assignment.
+Current product-config metadata must still show the exact endpoint, successful
+provisioning and disabled local/access-key authentication. Its existing
+operator-accessible public networking is preserved, not replaced with a new
+private-only requirement.
+It additionally needs an operator-approved, hash-pinned **custom ARM metadata
+role** containing exactly these actions and no data actions, exclusions or
+wildcards:
+
+```text
+Microsoft.App/containerApps/read
+Microsoft.App/containerApps/authConfigs/read
+Microsoft.App/managedEnvironments/read
+Microsoft.AppConfiguration/configurationStores/read
+Microsoft.ManagedIdentity/userAssignedIdentities/read
+Microsoft.DocumentDB/databaseAccounts/read
+Microsoft.DocumentDB/databaseAccounts/sqlDatabases/read
+Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers/read
+Microsoft.DocumentDB/databaseAccounts/sqlRoleDefinitions/read
+Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments/read
+Microsoft.Authorization/roleAssignments/read
+Microsoft.Authorization/roleDefinitions/read
+Microsoft.Resources/deployments/read
+Microsoft.Resources/deployments/operations/read
+```
+
+Assign this role at **ten exact resource scopes**, not a group or subscription:
+COUNCIL UAMI, CODE UAMI, managed environment, factory Cosmos account, original
+source host, original model host, product App Configuration, new preview host,
+new context host, and
+`G/providers/microsoft.resources/deployments/preview-{operation:N}`.
+Role definitions are read through an authorized resource scope; no
+subscription-wide role-definition read is required. Current direct/inherited
+assignments at those scopes are checked for unapproved access. CODE retains
+its existing factory metadata/source-progress rights; no new CODE grant or
+application-backend access is required.
+
+Factory Cosmos account `G/providers/microsoft.documentdb/databaseaccounts/{P}-cosmos`
+must retain its original incarnation, disabled local auth and disabled public
+networking. Its original SQL database is `K`, with existing `runs` and new
+`council-preview` containers, both partitioned `/product` (Hash, version 2).
+Create one custom SQL role with account `assignableScopes` and exactly:
+
+```text
+Microsoft.DocumentDB/databaseAccounts/readMetadata
+Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers/items/read
+Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers/items/create
+Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers/items/replace
+```
+
+Assign it to COUNCIL only at `{account}/dbs/K/colls/runs` and
+`{account}/dbs/K/colls/council-preview`. No query, delete, upsert, other-container
+or account-wide item grant. `FactoryPreviewValidation` supplies deterministic
+resource/SQL-role/assignment IDs and the complete 18-receipt target list:
+container, SQL role, two SQL assignments, ten metadata assignments, and four
+host/auth resources. Receipt indices are not deployment execution order:
+resource-scoped grants depend on their target resources existing.
+
+Actual ARM deployment operations must report Create/Succeeded with matching
+target, tracking/operation IDs and Created/201 or OK/200 status. Native
+`systemData`, creation ETag, and Cosmos `_rid` forms are supported; SQL role
+resources are checked by exact properties and deployment receipts, not invented
+timestamps. These are point-in-time checks, **not cross-provider atomic fencing**,
+global tenant permission discovery or a proof of successful Cosmos data-plane
+persistence. This path writes no governance, source progress, preview/run state,
+GitHub issue/PR/label, handoff or activation. Aggregate evidence acquisition,
+conveyor composition and persisted readiness proof remain separate integration
+work; generic inactive `run`, `sweep`, HTTP and dry-run admission is unchanged.
 
 **See also:** the [loop overview](the-loop.md), the next phase
 [Creation phase](creation.md), and the decision-path redesign in

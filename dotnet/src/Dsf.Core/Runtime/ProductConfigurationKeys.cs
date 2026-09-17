@@ -24,6 +24,9 @@ public static class ProductConfigurationKeys
     public const string FactoryModels = "dsf/factory/models";
     public const string FactorySource = "dsf/factory/source";
     public const string FactorySupplemental = "dsf/factory/supplemental";
+    public const string FactoryPreview = "dsf/factory/preview";
+    public static string PreviewBinding(Guid operation, string name) => $"dsf/factory/preview-bindings/{operation:D}/{name}";
+    public static string PreviewOperation(Guid operation, int index) => $"dsf/factory/preview-operations/{operation:D}/{index:D4}";
     public const string CharterAdopted = "dsf/factory/charter/adopted";
     public const string CharterAdoptionOperation = "dsf/factory/charter/adoption-operation";
     public const string CharterAdoptionsPrefix = "dsf/factory/charter/adoptions/";

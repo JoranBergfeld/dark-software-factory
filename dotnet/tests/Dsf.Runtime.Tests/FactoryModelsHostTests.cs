@@ -479,8 +479,14 @@ public sealed class FactoryModelsHostTests
                 } } },
             })!;
             Resources[Account + "/providers/microsoft.authorization/roledefinitions/" + role.Split('/').Last()] = nativeRole;
+            var configReaderProperties = JsonSerializer.SerializeToElement(new { type = "BuiltInRole", permissions = new[] { new
+            {
+                actions = Array.Empty<string>(), notActions = Array.Empty<string>(), notDataActions = Array.Empty<string>(),
+                dataActions = new[] { "Microsoft.AppConfiguration/configurationStores/keyValues/read", "Microsoft.AppConfiguration/configurationStores/label/read" },
+            } } });
             var grants = new[] {
-                FactoryModelsValidation.Grant(scope, "/subscriptions/" + original.Identity.SubscriptionId + "/providers/microsoft.authorization/roledefinitions/" + FactoryModelsValidation.ConfigReaderRole, model.PrincipalId!, new string('a', 64)),
+                FactoryModelsValidation.Grant(scope, "/subscriptions/" + original.Identity.SubscriptionId + "/providers/microsoft.authorization/roledefinitions/" + FactoryModelsValidation.ConfigReaderRole,
+                    model.PrincipalId!, FactoryModelsValidation.Hash(configReaderProperties)),
                 FactoryModelsValidation.Grant(Account, role, model.PrincipalId!, FactoryModelsValidation.Hash(Element(nativeRole).GetProperty("properties"))),
             };
             var config = new FactoryModelsConfiguration(1, original.Identity.FactoryId, original.Identity.PlanFingerprint,

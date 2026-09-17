@@ -1,0 +1,190 @@
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using Dsf.Core.Runtime;
+
+namespace Dsf.Core.Onboarding;
+
+public enum PreviewCapabilityState { Prepared, Partial, Blocked, Canceled, Unknown }
+public enum PreviewHostKind { Council, SourceContext }
+
+public sealed record PreviewCapabilityRequest(Guid OperationId, string ApprovalFingerprint, Guid RequestId);
+
+public sealed record FactoryPreviewConfiguration(
+    int Protocol, string Purpose, Guid FactoryId, string ProfilePin, string PlanFingerprint, string ManifestBasisRevision,
+    string SourceConfigurationRevision, string SourceDeploymentRevision, string ModelConfigurationRevision, string ModelDeploymentRevision,
+    Guid AdoptedCharterRevision, string RuntimeImage, string AudienceClientId,
+    string MetadataRoleDefinitionId, string MetadataRoleRevision, IReadOnlyDictionary<string, string> BindingHashes);
+
+public sealed record FactoryPreviewCapability(
+    int Protocol, string Kind, Guid OperationId, string ApprovalFingerprint, FactoryPreviewConfiguration Configuration,
+    string ApprovedBy, DateTimeOffset ApprovedAt, PreviewCapabilityState State, IReadOnlyList<string> EffectHashes);
+
+public sealed record PreviewCapabilitySnapshot(
+    FactoryManifest Manifest, FactoryPreviewCapability Capability, FoundationOperation Council, FoundationOperation Code,
+    string CouncilEndpoint, string SourceContextEndpoint, string Revision);
+
+public sealed record PreviewSourceContext(
+    Guid RequestId, Guid OperationId, string ApprovalFingerprint, string CapabilityRevision, SourceCharterContextResult Context);
+
+public sealed record PreviewContextFailure(FactoryCharterState State, string Reason);
+
+/// <summary>Current protected records and native bindings; no readiness or publication permission.</summary>
+public interface IFactoryPreviewCapability
+{
+    Task<PreviewCapabilitySnapshot> CheckAsync(PreviewCapabilityRequest request, CancellationToken cancellationToken);
+}
+
+public sealed class PreviewCapabilityException(FactoryCharterState state, string reason) : Exception(reason)
+{
+    public FactoryCharterState State { get; } = state;
+}
+
+public static class FactoryPreviewValidation
+{
+    public const string Purpose = "supervised-proposal-preview-v1";
+    public const string Kind = "decide-preview-capability";
+    public const string OperationKind = "decide-preview-operation";
+    public const string PreviewContainer = "council-preview";
+    public const string RecordContentType = "application/vnd.dsf.preview+json;version=1";
+    public const int ResponseBytes = 4 * 1024 * 1024;
+    public static readonly TimeSpan RequestBudget = TimeSpan.FromSeconds(180);
+    public static IReadOnlyList<string> BindingNames { get; } = ["council", "code", "hosting", "account", "database", "runs"];
+    public static IReadOnlyList<string> MetadataActions { get; } =
+    [
+        "Microsoft.App/containerApps/read", "Microsoft.App/containerApps/authConfigs/read", "Microsoft.App/managedEnvironments/read",
+        "Microsoft.AppConfiguration/configurationStores/read",
+        "Microsoft.ManagedIdentity/userAssignedIdentities/read", "Microsoft.DocumentDB/databaseAccounts/read",
+        "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/read", "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers/read",
+        "Microsoft.DocumentDB/databaseAccounts/sqlRoleDefinitions/read", "Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments/read",
+        "Microsoft.Authorization/roleAssignments/read", "Microsoft.Authorization/roleDefinitions/read",
+        "Microsoft.Resources/deployments/read", "Microsoft.Resources/deployments/operations/read",
+    ];
+    public static IReadOnlyList<string> StateDataActions { get; } =
+    [
+        "Microsoft.DocumentDB/databaseAccounts/readMetadata",
+        "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers/items/read",
+        "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers/items/create",
+        "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers/items/replace",
+    ];
+
+    public static string ManifestBasis(FactoryManifest manifest) =>
+        FactoryModelsValidation.Hash(manifest with { PreviewOperationId = null, PreviewApprovalFingerprint = null });
+    public static string Group(FactoryModels models) => models.Bindings![2].Target[..models.Bindings[2].Target.IndexOf("/providers/", StringComparison.Ordinal)];
+    public static string Prefix(Guid factory) => "df-" + factory.ToString("N")[..14];
+    public static string HostTarget(string group, Guid factory, PreviewHostKind kind) =>
+        group + "/providers/microsoft.app/containerapps/" + Prefix(factory) + (kind == PreviewHostKind.Council ? "-preview" : "-context");
+    public static string Deployment(string group, Guid operation) => group + "/providers/microsoft.resources/deployments/preview-" + operation.ToString("N");
+    public static string Account(string group, Guid factory) => group + "/providers/microsoft.documentdb/databaseaccounts/" + Prefix(factory) + "-cosmos";
+    public static string Database(string account, string product) => account + "/sqldatabases/" + product;
+    public static string Container(string account, string product, string container) => Database(account, product) + "/containers/" + container;
+    public static string SqlScope(string account, string product, string container) => account + "/dbs/" + product + "/colls/" + container;
+    public static string SqlRole(string account, Guid factory) => account + "/sqlroledefinitions/" + StableId(factory + ":preview-state");
+    public static string SqlAssignment(string account, string principal, string scope, string role) =>
+        account + "/sqlroleassignments/" + StableId(principal + ":" + scope + ":" + role);
+    private static Guid StableId(string value) => new(SHA256.HashData(Encoding.UTF8.GetBytes(value))[..16]);
+
+    public static IReadOnlyList<string> MetadataScopes(FactoryManifest manifest, FactoryModels models, FactoryGitHubAuthority github, Guid operation)
+    {
+        var group = Group(models);
+        return new[] { models.Bindings![0].Target, models.Bindings[1].Target, models.Bindings[2].Target,
+            Account(group, manifest.Identity.FactoryId), FactorySourceValidation.HostTarget(github), FactoryModelsValidation.HostTarget(models),
+            group + "/providers/microsoft.appconfiguration/configurationstores/dsfo-" + manifest.Identity.FactoryId.ToString("N"),
+            HostTarget(group, manifest.Identity.FactoryId, PreviewHostKind.Council),
+            HostTarget(group, manifest.Identity.FactoryId, PreviewHostKind.SourceContext), Deployment(group, operation) };
+    }
+
+    public static IReadOnlyList<(string Target, string Api)> Targets(
+        FactoryManifest manifest, FactoryModels models, FactoryGitHubAuthority github, Guid operation, string metadataRole)
+    {
+        var group = Group(models);
+        var account = Account(group, manifest.Identity.FactoryId);
+        var role = SqlRole(account, manifest.Identity.FactoryId);
+        return new[] { (Container(account, manifest.Identity.ProductKey, PreviewContainer), "2024-11-15"), (role, "2024-11-15") }
+            .Concat(new[] { "runs", PreviewContainer }.Select(name => (SqlAssignment(account, models.Bindings![0].PrincipalId!,
+                SqlScope(account, manifest.Identity.ProductKey, name), role), "2024-11-15")))
+            .Concat(MetadataScopes(manifest, models, github, operation).Select(scope =>
+                (FactoryModelsValidation.Grant(scope, metadataRole, models.Bindings![0].PrincipalId!, "").Target, "2022-04-01")))
+            .Concat(new[] { PreviewHostKind.Council, PreviewHostKind.SourceContext }.SelectMany(kind =>
+            {
+                var host = HostTarget(group, manifest.Identity.FactoryId, kind);
+                return new[] { (host, "2025-01-01"), (host + "/authconfigs/current", "2025-01-01") };
+            })).ToArray();
+    }
+
+    public static (FactoryPreviewCapability Capability, Dictionary<string, FoundationOperation> Bindings, FoundationOperation[] Effects)
+        Read(FactoryManifest manifest, FactoryModels models, FactoryGitHubAuthority github, FactorySource source,
+            IReadOnlyList<FoundationOperation> sourceEffects, IReadOnlyDictionary<string, string> values,
+            PreviewCapabilityRequest request, DateTimeOffset now)
+    {
+        if (request.OperationId == Guid.Empty || request.RequestId == Guid.Empty || !FactorySourceValidation.Hash(request.ApprovalFingerprint))
+            throw new PreviewCapabilityException(FactoryCharterState.Blocked, "InvalidPreviewCapabilityRequest");
+        if (!values.ContainsKey(ProductConfigurationKeys.FactoryPreview))
+            throw new PreviewCapabilityException(FactoryCharterState.Unknown, "ProtectedPreviewCapabilityMissing");
+        var capability = FactorySourceValidation.ReadRecord<FactoryPreviewCapability>(values, ProductConfigurationKeys.FactoryPreview);
+        var config = capability.Configuration;
+        if (capability.Protocol != 1 || capability.Kind != Kind || config.Protocol != 1 || config.Purpose != Purpose
+            || capability.OperationId != request.OperationId || capability.ApprovalFingerprint != request.ApprovalFingerprint
+            || manifest.PreviewOperationId != capability.OperationId || manifest.PreviewApprovalFingerprint != capability.ApprovalFingerprint
+            || capability.ApprovalFingerprint != FactoryModelsValidation.Hash(config) || capability.State != PreviewCapabilityState.Prepared
+            || capability.ApprovedBy != manifest.Identity.AzureActorId || capability.ApprovedAt < manifest.Identity.CreatedAt
+            || capability.ApprovedAt > now || capability.ApprovedAt.Offset != TimeSpan.Zero
+            || config.FactoryId != manifest.Identity.FactoryId || config.ProfilePin != manifest.ProfilePin
+            || config.PlanFingerprint != manifest.Identity.PlanFingerprint || config.ManifestBasisRevision != ManifestBasis(manifest)
+            || config.SourceConfigurationRevision != source.ApprovalFingerprint
+            || config.SourceDeploymentRevision != FactoryModelsValidation.Hash(sourceEffects)
+            || config.ModelConfigurationRevision != models.ApprovalFingerprint
+            || config.ModelDeploymentRevision != FactoryModelsValidation.Hash(models.Effects)
+            || config.AdoptedCharterRevision == Guid.Empty || config.BindingHashes.Count != BindingNames.Count
+            || BindingNames.Any(name => !config.BindingHashes.TryGetValue(name, out var hash) || !FactorySourceValidation.Hash(hash))
+            || !FactorySourceValidation.Hash(config.MetadataRoleRevision))
+            throw new PreviewCapabilityException(FactoryCharterState.Blocked, "PreviewApprovalOrCurrentInputsChanged");
+        FactorySourceValidation.ValidateSelection(new(config.RuntimeImage, config.AudienceClientId));
+        var rolePrefix = "/subscriptions/" + manifest.Identity.SubscriptionId + "/providers/microsoft.authorization/roledefinitions/";
+        if (!config.MetadataRoleDefinitionId.StartsWith(rolePrefix, StringComparison.Ordinal)
+            || !Guid.TryParseExact(config.MetadataRoleDefinitionId[rolePrefix.Length..], "D", out var roleId) || roleId == Guid.Empty)
+            throw new JsonException();
+        var bindings = BindingNames.ToDictionary(name => name, name =>
+            FactorySourceValidation.ReadRecord<FoundationOperation>(values, ProductConfigurationKeys.PreviewBinding(capability.OperationId, name)));
+        var group = Group(models);
+        var account = Account(group, config.FactoryId);
+        string[] expected = [models.Bindings![0].Target, models.Bindings[1].Target, models.Bindings[2].Target,
+            account, Database(account, manifest.Identity.ProductKey), Container(account, manifest.Identity.ProductKey, "runs")];
+        for (var i = 0; i < BindingNames.Count; i++)
+        {
+            var binding = bindings[BindingNames[i]];
+            if (binding.SchemaVersion != 1 || FactoryModelsValidation.Hash(binding) != config.BindingHashes[BindingNames[i]]
+                || binding.Target != expected[i] || binding.ResourceId != binding.Target || binding.FactoryId != config.FactoryId
+                || binding.OperationId != models.Bindings[0].OperationId || binding.Kind != "decide-foundation-operation"
+                || binding.State != FoundationOperationState.Completed || binding.Disposition != FoundationResourceDisposition.Created
+                || binding.StartedAt < manifest.Identity.CreatedAt || binding.StartedAt > now || binding.ClientRequestId == Guid.Empty
+                || !FactorySourceValidation.Hash(binding.RequestSha256) || binding.HttpStatus is not (200 or 201)
+                || string.IsNullOrWhiteSpace(binding.Incarnation) || !FactoryTelemetryValidation.IsProviderOperationId(binding.ProviderOperationId)
+                || !Guid.TryParse(binding.ProviderRequestId, out var provider) || provider == Guid.Empty
+                || !Guid.TryParse(binding.ProviderCorrelationId, out var correlation) || correlation == Guid.Empty
+                || i >= 3 && binding.ApiVersion != "2024-11-15"
+                || i < 3 && FactoryModelsValidation.Hash(binding) != FactoryModelsValidation.Hash(models.Bindings[i]))
+                throw new JsonException("Original factory binding required.");
+        }
+        var targets = Targets(manifest, models, github, capability.OperationId, config.MetadataRoleDefinitionId);
+        if (capability.EffectHashes.Count != targets.Count) throw new JsonException("Complete preview deployment receipts required.");
+        var effects = targets.Select((target, i) =>
+        {
+            var effect = FactorySourceValidation.ReadRecord<FoundationOperation>(values, ProductConfigurationKeys.PreviewOperation(capability.OperationId, i));
+            if (effect.SchemaVersion != 1 || effect.Kind != OperationKind || effect.FactoryId != config.FactoryId
+                || effect.OperationId != capability.OperationId || effect.Index != i || effect.Target != target.Target
+                || effect.ResourceId != effect.Target || effect.ApiVersion != target.Api
+                || effect.DeploymentTarget != Deployment(group, capability.OperationId)
+                || effect.StartedAt < capability.ApprovedAt || effect.StartedAt > now || effect.ClientRequestId == Guid.Empty
+                || effect.State != FoundationOperationState.Completed || effect.Disposition != FoundationResourceDisposition.Created
+                || effect.HttpStatus is not (200 or 201) || !FactorySourceValidation.Hash(effect.RequestSha256)
+                || !FactorySourceValidation.Hash(effect.NativeRevision) || !FactoryTelemetryValidation.IsProviderOperationId(effect.ProviderOperationId)
+                || !Guid.TryParse(effect.ProviderRequestId, out var provider) || provider == Guid.Empty
+                || !Guid.TryParse(effect.ProviderCorrelationId, out var correlation) || correlation == Guid.Empty
+                || FactoryModelsValidation.Hash(effect) != capability.EffectHashes[i])
+                throw new JsonException("Unconfirmed preview deployment effect.");
+            return effect;
+        }).ToArray();
+        return (capability, bindings, effects);
+    }
+}
