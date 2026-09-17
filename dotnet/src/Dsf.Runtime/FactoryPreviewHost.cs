@@ -20,17 +20,22 @@ public static partial class RuntimeVerbs
     public static WebApplication BuildPreviewHost(FactoryHostSettings settings, RuntimeDependencies dependencies, PreviewHostKind kind,
         string host = DefaultHost, int port = DefaultPort)
     {
-        if (!Enum.IsDefined(kind)) throw new ArgumentOutOfRangeException(nameof(kind));
+        if (kind is not (PreviewHostKind.Council or PreviewHostKind.SourceContext)) throw new ArgumentOutOfRangeException(nameof(kind));
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions { Args = [] });
         builder.Logging.ClearProviders();
         builder.WebHost.UseUrls($"http://{host}:{port}");
         builder.WebHost.ConfigureKestrel(options => options.Limits.MaxRequestBodySize = 4096);
         var app = builder.Build();
-        Func<HttpContext, Task<IResult>> handler = HandleAsync;
+        Func<HttpContext, Task<IResult>> handler = context => HandleAsync(context);
         app.MapPost(kind == PreviewHostKind.SourceContext ? "/council-context" : "/source-context", handler);
+        if (kind == PreviewHostKind.Council)
+        {
+            Func<HttpContext, Task<IResult>> modelAuthority = context => HandleAsync(context, modelAuthority: true);
+            app.MapPost("/model-authority", modelAuthority);
+        }
         return app;
 
-        async Task<IResult> HandleAsync(HttpContext context)
+        async Task<IResult> HandleAsync(HttpContext context, bool modelAuthority = false)
         {
             context.Response.Headers.CacheControl = "no-store";
             try
@@ -49,6 +54,14 @@ public static partial class RuntimeVerbs
                 if (!NativeCaller(context, kind == PreviewHostKind.SourceContext ? capability.Council.PrincipalId! : capability.Manifest.Identity.AzureActorId,
                     capability.Manifest.Identity.TenantId, kind == PreviewHostKind.SourceContext ? capability.Council.ClientId : null))
                     throw new PreviewCapabilityException(FactoryCharterState.Blocked, "ApprovedPreviewCallerRequired");
+                if (modelAuthority)
+                {
+                    var models = await OpenPreviewModelsAsync(settings, dependencies, request, token);
+                    var observation = models.Observations.Single();
+                    if (observation.CapabilityRevision != capability.Revision)
+                        throw new PreviewCapabilityException(FactoryCharterState.Blocked, "PreviewCapabilityChangedDuringModelRead");
+                    return Results.Json(new PreviewModelAuthorityContext(request.RequestId, capability.Revision, observation.Authority), FactoryGitHubJson.Options);
+                }
                 SourceCharterContextResult result;
                 if (kind == PreviewHostKind.SourceContext)
                     result = await ReadSourceCharterContextAsync(settings, dependencies with { SourceHttp = http }, token);

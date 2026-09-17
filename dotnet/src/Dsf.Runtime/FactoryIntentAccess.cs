@@ -76,15 +76,8 @@ internal sealed class FactoryIntentAccess(FactorySourceAccess source, HttpClient
     {
         await CheckAsync(token);
         var result = await RequestAsync<ModelTextResult>("/synthesis", new ModelWorkloadRequest(Capability, input), token);
-        var observation = result.Observation;
-        var route = Models.Routes![0].Selection;
-        if (observation is null || observation.Route != "synthesis" || observation.ConfigurationRevision != Models.ApprovalFingerprint
-            || observation.State != ModelCapabilityState.Verified || observation.Reason != ModelCapabilityReason.None
-            || observation.ResponseModel != route.Model && observation.ResponseModel != route.Model + "-" + route.Version
-            || observation.OutputSha256 != FactoryModelsValidation.Hash(result.Text) || observation.OutputCharacters != result.Text.Length
-            || observation.RequestId is not null && (!Guid.TryParse(observation.RequestId, out var requestId) || requestId == Guid.Empty)
-            || observation.Dimensions != 0 || observation.Groups.Count != 0)
-            throw new IntentException(IntentState.Failed, "InvalidModelObservation");
+        try { FactoryModelsValidation.ValidateTextResult(Models, "synthesis", result); }
+        catch (ModelCapabilityException) { throw new IntentException(IntentState.Failed, "InvalidModelObservation"); }
         await CheckAsync(token);
         return result;
     }

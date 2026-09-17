@@ -29,6 +29,10 @@ internal sealed class PreviewContextTransport : HttpMessageHandler
     internal string CouncilEndpoint = "https://preview.private.azurecontainerapps.io";
     internal string ContextEndpoint = "https://context.private.azurecontainerapps.io";
     internal int ContextCalls;
+    internal const string ModelEndpoint = "https://preview-models.private.azurecontainerapps.io";
+    internal readonly List<Uri> ModelServiceRequests = [];
+    internal Func<string, string>? ChangeModelResponse { get; set; }
+    internal Func<HttpRequestMessage, HttpResponseMessage?>? ModelNativeResponse { get; set; }
     private HttpMessageInvoker inner = null!;
 
     private const string Charter = """
@@ -53,7 +57,7 @@ internal sealed class PreviewContextTransport : HttpMessageHandler
 
         """;
 
-    internal static async Task<PreviewContextTransport> CreateAsync()
+    internal static async Task<PreviewContextTransport> CreateAsync(bool modelEvaluation = false)
     {
         var result = new PreviewContextTransport { Intent = await IntentWorkflowTransport.CreateAsync() };
         result.inner = new(result.Intent, false);
@@ -92,11 +96,11 @@ internal sealed class PreviewContextTransport : HttpMessageHandler
         source.Values[ProductConfigurationKeys.CharterAdoptionReceipt(adoption.Revision, "receipt")] = JsonSerializer.Serialize(adoption, json);
         source.Values[ProductConfigurationKeys.CharterAdoptionReceipt(adoption.Revision, "intent")] = JsonSerializer.Serialize(operation with { State = CharterEffectState.Intended }, json);
         for (var i = 0; i < parts.Length; i++) source.Values[ProductConfigurationKeys.CharterAdoptionPayload(adoption.Revision, i)] = JsonSerializer.Serialize(parts[i], json);
-        result.Prepare(adoption.Revision);
+        result.Prepare(adoption.Revision, modelEvaluation);
         return result;
     }
 
-    private void Prepare(Guid adoption)
+    private void Prepare(Guid adoption, bool modelEvaluation)
     {
         var manifest = JsonSerializer.Deserialize<FactoryManifest>(Source.Values[ProductConfigurationKeys.FactoryManifest], FactoryGitHubJson.Options)!;
         Models = FactoryModelsValidation.ReadPreparation(manifest, Source.Values);
@@ -134,7 +138,9 @@ internal sealed class PreviewContextTransport : HttpMessageHandler
             FactoryModelsValidation.Hash(FactorySourceValidation.Read(manifest, Source.GitHub, Source.Values).Effects),
             Models.ApprovalFingerprint, FactoryModelsValidation.Hash(Models.Effects), adoption,
             "example.azurecr.io/dsf/runtime@sha256:" + new string('7', 64), "abababab-abab-abab-abab-abababababab", roleId,
-            FactoryModelsValidation.Hash(JsonSerializer.SerializeToElement(role["properties"])), resources.ToDictionary(p => p.Key, p => FactoryModelsValidation.Hash(p.Value)));
+            FactoryModelsValidation.Hash(JsonSerializer.SerializeToElement(role["properties"])), resources.ToDictionary(p => p.Key, p => FactoryModelsValidation.Hash(p.Value)))
+        { ModelEvaluation = modelEvaluation ? new(PreviewModelHostConfiguration.PurposeName,
+            "example.azurecr.io/dsf/runtime@sha256:" + new string('8', 64), "acacacac-acac-acac-acac-acacacacacac") : null };
         foreach (var pair in resources)
             Source.Values[ProductConfigurationKeys.PreviewBinding(operation, pair.Key)] = JsonSerializer.Serialize(pair.Value, FactoryGitHubJson.Options);
         var created = Source.Clock.Now.ToString("O");
@@ -150,39 +156,41 @@ internal sealed class PreviewContextTransport : HttpMessageHandler
             Native[target] = JsonSerializer.SerializeToNode(new { id = target, properties = new
                 { scope, roleDefinitionId = sqlRole, principalId = binding[0].PrincipalId } })!;
         }
-        foreach (var scope in FactoryPreviewValidation.MetadataScopes(manifest, Models, Source.GitHub, operation))
+        foreach (var scope in FactoryPreviewValidation.MetadataScopes(manifest, Models, Source.GitHub, operation, config))
         {
             var target = FactoryModelsValidation.Grant(scope, roleId, binding[0].PrincipalId!, "").Target;
             Native[target] = JsonSerializer.SerializeToNode(new { id = target, properties = new { scope, roleDefinitionId = roleId,
                 principalId = binding[0].PrincipalId, principalType = "ServicePrincipal", createdOn = created, updatedOn = created,
                 createdBy = manifest.Identity.AzureActorId, condition = (string?)null, conditionVersion = (string?)null } })!;
         }
-        foreach (var kind in new[] { PreviewHostKind.Council, PreviewHostKind.SourceContext })
+        foreach (var kind in FactoryPreviewValidation.HostKinds(config))
         {
-            var identity = kind == PreviewHostKind.Council ? binding[0] : binding[1];
+            var identity = kind == PreviewHostKind.SourceContext ? binding[1] : binding[0];
+            var model = kind == PreviewHostKind.ModelEvaluation ? config.ModelEvaluation : null;
             var target = FactoryPreviewValidation.HostTarget(Group, manifest.Identity.FactoryId, kind);
             var host = Source.Resources[Source.HostTarget].DeepClone();
             host["id"] = target;
             host["systemData"] = JsonSerializer.SerializeToNode(new { createdAt = created, lastModifiedAt = created });
             host["identity"]!["userAssignedIdentities"] = new JsonObject { [identity.Target] = new JsonObject() };
             var container = host["properties"]!["template"]!["containers"]![0]!;
-            container["image"] = config.RuntimeImage;
-            container["args"] = new JsonArray(kind == PreviewHostKind.Council ? "serve-preview" : "serve-source-context");
+            container["image"] = model?.RuntimeImage ?? config.RuntimeImage;
+            container["args"] = new JsonArray(kind == PreviewHostKind.Council ? "serve-preview" : model is not null ? "serve-preview-models" : "serve-source-context");
             foreach (var value in container["env"]!.AsArray())
                 if ((string?)value!["name"] == "AZURE_CLIENT_ID") value["value"] = identity.ClientId;
-            host["properties"]!["configuration"]!["ingress"]!["fqdn"] = new Uri(kind == PreviewHostKind.Council ? CouncilEndpoint : ContextEndpoint).Host;
+            host["properties"]!["configuration"]!["ingress"]!["fqdn"] = new Uri(kind == PreviewHostKind.Council ? CouncilEndpoint : model is not null ? ModelEndpoint : ContextEndpoint).Host;
             Native[target] = host;
             var auth = Source.Resources[Source.HostTarget + "/authconfigs/current"].DeepClone();
             auth["id"] = target + "/authconfigs/current";
             auth["systemData"] = host["systemData"]!.DeepClone();
             var aad = auth["properties"]!["identityProviders"]!["azureActiveDirectory"]!;
-            aad["registration"]!["clientId"] = config.AudienceClientId;
-            aad["validation"]!["allowedAudiences"] = new JsonArray(config.AudienceClientId, "api://" + config.AudienceClientId);
+            var audience = model?.AudienceClientId ?? config.AudienceClientId;
+            aad["registration"]!["clientId"] = audience;
+            aad["validation"]!["allowedAudiences"] = new JsonArray(audience, "api://" + audience);
             aad["validation"]!["defaultAuthorizationPolicy"]!["allowedPrincipals"]!["identities"] =
                 new JsonArray(kind == PreviewHostKind.Council ? manifest.Identity.AzureActorId : binding[0].PrincipalId);
             Native[target + "/authconfigs/current"] = auth;
         }
-        var targets = FactoryPreviewValidation.Targets(manifest, Models, Source.GitHub, operation, roleId);
+        var targets = FactoryPreviewValidation.Targets(manifest, Models, Source.GitHub, operation, roleId, config);
         var effects = targets.Select((target, i) =>
         {
             var body = JsonSerializer.SerializeToElement(Native[target.Target]);
@@ -297,6 +305,14 @@ internal sealed class PreviewContextTransport : HttpMessageHandler
         var uri = request.RequestUri!;
         var principal = TokenPrincipal(request);
         Requests.Add((principal, request.Method.Method, uri));
+        if (uri.Host == new Uri(ModelEndpoint).Host)
+        {
+            Assert.Equal(Models.Bindings![0].PrincipalId, principal);
+            Assert.Equal("/evaluate", uri.AbsolutePath);
+            var input = JsonSerializer.Deserialize<PreviewModelRequest>(await request.Content!.ReadAsStringAsync(token), FactorySourceValidation.RecordJson)!;
+            var result = await RunModelAsync(input);
+            return new(result.Status) { Content = new StringContent(ChangeModelResponse?.Invoke(result.Body) ?? result.Body, Encoding.UTF8, "application/json") };
+        }
         if (uri.Host == new Uri(ContextEndpoint).Host)
         {
             Assert.Equal(Models.Bindings![0].PrincipalId, principal);
@@ -313,7 +329,7 @@ internal sealed class PreviewContextTransport : HttpMessageHandler
             Assert.Contains(principal, new[] { Source.Code.PrincipalId, Models.Bindings![0].PrincipalId });
             var path = uri.AbsolutePath;
             if (EnforceCouncilScopes && principal == Models.Bindings[0].PrincipalId
-                && !FactoryPreviewValidation.MetadataScopes(Source.Manifest, Models, Source.GitHub, Capability.OperationId)
+                && !FactoryPreviewValidation.MetadataScopes(Source.Manifest, Models, Source.GitHub, Capability.OperationId, Capability.Configuration)
                     .Any(scope => path.Equals(scope, StringComparison.OrdinalIgnoreCase) || path.StartsWith(scope + "/", StringComparison.OrdinalIgnoreCase)))
                 return new(HttpStatusCode.Forbidden);
             if (path.EndsWith("/roleassignments", StringComparison.OrdinalIgnoreCase))
@@ -348,6 +364,39 @@ internal sealed class PreviewContextTransport : HttpMessageHandler
             return SourceInventoryTransport.Json(body);
         }
         return forwarded;
+    }
+
+    internal async Task<PreviewContextRunner> RunModelAsync(PreviewModelRequest request, string? caller = null, string? client = null)
+    {
+        var writes = Source.Writes.Count;
+        var runner = new PreviewContextRunner(Source) { Route = "/evaluate", Request = request,
+            Caller = caller ?? Models.Bindings![0].PrincipalId!, Client = client ?? Models.Bindings![0].ClientId! };
+        using var native = new ModelNativeTransport(this);
+        using var http = new HttpClient(native, false);
+        var environment = Source.Environment;
+        environment["AZURE_CLIENT_ID"] = Models.Bindings![0].ClientId;
+        Assert.Equal(0, await RuntimeCliApplication.InvokeAsync(["serve-preview-models"], environment, new StringWriter(), new StringWriter(),
+            RuntimeDependencies.Production() with { WebHostRunner = runner, ModelHttp = http,
+                ModelCredential = new IntentModelCredential(Source), ModelClock = Source.Clock }, CancellationToken.None));
+        Assert.Equal(writes, Source.Writes.Count);
+        Assert.DoesNotContain(Requests, r => r.Method is "PUT" or "PATCH" or "DELETE");
+        return runner;
+    }
+
+    private sealed class ModelNativeTransport(PreviewContextTransport owner) : HttpMessageHandler
+    {
+        private readonly HttpMessageInvoker models = new(owner.Intent.Models, false);
+        private readonly HttpMessageInvoker factory = new(owner, false);
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
+        {
+            owner.ModelServiceRequests.Add(request.RequestUri!);
+            var uri = request.RequestUri!;
+            if (owner.Models.Routes!.Any(r => uri.Host == new Uri(r.Selection.Endpoint).Host
+                || uri.Host == "management.azure.com" && uri.AbsolutePath.StartsWith(r.Selection.AccountResourceId, StringComparison.OrdinalIgnoreCase)))
+                return owner.ModelNativeResponse?.Invoke(request) is { } response ? Task.FromResult(response) : models.SendAsync(request, token);
+            return factory.SendAsync(request, token);
+        }
+        protected override void Dispose(bool disposing) { if (disposing) { models.Dispose(); factory.Dispose(); } base.Dispose(disposing); }
     }
 
     private static string TokenPrincipal(HttpRequestMessage request)

@@ -9,7 +9,7 @@ namespace Dsf.Runtime;
 /// Runtime workflow invariants shared by CLI and HTTP adapters: live-filing
 /// gates, stable run identity, resume rules, and pre-station load failures.
 /// </summary>
-internal static class RuntimeWorkflow
+internal static partial class RuntimeWorkflow
 {
     internal static async Task<SourceCharterContextResult> ReadSourceCharterContextAsync(
         FactorySourceAccess source, IFactoryCharterEvidenceReader records, HttpClient http, TimeProvider clock, CancellationToken token)

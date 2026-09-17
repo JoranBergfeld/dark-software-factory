@@ -133,6 +133,23 @@ public static class RuntimeCliApplication
             }
         });
         root.Subcommands.Add(source);
+        var previewModels = new Command("serve-preview-models", "serve protected council-only model evaluation; never publish or activate");
+        previewModels.SetAction(async (_, token) =>
+        {
+            try
+            {
+                var settings = FactoryHostSettings.Read(env, "Preview models");
+                await using var host = RuntimeVerbs.BuildPreviewModelsHost(settings, dependencies);
+                await dependencies.WebHostRunner.RunAsync(host, token);
+                return Success;
+            }
+            catch (RuntimeVerbException exception)
+            {
+                await stderr.WriteLineAsync(exception.Message);
+                return Failure;
+            }
+        });
+        root.Subcommands.Add(previewModels);
         foreach (var kind in new[] { Dsf.Core.Onboarding.PreviewHostKind.Council, Dsf.Core.Onboarding.PreviewHostKind.SourceContext })
         {
             var preview = new Command(kind == Dsf.Core.Onboarding.PreviewHostKind.Council ? "serve-preview" : "serve-source-context",

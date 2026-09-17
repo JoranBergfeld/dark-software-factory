@@ -277,13 +277,15 @@ cross-provider transaction or a complete council readiness assessment.
 
 ### Protected council source-context consumption
 
-Two **runtime** commands provide connected, read-only consumption. They are
-not `dsf` CLI verbs and are not yet created by provisioning assets.
+Two **runtime** commands provide connected, read-only source consumption; an
+explicitly selected third host provides model evaluation. They are not `dsf`
+CLI verbs and are not yet created by provisioning assets.
 
 | Runtime command | Host suffix | Workload identity | POST route | Native Entra caller |
 | --- | --- | --- | --- | --- |
 | `serve-preview` | `-preview` | Original COUNCIL UAMI only | `/source-context` | Factory's approved Azure operator only |
 | `serve-source-context` | `-context` | Original CODE UAMI only | `/council-context` | Original COUNCIL principal **and client** only |
+| `serve-preview-models` (explicit selection) | `-preview-models` | Original COUNCIL UAMI only | `/evaluate` | Original COUNCIL principal **and client** only |
 
 Both accept `PreviewCapabilityRequest`: `operationId`, `approvalFingerprint`,
 and a nonempty `requestId`. `RuntimeCliApplication` runs the real hosts through
@@ -293,6 +295,13 @@ protected and native authority. The source route then calls
 The council proxy acquires its own COUNCIL token for `api://{audience}/.default`;
 it never forwards an operator token, borrows CODE credentials, or reads the
 private source-progress store.
+
+The operator-only council route `/model-authority` accepts the same capability
+request. It invokes `RuntimeVerbs.OpenPreviewModelsAsync` and the shared
+`RuntimeWorkflow`, then the real model-consumption host. Its
+`PreviewModelAuthorityContext` binds the operator request, capability revision,
+and fresh native observations for synthesis, embedding and all three jurors.
+It issues no inference probe and is not aggregate preview-input readiness.
 
 Success is HTTP 200 with `PreviewSourceContext`: matching request/operation/
 approval, `capabilityRevision`, and current `SourceCharterContextResult`.
@@ -332,6 +341,47 @@ validation; a retained proof is not substituted for live native authority.
 Both hosts recheck capability before releasing successful context. Source
 revision/fetched-charter/adoption fences remain inside the actual shared reader.
 
+#### Verified council model consumer
+
+`FactoryPreviewConfiguration.modelEvaluation` is an optional **protected**
+`PreviewModelHostConfiguration`, with exact `purpose`
+`council-model-evaluation-v1`, immutable `runtimeImage`, and
+`audienceClientId`. Omission preserves the source-only capability; it cannot
+authorize model consumption. Selection is included in the configuration
+fingerprint, manifest approval pin, deployment receipts and native host checks.
+The existing model topology/configuration/deployment pins remain mandatory.
+
+`RuntimeVerbs.OpenPreviewModelsAsync` returns `IFactoryPreviewModelWorkloads`,
+implementing the existing `IFactoryModelWorkloads`: async singleton-or-multiple
+embedding/deduplication, synthesis (also used by grounding/lenses), and each of
+the three juror routes. It adds request-bound `ReadAuthorityAsync` and bounded
+`Observations`. The client obtains its own COUNCIL token and sends
+`PreviewModelRequest` to the approved `/evaluate` host; it never dispatches to a
+model account directly.
+
+The model host uses the actual `FactoryModelWorkloads` implementation under
+COUNCIL's existing reviewed narrow model grants. It verifies all five native
+account/deployment/role/assignment routes before inference and again afterward,
+and rechecks protected capability/native deployment bindings before release.
+Client and host retain and validate request ID, input hash, capability revision,
+current model authority, actual response model/configuration, output hash,
+dimensions and complete embedding groups. A singleton sends **one** input to
+native embeddings; no repeated observation or lexical substitute.
+
+Model requests/responses are limited to 128 KiB, text inputs to 32,768
+characters, outputs to 8,192, embedding inputs to 1..32. Native model responses
+are streamed within 1 MiB (text/metadata) or 4 MiB (embeddings), not buffered
+unboundedly before checking size. Admission and each consumer operation have
+180-second deadlines. A consumer retains at most 64 confirmed observations;
+overflow fails explicitly. Unknown/canceled dispatch or malformed returned
+provenance prevents further dispatch on that consumer instance. This is not a
+durable dispatch journal, a cross-process retry fence, a complete candidate
+evaluation or a readiness proof.
+
+Telemetry/supplemental council-consumption routes and their aggregate
+`CouncilEvaluationContext` operation are not implemented by this model
+consumer. It does not replace their current-evidence or adopted-intent gates.
+
 #### Reviewed deployment contract
 
 Let `G` be the original factory resource group, `F` the factory GUID in lowercase
@@ -340,7 +390,17 @@ The operator-reviewed plan must explicitly create **new** Container Apps
 `G/providers/microsoft.app/containerapps/{P}-preview` and `{P}-context`.
 Original source/model hosts, images, caller lists and creation receipts remain
 unchanged: `/charter-review` remains operator-only; `/materialize` remains
-CODE-only. No telemetry, supplemental or model endpoint is expanded here.
+CODE-only. Legacy model `/proof` remains operator-only; synthesis, deduplication
+and authority remain CODE-only; existing juror callers remain unchanged.
+Telemetry and supplemental endpoints are unchanged.
+
+When `modelEvaluation` is selected, the same reviewed plan additionally creates
+`G/providers/microsoft.app/containerapps/{P}-preview-models` and its native auth
+resource. This third host uses its separately pinned image/audience, the
+original COUNCIL UAMI and `serve-preview-models`; its only native caller is
+COUNCIL. It has the same four environment names, isolated host shape and
+private environment requirements below. The existing source/council images and
+the new model image must all appear explicitly in the operator-reviewed plan.
 
 Each new host must use the approved immutable image, original private managed
 environment, one assigned UAMI, `dotnet dsf-runtime.dll`, and its exact command
@@ -388,6 +448,9 @@ COUNCIL UAMI, CODE UAMI, managed environment, factory Cosmos account, original
 source host, original model host, product App Configuration, new preview host,
 new context host, and
 `G/providers/microsoft.resources/deployments/preview-{operation:N}`.
+With model evaluation selected, add only the eleventh metadata scope: the new
+`{P}-preview-models` Container App. The action set remains unchanged, with no
+new direct model-account, source-backend, secret or governance-write grant.
 Role definitions are read through an authorized resource scope; no
 subscription-wide role-definition read is required. Current direct/inherited
 assignments at those scopes are checked for unapproved access. CODE retains
@@ -412,7 +475,11 @@ Assign it to COUNCIL only at `{account}/dbs/K/colls/runs` and
 or account-wide item grant. `FactoryPreviewValidation` supplies deterministic
 resource/SQL-role/assignment IDs and the complete 18-receipt target list:
 container, SQL role, two SQL assignments, ten metadata assignments, and four
-host/auth resources. Receipt indices are not deployment execution order:
+host/auth resources. Selecting model evaluation produces **21** receipts:
+eleven metadata assignments and six host/auth resources, with the other four
+resources unchanged. `FactoryPreviewValidation.Targets` and `MetadataScopes`
+must receive the approved configuration to enumerate that selection.
+Receipt indices are not deployment execution order:
 resource-scoped grants depend on their target resources existing.
 
 Actual ARM deployment operations must report Create/Succeeded with matching

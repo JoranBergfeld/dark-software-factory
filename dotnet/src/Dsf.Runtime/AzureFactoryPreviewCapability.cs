@@ -30,7 +30,9 @@ internal sealed class AzureFactoryPreviewCapability(
             models = FactoryModelsValidation.ReadVerified(manifest, values,
                 new(models.OperationId, models.ApprovalFingerprint, models.LastProofReference ?? "", models.LastProofSha256 ?? ""), clock.GetUtcNow());
             var (capability, bindings, effects) = FactoryPreviewValidation.Read(manifest, models, github, source, sourceEffects, values, request, clock.GetUtcNow());
-            var own = bindings[kind == PreviewHostKind.Council ? "council" : "code"];
+            if (kind == PreviewHostKind.ModelEvaluation && capability.Configuration.ModelEvaluation is null)
+                throw Denied("ApprovedPreviewModelConsumerRequired");
+            var own = bindings[kind == PreviewHostKind.SourceContext ? "code" : "council"];
             if (settings.ManagedIdentityClientId != own.ClientId) throw Denied("PreviewWorkloadIdentityMismatch");
             var nativeCredential = new FactoryWorkloadCredential(credential, manifest.Identity.TenantId, own, clock);
             _ = await nativeCredential.GetTokenAsync(new TokenRequestContext(["https://appconfig.azure.com/.default"]), token);
@@ -40,7 +42,8 @@ internal sealed class AzureFactoryPreviewCapability(
             var current = await ReadAsync(nativeCredential, token);
             if (FactoryModelsValidation.Hash(records) != FactoryModelsValidation.Hash(current)) throw Denied("PreviewGovernanceChanged");
             var revision = FactoryModelsValidation.Hash(new { Records = records, Native = native.Revisions });
-            return new(manifest, capability, bindings["council"], bindings["code"], endpoints.Council, endpoints.Source, revision);
+            return new(manifest, capability, bindings["council"], bindings["code"], endpoints.Council, endpoints.Source, revision)
+            { ModelEndpoint = endpoints.Models, Models = models };
         }
         catch (PreviewCapabilityException) { throw; }
         catch (OperationCanceledException) { throw; }
@@ -92,7 +95,7 @@ internal sealed class NativePreviewBindings(
     private string Group => FactoryPreviewValidation.Group(models);
     private string Account => bindings["account"].Target;
 
-    internal async Task<(string Council, string Source)> CheckAsync(CancellationToken token)
+    internal async Task<(string Council, string Source, string? Models)> CheckAsync(CancellationToken token)
     {
         foreach (var (name, binding) in bindings)
         {
@@ -187,7 +190,7 @@ internal sealed class NativePreviewBindings(
         foreach (var assignment in assigned)
             RequirePropertiesRevision(assignment, effects.Single(e => Same(e.Target, assignment.GetProperty("id").GetString())));
 
-        var scopes = FactoryPreviewValidation.MetadataScopes(manifest, models, github, capability.OperationId);
+        var scopes = FactoryPreviewValidation.MetadataScopes(manifest, models, github, capability.OperationId, capability.Configuration);
         for (var i = 0; i < scopes.Count; i++)
         {
             var effect = effects[4 + i];
@@ -208,7 +211,8 @@ internal sealed class NativePreviewBindings(
         }
         var council = await NewHostAsync(PreviewHostKind.Council, token);
         var context = await NewHostAsync(PreviewHostKind.SourceContext, token);
-        return (council, context);
+        var model = capability.Configuration.ModelEvaluation is null ? null : await NewHostAsync(PreviewHostKind.ModelEvaluation, token);
+        return (council, context, model);
     }
 
     private async Task OriginalHostsAsync(CancellationToken token)
@@ -257,9 +261,14 @@ internal sealed class NativePreviewBindings(
             if (observed.Revision != effect.NativeRevision || observed.Incarnation != effect.Incarnation) throw Changed("PreviewHostChanged");
             RequireIncarnation(native, effect);
         }
-        return FactoryHostedWorkloadPolicy.Validate(host, auth, bindings[kind == PreviewHostKind.Council ? "council" : "code"], bindings["hosting"],
-            capability.Configuration.RuntimeImage, kind == PreviewHostKind.Council ? "serve-preview" : "serve-source-context",
-            Product, ProductEndpoint, manifest.ProfilePin, manifest.Identity.TenantId, capability.Configuration.AudienceClientId,
+        var model = kind == PreviewHostKind.ModelEvaluation ? capability.Configuration.ModelEvaluation : null;
+        return FactoryHostedWorkloadPolicy.Validate(host, auth, bindings[kind == PreviewHostKind.SourceContext ? "code" : "council"], bindings["hosting"],
+            model?.RuntimeImage ?? capability.Configuration.RuntimeImage, kind switch
+            {
+                PreviewHostKind.Council => "serve-preview", PreviewHostKind.SourceContext => "serve-source-context",
+                PreviewHostKind.ModelEvaluation => "serve-preview-models", _ => throw new ArgumentOutOfRangeException(nameof(kind)),
+            },
+            Product, ProductEndpoint, manifest.ProfilePin, manifest.Identity.TenantId, model?.AudienceClientId ?? capability.Configuration.AudienceClientId,
             [kind == PreviewHostKind.Council ? manifest.Identity.AzureActorId : bindings["council"].PrincipalId!]);
     }
 

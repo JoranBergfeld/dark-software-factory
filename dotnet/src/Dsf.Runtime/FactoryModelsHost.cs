@@ -128,12 +128,7 @@ public static partial class RuntimeVerbs
                 object result;
                 if (native is not null)
                 {
-                    var observations = new List<ModelRouteAuthority>();
-                    foreach (var required in authority.Routes!)
-                        observations.Add(await workloads.CheckRouteAsync(required, context.RequestAborted));
-                    var checkedAuthority = new ModelAuthorityResult(native.CheckId, reference, authority.Bindings![0].PrincipalId!, observations);
-                    FactoryModelsValidation.ValidateNativeAuthority(authority, native.CheckId, checkedAuthority);
-                    result = checkedAuthority;
+                    result = await workloads.ReadAuthorityAsync(native.CheckId, context.RequestAborted);
                 }
                 else result = route == "embedding" ? await workloads.DeduplicateAsync(deduplication!.Items, context.RequestAborted)
                     : route == "synthesis" ? await workloads.SynthesizeAsync(completion!.Input, context.RequestAborted)

@@ -11,6 +11,16 @@ internal sealed class FactoryModelWorkloads(
     FactoryManifest manifest, FactoryModels authority, TokenCredential credential, HttpClient http, TimeProvider clock) : IFactoryModelWorkloads
 {
     public Task<ModelTextResult> SynthesizeAsync(string input, CancellationToken token) => CompleteAsync("synthesis", input, false, token);
+    internal async Task<ModelAuthorityResult> ReadAuthorityAsync(Guid checkId, CancellationToken token)
+    {
+        var reference = new ModelCapabilityReference(authority.OperationId, authority.ApprovalFingerprint,
+            authority.LastProofReference!, authority.LastProofSha256!);
+        var observations = new List<ModelRouteAuthority>();
+        foreach (var route in authority.Routes!) observations.Add(await CheckRouteAsync(route, token));
+        var result = new ModelAuthorityResult(checkId, reference, authority.Bindings![0].PrincipalId!, observations);
+        FactoryModelsValidation.ValidateNativeAuthority(authority, checkId, result);
+        return result;
+    }
     public Task<ModelTextResult> JudgeAsync(string juror, string input, CancellationToken token)
     {
         if (!FactoryModelsValidation.RouteNames.Skip(2).Contains(juror))
@@ -145,7 +155,7 @@ internal sealed class FactoryModelWorkloads(
         using var request = new HttpRequestMessage(body is null ? HttpMethod.Get : HttpMethod.Post, uri);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", access.Token);
         if (body is not null) request.Content = JsonContent.Create(body);
-        try { return await http.SendAsync(request, token); }
+        try { return await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token); }
         catch (HttpRequestException) { throw FactoryModelsValidation.Failure(ModelCapabilityReason.NetworkUnavailable, route, "Workload network path unavailable; no operator fallback or public-access relaxation."); }
         catch (OperationCanceledException) when (!token.IsCancellationRequested)
         { throw FactoryModelsValidation.Failure(ModelCapabilityReason.NetworkUnavailable, route, "Native workload request timed out; no retry or substitute result."); }
@@ -159,11 +169,13 @@ internal sealed class FactoryModelWorkloads(
                 HttpStatusCode.NotFound => ModelCapabilityReason.MissingDeployment,
                 _ => ModelCapabilityReason.UnsupportedTarget,
             }, route, "Actual workload native request failed; provider body withheld, no retry or fallback.");
-        var bytes = await response.Content.ReadAsByteArrayAsync(token);
         var limit = route == "embedding" ? 4 * 1024 * 1024 : 1024 * 1024;
-        if (bytes.Length > limit) throw FactoryModelsValidation.Failure(ModelCapabilityReason.MalformedResponse, route, "Provider response exceeds bounded model response.");
         var requestId = response.Headers.TryGetValues("x-request-id", out var values) && Guid.TryParse(values.Single(), out var id) ? id.ToString() : null;
-        return (JsonDocument.Parse(bytes, new JsonDocumentOptions { AllowDuplicateProperties = false }), requestId);
+        JsonDocument body;
+        try { body = await EvidencePayload.ReadAsync(response, token, limit); }
+        catch (SupplementalSourceException e) when (e.Reason == SupplementalReason.CapacityExceeded)
+        { throw FactoryModelsValidation.Failure(ModelCapabilityReason.MalformedResponse, route, "Provider response exceeds bounded model response."); }
+        return (body, requestId);
     }
     private static string ReadModel(JsonElement response, ModelRouteSelection route)
     {
