@@ -42,33 +42,59 @@ internal sealed partial class PreviewExecutionStore
         await WriteAsync(Document with { Admission = Document.Admission! with { State = PreviewWorkState.Running, Readiness = PreviewReadiness.Running } }, token);
     }
 
-    internal async Task EndWorkAsync(PreviewWorkAdmission admission, PreviewReadiness readiness, string? reason,
-        bool definitelyStopped, CancellationToken token)
+    internal async Task<PreviewWorkAdmission> EndWorkAsync(PreviewWorkAdmission admission, PreviewReadiness readiness, string? reason,
+        string? evaluatedRevision, bool began, CancellationToken executionToken, CancellationToken token)
     {
-        var run = definitelyStopped ? await ReadAsync(token) : null;
+        var run = began && !executionToken.IsCancellationRequested ? await ReadAsync(token) : null;
         RequireWorker(admission);
+        if (readiness == PreviewReadiness.ReadyAwaitingActivation && evaluatedRevision != Revision)
+            throw new PreviewCapabilityException(FactoryCharterState.Unknown, "EvaluatedPreviewRevisionChangedBeforeRelease");
         owner = admission.WorkerId;
-        var released = definitelyStopped && !Document.Dispatches.Any(d => d.State is PreviewModelDispatchState.Unknown or PreviewModelDispatchState.Dispatched);
+        var confirmedRun = Document.PendingRun is not null && run is not null ? await RunReceiptAsync(run, token) : null;
+        var released = began && !executionToken.IsCancellationRequested
+            && !Document.Dispatches.Any(d => d.State is PreviewModelDispatchState.Unknown or PreviewModelDispatchState.Dispatched);
         var next = Document with
         {
             Admission = Document.Admission! with
             {
                 State = released ? PreviewWorkState.Released : PreviewWorkState.Unknown,
-                Readiness = readiness,
-                Reason = reason is { Length: <= 256 } ? reason : "PreviewWorkerOutcomeUnconfirmed"
+                Readiness = released ? readiness : PreviewReadiness.Unknown,
+                Reason = !released && readiness != PreviewReadiness.Unknown || reason?.Length > 256
+                    ? "PreviewWorkerOutcomeUnconfirmed" : reason
             }
         };
         if (released && Document.PendingRun is not null)
-            next = next with { PendingRun = null, Run = await RunReceiptAsync(run ?? throw new JsonException(), token) };
+            next = next with { PendingRun = null, Run = confirmedRun ?? throw new JsonException() };
         await WriteAsync(next, token);
+        if (released && executionToken.IsCancellationRequested)
+            await QuarantineWorkAsync(admission, "PreviewWorkerOutcomeUnconfirmed", token);
+        return Document.Admission!;
+    }
+
+    internal async Task QuarantineWorkAsync(PreviewWorkAdmission admission, string reason, CancellationToken token)
+    {
+        RequireAdmissionIdentity(admission);
+        if (Document.Admission is { State: PreviewWorkState.Unknown, Readiness: PreviewReadiness.Unknown }) return;
+        owner = admission.WorkerId;
+        await WriteAsync(Document with
+        {
+            Admission = Document.Admission! with { State = PreviewWorkState.Unknown, Readiness = PreviewReadiness.Unknown, Reason = reason }
+        }, token);
     }
 
     internal void RequireWorker(PreviewWorkAdmission? admission, bool queued = false)
     {
+        RequireAdmissionIdentity(admission);
+        if (Document.Admission!.State != (queued ? PreviewWorkState.Queued : PreviewWorkState.Running))
+            throw new PreviewCapabilityException(FactoryCharterState.Unknown, "ExactDurablyAdmittedPreviewWorkerRequired");
+    }
+
+    private void RequireAdmissionIdentity(PreviewWorkAdmission? admission)
+    {
         if (admission is null || Document.Admission is not { } current || current.Id != admission.Id
             || current.WorkerId != admission.WorkerId || current.Request != admission.Request
             || current.CapabilityRevision != admission.CapabilityRevision || current.CapabilityRevision != authority.Revision
-            || current.State != (queued ? PreviewWorkState.Queued : PreviewWorkState.Running) || Document.Owner != current.WorkerId)
+            || Document.Owner != current.WorkerId)
             throw new PreviewCapabilityException(FactoryCharterState.Unknown, "ExactDurablyAdmittedPreviewWorkerRequired");
     }
 

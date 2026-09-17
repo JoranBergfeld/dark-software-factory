@@ -28,9 +28,22 @@ internal sealed partial class PreviewPreparationTransport
     internal Func<string, HttpStatusCode, Task>? AfterIngressResponse { get; set; }
     internal Func<Uri, Task>? BeforeIngressRequest { get; set; }
     internal Func<string, string>? AlterIngressBody { get; set; }
+    internal TimeProvider? PreviewClock { get; set; }
+    internal Action<JsonNode>? AfterEvaluationRead { get; set; }
+    internal Action<JsonNode>? BeforeEvaluationWrite { get; set; }
     internal readonly System.Collections.Concurrent.ConcurrentQueue<(string Path, TimeSpan Elapsed, TimeSpan WallElapsed)> IngressResponses = new();
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, Lazy<Task<PreviewRunner>>> previewHosts = new();
     private readonly object seedGate = new();
+
+    internal async Task<JsonNode> InspectEvaluationAsync(PreviewCapabilityRequest request)
+    {
+        var host = HostedResources.Single(r => (string?)r["properties"]?["template"]?["containers"]?[0]?["args"]?[0] == "serve-preview");
+        using var message = new HttpRequestMessage(HttpMethod.Post,
+            "https://" + (string)host["properties"]!["configuration"]!["ingress"]!["fqdn"]! + "/evaluation")
+        { Content = JsonContent.Create(request, options: FactoryGitHubJson.Options) };
+        using var response = await PreviewHostAsync(message, CancellationToken.None);
+        return JsonNode.Parse(await response.Content.ReadAsStringAsync())!;
+    }
 
     private async Task<HttpResponseMessage> PreviewHostAsync(HttpRequestMessage request, CancellationToken token, bool modelProof = false)
     {
@@ -75,7 +88,7 @@ internal sealed partial class PreviewPreparationTransport
             {
                 PreviewHttp = http,
                 PreviewCredential = credential,
-                PreviewClock = scenario.Source.Source.Clock,
+                PreviewClock = PreviewClock ?? scenario.Source.Source.Clock,
                 ModelHttp = http,
                 ModelCredential = credential,
                 ModelClock = scenario.Source.Source.Clock,
@@ -176,6 +189,7 @@ internal sealed partial class PreviewPreparationTransport
                 var original = JsonNode.Parse(before)!;
                 if ((string?)original["_etag"] != request.Headers.GetValues("If-Match").Single()) return new(HttpStatusCode.PreconditionFailed);
                 var body = JsonNode.Parse(content!)!;
+                BeforeEvaluationWrite?.Invoke(body);
                 body["_rid"] = original["_rid"]!.DeepClone();
                 body["_etag"] = "\"" + Guid.NewGuid().ToString("D") + "\"";
                 SeedDocuments[path] = body.ToJsonString();
@@ -186,6 +200,7 @@ internal sealed partial class PreviewPreparationTransport
             var response = new HttpResponseMessage(request.Method == HttpMethod.Post ? HttpStatusCode.Created : HttpStatusCode.OK)
             { Content = new StringContent(text, Encoding.UTF8, "application/json") };
             response.Headers.TryAddWithoutValidation("ETag", (string?)JsonNode.Parse(text)!["_etag"]);
+            if (request.Method == HttpMethod.Get) AfterEvaluationRead?.Invoke(JsonNode.Parse(text)!);
             return response;
         }
     }

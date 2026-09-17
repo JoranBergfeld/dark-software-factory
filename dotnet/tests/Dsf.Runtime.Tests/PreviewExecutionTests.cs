@@ -231,7 +231,10 @@ public sealed class PreviewExecutionTests
         };
         var initial = await first.RunEvaluationAsync("/evaluate");
         Assert.True(stopped);
-        Assert.NotEqual(HttpStatusCode.OK, initial.Status);
+        var initialBody = JsonNode.Parse(initial.Body)!;
+        Assert.True((string?)initialBody["readiness"] == "Unknown" || (string?)initialBody["state"] == "Unknown",
+            initial.Body);
+        Assert.DoesNotContain("\"readiness\":\"ReadyAwaitingActivation\"", initial.Body);
         Assert.Equal(stop == "confirmed" ? 1 : 0, first.Intent.Models.Inference.Count - inference);
         using var next = await PreviewContextTransport.ReconstructAsync(first);
         next.ImportEvaluationState(first);

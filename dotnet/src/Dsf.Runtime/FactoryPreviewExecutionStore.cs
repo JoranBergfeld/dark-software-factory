@@ -47,6 +47,8 @@ internal sealed partial class PreviewExecutionStore(PreviewCapabilitySnapshot au
     private PreviewEvaluationDocument? document;
     private CosmosRunStore? runs;
     internal PreviewEvaluationDocument Document => document ?? throw new InvalidOperationException("Preview state must be read first.");
+    internal string Revision => version is not null ? FactoryModelsValidation.Hash(new { Id, version, Document.Checksum })
+        : throw new InvalidOperationException("Confirmed native preview version required.");
     internal string RunId => Id + "-run";
 
     internal async Task<PreviewExecutionSeed> PrepareAsync(TimeProvider clock, CancellationToken token, bool readOnly = false)

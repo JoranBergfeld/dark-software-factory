@@ -12,7 +12,7 @@ internal sealed class FactoryPreviewWorker(FactoryHostSettings settings, Runtime
     ILogger<FactoryPreviewWorker> logger) : BackgroundService
 {
     private sealed record Work(PreviewCapabilitySnapshot Authority, PreviewCapabilityRequest Request, PreviewWorkAdmission? Admission, bool Inputs);
-    private sealed record Completion(PreviewHttpObservation Observation, bool Inputs, string AuthorityRevision, DateTimeOffset ExpiresAt);
+    private sealed record Completion(PreviewHttpObservation Observation, bool Inputs, string AuthorityRevision, string? ExecutionRevision, DateTimeOffset ExpiresAt);
     private readonly Guid workerId = Guid.NewGuid();
     private readonly SemaphoreSlim gate = new(1, 1);
     private readonly Channel<Work> queue = Channel.CreateBounded<Work>(new BoundedChannelOptions(1) { SingleReader = true });
@@ -32,6 +32,7 @@ internal sealed class FactoryPreviewWorker(FactoryHostSettings settings, Runtime
         {
             if (stopping) return Observation(authority, request, PreviewReadiness.Unknown, "PreviewWorkerStopping");
             PreviewExecutionStore? store = null;
+            var unconfirmedAdmission = false;
             if (!inputs)
             {
                 store = Store(authority);
@@ -44,6 +45,7 @@ internal sealed class FactoryPreviewWorker(FactoryHostSettings settings, Runtime
                 {
                     if (store.Document.Run is null)
                         return Observation(authority, request, PreviewReadiness.Unknown, unknown.Reason ?? "OriginalPreviewWorkUnconfirmedNoReplay");
+                    unconfirmedAdmission = true;
                     execute = false;
                 }
                 if (!execute && store.Document.Run is null)
@@ -53,10 +55,23 @@ internal sealed class FactoryPreviewWorker(FactoryHostSettings settings, Runtime
             if (active is not null)
                 return Observation(authority, request, PreviewReadiness.Checking, "CurrentReadOnlyInspectionInProgress");
             if (completed is { } cached && cached.Inputs == inputs && cached.AuthorityRevision == authority.Revision
-                && cached.ExpiresAt > dependencies.PreviewClock.GetUtcNow() && cached.Observation is { } previous && previous.RequestId == request.RequestId
+                && cached.Observation is { } previous
                 && previous.FactoryId == authority.Manifest.Identity.FactoryId && previous.OperationId == request.OperationId
                 && previous.ApprovalFingerprint == request.ApprovalFingerprint)
-                return previous;
+            {
+                if (!inputs && !unconfirmedAdmission && previous.Readiness == PreviewReadiness.ReadyAwaitingActivation)
+                {
+                    if (cached.ExecutionRevision != store!.Revision)
+                        return Observation(authority, request, PreviewReadiness.Unknown, "PreviewEvaluationObservationChanged");
+                    _ = await store.ReadAsync(token);
+                    if (cached.ExecutionRevision != store.Revision)
+                        return Observation(authority, request, PreviewReadiness.Unknown, "PreviewEvaluationObservationChanged");
+                }
+                if (cached.ExpiresAt > dependencies.PreviewClock.GetUtcNow() && previous.RequestId == request.RequestId
+                    && (!unconfirmedAdmission || previous.Readiness == PreviewReadiness.Unknown
+                        && (cached.ExecutionRevision is null || previous.Evaluation is not null && cached.ExecutionRevision == store!.Revision)))
+                    return previous;
+            }
             if (execute && store is not null && store.Document.Proof is null
                 && store.Document.Phase != PreviewExecutionPhase.Failed)
             {
@@ -101,6 +116,7 @@ internal sealed class FactoryPreviewWorker(FactoryHostSettings settings, Runtime
         using var pending = CancellationTokenSource.CreateLinkedTokenSource(token, deadline.Token);
         token = pending.Token;
         var began = false;
+        string? executionRevision = null;
         DateTimeOffset? evidenceExpires = null;
         PreviewHttpObservation outcome;
         try
@@ -125,6 +141,7 @@ internal sealed class FactoryPreviewWorker(FactoryHostSettings settings, Runtime
                     ? await RuntimeWorkflow.InspectPreviewAsync(settings, dependencies, work.Request, http, token)
                     : await RuntimeWorkflow.ExecutePreviewAsync(settings, dependencies, work.Request, http, token, work.Admission);
                 evidenceExpires = EvidenceExpires(report.Inputs);
+                executionRevision = report.ExecutionRevision;
                 outcome = Observation(work.Authority, work.Request, report.Readiness, report.Reason, JsonSerializer.SerializeToElement(report, Json));
             }
         }
@@ -152,16 +169,31 @@ internal sealed class FactoryPreviewWorker(FactoryHostSettings settings, Runtime
             {
                 var store = Store(work.Authority);
                 await store.ReadDocumentAsync(cleanup.Token);
-                await store.EndWorkAsync(work.Admission, outcome.Readiness, outcome.Reason, began && !token.IsCancellationRequested, cleanup.Token);
+                var release = await store.EndWorkAsync(work.Admission, outcome.Readiness, outcome.Reason, executionRevision, began, token, cleanup.Token);
+                if (release.Readiness != outcome.Readiness || release.Reason != outcome.Reason)
+                    outcome = Observation(work.Authority, work.Request, release.Readiness, release.Reason);
+                executionRevision = store.Revision;
             }
             catch (Exception exception) when (Unconfirmed(exception) || exception is PreviewCapabilityException)
             {
-                logger.LogWarning("Original preview worker outcome could not be confirmed; operation {OperationId} remains quarantined.", work.Request.OperationId);
+                logger.LogWarning("Original preview worker release could not be confirmed; operation {OperationId} must not be replayed.", work.Request.OperationId);
                 outcome = Observation(work.Authority, work.Request, PreviewReadiness.Unknown, "PreviewWorkerReleaseUnconfirmedNoTakeover");
+                using var quarantine = new CancellationTokenSource(TimeSpan.FromSeconds(30), dependencies.PreviewClock);
+                try
+                {
+                    var current = Store(work.Authority);
+                    await current.ReadDocumentAsync(quarantine.Token);
+                    await current.QuarantineWorkAsync(work.Admission, outcome.Reason!, quarantine.Token);
+                    executionRevision = current.Revision;
+                }
+                catch (Exception failure) when (Unconfirmed(failure) || failure is PreviewCapabilityException)
+                {
+                    logger.LogWarning("Native preview quarantine could not be confirmed; operation {OperationId} requires its original authority.", work.Request.OperationId);
+                }
             }
         }
         var expires = outcome.ObservedAt + FactoryPreviewValidation.RequestBudget;
-        return new(outcome, work.Inputs, work.Authority.Revision,
+        return new(outcome, work.Inputs, work.Authority.Revision, executionRevision,
             evidenceExpires is { } until && outcome.Readiness == PreviewReadiness.ReadyAwaitingActivation && until < expires ? until : expires);
     }
 

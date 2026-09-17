@@ -11,6 +11,7 @@ public sealed record PreviewExecutionResult(PreviewExecutionPhase State, Preview
     public PreviewReadiness Readiness { get; init; }
     public PreviewReadinessProof? Proof { get; init; }
     public string? Reason { get; init; }
+    internal string? ExecutionRevision { get; init; }
 }
 
 public static partial class RuntimeVerbs
@@ -94,8 +95,10 @@ internal static partial class RuntimeWorkflow
         var run = await store.ReadAsync(token) ?? throw new PreviewCapabilityException(FactoryCharterState.Blocked, "PreviewEvaluationNotStarted");
         var report = Report(store, run);
         if (admission is not null) store.RequireWorker(admission);
-        else if (store.Document.Admission is { State: not PreviewWorkState.Released })
-            return report with { Readiness = PreviewReadiness.Unknown, Reason = "OriginalPreviewWorkerOrReleaseUnconfirmed" };
+        else if (store.Document.Admission is { State: not PreviewWorkState.Released } currentAdmission)
+            return report with { Readiness = PreviewReadiness.Unknown,
+                Reason = currentAdmission.State == PreviewWorkState.Unknown ? currentAdmission.Reason ?? "OriginalPreviewWorkerOrReleaseUnconfirmed"
+                    : "OriginalPreviewWorkerOrReleaseUnconfirmed" };
         if (store.Document.Dispatches.Any(d => d.State is PreviewModelDispatchState.Unknown or PreviewModelDispatchState.Dispatched)
             || store.Document.PendingRun is not null)
             return report with { Readiness = PreviewReadiness.Unknown, Reason = "PreviewDispatchOrCheckpointUnconfirmed" };
@@ -109,7 +112,7 @@ internal static partial class RuntimeWorkflow
                 throw new PreviewCapabilityException(FactoryCharterState.Unknown, "DurableCandidateProofChanged");
             var finalStore = new PreviewExecutionStore(authority, credential, http, dependencies.PreviewClock);
             _ = await finalStore.ReadAsync(token);
-            if (finalStore.Document.Checksum != store.Document.Checksum)
+            if (finalStore.Revision != store.Revision)
                 throw new PreviewCapabilityException(FactoryCharterState.Unknown, "DurablePreviewStateChangedDuringInspection");
             var now = dependencies.PreviewClock.GetUtcNow();
             ValidateCapturedInputs(report.Inputs, current.Snapshot, now);
@@ -143,6 +146,7 @@ internal static partial class RuntimeWorkflow
         new(store.Document.Phase, store.Document.Inputs ?? throw new InvalidOperationException("Captured inputs required."),
             run, store.Document.Run ?? throw new InvalidOperationException("Confirmed native run required."), store.Document.Dispatches)
         {
+            ExecutionRevision = store.Revision,
             Proof = store.Document.Proof,
             Readiness = store.Document.PendingRun is not null
             || store.Document.Dispatches.Any(d => d.State is PreviewModelDispatchState.Dispatched or PreviewModelDispatchState.Unknown)
