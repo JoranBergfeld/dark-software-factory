@@ -257,6 +257,24 @@ lease, revocation receipt or cross-provider transaction. Cancellation is not
 rollback. Reconstructed artifacts and checksums establish neither current
 readiness nor safe replay of external model dispatches.
 
+The source workload exposes a shared implementation API,
+`RuntimeVerbs.ReadSourceCharterContextAsync`, for reading adopted intent under
+its own verified code-intent identity. It uses the actual source/inventory and
+intent workflows, including the original analyzed inventory, complete analysis,
+current native model authority and exact fetched-charter fence. A council
+identity cannot be substituted for that source identity. No council-facing HTTP
+route or preview admission is granted by this API.
+
+Its protected App Configuration reader reuses Core's
+`FactoryCharterAdoptionReader` with the existing operator adoption path.
+Adoption, coordinator, original intent, confirmed receipt and all bounded
+payload chunks must agree, including the approving operator. Current pointer
+revisions are checked around reading and native revalidation; missing/corrupt
+history remains unknown. The result distinguishes retained adoption evidence
+from current source context and performs no adoption, publication, activation
+or source-progress writes. These sequential native checks are not a
+cross-provider transaction or a complete council readiness assessment.
+
 **See also:** the [loop overview](the-loop.md), the next phase
 [Creation phase](creation.md), and the decision-path redesign in
 [ADR 0011](https://github.com/JoranBergfeld/dark-software-factory/blob/main/docs/adr/0011-feature-council-deliberative-redesign.md)

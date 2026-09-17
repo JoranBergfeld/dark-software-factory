@@ -11,6 +11,31 @@ namespace Dsf.Runtime;
 /// </summary>
 internal static class RuntimeWorkflow
 {
+    internal static async Task<SourceCharterContextResult> ReadSourceCharterContextAsync(
+        FactorySourceAccess source, IFactoryCharterEvidenceReader records, HttpClient http, TimeProvider clock, CancellationToken token)
+    {
+        var retained = await FactoryCharterAdoptionReader.ReadAsync(source.Manifest.Identity.FactoryId, records, token);
+        if (retained is null)
+            return new(FactoryCharterState.Blocked, "Explicit adopted charter required; draft readiness is not adoption.", null, null);
+        var workflow = new FactoryIntentWorkflow(source, http, clock, charterReview: true);
+        var analysis = await workflow.ReviewCharterAsync(token);
+        if (analysis.State != IntentState.DraftReady) throw new IntentException(analysis.State, analysis.Detail);
+        var charter = await workflow.ReadReviewedCharterAsync(token);
+        FactoryCharterAdoptionReader.RequireCurrent(retained.Adoption, new(analysis, charter), source.Manifest.Identity.ProductKey);
+        var current = await FactoryCharterAdoptionReader.ReadAsync(source.Manifest.Identity.FactoryId, records, token);
+        if (current is null || current.Revision != retained.Revision || current.OperationRevision != retained.OperationRevision
+            || FactoryModelsValidation.Hash(current.Adoption) != FactoryModelsValidation.Hash(retained.Adoption))
+            throw new CharterAdoptionEvidenceException("Adoption changed while reading current source.");
+        analysis = await workflow.RevalidateCharterReviewAsync(analysis, token);
+        var evidence = new CharterEvidence(analysis, charter);
+        FactoryCharterAdoptionReader.RequireCurrent(retained.Adoption, evidence, source.Manifest.Identity.ProductKey);
+        current = await FactoryCharterAdoptionReader.ReadAsync(source.Manifest.Identity.FactoryId, records, token);
+        if (current is null || current.Revision != retained.Revision || current.OperationRevision != retained.OperationRevision
+            || FactoryModelsValidation.Hash(current.Adoption) != FactoryModelsValidation.Hash(retained.Adoption))
+            throw new CharterAdoptionEvidenceException("Adoption changed during final native verification.");
+        return new(FactoryCharterState.Adopted, "Current source-side adopted intent only; not council readiness or activation.", retained, evidence);
+    }
+
     internal static Task<SupplementalEvidence> ObserveSupplementalAsync(IFactorySupplementalEvidenceSource source,
         SupplementalProofRequest request, CancellationToken token) => source.ReadAsync(request, token);
 

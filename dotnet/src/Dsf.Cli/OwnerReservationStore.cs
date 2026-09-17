@@ -15,7 +15,7 @@ internal sealed class ReservationStoreException(FactoryReservationState state, s
 }
 
 /// <summary>Only per-key+label conditional writes, authenticated as the selected Azure CLI operator.</summary>
-internal sealed class OwnerReservationStore
+internal sealed class OwnerReservationStore : IFactoryCharterEvidenceReader
 {
     public const string ContentType = "application/vnd.dsf.reservation+json;version=1";
     public const int RecordLimit = 10 * 1024;
@@ -49,6 +49,15 @@ internal sealed class OwnerReservationStore
             or JsonException or FormatException or InvalidOperationException)
         { throw new ReservationStoreException(FactoryReservationState.Unknown, "Owner reservation read unavailable; provider details withheld."); }
     }
+
+    async Task<CharterEvidenceRecord?> IFactoryCharterEvidenceReader.ReadAsync(string key, CancellationToken token)
+    {
+        var record = await ReadAsync(key, token);
+        return record is null ? null : new(record.Key, record.Label, record.Value, record.ETag.ToString(), record.ContentType);
+    }
+
+    Task IFactoryCharterEvidenceReader.RequirePristineAsync(string prefix, CancellationToken token) =>
+        RequirePristineAsync(prefix, token);
 
     internal async Task RequirePristineAsync(string prefix, CancellationToken token)
     {

@@ -13,6 +13,206 @@ namespace Dsf.Cli.Tests;
 public sealed class FactoryCharterWorkflowTests
 {
     [Theory]
+    [InlineData("missing-adoption", FactoryCharterState.Blocked)]
+    [InlineData("orphaned-adoption", FactoryCharterState.Unknown)]
+    [InlineData("missing-payload", FactoryCharterState.Unknown)]
+    [InlineData("missing-coordinator", FactoryCharterState.Unknown)]
+    [InlineData("missing-analysis", FactoryCharterState.Unknown)]
+    [InlineData("Unknown", FactoryCharterState.Unknown)]
+    [InlineData("Canceled", FactoryCharterState.Canceled)]
+    [InlineData("model-grant", FactoryCharterState.Blocked)]
+    [InlineData("council-identity", FactoryCharterState.Blocked)]
+    [InlineData("request-canceled", FactoryCharterState.Canceled)]
+    public async Task Source_context_preserves_missing_revoked_and_uncertain_authority(string failure, FactoryCharterState expected)
+    {
+        using var scenario = await CharterScenario.ReadyAsync(CharterScenario.ExistingCharter);
+        var review = await scenario.Machine.InvokeAsync("charter", "--adopt", "--existing");
+        Assert.Equal(0, (await scenario.Machine.InvokeAsync("charter", "--adopt", "--existing",
+            "--approve", (string)review.Result["revision"]!)).Exit);
+        scenario.Reconstruct();
+        var source = scenario.Source.Source!;
+        if (failure is "missing-adoption" or "orphaned-adoption")
+        {
+            source.Values.Remove(ProductConfigurationKeys.CharterAdopted);
+            source.Values.Remove(ProductConfigurationKeys.CharterAdoptionOperation);
+            if (failure == "missing-adoption")
+                foreach (var key in source.Values.Keys.Where(k => k.StartsWith(ProductConfigurationKeys.CharterAdoptionsPrefix, StringComparison.Ordinal)).ToArray())
+                    source.Values.Remove(key);
+        }
+        if (failure == "missing-payload")
+            source.Values.Remove(source.Values.Keys.Single(k => k.StartsWith(ProductConfigurationKeys.CharterAdoptionsPrefix, StringComparison.Ordinal)
+                && k.EndsWith("/payload/0000", StringComparison.Ordinal)));
+        if (failure == "missing-coordinator") source.Values.Remove(ProductConfigurationKeys.CharterAdoptionOperation);
+        if (failure == "missing-analysis") source.Progress.Remove("intent/current");
+        if (failure is "Unknown" or "Canceled")
+        {
+            var key = source.Progress.Keys.Single(k => k.StartsWith("source/", StringComparison.Ordinal) && k.EndsWith("/current", StringComparison.Ordinal));
+            var previous = source.Progress[key];
+            var progress = JsonNode.Parse(previous.Value)!;
+            progress["state"] = failure;
+            source.Progress[key] = (progress.ToJsonString(), previous.Revision + 1);
+        }
+        var models = FactoryModelsValidation.ReadPreparation(source.Manifest, source.Values);
+        if (failure == "model-grant")
+        {
+            var grant = models.Grants!.First(g => g.Scope.Contains("/microsoft.cognitiveservices/", StringComparison.Ordinal));
+            scenario.Models.Resources[grant.Target]["properties"]!["principalId"] = "ffffffff-ffff-ffff-ffff-ffffffffffff";
+        }
+        var environment = source.Environment;
+        if (failure == "council-identity") environment["AZURE_CLIENT_ID"] = models.Bindings![0].ClientId;
+        using var canceled = new CancellationTokenSource();
+        if (failure == "request-canceled") canceled.Cancel();
+        using var http = new HttpClient(scenario.Source.WorkloadTransport!(source));
+        var before = source.Progress.ToDictionary(p => p.Key, p => p.Value);
+        var result = await RuntimeVerbs.ReadSourceCharterContextAsync(FactoryHostSettings.Read(environment, "Source context"),
+            RuntimeDependencies.Production() with
+            {
+                SourceHttp = http, SourceCredential = new SourceTestCredential(source), SourceClock = source.Clock,
+            }, canceled.Token);
+        Assert.Equal(expected, result.State);
+        Assert.Null(result.Adoption);
+        Assert.Null(result.Current);
+        Assert.Equal(before, source.Progress);
+        Assert.Empty(scenario.GitHubWrites);
+    }
+
+    [Fact]
+    public async Task Malformed_native_adoption_record_is_unknown_not_a_known_source_rejection()
+    {
+        using var scenario = await CharterScenario.ReadyAsync(CharterScenario.ExistingCharter);
+        var review = await scenario.Machine.InvokeAsync("charter", "--adopt", "--existing");
+        Assert.Equal(0, (await scenario.Machine.InvokeAsync("charter", "--adopt", "--existing",
+            "--approve", (string)review.Result["revision"]!)).Exit);
+        scenario.Reconstruct();
+        var source = scenario.Source.Source!;
+        using var http = new HttpClient(new MissingCharterLabelTransport(scenario.Source.WorkloadTransport!(source)));
+        var result = await RuntimeVerbs.ReadSourceCharterContextAsync(FactoryHostSettings.Read(source.Environment, "Source context"),
+            RuntimeDependencies.Production() with
+            {
+                SourceHttp = http, SourceCredential = new SourceTestCredential(source), SourceClock = source.Clock,
+            }, CancellationToken.None);
+        Assert.Equal(FactoryCharterState.Unknown, result.State);
+        Assert.Null(result.Adoption);
+        Assert.Null(result.Current);
+        Assert.Empty(scenario.GitHubWrites);
+    }
+
+    private sealed class MissingCharterLabelTransport(HttpMessageHandler inner) : DelegatingHandler(inner)
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
+        {
+            var response = await base.SendAsync(request, token);
+            if (Uri.UnescapeDataString(request.RequestUri!.AbsolutePath) == "/kv/" + ProductConfigurationKeys.CharterAdopted)
+            {
+                var body = JsonNode.Parse(await response.Content.ReadAsStringAsync(token))!.AsObject();
+                body.Remove("label");
+                response.Content.Dispose();
+                response.Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json");
+            }
+            return response;
+        }
+    }
+
+    [Fact]
+    public async Task Source_context_withholds_adoption_erased_during_final_native_revalidation()
+    {
+        using var scenario = await CharterScenario.ReadyAsync(CharterScenario.ExistingCharter);
+        var review = await scenario.Machine.InvokeAsync("charter", "--adopt", "--existing");
+        Assert.Equal(0, (await scenario.Machine.InvokeAsync("charter", "--adopt", "--existing",
+            "--approve", (string)review.Result["revision"]!)).Exit);
+        scenario.Reconstruct();
+        var source = scenario.Source.Source!;
+        var reads = 0;
+        var changed = false;
+        source.OnRequest = request =>
+        {
+            if (Uri.UnescapeDataString(request.RequestUri!.AbsolutePath) == "/kv/" + ProductConfigurationKeys.CharterAdopted)
+                reads++;
+            if (reads >= 4 && !changed && request.RequestUri.Host == "management.azure.com")
+            {
+                changed = true;
+                source.Values.Remove(ProductConfigurationKeys.CharterAdopted);
+            }
+        };
+        using var http = new HttpClient(scenario.Source.WorkloadTransport!(source));
+        var result = await RuntimeVerbs.ReadSourceCharterContextAsync(FactoryHostSettings.Read(source.Environment, "Source context"),
+            RuntimeDependencies.Production() with
+            {
+                SourceHttp = http, SourceCredential = new SourceTestCredential(source), SourceClock = source.Clock,
+            }, CancellationToken.None);
+        Assert.True(changed);
+        Assert.Equal(FactoryCharterState.Unknown, result.State);
+        Assert.Null(result.Adoption);
+        Assert.Null(result.Current);
+        Assert.Empty(scenario.GitHubWrites);
+    }
+
+    [Fact]
+    public async Task Source_workload_reads_adopted_intent_with_original_complete_analysis_without_mutations()
+    {
+        using var scenario = await CharterScenario.ReadyAsync(CharterScenario.ExistingCharter);
+        var review = await scenario.Machine.InvokeAsync("charter", "--adopt", "--existing");
+        var adopted = await scenario.Machine.InvokeAsync("charter", "--adopt", "--existing", "--approve", (string)review.Result["revision"]!);
+        Assert.Equal(0, adopted.Exit);
+        scenario.Reconstruct();
+        var source = scenario.Source.Source!;
+        using var http = new HttpClient(scenario.Source.WorkloadTransport!(source));
+        var before = scenario.Arm.Product.Export();
+        var sourceBefore = source.Progress.ToDictionary(p => p.Key, p => p.Value);
+        var result = await RuntimeVerbs.ReadSourceCharterContextAsync(
+            FactoryHostSettings.Read(source.Environment, "Source context"),
+            RuntimeDependencies.Production() with
+            {
+                SourceHttp = http, SourceCredential = new SourceTestCredential(source), SourceClock = source.Clock,
+            }, CancellationToken.None);
+        Assert.True(result.State == FactoryCharterState.Adopted, result.Detail);
+        Assert.NotNull(result.Adoption);
+        Assert.NotNull(result.Current);
+        Assert.Equal((Guid)adopted.Result["adoption"]!["revision"]!, result.Adoption.Adoption.Revision);
+        Assert.Equal(CharterScenario.ExistingCharter, result.Current.Source.Content);
+        Assert.Equal(IntentState.DraftReady, result.Current.Analysis.State);
+        Assert.NotEmpty(result.Current.Analysis.Chunks);
+        Assert.NotEmpty(result.Current.Analysis.Limitations);
+        Assert.Equal(sourceBefore, source.Progress);
+        Assert.Equal(before, scenario.Arm.Product.Export());
+        Assert.Empty(scenario.GitHubWrites);
+    }
+
+    [Fact]
+    public async Task Adoption_cannot_substitute_an_operator_absent_from_its_immutable_review()
+    {
+        using var scenario = await CharterScenario.ReadyAsync(CharterScenario.ExistingCharter);
+        var review = await scenario.Machine.InvokeAsync("charter", "--adopt", "--existing");
+        var adopted = await scenario.Machine.InvokeAsync("charter", "--adopt", "--existing", "--approve", (string)review.Result["revision"]!);
+        Assert.Equal(0, adopted.Exit);
+        var revision = (Guid)adopted.Result["adoption"]!["revision"]!;
+        foreach (var key in new[]
+        {
+            "dsf/factory/charter/adopted", "dsf/factory/charter/adoption-operation",
+            $"dsf/factory/charter/adoptions/{revision:N}/intent",
+            $"dsf/factory/charter/adoptions/{revision:N}/receipt",
+        })
+            scenario.Arm.Product.Change(key, text =>
+            {
+                if (key.EndsWith("/intent", StringComparison.Ordinal) || key.EndsWith("/adoption-operation", StringComparison.Ordinal))
+                {
+                    var operation = JsonSerializer.Deserialize<CharterAdoptionOperation>(text, FactorySourceValidation.RecordJson)!;
+                    return JsonSerializer.Serialize(operation with
+                    { Adoption = operation.Adoption with { OperatorId = operation.Adoption.OperatorId + 1 } }, FactoryGitHubJson.Options);
+                }
+                var authority = JsonSerializer.Deserialize<CharterAdoption>(text, FactorySourceValidation.RecordJson)!;
+                return JsonSerializer.Serialize(authority with { OperatorId = authority.OperatorId + 1 }, FactoryGitHubJson.Options);
+            });
+        scenario.Reconstruct();
+        var before = scenario.Arm.Product.Export();
+        var result = await scenario.Machine.InvokeAsync("charter", "--status-only");
+        Assert.Equal("Unknown", (string?)result.Result["state"]);
+        Assert.Null(result.Result["adoption"]);
+        Assert.Equal(before, scenario.Arm.Product.Export());
+        Assert.Empty(scenario.GitHubWrites);
+    }
+
+    [Theory]
     [InlineData("missing-proof")]
     [InlineData("missing-page")]
     [InlineData("changed-page")]

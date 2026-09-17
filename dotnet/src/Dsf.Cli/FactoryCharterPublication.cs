@@ -10,7 +10,7 @@ internal sealed partial class FactoryCharterService
     private const string PublicationKey = "dsf/factory/charter/publication";
     private const string PublicationPrefix = "dsf/factory/charter/publications/";
     private const string PublicationInitializedKey = PublicationPrefix + "initialized";
-    private const int PayloadChunkSize = 3000;
+    private const int PayloadChunkSize = FactoryCharterAdoptionReader.PayloadChunkCharacters;
     private const int MaximumPayloadRecords = FactoryCharterLimits.MaximumPayloadRecords;
     private static string PayloadKey(Guid operation, int index) => $"{PublicationPrefix}{operation:N}/payload/{index:D4}";
     private static string PublicationHistoryKey(int sequence) => $"{PublicationPrefix}history/{sequence:D2}";

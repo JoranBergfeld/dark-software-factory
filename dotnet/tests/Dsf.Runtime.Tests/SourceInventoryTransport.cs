@@ -233,6 +233,15 @@ internal sealed class SourceInventoryTransport : HttpMessageHandler
         if (uri.Host == new Uri(ProductEndpoint).Host)
         {
             Assert.Equal(HttpMethod.Get, request.Method);
+            if (uri.AbsolutePath.StartsWith("/kv/", StringComparison.Ordinal))
+            {
+                var key = Uri.UnescapeDataString(uri.AbsolutePath["/kv/".Length..]);
+                return Values.TryGetValue(key, out var value) ? Json(Setting(key, value, 1)) : Json(new { }, 404);
+            }
+            var filter = Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(uri.Query);
+            if (filter.TryGetValue("key", out var selected) && selected == ProductConfigurationKeys.CharterAdoptionsPrefix + "*")
+                return Json(new { items = Values.Keys.Where(k => k.StartsWith(ProductConfigurationKeys.CharterAdoptionsPrefix, StringComparison.Ordinal))
+                    .Select(key => new { key }).ToArray() });
             return Json(new { items = Values.Select(p => Setting(p.Key, p.Value, 1)).ToArray() });
         }
         if (uri.Host == new Uri(ProgressEndpoint).Host)
@@ -326,7 +335,8 @@ internal sealed class SourceInventoryTransport : HttpMessageHandler
     }
     private static object Setting(string key, string value, int etag) => new
         { key, value, etag = etag.ToString(), label = (string?)null,
-            content_type = key.StartsWith("intent/", StringComparison.Ordinal) ? "application/vnd.dsf.intent+json;version=1" : "application/vnd.dsf.source+json;version=1", locked = false };
+            content_type = key.StartsWith(FactoryCharterLimits.AuditPrefix, StringComparison.Ordinal) ? FactoryCharterLimits.RecordContentType
+                : key.StartsWith("intent/", StringComparison.Ordinal) ? "application/vnd.dsf.intent+json;version=1" : "application/vnd.dsf.source+json;version=1", locked = false };
     internal static HttpResponseMessage Json(object value, int status = 200) => new((HttpStatusCode)status)
         { Content = JsonContent.Create(value) };
 }

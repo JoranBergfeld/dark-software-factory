@@ -7,9 +7,9 @@ namespace Dsf.Cli;
 
 internal sealed partial class FactoryCharterService
 {
-    private const string AdoptionKey = "dsf/factory/charter/adopted";
-    private const string AdoptionOperationKey = "dsf/factory/charter/adoption-operation";
-    private static string AdoptionPayloadKey(Guid revision, int index) => $"dsf/factory/charter/adoptions/{revision:N}/payload/{index:D4}";
+    private const string AdoptionKey = ProductConfigurationKeys.CharterAdopted;
+    private const string AdoptionOperationKey = ProductConfigurationKeys.CharterAdoptionOperation;
+    private static string AdoptionPayloadKey(Guid revision, int index) => ProductConfigurationKeys.CharterAdoptionPayload(revision, index);
 
     internal async Task<FactoryCharterResult> ReviewAdoptionAsync(FactoryReservationResult admission, bool existing, CancellationToken token)
     {
@@ -97,7 +97,7 @@ internal sealed partial class FactoryCharterService
         if (held is null)
         {
             if (prior is not null) throw new CharterOperationException(FactoryCharterState.Unknown, "Adoption coordinator missing; surviving authority is history.");
-            await store.RequirePristineAsync("dsf/factory/charter/adoptions/", token);
+            await store.RequirePristineAsync(ProductConfigurationKeys.CharterAdoptionsPrefix, token);
         }
         var heldOperation = held is null ? null : JsonSerializer.Deserialize<CharterAdoptionOperation>(held.Value, FactorySourceValidation.RecordJson)
             ?? throw new JsonException();
@@ -159,21 +159,12 @@ internal sealed partial class FactoryCharterService
     }
 
     private static string AdoptionFingerprint(CharterReview review, CharterMergeReceipt? merge, Guid? operation) =>
-        FactoryModelsValidation.Hash(new { Review = review.Fingerprint, operation, merge?.PullRequestId, merge?.PullRequestNodeId,
-            merge?.Number, merge?.Commit, merge?.HumanId, merge?.MergedAt });
+        FactoryCharterAdoptionReader.Fingerprint(review, merge, operation);
 
     private static CharterAdoption ReadAdoption(ConfigurationSetting record, FactoryReservationResult admission)
     {
-        if (record.ContentType != OwnerReservationStore.ContentType) throw new JsonException();
-        var adoption = JsonSerializer.Deserialize<CharterAdoption>(record.Value, FactorySourceValidation.RecordJson) ?? throw new JsonException();
-        if (adoption.Protocol != 1 || adoption.FactoryId != admission.Identity!.FactoryId || adoption.Revision == Guid.Empty
-            || adoption.Sequence is < 1 or > FactoryCharterLimits.MaximumRevisions || !FactorySourceValidation.Hash(adoption.ReviewFingerprint)
-            || !FactorySourceValidation.GitId(adoption.CharterBlob) || !FactorySourceValidation.GitId(adoption.SourceCommit)
-            || !FactorySourceValidation.GitId(adoption.SourceTree) || !FactorySourceValidation.Hash(adoption.PayloadSha256)
-            || adoption.Route == "HumanMerged" && (adoption.PublicationOperation is null || adoption.Merge is null)
-            || adoption.Route is not ("UnchangedExisting" or "HumanMerged") || adoption.PayloadRecords is < 1 or > MaximumPayloadRecords)
-            throw new JsonException();
-        return adoption;
+        return FactoryCharterAdoptionReader.ReadRecord(
+            new(record.Key, record.Label, record.Value, record.ETag.ToString(), record.ContentType), admission.Identity!.FactoryId);
     }
 
     private async Task<FactoryCharterResult?> AdoptionStatusAsync(FactoryReservationResult admission, CancellationToken token)
@@ -181,7 +172,7 @@ internal sealed partial class FactoryCharterService
         var store = ProductStore(admission);
         var record = await store.ReadAsync(AdoptionKey, token);
         var held = await store.ReadAsync(AdoptionOperationKey, token);
-        if (held is null && record is null) await store.RequirePristineAsync("dsf/factory/charter/adoptions/", token);
+        if (held is null && record is null) await store.RequirePristineAsync(ProductConfigurationKeys.CharterAdoptionsPrefix, token);
         var operation = held is null ? null : JsonSerializer.Deserialize<CharterAdoptionOperation>(held.Value, FactorySourceValidation.RecordJson) ?? throw new JsonException();
         if (operation is not null && operation.State != CharterEffectState.Confirmed)
             return new(FactoryCharterState.Unknown, "Adoption staging/promotion unconfirmed. Inspect original revision; no replacement.")
@@ -198,6 +189,7 @@ internal sealed partial class FactoryCharterService
             if (current.Review!.AfterBlob != adoption.CharterBlob || current.Review.ModelRevision != adoption.ModelRevision)
                 return current with { State = FactoryCharterState.Blocked, HistoricalAdoption = adoption,
                     Detail = "Current charter/model differs; retained adoption is historical, not current authorization." };
+            FactoryCharterAdoptionReader.RequireCurrent(adoption, current.Evidence!, admission.Identity!.ProductKey);
             return current with { State = FactoryCharterState.Adopted, Adoption = adoption, Revision = record.ETag.ToString(),
                 Detail = "Current charter/source/model checked; reviewed intent remains adopted. Activation remains blocked." };
         }
@@ -205,34 +197,16 @@ internal sealed partial class FactoryCharterService
         { return new(e.State, e.Message) { HistoricalAdoption = adoption, Revision = record.ETag.ToString() }; }
     }
 
-    private static string AdoptionReceiptKey(Guid revision, string kind) => $"dsf/factory/charter/adoptions/{revision:N}/{kind}";
+    private static string AdoptionReceiptKey(Guid revision, string kind) => ProductConfigurationKeys.CharterAdoptionReceipt(revision, kind);
     private static async Task VerifyAdoptionPayloadAsync(OwnerReservationStore store, CharterAdoption adoption, CancellationToken token)
     {
-        var serialized = new System.Text.StringBuilder();
-        for (var i = 0; i < adoption.PayloadRecords; i++)
+        try
         {
-            var part = await store.ReadAsync(AdoptionPayloadKey(adoption.Revision, i), token);
-            if (part is null || part.ContentType != OwnerReservationStore.ContentType)
-                throw new CharterOperationException(FactoryCharterState.Unknown, "Adoption evidence incomplete; retained adoption is historical.");
-            var text = JsonSerializer.Deserialize<string>(part.Value, FactorySourceValidation.RecordJson) ?? throw new JsonException();
-            if (text.Length > PayloadChunkSize) throw new JsonException();
-            serialized.Append(text);
+            var retained = await FactoryCharterAdoptionReader.ReadAsync(adoption.FactoryId, store, token);
+            if (retained is null || FactoryModelsValidation.Hash(retained.Adoption) != FactoryModelsValidation.Hash(adoption))
+                throw new CharterOperationException(FactoryCharterState.Unknown, "Adoption changed during evidence verification.");
         }
-        var receipt = await store.ReadAsync(AdoptionReceiptKey(adoption.Revision, "receipt"), token);
-        var intent = await store.ReadAsync(AdoptionReceiptKey(adoption.Revision, "intent"), token);
-        var original = intent is null ? null : JsonSerializer.Deserialize<CharterAdoptionOperation>(intent.Value, FactorySourceValidation.RecordJson);
-        if (receipt?.Value != FactoryReservationRecords.Serialize(adoption)
-            || original is null || original.State != CharterEffectState.Intended
-            || FactoryModelsValidation.Hash(original.Adoption) != FactoryModelsValidation.Hash(adoption)
-            || FactoryModelsValidation.Hash(serialized.ToString()) != adoption.PayloadSha256)
-            throw new CharterOperationException(FactoryCharterState.Unknown, "Adoption evidence/receipt integrity unconfirmed.");
-        var payload = JsonSerializer.Deserialize<CharterPublicationPayload>(serialized.ToString(), FactorySourceValidation.RecordJson) ?? throw new JsonException();
-        var review = payload.Review;
-        if (review.FactoryId != adoption.FactoryId || review.AnalysisRevision != adoption.AnalysisRevision || review.AnalysisChain != adoption.AnalysisChain
-            || review.AnalysisSource != adoption.AnalysisSource || review.SourceIntegrity != adoption.SourceIntegrity || review.ModelRevision != adoption.ModelRevision
-            || review.Commit != adoption.SourceCommit || review.RootTree != adoption.SourceTree || review.AfterBlob != adoption.CharterBlob
-            || FactoryModelsValidation.Hash(review.After) != adoption.CharterSha256
-            || (adoption.Route == "UnchangedExisting" ? review.Fingerprint : AdoptionFingerprint(review, adoption.Merge, adoption.PublicationOperation)) != adoption.ReviewFingerprint)
-            throw new CharterOperationException(FactoryCharterState.Unknown, "Adoption inputs differ from immutable evidence.");
+        catch (CharterAdoptionEvidenceException e)
+        { throw new CharterOperationException(FactoryCharterState.Unknown, e.Message); }
     }
 }

@@ -24,6 +24,13 @@ public static class ProductConfigurationKeys
     public const string FactoryModels = "dsf/factory/models";
     public const string FactorySource = "dsf/factory/source";
     public const string FactorySupplemental = "dsf/factory/supplemental";
+    public const string CharterAdopted = "dsf/factory/charter/adopted";
+    public const string CharterAdoptionOperation = "dsf/factory/charter/adoption-operation";
+    public const string CharterAdoptionsPrefix = "dsf/factory/charter/adoptions/";
+    public static string CharterAdoptionPayload(Guid revision, int index) =>
+        $"{CharterAdoptionsPrefix}{revision:N}/payload/{index:D4}";
+    public static string CharterAdoptionReceipt(Guid revision, string kind) =>
+        $"{CharterAdoptionsPrefix}{revision:N}/{kind}";
     public static string SupplementalOperation(Guid operation, int index) => $"dsf/factory/supplemental-operations/{operation:D}/{index:D4}";
     public static string SupplementalProof(Guid operation, Guid check, string kind) => $"dsf/factory/supplemental-proofs/{operation:D}/{check:D}/{kind}";
     public static string SourceOperation(Guid operationId, int index) => $"dsf/factory/source-operations/{operationId:D}/{index:D4}";
