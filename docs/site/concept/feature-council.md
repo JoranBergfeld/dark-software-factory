@@ -278,15 +278,17 @@ cross-provider transaction or a complete council readiness assessment.
 ### Protected council source-context consumption
 
 Two **runtime** commands provide connected, read-only source consumption;
-explicitly selected hosts provide model evaluation and telemetry evidence. They are not `dsf`
+explicitly selected hosts provide model evaluation, telemetry and supplemental evidence. They are not `dsf`
 CLI verbs and are not yet created by provisioning assets.
 
 | Runtime command | Host suffix | Workload identity | POST route | Native Entra caller |
 | --- | --- | --- | --- | --- |
-| `serve-preview` | `-preview` | Original COUNCIL UAMI only | `/source-context`, `/model-authority`, `/telemetry-evidence` | Factory's approved Azure operator only |
+| `serve-preview` | `-preview` | Original COUNCIL UAMI only | `/source-context`, `/model-authority`, `/telemetry-evidence`, `/supplemental-evidence` | Factory's approved Azure operator only |
+| `serve-preview` (selected supplemental callback) | `-preview` | Original COUNCIL UAMI only | `/supplemental-authority` | Requested selected source's original principal **and client** only |
 | `serve-source-context` | `-context` | Original CODE UAMI only | `/council-context` | Original COUNCIL principal **and client** only |
 | `serve-preview-models` (explicit selection) | `-preview-models` | Original COUNCIL UAMI only | `/evaluate` | Original COUNCIL principal **and client** only |
 | `serve-preview-telemetry` (explicit selection) | `-preview-telemetry` | Original TELEMETRY UAMI only | `/evidence` | Original COUNCIL principal **and client** only |
+| `serve-preview-supplemental` (selected sources only) | `-preview-foundryiq`, `-preview-webiq` | That source's original distinct UAMI only | `/evidence` | Original COUNCIL principal **and client** only |
 
 Source/context/telemetry routes accept `PreviewCapabilityRequest`: `operationId`, `approvalFingerprint`,
 and a nonempty `requestId`. `RuntimeCliApplication` runs the real hosts through
@@ -324,6 +326,7 @@ registry. No runtime principal receives governance-write permission.
 | `dsf/factory/preview` | Protocol 1 `FactoryPreviewCapability`, kind `decide-preview-capability`, explicit `Prepared` state, operation, approving Azure operator/time, configuration hash and all effect hashes |
 | `dsf/factory/preview-bindings/{operation:D}/{name}` | Original completed `FoundationOperation`; names `council`, `code`, `hosting`, `account`, `database`, `runs` |
 | `dsf/factory/preview-operations/{operation:D}/{index:D4}` | Completed creation receipt, kind `decide-preview-operation`, exact target/API, request hash, provider IDs, deployment operation and current native revision |
+| `dsf/factory/preview-supplemental/{operation:D}` (selected sources only) | Exact `PreviewSupplementalConfiguration`, pinned by `configuration.supplementalRevision` in the capability |
 | Factory manifest | Both `previewOperationId` and `previewApprovalFingerprint` must match the protected capability and request |
 
 Preview records are unlabeled and use content type
@@ -380,8 +383,7 @@ durable dispatch journal, a cross-process retry fence, a complete candidate
 evaluation or a readiness proof.
 
 The model consumer does not replace current-evidence or adopted-intent gates.
-Selected supplemental consumption and the aggregate `CouncilEvaluationContext`
-operation remain separate integration work.
+The aggregate `CouncilEvaluationContext` operation remains separate integration work.
 
 #### Genuine application telemetry consumer
 
@@ -499,6 +501,95 @@ readiness, a completed preview or activation**. This read-only operation does
 not yet persist preview evidence; checkpoint 2c must persist its bounded
 provenance with the actual conveyor run.
 
+#### Selected supplemental consumption
+
+Operator-only `POST /supplemental-evidence` invokes
+`RuntimeVerbs.ReadPreviewSupplementalAsync` and shared `RuntimeWorkflow`.
+It accepts only `PreviewCapabilityRequest`, never caller-authored context or
+queries. COUNCIL checks current protected/native capability, calls **every**
+selected source's new `/evidence` using its own audience token, validates each
+response, and rechecks capability and proof age before releasing results.
+The source request is `PreviewSupplementalRequest` (`preview`, `kind`).
+Existing operator `serve-supplemental` `/proof` and `/evidence` stay unchanged.
+
+Each new host runs the original `FactorySupplementalEvidence` workload under
+its own original FoundryIQ or WebIQ UAMI. These identities have **no product
+governance read grant**. Instead, the source calls COUNCIL
+`/supplemental-authority` with its own token before and after retrieval.
+COUNCIL validates current protected/native bindings and that exact requested
+source's principal/client. `PreviewSupplementalAuthority` returns only its
+own typed workload, original identity/hosting/vault/grant receipts, relevant
+Search prerequisite hash, selected metadata grant, and request/governance/
+capability revisions. It contains no charter, analysis, telemetry, other
+source configuration, operator token or secret value. A source cannot use
+operator routes or read another source's authority.
+
+The capability pins `supplementalRevision`, the hash of the separate protected
+`PreviewSupplementalConfiguration`. That record pins original #213
+`configurationRevision`, complete original `deploymentRevision`, and the
+ordered, complete selected host list. Each `PreviewSupplementalHost` carries
+`kind`, original identity receipt hash (`identityRevision`), `principalId`,
+`clientId`, separately approved immutable `runtimeImage`, `audienceClientId`,
+`metadataRoleDefinitionId`, `metadataRoleRevision`, and exact `metadataScope`.
+The shared capability reader resolves and verifies this record from the same
+fetched snapshot; its in-memory `Supplemental` property is not serialized as
+another authority. Splitting this record avoids exceeding App Configuration's
+10 KiB per-setting limit when telemetry, models and both sources are selected.
+No record bound is increased and missing references cannot disable a source.
+
+Original preparation must be current `ReadySupplemental`/`observed`, with all
+effects and independent per-source proof records matching their protected
+hashes. Historical proofs establish receipt integrity, not current evidence.
+Original direct identity/grant creations retain native request/correlation
+receipts without invented deployment-operation IDs; original host/auth
+receipts must name their actual `sp-{operation:N}-{kind}` deployment and
+provider operation. Preview overlay effects remain separately pinned.
+
+Before and after the real query, the source checks its current private/RBAC
+backend, original narrow data/metadata grants, exact role definitions, and
+direct/inherited grant inventory at the approved scope, allowing only the
+separately approved preview metadata overlay. WebIQ reads the exact
+operator-seeded product `webiq-api-key` **version** before and after retrieval;
+no environment/owner-key fallback. FoundryIQ revalidates the exact dedicated
+Search service, extractive knowledge base, selected `searchIndex` sources,
+indexes, ETags, activities and supported permission modes. No crawl, model
+query or provider-URL following is added.
+
+HTTP 200 returns `PreviewSupplementalEvidence`: request ID, common protected
+`governanceRevision`, supplemental state, and one
+`PreviewSupplementalSourceEvidence` per selected source. Each source contains
+its current authority, actual `SupplementalEvidence` (content, opaque/scoped
+references and request-bound proof), and complete native metadata revision map.
+Web references remain `webiq:sha256:...`; provider document IDs and URLs are
+not exposed or followed. Existing source limits, key-echo rejection and
+conservative secret screening remain in force; content is untrusted evidence,
+not instructions or demonstrated semantic support.
+
+A selected native `[]` is `ReadySupplemental` with reason `Empty`. Null,
+missing, malformed, partial, denied and unsupported results are never empty.
+Non-Ready source proofs retain their state/reason with no content; a later
+selected source is still checked. Authority/transport failures withhold the
+capture as sanitized Blocked/Partial/Failed/Canceled/Unknown, not fabricated
+source proofs. Missing root/pins are `NotSelected` only after current
+all-label enumeration confirms the supplemental namespace is pristine:
+orphaned effects/proofs/configuration or unreadable/labeled history are Unknown.
+Pristine Azure-only requires no supplemental host, grant, setting or upstream
+call; the namespace read uses COUNCIL's existing governance-read permission.
+
+Requests are 4 KiB, authority callbacks 32 KiB, each source envelope/native
+metadata body 256 KiB, and combined output 1 MiB. Existing #213 limits remain
+16 items per source, 8,192 characters per item, 320-character references and
+8 KiB proofs; native bodies are streamed and bounded, including unknown
+Content-Length. Whole consumption has a 180-second budget, enclosing the
+existing 60-second source workload and two-minute proof validity. Overflow
+fails rather than truncates. These sequential checks are not global grant
+discovery or cross-provider atomic fencing.
+
+This operation is read-only: no publication, activation, source removal,
+configuration repair, checkpoint or readiness claim. Aggregate trusted inputs,
+bounded combined evidence selection, actual conveyor execution and durable
+readiness proof remain subsequent work.
+
 #### Reviewed deployment contract
 
 Let `G` be the original factory resource group, `F` the factory GUID in lowercase
@@ -509,8 +600,8 @@ Original source/model hosts, images, caller lists and creation receipts remain
 unchanged: `/charter-review` remains operator-only; `/materialize` remains
 CODE-only. Legacy model `/proof` remains operator-only; synthesis, deduplication
 and authority remain CODE-only; existing juror callers remain unchanged.
-Original telemetry `/proof` remains operator-only and unchanged; supplemental
-endpoints are unchanged.
+Original telemetry `/proof` and original supplemental `/proof` and `/evidence`
+remain operator-only and unchanged.
 
 When `modelEvaluation` is selected, the same reviewed plan additionally creates
 `G/providers/microsoft.app/containerapps/{P}-preview-models` and its native auth
@@ -529,20 +620,45 @@ apply, with `AZURE_CLIENT_ID` set to TELEMETRY's original client ID. The
 COUNCIL host image must explicitly include `/telemetry-evidence` in the reviewed
 plan; neither this nor any source/model image change is implicit.
 
+For **each selected** supplemental source, explicitly create
+`G/providers/microsoft.app/containerapps/{P}-preview-{kind}` and its
+`authconfigs/current`, with that source's original distinct UAMI, separately
+reviewed image/audience and `serve-preview-supplemental`. Its native caller is
+only COUNCIL. The COUNCIL preview host's reviewed image must include the two
+supplemental routes; its native allowed-principal list becomes the operator
+**plus only selected supplemental principals** to permit authority callbacks.
+Application authorization keeps all operator routes operator-only and
+callbacks source-kind/client-bound. This is a reviewed preview-host policy,
+not implicit image drift or an expansion of legacy inactive endpoints.
+
 Each new host must use the approved immutable image, original private managed
 environment, one assigned UAMI, `dotnet dsf-runtime.dll`, and its exact command
 from the table. Native ACA auth must require HTTPS/Entra/Return401, the exact
 tenant, both GUID and `api://GUID` audiences, and only the listed principal.
 No excluded paths, groups, token store, extra identities, secrets, mounts,
 init containers, service bindings or Dapr. Ingress port is 8080; revision mode
-is Single. Each host has exactly:
+is Single. Source/model/telemetry hosts have exactly these four settings;
+selected supplemental hosts have these four plus the two below:
 
 ```text
 DSF_PRODUCT=K
 AZURE_APPCONFIG_ENDPOINT=https://dsfo-F.azconfig.io
 DSF_FACTORY_PROFILE_PIN=<original protected profile pin>
-AZURE_CLIENT_ID=<that host's original CODE, COUNCIL or TELEMETRY client ID>
+AZURE_CLIENT_ID=<that host's original CODE, COUNCIL, TELEMETRY or selected supplemental client ID>
 ```
+
+Selected supplemental hosts additionally require:
+
+```text
+DSF_SUPPLEMENTAL_CONFIG=<exact original #213 SupplementalHostConfiguration for this source; at most 8 KiB>
+DSF_PREVIEW_COORDINATOR=<PreviewSupplementalCoordinator JSON; at most 2 KiB>
+```
+
+The coordinator JSON has `endpoint` (the exact HTTPS private COUNCIL ACA
+endpoint), `audienceClientId` (COUNCIL preview audience), `principalId` and
+`clientId` (original COUNCIL UAMI). COUNCIL revalidates both environment values
+against current native host/configuration receipts. These settings carry no
+credentials and grant the source no App Configuration access.
 
 COUNCIL retains its already approved product-config Data Reader assignment.
 Current product-config metadata must still show the exact endpoint, successful
@@ -588,6 +704,38 @@ Telemetry selection adds **three** exact scopes for COUNCIL's existing
 14-action metadata role: original TELEMETRY UAMI, original `{P}-telemetry`
 host, and new `{P}-preview-telemetry` host. No workspace/component data or
 metadata grant goes to COUNCIL.
+
+Each selected supplemental adds **three** COUNCIL metadata scopes: its
+original UAMI, original `{P}-{kind}` host, and new `{P}-preview-{kind}` host.
+COUNCIL gains no Search, Key Vault, secret or supplemental data permission.
+Each source retains its original #213 grants and receives exactly **one**
+separately approved, hash-pinned custom ARM metadata assignment:
+
+| Identity | Exact assignment scope | Exact additional actions (no data actions, exclusions or wildcards) |
+| --- | --- | --- |
+| FoundryIQ | Selected Search resource ID | `Microsoft.Authorization/roleAssignments/read`, `Microsoft.Authorization/roleDefinitions/read` |
+| WebIQ | Original product vault ARM resource ID | The same two authorization reads plus `Microsoft.KeyVault/vaults/read` |
+
+FoundryIQ retains Search Index Data Reader
+`1407120a-92aa-4202-b7e9-c0e197c71c8f` and its original custom role containing
+exactly `Microsoft.Search/searchServices/read`, `indexes/read`,
+`knowledgebases/read` and `knowledgesources/read` under that provider/service.
+WebIQ retains Key Vault Secrets User
+`4633458b-17de-408a-b874-0445c86b69e6` only at
+`{product-vault}/secrets/webiq-api-key`, not the vault or other secret.
+No source gets group/subscription-wide role inventory, product governance,
+source progress, model, repository, Cosmos or another source's privileges.
+Role definitions are read through authorized resource scopes; their reviewed
+assignability does not itself grant access.
+
+Supplemental role reads use `2022-04-01`; Search resource metadata uses
+`2025-05-01`, and vault metadata uses the original pinned vault API version.
+Identity reads use `2024-11-30`, ACA/auth `2025-01-01`; original Foundry data/
+metadata uses `2026-04-01`, and versioned Key Vault secret reads use `7.4`.
+WebIQ retains `POST https://api.microsoft.ai/v3/search/web` with the original
+fixed public-safe query and source-owned `x-apikey`; no private context is sent.
+Keep the existing native networking/reachability prerequisites; no network
+repair or endpoint fallback is implicit.
 
 TELEMETRY retains its original product App Configuration Data Reader
 (`516239f1-63e1-4d78-a4de-a74fb236a071`) and each selected workspace's
@@ -655,9 +803,22 @@ evidence host/auth resources and `7 + A` TELEMETRY metadata assignments.
 Thus source+telemetry needs `30 + A` receipts, or `33 + A` with model evaluation
 (31/34 respectively for one component). Original #208 receipts remain separate
 and pinned. `FactoryPreviewValidation.Targets` and `MetadataScopes` must receive
-the approved configuration to enumerate the selections.
+the approved, resolved configuration to enumerate the selections.
+Each selected supplemental adds **six** preview effects: three COUNCIL
+metadata assignments, two source host/auth resources, and one source-owned
+metadata assignment. With models, telemetry and both selected supplementals,
+the total is `45 + A` (46 for one component), plus the separate bounded
+protected supplemental configuration record. No selected sources means none
+of these records/resources/grants/settings.
 Receipt indices are not deployment execution order:
 resource-scoped grants depend on their target resources existing.
+
+Milestone 3 must wire these exact approved resources, caller policies,
+configuration records and native receipts into the deployment plan/assets.
+The existing operator #208/#213 native isolation checks must recognize only
+the corresponding separately approved, receipt-backed preview metadata
+overlays; their original rejection of arbitrary extra grants must not be
+relaxed. This slice changes neither CLI/provisioning assets nor live resources.
 
 Actual ARM deployment operations must report Create/Succeeded with matching
 target, tracking/operation IDs and Created/201 or OK/200 status. Native

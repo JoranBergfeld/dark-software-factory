@@ -33,10 +33,13 @@ public static partial class RuntimeVerbs
             Func<HttpContext, Task<IResult>> modelAuthority = context => HandleAsync(context, modelAuthority: true);
             app.MapPost("/model-authority", modelAuthority);
             app.MapPost("/telemetry-evidence", (Func<HttpContext, Task<IResult>>)(context => HandleAsync(context, telemetryEvidence: true)));
+            app.MapPost("/supplemental-evidence", (Func<HttpContext, Task<IResult>>)(context => HandleAsync(context, supplementalEvidence: true)));
+            app.MapPost("/supplemental-authority", (Func<HttpContext, Task<IResult>>)(context => HandleAsync(context, supplementalAuthority: true)));
         }
         return app;
 
-        async Task<IResult> HandleAsync(HttpContext context, bool modelAuthority = false, bool telemetryEvidence = false)
+        async Task<IResult> HandleAsync(HttpContext context, bool modelAuthority = false, bool telemetryEvidence = false,
+            bool supplementalEvidence = false, bool supplementalAuthority = false)
         {
             context.Response.Headers.CacheControl = "no-store";
             try
@@ -46,12 +49,21 @@ public static partial class RuntimeVerbs
                 using var deadline = new CancellationTokenSource(FactoryPreviewValidation.RequestBudget, clock);
                 using var pending = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted, deadline.Token);
                 var token = pending.Token;
-                var request = await context.Request.ReadFromJsonAsync<PreviewCapabilityRequest>(FactorySourceValidation.RecordJson, token) ?? throw new JsonException();
+                var optional = supplementalAuthority ? await context.Request.ReadFromJsonAsync<PreviewSupplementalRequest>(FactorySourceValidation.RecordJson, token)
+                    ?? throw new JsonException() : null;
+                var request = optional?.Preview ?? await context.Request.ReadFromJsonAsync<PreviewCapabilityRequest>(FactorySourceValidation.RecordJson, token) ?? throw new JsonException();
                 var credential = (kind == PreviewHostKind.SourceContext ? dependencies.SourceCredential : dependencies.PreviewCredential)
                     ?? new ManagedIdentityCredential(ManagedIdentityId.FromUserAssignedClientId(settings.ManagedIdentityClientId));
                 var http = (kind == PreviewHostKind.SourceContext ? dependencies.SourceHttp : dependencies.PreviewHttp) ?? PreviewHttp;
                 IFactoryPreviewCapability authority = new AzureFactoryPreviewCapability(settings, kind, credential, http, clock);
                 var capability = await authority.CheckAsync(request, token);
+                if (optional is not null)
+                {
+                    var source = SupplementalAuthority(capability, optional);
+                    if (!NativeCaller(context, source.Workload.SourcePrincipalId, source.Workload.TenantId, source.Workload.SourceClientId))
+                        throw new PreviewCapabilityException(FactoryCharterState.Blocked, "SelectedSupplementalCallerRequired");
+                    return Results.Json(source, FactoryGitHubJson.Options);
+                }
                 if (!NativeCaller(context, kind == PreviewHostKind.SourceContext ? capability.Council.PrincipalId! : capability.Manifest.Identity.AzureActorId,
                     capability.Manifest.Identity.TenantId, kind == PreviewHostKind.SourceContext ? capability.Council.ClientId : null))
                     throw new PreviewCapabilityException(FactoryCharterState.Blocked, "ApprovedPreviewCallerRequired");
@@ -70,6 +82,17 @@ public static partial class RuntimeVerbs
                         throw new PreviewCapabilityException(FactoryCharterState.Blocked, "PreviewCapabilityChangedDuringTelemetryRead");
                     return Results.Json(evidence, FactoryGitHubJson.Options,
                         statusCode: evidence.Capture.Proof.State == TelemetryState.Ready ? 200 : 409);
+                }
+                if (supplementalEvidence)
+                {
+                    var evidence = await ReadPreviewSupplementalAsync(settings, dependencies, request, token);
+                    if (evidence.GovernanceRevision != capability.GovernanceRevision)
+                        throw new PreviewCapabilityException(FactoryCharterState.Blocked, "PreviewCapabilityChangedDuringSupplementalRead");
+                    var supplementalBytes = JsonSerializer.SerializeToUtf8Bytes(evidence, FactoryGitHubJson.Options);
+                    if (supplementalBytes.Length > FactoryPreviewSupplementalValidation.ResponseBytes)
+                        return Error(FactoryCharterState.Partial, "PreviewSupplementalCapacityExceeded", 409);
+                    return Results.Content(System.Text.Encoding.UTF8.GetString(supplementalBytes), "application/json",
+                        statusCode: evidence.State is SupplementalState.NotSelected or SupplementalState.ReadySupplemental ? 200 : 409);
                 }
                 SourceCharterContextResult result;
                 if (kind == PreviewHostKind.SourceContext)

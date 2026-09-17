@@ -471,7 +471,7 @@ public sealed class PreviewTelemetryConsumerTests
         Assert.InRange(content.ReadBytes, 1, 131072 + 8192);
     }
 
-    private sealed class CountingTelemetryContent : HttpContent
+    internal sealed class CountingTelemetryContent : HttpContent
     {
         private readonly CountingStream stream = new(System.Text.Encoding.UTF8.GetBytes("{\"data\":\"" + new string('x', 2 * 131072) + "\"}"));
         internal long ReadBytes => stream.ReadBytes;

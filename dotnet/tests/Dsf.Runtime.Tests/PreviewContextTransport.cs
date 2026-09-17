@@ -58,7 +58,7 @@ internal sealed partial class PreviewContextTransport : HttpMessageHandler
         """;
 
     internal static async Task<PreviewContextTransport> CreateAsync(bool modelEvaluation = false, bool telemetryEvidence = false,
-        bool mixedTables = false, bool multipleBackends = false, string? telemetryTable = null)
+        bool mixedTables = false, bool multipleBackends = false, string? telemetryTable = null, IReadOnlyList<string>? supplementals = null)
     {
         var result = new PreviewContextTransport { Intent = await IntentWorkflowTransport.CreateAsync() };
         result.inner = new(result.Intent, false);
@@ -98,6 +98,7 @@ internal sealed partial class PreviewContextTransport : HttpMessageHandler
         source.Values[ProductConfigurationKeys.CharterAdoptionReceipt(adoption.Revision, "intent")] = JsonSerializer.Serialize(operation with { State = CharterEffectState.Intended }, json);
         for (var i = 0; i < parts.Length; i++) source.Values[ProductConfigurationKeys.CharterAdoptionPayload(adoption.Revision, i)] = JsonSerializer.Serialize(parts[i], json);
         if (telemetryEvidence) await result.PrepareTelemetryAsync(mixedTables, multipleBackends, telemetryTable);
+        if (supplementals is not null) await result.PrepareSupplementalsAsync(supplementals);
         result.Prepare(adoption.Revision, modelEvaluation);
         return result;
     }
@@ -143,7 +144,10 @@ internal sealed partial class PreviewContextTransport : HttpMessageHandler
             FactoryModelsValidation.Hash(JsonSerializer.SerializeToElement(role["properties"])), resources.ToDictionary(p => p.Key, p => FactoryModelsValidation.Hash(p.Value)))
         { ModelEvaluation = modelEvaluation ? new(PreviewModelHostConfiguration.PurposeName,
             "example.azurecr.io/dsf/runtime@sha256:" + new string('8', 64), "acacacac-acac-acac-acac-acacacacacac") : null,
-            Telemetry = TelemetrySelection };
+            Telemetry = TelemetrySelection, Supplemental = SupplementalConfiguration,
+            SupplementalRevision = SupplementalConfiguration is null ? null : FactoryModelsValidation.Hash(SupplementalConfiguration) };
+        if (SupplementalConfiguration is not null)
+            Source.Values[FactoryPreviewSupplementalValidation.ConfigurationKey(operation)] = JsonSerializer.Serialize(SupplementalConfiguration, FactoryGitHubJson.Options);
         foreach (var pair in resources)
             Source.Values[ProductConfigurationKeys.PreviewBinding(operation, pair.Key)] = JsonSerializer.Serialize(pair.Value, FactoryGitHubJson.Options);
         var created = Source.Clock.Now.ToString("O");
@@ -169,7 +173,8 @@ internal sealed partial class PreviewContextTransport : HttpMessageHandler
         foreach (var kind in FactoryPreviewValidation.HostKinds(config))
         {
             var projection = kind == PreviewHostKind.TelemetryEvidence ? config.Telemetry : null;
-            var identity = projection?.SourceIdentity ?? (kind == PreviewHostKind.SourceContext ? binding[1] : binding[0]);
+            var optional = config.Supplemental?.Hosts.SingleOrDefault(h => FactoryPreviewSupplementalValidation.HostKind(h.Kind) == kind);
+            var identity = (optional is null ? null : SupplementalIdentity(optional)) ?? projection?.SourceIdentity ?? (kind == PreviewHostKind.SourceContext ? binding[1] : binding[0]);
             var model = kind == PreviewHostKind.ModelEvaluation ? config.ModelEvaluation : null;
             var target = FactoryPreviewValidation.HostTarget(Group, manifest.Identity.FactoryId, kind);
             var host = Source.Resources[Source.HostTarget].DeepClone();
@@ -177,24 +182,42 @@ internal sealed partial class PreviewContextTransport : HttpMessageHandler
             host["systemData"] = JsonSerializer.SerializeToNode(new { createdAt = created, lastModifiedAt = created });
             host["identity"]!["userAssignedIdentities"] = new JsonObject { [identity.Target] = new JsonObject() };
             var container = host["properties"]!["template"]!["containers"]![0]!;
-            container["image"] = projection?.RuntimeImage ?? model?.RuntimeImage ?? config.RuntimeImage;
-            container["args"] = new JsonArray(projection is not null ? "serve-preview-telemetry"
+            container["image"] = optional?.RuntimeImage ?? projection?.RuntimeImage ?? model?.RuntimeImage ?? config.RuntimeImage;
+            container["args"] = new JsonArray(optional is not null ? "serve-preview-supplemental" : projection is not null ? "serve-preview-telemetry"
                 : kind == PreviewHostKind.Council ? "serve-preview" : model is not null ? "serve-preview-models" : "serve-source-context");
             foreach (var value in container["env"]!.AsArray())
                 if ((string?)value!["name"] == "AZURE_CLIENT_ID") value["value"] = identity.ClientId;
-            host["properties"]!["configuration"]!["ingress"]!["fqdn"] = new Uri(projection is not null ? TelemetryEndpoint
+            if (optional is not null)
+            {
+                container["env"]!.AsArray().Add(JsonSerializer.SerializeToNode(new { name = "DSF_SUPPLEMENTAL_CONFIG",
+                    value = JsonSerializer.Serialize(FactorySupplementalValidation.HostConfiguration(manifest, Supplemental!, identity, optional.Kind), FactoryGitHubJson.Options) }));
+                container["env"]!.AsArray().Add(JsonSerializer.SerializeToNode(new { name = "DSF_PREVIEW_COORDINATOR",
+                    value = JsonSerializer.Serialize(new PreviewSupplementalCoordinator(CouncilEndpoint, config.AudienceClientId,
+                        binding[0].PrincipalId!, binding[0].ClientId!), FactoryGitHubJson.Options) }));
+            }
+            host["properties"]!["configuration"]!["ingress"]!["fqdn"] = new Uri(optional is not null ? SupplementalEndpoint(optional.Kind) : projection is not null ? TelemetryEndpoint
                 : kind == PreviewHostKind.Council ? CouncilEndpoint : model is not null ? ModelEndpoint : ContextEndpoint).Host;
             Native[target] = host;
             var auth = Source.Resources[Source.HostTarget + "/authconfigs/current"].DeepClone();
             auth["id"] = target + "/authconfigs/current";
             auth["systemData"] = host["systemData"]!.DeepClone();
             var aad = auth["properties"]!["identityProviders"]!["azureActiveDirectory"]!;
-            var audience = projection?.AudienceClientId ?? model?.AudienceClientId ?? config.AudienceClientId;
+            var audience = optional?.AudienceClientId ?? projection?.AudienceClientId ?? model?.AudienceClientId ?? config.AudienceClientId;
             aad["registration"]!["clientId"] = audience;
             aad["validation"]!["allowedAudiences"] = new JsonArray(audience, "api://" + audience);
             aad["validation"]!["defaultAuthorizationPolicy"]!["allowedPrincipals"]!["identities"] =
-                new JsonArray(kind == PreviewHostKind.Council ? manifest.Identity.AzureActorId : binding[0].PrincipalId);
+                JsonSerializer.SerializeToNode(kind == PreviewHostKind.Council
+                    ? new[] { manifest.Identity.AzureActorId }.Concat(config.Supplemental?.Hosts.Select(h => h.PrincipalId) ?? []).ToArray()
+                    : [binding[0].PrincipalId!]);
             Native[target + "/authconfigs/current"] = auth;
+        }
+        foreach (var optionalHost in config.Supplemental?.Hosts ?? [])
+        {
+            var grant = FactoryModelsValidation.Grant(optionalHost.MetadataScope, optionalHost.MetadataRoleDefinitionId, optionalHost.PrincipalId, "");
+            Native[grant.Target] = JsonSerializer.SerializeToNode(new { id = grant.Target, properties = new { scope = grant.Scope,
+                roleDefinitionId = grant.RoleDefinitionId, principalId = grant.PrincipalId, principalType = "ServicePrincipal",
+                createdOn = created, updatedOn = created, createdBy = manifest.Identity.AzureActorId,
+                condition = (string?)null, conditionVersion = (string?)null } })!;
         }
         if (config.Telemetry is { } selected)
         {
@@ -293,6 +316,13 @@ internal sealed partial class PreviewContextTransport : HttpMessageHandler
             worker.TelemetrySelection = worker.Capability.Configuration.Telemetry;
         }
         worker.Request = first.Request with { RequestId = Guid.NewGuid() };
+        if (worker.Capability.Configuration.SupplementalRevision is not null)
+        {
+            worker.Supplemental = FactorySupplementalValidation.Read(worker.Source.Manifest, worker.Source.Values[ProductConfigurationKeys.FactorySupplemental]);
+            worker.SupplementalConfiguration = JsonSerializer.Deserialize<PreviewSupplementalConfiguration>(
+                worker.Source.Values[FactoryPreviewSupplementalValidation.ConfigurationKey(worker.Capability.OperationId)], FactorySourceValidation.RecordJson)!;
+            worker.Capability = worker.Capability with { Configuration = worker.Capability.Configuration with { Supplemental = worker.SupplementalConfiguration } };
+        }
         return worker;
     }
 
@@ -327,6 +357,7 @@ internal sealed partial class PreviewContextTransport : HttpMessageHandler
         var uri = request.RequestUri!;
         var principal = TokenPrincipal(request);
         Requests.Add((principal, request.Method.Method, uri));
+        if (await SupplementalRequestAsync(request, principal, token) is { } supplementalReply) return supplementalReply;
         if (uri.Host == new Uri(TelemetryEndpoint).Host)
         {
             Assert.Equal(Models.Bindings![0].PrincipalId, principal);
@@ -357,7 +388,11 @@ internal sealed partial class PreviewContextTransport : HttpMessageHandler
         if (uri.Host == "management.azure.com")
         {
             Assert.Equal(HttpMethod.Get, request.Method);
-            Assert.Contains(principal, new[] { Source.Code.PrincipalId, Models.Bindings![0].PrincipalId, Telemetry?.Configuration.SourceIdentity.PrincipalId });
+            Assert.Contains(principal, new[] { Source.Code.PrincipalId, Models.Bindings![0].PrincipalId, Telemetry?.Configuration.SourceIdentity.PrincipalId }
+                .Concat(SupplementalHosts.Select(h => h.PrincipalId)));
+            if (SupplementalHosts.SingleOrDefault(h => h.PrincipalId == principal) is { } optionalIdentity
+                && !uri.AbsolutePath.StartsWith(optionalIdentity.MetadataScope + "/", StringComparison.OrdinalIgnoreCase)
+                && !uri.AbsolutePath.Equals(optionalIdentity.MetadataScope, StringComparison.OrdinalIgnoreCase)) return new(HttpStatusCode.Forbidden);
             var path = uri.AbsolutePath;
             if (Telemetry is not null && principal == Telemetry.Configuration.SourceIdentity.PrincipalId
                 && !FactoryPreviewTelemetryValidation.MetadataScopes(Source.Manifest, Models, Capability.OperationId, Capability.Configuration.Telemetry!)
@@ -369,6 +404,7 @@ internal sealed partial class PreviewContextTransport : HttpMessageHandler
                     .Any(scope => path.Equals(scope, StringComparison.OrdinalIgnoreCase) || path.StartsWith(scope + "/", StringComparison.OrdinalIgnoreCase)))
                 return new(HttpStatusCode.Forbidden);
             if (TelemetryNativeResponse?.Invoke(request) is { } telemetryReply) return telemetryReply;
+            if (SupplementalNativeResponse?.Invoke(request) is { } supplementalNative) return supplementalNative;
             if (path.EndsWith("/roleassignments", StringComparison.OrdinalIgnoreCase))
             {
                 var scope = path[..^"/providers/microsoft.authorization/roleassignments".Length];

@@ -242,6 +242,9 @@ internal sealed class SourceInventoryTransport : HttpMessageHandler
             if (filter.TryGetValue("key", out var selected) && selected == ProductConfigurationKeys.CharterAdoptionsPrefix + "*")
                 return Json(new { items = Values.Keys.Where(k => k.StartsWith(ProductConfigurationKeys.CharterAdoptionsPrefix, StringComparison.Ordinal))
                     .Select(key => new { key }).ToArray() });
+            if (FactoryPreviewSupplementalValidation.NamespacePrefixes.Any(prefix => selected == prefix + "*"))
+                return Json(new { items = Values.Where(p => p.Key.StartsWith(selected.ToString()[..^1], StringComparison.Ordinal))
+                    .Select(p => Setting(p.Key, p.Value, 1)).ToArray() });
             return Json(new { items = Values.Select(p => Setting(p.Key, p.Value, 1)).ToArray() });
         }
         if (uri.Host == new Uri(ProgressEndpoint).Host)

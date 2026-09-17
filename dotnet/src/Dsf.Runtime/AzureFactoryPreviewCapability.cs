@@ -36,13 +36,15 @@ internal sealed class AzureFactoryPreviewCapability(
             if (kind == PreviewHostKind.TelemetryEvidence && telemetry is null)
                 throw Denied("PreviewTelemetryProjectionRequired:dsf/factory/preview.configuration.telemetry");
             var telemetryEffects = telemetry is null ? [] : FactoryTelemetryValidation.ReadCompletedEffects(telemetry, values);
+            var supplemental = FactoryPreviewSupplementalValidation.Read(manifest, capability.Configuration, values);
+            var supplementalEffects = supplemental is null ? [] : FactoryPreviewSupplementalValidation.ReadEffects(supplemental, values);
             var own = kind == PreviewHostKind.TelemetryEvidence ? telemetry!.Configuration.SourceIdentity
                 : bindings[kind == PreviewHostKind.SourceContext ? "code" : "council"];
             if (settings.ManagedIdentityClientId != own.ClientId) throw Denied("PreviewWorkloadIdentityMismatch");
             var nativeCredential = new FactoryWorkloadCredential(credential, manifest.Identity.TenantId, own, clock);
             _ = await nativeCredential.GetTokenAsync(new TokenRequestContext(["https://appconfig.azure.com/.default"]), token);
             var native = new NativePreviewBindings(manifest, models, github, source, sourceEffects, capability, bindings, effects,
-                telemetry, telemetryEffects, nativeCredential, http, clock);
+                telemetry, telemetryEffects, supplemental, supplementalEffects, nativeCredential, http, clock);
             var endpoints = kind == PreviewHostKind.TelemetryEvidence
                 ? (Council: (string?)null, Source: (string?)null, Models: (string?)null, Telemetry: await native.CheckTelemetryAsync(true, token))
                 : await native.CheckAsync(token);
@@ -51,7 +53,9 @@ internal sealed class AzureFactoryPreviewCapability(
             var revision = FactoryModelsValidation.Hash(new { Records = records, Native = native.Revisions });
             return new(manifest, capability, bindings["council"], bindings["code"], endpoints.Council, endpoints.Source, revision)
             { ModelEndpoint = endpoints.Models, Models = models, GovernanceRevision = FactoryModelsValidation.Hash(records),
-                Telemetry = telemetry, TelemetryEffects = telemetryEffects, TelemetryEndpoint = endpoints.Telemetry };
+                Telemetry = telemetry, TelemetryEffects = telemetryEffects, TelemetryEndpoint = endpoints.Telemetry,
+                Supplemental = supplemental, SupplementalEffects = supplementalEffects, Effects = effects,
+                SupplementalEndpoints = native.SupplementalEndpoints };
         }
         catch (PreviewCapabilityException) { throw; }
         catch (OperationCanceledException) { throw; }
@@ -73,8 +77,7 @@ internal sealed class AzureFactoryPreviewCapability(
             .ListRecordsAsync(settings.ProductEndpoint, ProductConfigurationKeys.NoLabel, token))
         {
             var key = setting.Key;
-            var metadata = JsonSerializer.SerializeToElement(new { ETag = setting.ETag.ToString(), setting.Label,
-                setting.ContentType, Tags = new SortedDictionary<string, string>(setting.Tags, StringComparer.Ordinal), setting.IsReadOnly, setting.LastModified });
+            var metadata = Metadata(setting);
             if (Encoding.UTF8.GetByteCount(key + setting.Value + metadata.GetRawText()) + 512 > FactoryCharterLimits.RecordBytes
                 || string.IsNullOrEmpty(setting.ETag.ToString())
                 || key.StartsWith("dsf/factory/preview", StringComparison.Ordinal) && setting.ContentType != FactoryPreviewValidation.RecordContentType)
@@ -87,7 +90,24 @@ internal sealed class AzureFactoryPreviewCapability(
             if (values.Count >= 512 || !values.TryAdd(key, setting.Value)) throw new JsonException();
             versions.Add(key, FactoryModelsValidation.Hash(metadata));
         }
+        var supplemental = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var prefix in FactoryPreviewSupplementalValidation.NamespacePrefixes)
+        await foreach (var setting in new AzureConfigurationSettingsGateway(currentCredential, http)
+            .ListRecordsAsync(settings.ProductEndpoint, "*", token, prefix + "*"))
+        {
+            if (!setting.Key.StartsWith(prefix, StringComparison.Ordinal)
+                || setting.Label is not null || !supplemental.Add(setting.Key)
+                || !values.TryGetValue(setting.Key, out var value) || value != setting.Value
+                || !versions.TryGetValue(setting.Key, out var version) || version != FactoryModelsValidation.Hash(Metadata(setting)))
+                throw new PreviewCapabilityException(FactoryCharterState.Unknown, "SupplementalNamespaceUnconfirmed");
+        }
+        if (!supplemental.SetEquals(values.Keys.Where(FactoryPreviewSupplementalValidation.IsSelectionRecord)))
+            throw new PreviewCapabilityException(FactoryCharterState.Unknown, "SupplementalNamespaceUnconfirmed");
         return new(values, versions);
+
+        static JsonElement Metadata(Azure.Data.AppConfiguration.ConfigurationSetting setting) => JsonSerializer.SerializeToElement(new
+        { ETag = setting.ETag.ToString(), setting.Label, setting.ContentType,
+            Tags = new SortedDictionary<string, string>(setting.Tags, StringComparer.Ordinal), setting.IsReadOnly, setting.LastModified });
     }
 
     private static PreviewCapabilityException Denied(string reason) => new(FactoryCharterState.Blocked, reason);
@@ -98,9 +118,11 @@ internal sealed partial class NativePreviewBindings(
     IReadOnlyList<FoundationOperation> sourceEffects, FactoryPreviewCapability capability,
     IReadOnlyDictionary<string, FoundationOperation> bindings, IReadOnlyList<FoundationOperation> effects,
     FactoryTelemetry? telemetry, IReadOnlyList<FoundationOperation> telemetryEffects,
+    FactorySupplemental? supplemental, IReadOnlyList<FoundationOperation> supplementalEffects,
     TokenCredential credential, HttpClient http, TimeProvider clock)
 {
     internal SortedDictionary<string, string> Revisions { get; } = new(StringComparer.Ordinal);
+    internal Dictionary<string, string> SupplementalEndpoints { get; } = new(StringComparer.Ordinal);
     private string Group => FactoryPreviewValidation.Group(models);
     private string Account => bindings["account"].Target;
 
@@ -222,6 +244,9 @@ internal sealed partial class NativePreviewBindings(
         var context = await NewHostAsync(PreviewHostKind.SourceContext, token);
         var model = capability.Configuration.ModelEvaluation is null ? null : await NewHostAsync(PreviewHostKind.ModelEvaluation, token);
         var evidence = telemetry is null ? null : await CheckTelemetryAsync(false, token);
+        if (supplemental is not null)
+            foreach (var selected in capability.Configuration.Supplemental!.Hosts)
+                SupplementalEndpoints.Add(selected.Kind, await CheckSupplementalAsync(selected, council, token));
         return (council, context, model, evidence);
     }
 
@@ -259,7 +284,7 @@ internal sealed partial class NativePreviewBindings(
     private string Product => manifest.Identity.ProductKey;
     private string ProductEndpoint => "https://dsfo-" + manifest.Identity.FactoryId.ToString("N") + ".azconfig.io";
 
-    private async Task<string> NewHostAsync(PreviewHostKind kind, CancellationToken token)
+    private async Task<string> NewHostAsync(PreviewHostKind kind, CancellationToken token, string? coordinatorEndpoint = null)
     {
         var target = FactoryPreviewValidation.HostTarget(Group, manifest.Identity.FactoryId, kind);
         var host = await GetAsync(target, "2025-01-01", token);
@@ -273,18 +298,31 @@ internal sealed partial class NativePreviewBindings(
         }
         var model = kind == PreviewHostKind.ModelEvaluation ? capability.Configuration.ModelEvaluation : null;
         var projection = kind == PreviewHostKind.TelemetryEvidence ? capability.Configuration.Telemetry : null;
+        var optional = capability.Configuration.Supplemental?.Hosts.SingleOrDefault(h => FactoryPreviewSupplementalValidation.HostKind(h.Kind) == kind);
+        IReadOnlyList<string> callers = kind == PreviewHostKind.Council
+            ? new[] { manifest.Identity.AzureActorId }.Concat(capability.Configuration.Supplemental?.Hosts.Select(h => h.PrincipalId) ?? []).ToArray()
+            : [bindings["council"].PrincipalId!];
+        var optionalIdentity = optional is null ? null
+            : supplementalEffects.Single(e => e.Target == FactorySupplementalValidation.IdentityTarget(supplemental!.Configuration!, optional.Kind));
+        var extra = optional is null ? null : new Dictionary<string, string>
+        {
+            ["DSF_SUPPLEMENTAL_CONFIG"] = JsonSerializer.Serialize(FactorySupplementalValidation.HostConfiguration(manifest, supplemental!,
+                optionalIdentity!, optional.Kind), FactoryGitHubJson.Options),
+            ["DSF_PREVIEW_COORDINATOR"] = JsonSerializer.Serialize(new PreviewSupplementalCoordinator(coordinatorEndpoint!,
+                capability.Configuration.AudienceClientId, bindings["council"].PrincipalId!, bindings["council"].ClientId!), FactoryGitHubJson.Options),
+        };
         return FactoryHostedWorkloadPolicy.Validate(host, auth,
-            projection?.SourceIdentity ?? bindings[kind == PreviewHostKind.SourceContext ? "code" : "council"], bindings["hosting"],
-            projection?.RuntimeImage ?? model?.RuntimeImage ?? capability.Configuration.RuntimeImage, kind switch
+            optionalIdentity ?? projection?.SourceIdentity ?? bindings[kind == PreviewHostKind.SourceContext ? "code" : "council"], bindings["hosting"],
+            optional?.RuntimeImage ?? projection?.RuntimeImage ?? model?.RuntimeImage ?? capability.Configuration.RuntimeImage, kind switch
             {
                 PreviewHostKind.Council => "serve-preview", PreviewHostKind.SourceContext => "serve-source-context",
                 PreviewHostKind.ModelEvaluation => "serve-preview-models",
                 PreviewHostKind.TelemetryEvidence => "serve-preview-telemetry",
+                PreviewHostKind.FoundryEvidence or PreviewHostKind.WebEvidence => "serve-preview-supplemental",
                 _ => throw new ArgumentOutOfRangeException(nameof(kind)),
             },
             Product, ProductEndpoint, manifest.ProfilePin, manifest.Identity.TenantId,
-            projection?.AudienceClientId ?? model?.AudienceClientId ?? capability.Configuration.AudienceClientId,
-            [kind == PreviewHostKind.Council ? manifest.Identity.AzureActorId : bindings["council"].PrincipalId!]);
+            optional?.AudienceClientId ?? projection?.AudienceClientId ?? model?.AudienceClientId ?? capability.Configuration.AudienceClientId, callers, extra);
     }
 
     private void RequireIncarnation(JsonElement native, FoundationOperation binding)

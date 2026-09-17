@@ -147,9 +147,23 @@ public static class FactorySupplementalValidation
     {
         var config = authority.Configuration!;
         var source = config.Selection.Sources.Single(s => s.Kind == proof.Kind);
-        if (proof.FactoryId != config.FactoryId || proof.ConfigurationRevision != authority.ApprovalFingerprint
-            || identity.Target != IdentityTarget(config, source.Kind)
-            || proof.CheckId != authority.CheckId || proof.CheckId == Guid.Empty || proof.SourcePrincipalId != identity.PrincipalId
+        if (identity.Target != IdentityTarget(config, source.Kind)) throw new JsonException();
+        ValidateProofCore(config.FactoryId, authority.ApprovalFingerprint!, authority.CheckId, identity.PrincipalId!, source, proof, now);
+    }
+
+    public static void ValidateProof(SupplementalHostConfiguration configuration, SupplementalProofRequest request, SupplementalProof proof, DateTimeOffset now)
+    {
+        ValidateHostConfiguration(configuration);
+        if (request.ConfigurationRevision != configuration.ConfigurationRevision) throw new JsonException();
+        ValidateProofCore(configuration.FactoryId, configuration.ConfigurationRevision, request.CheckId,
+            configuration.SourcePrincipalId, configuration.Source, proof, now);
+    }
+
+    private static void ValidateProofCore(Guid factory, string revision, Guid? check, string principal, SupplementalSourceSelection source,
+        SupplementalProof proof, DateTimeOffset now)
+    {
+        if (proof.FactoryId != factory || proof.ConfigurationRevision != revision || proof.Kind != source.Kind
+            || proof.CheckId != check || proof.CheckId == Guid.Empty || proof.SourcePrincipalId != principal
             || proof.Coverage != Coverage || proof.SecretVersion != source.SecretVersion || !Enum.IsDefined(proof.State) || !Enum.IsDefined(proof.Reason)
             || proof.ObservedAt > now || proof.ObservedAt < now.AddMinutes(-2) || proof.Records.Count > 16
             || proof.Records.Any(r => r is null || !r.Reference.StartsWith(source.Kind + ":", StringComparison.Ordinal)

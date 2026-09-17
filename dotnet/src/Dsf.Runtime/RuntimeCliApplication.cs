@@ -211,6 +211,33 @@ public static class RuntimeCliApplication
             }
         });
         root.Subcommands.Add(supplemental);
+        var previewSupplemental = new Command("serve-preview-supplemental", "serve council-only selected supplemental evidence; no governance data access");
+        previewSupplemental.SetAction(async (_, token) =>
+        {
+            try
+            {
+                var settings = FactoryHostSettings.Read(env, "Preview supplemental source");
+                var source = env.GetValueOrDefault("DSF_SUPPLEMENTAL_CONFIG");
+                var coordinator = env.GetValueOrDefault("DSF_PREVIEW_COORDINATOR");
+                if (string.IsNullOrWhiteSpace(source) || System.Text.Encoding.UTF8.GetByteCount(source) > 8192
+                    || string.IsNullOrWhiteSpace(coordinator) || System.Text.Encoding.UTF8.GetByteCount(coordinator) > 2048)
+                    throw new RuntimeVerbException("Bounded DSF_SUPPLEMENTAL_CONFIG and DSF_PREVIEW_COORDINATOR required.");
+                var configuration = System.Text.Json.JsonSerializer.Deserialize<Dsf.Core.Onboarding.SupplementalHostConfiguration>(source,
+                    Dsf.Core.Onboarding.FactorySourceValidation.RecordJson) ?? throw new System.Text.Json.JsonException();
+                var callback = System.Text.Json.JsonSerializer.Deserialize<Dsf.Core.Onboarding.PreviewSupplementalCoordinator>(coordinator,
+                    Dsf.Core.Onboarding.FactorySourceValidation.RecordJson) ?? throw new System.Text.Json.JsonException();
+                await using var host = RuntimeVerbs.BuildPreviewSupplementalHost(settings, configuration, callback, dependencies);
+                await dependencies.WebHostRunner.RunAsync(host, token);
+                return Success;
+            }
+            catch (Exception e) when (e is RuntimeVerbException or System.Text.Json.JsonException)
+            {
+                await stderr.WriteLineAsync("Preview supplemental source requires DSF_SUPPLEMENTAL_CONFIG, DSF_PREVIEW_COORDINATOR, DSF_PRODUCT, "
+                    + "AZURE_APPCONFIG_ENDPOINT, DSF_FACTORY_PROFILE_PIN and explicit AZURE_CLIENT_ID; details withheld.");
+                return Failure;
+            }
+        });
+        root.Subcommands.Add(previewSupplemental);
         return root;
     }
 

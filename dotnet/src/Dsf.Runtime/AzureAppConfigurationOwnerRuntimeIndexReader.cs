@@ -58,10 +58,10 @@ internal sealed class AzureConfigurationSettingsGateway(TokenCredential? credent
     }
 
     internal async IAsyncEnumerable<ConfigurationSetting> ListRecordsAsync(
-        string endpoint, string label, [EnumeratorCancellation] CancellationToken cancellationToken)
+        string endpoint, string label, [EnumeratorCancellation] CancellationToken cancellationToken, string keyFilter = "*")
     {
         var client = Client(endpoint);
-        var selector = new SettingSelector { LabelFilter = label };
+        var selector = new SettingSelector { LabelFilter = label, KeyFilter = keyFilter };
         await foreach (var setting in client.GetConfigurationSettingsAsync(selector, cancellationToken))
         {
             if (label == ProductConfigurationKeys.NoLabel && setting.Label is not null)
