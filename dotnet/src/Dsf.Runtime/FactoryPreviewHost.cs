@@ -9,6 +9,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Dsf.Runtime;
 
@@ -25,6 +26,12 @@ public static partial class RuntimeVerbs
         builder.Logging.ClearProviders();
         builder.WebHost.UseUrls($"http://{host}:{port}");
         builder.WebHost.ConfigureKestrel(options => options.Limits.MaxRequestBodySize = 4096);
+        if (kind == PreviewHostKind.Council)
+        {
+            builder.Services.AddSingleton(provider => new FactoryPreviewWorker(settings, dependencies, dependencies.PreviewHttp ?? PreviewHttp,
+                provider.GetRequiredService<ILogger<FactoryPreviewWorker>>()));
+            builder.Services.AddHostedService(provider => provider.GetRequiredService<FactoryPreviewWorker>());
+        }
         var app = builder.Build();
         Func<HttpContext, Task<IResult>> handler = context => HandleAsync(context);
         app.MapPost(kind == PreviewHostKind.SourceContext ? "/council-context" : "/source-context", handler);
@@ -49,9 +56,7 @@ public static partial class RuntimeVerbs
         {
             context.Response.Headers.CacheControl = "no-store";
             var clock = kind == PreviewHostKind.SourceContext ? dependencies.SourceClock : dependencies.PreviewClock;
-            using var deadline = new CancellationTokenSource(evaluate ? TimeSpan.FromSeconds(FactoryPreviewExecution.Policy.RequestSeconds)
-                : inputs || evaluationStatus ? TimeSpan.FromSeconds(FactoryPreviewInputValidation.Policy.RequestSeconds)
-                : FactoryPreviewValidation.RequestBudget, clock);
+            using var deadline = new CancellationTokenSource(FactoryPreviewValidation.RequestBudget, clock);
             using var pending = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted, deadline.Token);
             try
             {
@@ -79,20 +84,14 @@ public static partial class RuntimeVerbs
                     return Results.Json(await PreparePreviewExecutionAsync(settings, dependencies, request, token), FactoryGitHubJson.Options);
                 if (preparationStatus)
                     return Results.Json(await InspectPreviewPreparationAsync(settings, dependencies, request, token), FactoryGitHubJson.Options);
-                if (evaluate || evaluationStatus)
+                if (evaluate || evaluationStatus || inputs)
                 {
-                    var evaluation = evaluate ? await ExecutePreviewAsync(settings, dependencies, request, token)
-                        : await InspectPreviewAsync(settings, dependencies, request, token);
+                    var evaluation = await app.Services.GetRequiredService<FactoryPreviewWorker>()
+                        .ObserveAsync(capability, request, evaluate, inputs, token);
                     var evaluationBytes = JsonSerializer.SerializeToUtf8Bytes(evaluation, new JsonSerializerOptions(FactoryGitHubJson.Options) { IgnoreReadOnlyProperties = false });
                     return evaluationBytes.Length > 4 * 1024 * 1024 ? Error(FactoryCharterState.Partial, "PreviewEvaluationResponseCapacityExceeded", 409)
-                        : Results.Content(System.Text.Encoding.UTF8.GetString(evaluationBytes), "application/json");
-                }
-                if (inputs)
-                {
-                    var acquired = await AcquirePreviewInputsAsync(settings, dependencies, request, token);
-                    if (acquired.Snapshot.CapabilityRevision != capability.Revision)
-                        throw new PreviewCapabilityException(FactoryCharterState.Blocked, "PreviewCapabilityChangedDuringInputRead");
-                    return Results.Json(acquired.Snapshot, FactoryGitHubJson.Options);
+                        : Results.Content(System.Text.Encoding.UTF8.GetString(evaluationBytes), "application/json",
+                            statusCode: evaluation.Readiness is PreviewReadiness.Queued or PreviewReadiness.Running or PreviewReadiness.Checking ? 202 : 200);
                 }
                 if (modelAuthority)
                 {
@@ -149,8 +148,10 @@ public static partial class RuntimeVerbs
                 && deadline.IsCancellationRequested && !context.RequestAborted.IsCancellationRequested)
             { return Error(FactoryCharterState.Unknown, evaluate ? "PreviewEvaluationDeadlineExceeded" : "PreviewInputCollectionDeadlineExceeded", 409); }
             catch (CosmosCheckpointException exception)
-            { return Error(exception.Failure == CosmosCheckpointFailure.Capacity ? FactoryCharterState.Partial : FactoryCharterState.Unknown,
-                "NativePreviewState" + exception.Failure, 409); }
+            {
+                return Error(exception.Failure == CosmosCheckpointFailure.Capacity ? FactoryCharterState.Partial : FactoryCharterState.Unknown,
+                "NativePreviewState" + exception.Failure, 409);
+            }
             catch (PreviewCapabilityException e) { return Error(e.State, e.Message, 403); }
             catch (SupplementalSourceException e) when (e.Reason == SupplementalReason.CapacityExceeded)
             { return Error(FactoryCharterState.Partial, "PreviewContextCapacityExceeded", 409); }

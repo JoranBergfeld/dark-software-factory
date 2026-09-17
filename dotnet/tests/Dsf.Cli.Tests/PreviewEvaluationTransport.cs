@@ -15,6 +15,7 @@ internal sealed partial class PreviewPreparationTransport
     internal Func<JsonNode, JsonNode>? AlterApplication { get; set; }
     internal void Restart()
     {
+        StopPreviewHosts();
         var documents = JsonSerializer.Deserialize<Dictionary<string, string>>(JsonSerializer.Serialize(SeedDocuments))!;
         var resources = JsonSerializer.Deserialize<Dictionary<string, JsonNode>>(
             JsonSerializer.Serialize(scenario.Source.Source!.Resources))!;

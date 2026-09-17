@@ -25,7 +25,7 @@ internal sealed partial class PreviewExecutionStore
                 throw new PreviewCapabilityException(FactoryCharterState.Partial, "PreviewDispatchCapacityExceeded");
             existing = new(identity, request, PreviewModelDispatchState.Intended, null, null);
             var intended = Document with { Dispatches = [.. Document.Dispatches, existing] };
-            if (JsonSerializer.SerializeToUtf8Bytes(intended, FactoryGitHubJson.Options).Length + RuntimeVerbs.PreviewModelResponseBytes
+            if (JsonSerializer.SerializeToUtf8Bytes(intended, FactoryGitHubJson.Options).Length + RuntimeVerbs.PreviewModelResponseBytes + AdmissionLifecycleBytes
                 > AzureCosmosDocumentGateway.MaximumCheckpointBytes)
                 throw new PreviewCapabilityException(FactoryCharterState.Partial, "PreviewDispatchResultReservationExceeded");
             await WriteAsync(intended, token);

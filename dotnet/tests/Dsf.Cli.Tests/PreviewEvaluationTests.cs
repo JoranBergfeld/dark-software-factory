@@ -80,9 +80,9 @@ public sealed class PreviewEvaluationTests
             || r.Method != "GET" && r.Uri.Host is "api.github.com" or "github.com"
                 && !r.Uri.AbsolutePath.EndsWith("/access_tokens", StringComparison.Ordinal));
 
-    internal static async Task<PreviewPreparationTransport> ConfiguredAsync(bool web = false)
+    internal static async Task<PreviewPreparationTransport> ConfiguredAsync(bool web = false, bool foundry = false)
     {
-        var transport = await PreviewPublicationTests.PreparedAsync(web);
+        var transport = await PreviewPublicationTests.PreparedAsync(web, foundry);
         var machine = transport.Scenario.Machine;
         var review = await machine.InvokeAsync("preview", "--configure");
         Assert.True(review.Exit == 0, (string?)review.Result["detail"] + "\n" + string.Join("\n", transport.Requests.TakeLast(8)));

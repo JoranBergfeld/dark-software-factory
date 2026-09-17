@@ -107,25 +107,13 @@ public sealed class PreviewExecutionCurrentnessTests
             await reached.Task.WaitAsync(TimeSpan.FromSeconds(60));
             var secondInference = second.Intent.Models.Inference.Count;
             var other = await second.RunEvaluationAsync("/evaluate");
-            if (boundary == "Dispatched")
-            {
-                Assert.Contains("Unknown", other.Body);
-                Assert.Equal(secondInference, second.Intent.Models.Inference.Count);
-            }
-            else
-            {
-                Assert.Equal("ReadyAwaitingActivation", (string?)JsonNode.Parse(other.Body)!["readiness"]);
-                Assert.Equal(secondInference + 16, second.Intent.Models.Inference.Count);
-            }
+            Assert.Contains("Unknown", other.Body);
+            Assert.Equal(secondInference, second.Intent.Models.Inference.Count);
         }
         finally { release.TrySetResult(); }
         var original = await running;
-        if (boundary == "Intended")
-        {
-            Assert.NotEqual(HttpStatusCode.OK, original.Status);
-            Assert.Equal(firstInference, first.Intent.Models.Inference.Count);
-        }
-        else Assert.Equal("ReadyAwaitingActivation", (string?)JsonNode.Parse(original.Body)!["readiness"]);
+        Assert.Equal("ReadyAwaitingActivation", (string?)JsonNode.Parse(original.Body)!["readiness"]);
+        Assert.Equal(firstInference + 16, first.Intent.Models.Inference.Count);
     }
 
     [Theory]

@@ -22,23 +22,43 @@ internal sealed partial class PreviewPreparationTransport
     internal Action? BeforeSeed { get; set; }
     internal string LastPreviewResponse = "";
     internal readonly List<string> HostFailures = [];
+    internal TimeSpan? IngressLimit { get; set; }
+    internal TimeSpan? EvaluationModelDelay { get; set; }
+    internal Func<string, CancellationToken, Task>? BeforeEvaluationResponse { get; set; }
+    internal Func<string, HttpStatusCode, Task>? AfterIngressResponse { get; set; }
+    internal Func<Uri, Task>? BeforeIngressRequest { get; set; }
+    internal Func<string, string>? AlterIngressBody { get; set; }
+    internal readonly System.Collections.Concurrent.ConcurrentQueue<(string Path, TimeSpan Elapsed, TimeSpan WallElapsed)> IngressResponses = new();
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, Lazy<Task<PreviewRunner>>> previewHosts = new();
+    private readonly object seedGate = new();
 
     private async Task<HttpResponseMessage> PreviewHostAsync(HttpRequestMessage request, CancellationToken token, bool modelProof = false)
     {
-        var runner = new PreviewRunner(this, request.RequestUri!.AbsolutePath, request.Content is null ? "" : await request.Content.ReadAsStringAsync(token),
-            request.Headers.Authorization?.Parameter);
-        using var http = new HttpClient(this, false) { Timeout = Timeout.InfiniteTimeSpan };
+        var hostname = request.RequestUri!.Host;
+        var runner = await previewHosts.GetOrAdd(hostname, _ => new(() => StartPreviewHostAsync(hostname, modelProof))).Value;
+        scenario.Source.Source!.Values = Values();
+        var response = await runner.SendAsync(request, token);
+        LastPreviewResponse = await response.Content.ReadAsStringAsync(token);
+        if (response.StatusCode is not (HttpStatusCode.OK or HttpStatusCode.Accepted)) HostFailures.Add(runner.Verb + ": " + LastPreviewResponse);
+        return response;
+    }
+
+    private async Task<PreviewRunner> StartPreviewHostAsync(string hostname, bool modelProof)
+    {
+        var http = new HttpClient(this, false) { Timeout = Timeout.InfiniteTimeSpan };
         var council = scenario.Arm.CreatedResources.Values.Single(r => ((string?)r["id"])?.EndsWith("-council", StringComparison.Ordinal) == true);
         var settings = new Dictionary<string, string?>
         {
-            ["DSF_PRODUCT"] = Manifest.Identity.ProductKey, ["AZURE_APPCONFIG_ENDPOINT"] = Authority.Configuration.ProductEndpoint,
-            ["DSF_FACTORY_PROFILE_PIN"] = Manifest.ProfilePin, ["AZURE_CLIENT_ID"] = (string?)council["properties"]!["clientId"],
+            ["DSF_PRODUCT"] = Manifest.Identity.ProductKey,
+            ["AZURE_APPCONFIG_ENDPOINT"] = Authority.Configuration.ProductEndpoint,
+            ["DSF_FACTORY_PROFILE_PIN"] = Manifest.ProfilePin,
+            ["AZURE_CLIENT_ID"] = (string?)council["properties"]!["clientId"],
         };
         var verb = "serve-models";
         var binding = council;
         if (!modelProof)
         {
-            var native = HostedResources.Single(r => (string?)r["properties"]?["configuration"]?["ingress"]?["fqdn"] == request.RequestUri.Host);
+            var native = HostedResources.Single(r => (string?)r["properties"]?["configuration"]?["ingress"]?["fqdn"] == hostname);
             var container = native["properties"]!["template"]!["containers"]![0]!;
             verb = (string)container["args"]![0]!;
             settings = container["env"]!.AsArray().ToDictionary(e => (string)e!["name"]!, e => (string?)e!["value"]);
@@ -49,16 +69,36 @@ internal sealed partial class PreviewPreparationTransport
         scenario.Source.Source!.Values = Values();
         var credential = new PreviewCredential(this, binding);
         var error = new StringWriter();
-        var exit = await RuntimeCliApplication.InvokeAsync([verb], settings, new StringWriter(), error,
-            RuntimeDependencies.Production() with { PreviewHttp = http, PreviewCredential = credential,
-                PreviewClock = scenario.Source.Source.Clock, ModelHttp = http, ModelCredential = credential,
-                ModelClock = scenario.Source.Source.Clock, SourceHttp = http, SourceCredential = credential,
-                SourceClock = scenario.Source.Source.Clock, TelemetryHttp = http, TelemetryCredential = credential,
-                TelemetryClock = scenario.Source.Source.Clock, WebHostRunner = runner }, token);
-        Assert.True(exit == 0, error.ToString());
-        LastPreviewResponse = runner.Body;
-        if (runner.Status != HttpStatusCode.OK) HostFailures.Add(verb + ": " + runner.Body);
-        return new(runner.Status) { Content = new StringContent(runner.Body, Encoding.UTF8, "application/json") };
+        var runner = new PreviewRunner(this, verb, http, error);
+        runner.Execution = RuntimeCliApplication.InvokeAsync([verb], settings, new StringWriter(), error,
+            RuntimeDependencies.Production() with
+            {
+                PreviewHttp = http,
+                PreviewCredential = credential,
+                PreviewClock = scenario.Source.Source.Clock,
+                ModelHttp = http,
+                ModelCredential = credential,
+                ModelClock = scenario.Source.Source.Clock,
+                SourceHttp = http,
+                SourceCredential = credential,
+                SourceClock = scenario.Source.Source.Clock,
+                TelemetryHttp = http,
+                TelemetryCredential = credential,
+                TelemetryClock = scenario.Source.Source.Clock,
+                WebHostRunner = runner
+            }, CancellationToken.None);
+        await Task.WhenAny(runner.Started.Task, runner.Execution);
+        Assert.False(runner.Execution.IsCompleted, error.ToString());
+        await runner.Started.Task;
+        return runner;
+    }
+
+    private void StopPreviewHosts()
+    {
+        foreach (var task in previewHosts.Values.Where(v => v.IsValueCreated).Select(v => v.Value)
+            .OrderBy(t => t.IsCompletedSuccessfully && t.Result.Verb == "serve-preview" ? 0 : 1))
+            task.GetAwaiter().GetResult().Dispose();
+        previewHosts.Clear();
     }
 
     private async Task<HttpResponseMessage> ModelProbeAsync(HttpRequestMessage request, CancellationToken token)
@@ -70,21 +110,39 @@ internal sealed partial class PreviewPreparationTransport
         var prompt = (string?)body["messages"]?[0]?["content"];
         var probe = prompt?.Contains("CAPABILITY PROBE", StringComparison.Ordinal) == true
             || route.Name == "embedding" && body["input"]!.AsArray().All(v => ((string)v!).Contains("CAPABILITY PROBE", StringComparison.Ordinal));
-        if (!probe) return NativeEvaluationResponse(route, body, prompt);
+        if (!probe)
+        {
+            var result = NativeEvaluationResponse(route, body, prompt);
+            if (BeforeEvaluationResponse is not null) await BeforeEvaluationResponse(route.Name, token);
+            if (EvaluationModelDelay is { } delay)
+            {
+                scenario.Source.Source!.Clock.Now += delay;
+                await Task.Delay(10, token);
+            }
+            return result;
+        }
         if (route.Name == "embedding")
         {
             Assert.Equal("/openai/v1/embeddings", request.RequestUri!.AbsolutePath);
             Assert.All(body["input"]!.AsArray(), value => Assert.Contains("CAPABILITY PROBE", (string?)value));
-            response = Reply(new { model = route.Model, data = Enumerable.Range(0, 3).Select(i => new
-                { index = i, embedding = Enumerable.Range(0, route.Dimensions).Select(d => d == (i < 2 ? 0 : 1) ? 1.0 : 0.0).ToArray() }).ToArray() });
+            response = Reply(new
+            {
+                model = route.Model,
+                data = Enumerable.Range(0, 3).Select(i => new
+                { index = i, embedding = Enumerable.Range(0, route.Dimensions).Select(d => d == (i < 2 ? 0 : 1) ? 1.0 : 0.0).ToArray() }).ToArray()
+            });
         }
         else
         {
             Assert.Equal("/openai/v1/chat/completions", request.RequestUri!.AbsolutePath);
             Assert.Contains("CAPABILITY PROBE", (string?)body["messages"]![0]!["content"]);
-            response = Reply(new { model = route.Model, choices = new[] { new { finish_reason = "stop",
+            response = Reply(new
+            {
+                model = route.Model,
+                choices = new[] { new { finish_reason = "stop",
                 message = new { content = (route.Name == "synthesis" ? "" : "GO: ")
-                    + "Equivalent problem descriptions should retain their stable identifier, preventing duplicated ownership and preserving traceability." } } } });
+                    + "Equivalent problem descriptions should retain their stable identifier, preventing duplicated ownership and preserving traceability." } } }
+            });
         }
         response.Headers.Add("x-request-id", Guid.NewGuid().ToString());
         return response;
@@ -97,35 +155,39 @@ internal sealed partial class PreviewPreparationTransport
         Assert.Equal("[\"" + Manifest.Identity.ProductKey + "\"]", request.Headers.GetValues("x-ms-documentdb-partitionkey").Single());
         Assert.False(request.Headers.Contains("x-ms-documentdb-is-upsert"));
         var path = request.RequestUri.AbsolutePath;
-        if (request.Method == HttpMethod.Post)
+        var content = request.Content is null ? null : await request.Content.ReadAsStringAsync(token);
+        lock (seedGate)
         {
-            var body = JsonNode.Parse(await request.Content!.ReadAsStringAsync(token))!;
-            path += "/" + (string)body["id"]!;
-            if (SeedDocuments.ContainsKey(path)) return new(HttpStatusCode.Conflict);
-            if (path.Contains("/council-preview/", StringComparison.Ordinal)) { BeforeSeed?.Invoke(); SeedCreates++; }
-            body["_rid"] = path.Contains("/council-preview/", StringComparison.Ordinal) ? SeedResourceId : RunResourceId;
-            body["_etag"] = "\"" + Guid.NewGuid().ToString("D") + "\"";
-            SeedDocuments.Add(path, body.ToJsonString());
-            if (SeedFailure == "lost") throw new HttpRequestException("lost-private-native-seed-response");
-            if (SeedFailure == "canceled") throw new OperationCanceledException(token);
+            if (request.Method == HttpMethod.Post)
+            {
+                var body = JsonNode.Parse(content!)!;
+                path += "/" + (string)body["id"]!;
+                if (SeedDocuments.ContainsKey(path)) return new(HttpStatusCode.Conflict);
+                if (path.Contains("/council-preview/", StringComparison.Ordinal)) { BeforeSeed?.Invoke(); SeedCreates++; }
+                body["_rid"] = path.Contains("/council-preview/", StringComparison.Ordinal) ? SeedResourceId : RunResourceId;
+                body["_etag"] = "\"" + Guid.NewGuid().ToString("D") + "\"";
+                SeedDocuments.Add(path, body.ToJsonString());
+                if (SeedFailure == "lost") throw new HttpRequestException("lost-private-native-seed-response");
+                if (SeedFailure == "canceled") throw new OperationCanceledException(token);
+            }
+            else if (request.Method == HttpMethod.Put)
+            {
+                if (!SeedDocuments.TryGetValue(path, out var before)) return new(HttpStatusCode.NotFound);
+                var original = JsonNode.Parse(before)!;
+                if ((string?)original["_etag"] != request.Headers.GetValues("If-Match").Single()) return new(HttpStatusCode.PreconditionFailed);
+                var body = JsonNode.Parse(content!)!;
+                body["_rid"] = original["_rid"]!.DeepClone();
+                body["_etag"] = "\"" + Guid.NewGuid().ToString("D") + "\"";
+                SeedDocuments[path] = body.ToJsonString();
+                AfterEvaluationWrite?.Invoke(body);
+            }
+            else Assert.Equal(HttpMethod.Get, request.Method);
+            if (!SeedDocuments.TryGetValue(path, out var text)) return new(HttpStatusCode.NotFound);
+            var response = new HttpResponseMessage(request.Method == HttpMethod.Post ? HttpStatusCode.Created : HttpStatusCode.OK)
+            { Content = new StringContent(text, Encoding.UTF8, "application/json") };
+            response.Headers.TryAddWithoutValidation("ETag", (string?)JsonNode.Parse(text)!["_etag"]);
+            return response;
         }
-        else if (request.Method == HttpMethod.Put)
-        {
-            if (!SeedDocuments.TryGetValue(path, out var before)) return new(HttpStatusCode.NotFound);
-            var original = JsonNode.Parse(before)!;
-            if ((string?)original["_etag"] != request.Headers.GetValues("If-Match").Single()) return new(HttpStatusCode.PreconditionFailed);
-            var body = JsonNode.Parse(await request.Content!.ReadAsStringAsync(token))!;
-            body["_rid"] = original["_rid"]!.DeepClone();
-            body["_etag"] = "\"" + Guid.NewGuid().ToString("D") + "\"";
-            SeedDocuments[path] = body.ToJsonString();
-            AfterEvaluationWrite?.Invoke(body);
-        }
-        else Assert.Equal(HttpMethod.Get, request.Method);
-        if (!SeedDocuments.TryGetValue(path, out var text)) return new(HttpStatusCode.NotFound);
-        var response = new HttpResponseMessage(request.Method == HttpMethod.Post ? HttpStatusCode.Created : HttpStatusCode.OK)
-        { Content = new StringContent(text, Encoding.UTF8, "application/json") };
-        response.Headers.TryAddWithoutValidation("ETag", (string?)JsonNode.Parse(text)!["_etag"]);
-        return response;
     }
 
     private sealed class PreviewCredential(PreviewPreparationTransport transport, JsonNode identity) : TokenCredential
@@ -133,47 +195,79 @@ internal sealed partial class PreviewPreparationTransport
         public override AccessToken GetToken(TokenRequestContext context, CancellationToken token) => GetTokenAsync(context, token).Result;
         public override ValueTask<AccessToken> GetTokenAsync(TokenRequestContext context, CancellationToken token)
         {
-            var claims = new { oid = (string?)identity["properties"]!["principalId"], appid = (string?)identity["properties"]!["clientId"],
-                tid = transport.Manifest.Identity.TenantId, xms_mirid = (string?)identity["id"], ver = "1.0",
+            var claims = new
+            {
+                oid = (string?)identity["properties"]!["principalId"],
+                appid = (string?)identity["properties"]!["clientId"],
+                tid = transport.Manifest.Identity.TenantId,
+                xms_mirid = (string?)identity["id"],
+                ver = "1.0",
                 aud = context.Scopes.Single()[..^"/.default".Length],
                 exp = transport.Scenario.Source.Source!.Clock.Now.AddHours(1).ToUnixTimeSeconds(),
-                nbf = transport.Scenario.Source.Source.Clock.Now.AddMinutes(-1).ToUnixTimeSeconds() };
+                nbf = transport.Scenario.Source.Source.Clock.Now.AddMinutes(-1).ToUnixTimeSeconds()
+            };
             return ValueTask.FromResult(new AccessToken("test." + Convert.ToBase64String(JsonSerializer.SerializeToUtf8Bytes(claims))
                 .TrimEnd('=').Replace('+', '-').Replace('/', '_') + ".test", DateTimeOffset.UtcNow.AddHours(1)));
         }
     }
 
-    private sealed class PreviewRunner(PreviewPreparationTransport transport, string path, string payload, string? bearer) : IWebHostRunner
+    private sealed class PreviewRunner(PreviewPreparationTransport transport, string verb, HttpClient native, StringWriter error) : IWebHostRunner, IDisposable
     {
-        internal HttpStatusCode Status;
-        internal string Body = "";
+        internal string Verb => verb;
+        internal Task<int> Execution = Task.FromResult(-1);
+        internal TaskCompletionSource<Uri> Started = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource stop = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public async Task RunAsync(WebApplication app, CancellationToken token)
         {
             app.Urls.Clear();
             app.Urls.Add("http://127.0.0.1:0");
             await app.StartAsync(token);
-            try
-            {
-                using var client = new HttpClient { BaseAddress = new Uri(app.Urls.Single()), Timeout = Timeout.InfiniteTimeSpan };
-                var principal = transport.Manifest.Identity.AzureActorId;
-                string? application = null;
-                if (bearer?.StartsWith("test.", StringComparison.Ordinal) == true)
-                {
-                    var encoded = bearer.Split('.')[1].Replace('-', '+').Replace('_', '/');
-                    var claims = JsonNode.Parse(Convert.FromBase64String(encoded.PadRight((encoded.Length + 3) / 4 * 4, '=')))!;
-                    principal = (string)claims["oid"]!;
-                    application = (string?)claims["appid"];
-                }
-                client.DefaultRequestHeaders.Add("X-MS-CLIENT-PRINCIPAL-IDP", "aad");
-                client.DefaultRequestHeaders.Add("X-MS-CLIENT-PRINCIPAL-ID", principal);
-                client.DefaultRequestHeaders.Add("X-MS-CLIENT-PRINCIPAL", Convert.ToBase64String(JsonSerializer.SerializeToUtf8Bytes(new
-                { auth_typ = "aad", claims = new[] { new { typ = "oid", val = principal },
-                    new { typ = "tid", val = transport.Manifest.Identity.TenantId }, new { typ = "appid", val = application ?? "" } } })));
-                using var response = await client.PostAsync(path, new StringContent(payload, Encoding.UTF8, "application/json"), token);
-                Status = response.StatusCode;
-                Body = await response.Content.ReadAsStringAsync(token);
-            }
+            Started.SetResult(new Uri(app.Urls.Single()));
+            try { await stop.Task.WaitAsync(token); }
             finally { await app.StopAsync(CancellationToken.None); }
+        }
+        internal async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
+        {
+            var path = request.RequestUri!.AbsolutePath;
+            var payload = request.Content is null ? "" : await request.Content.ReadAsStringAsync(token);
+            var bearer = request.Headers.Authorization?.Parameter;
+            using var client = new HttpClient { BaseAddress = await Started.Task, Timeout = Timeout.InfiniteTimeSpan };
+            var principal = transport.Manifest.Identity.AzureActorId;
+            string? application = null;
+            if (bearer?.StartsWith("test.", StringComparison.Ordinal) == true)
+            {
+                var encoded = bearer.Split('.')[1].Replace('-', '+').Replace('_', '/');
+                var claims = JsonNode.Parse(Convert.FromBase64String(encoded.PadRight((encoded.Length + 3) / 4 * 4, '=')))!;
+                principal = (string)claims["oid"]!;
+                application = (string?)claims["appid"];
+            }
+            client.DefaultRequestHeaders.Add("X-MS-CLIENT-PRINCIPAL-IDP", "aad");
+            client.DefaultRequestHeaders.Add("X-MS-CLIENT-PRINCIPAL-ID", principal);
+            client.DefaultRequestHeaders.Add("X-MS-CLIENT-PRINCIPAL", Convert.ToBase64String(JsonSerializer.SerializeToUtf8Bytes(new
+            {
+                auth_typ = "aad",
+                claims = new[] { new { typ = "oid", val = principal },
+                new { typ = "tid", val = transport.Manifest.Identity.TenantId }, new { typ = "appid", val = application ?? "" } }
+            })));
+            var clock = transport.Scenario.Source.Source!.Clock;
+            var started = clock.Now;
+            var timestamp = System.Diagnostics.Stopwatch.GetTimestamp();
+            using var ingress = new CancellationTokenSource(transport.IngressLimit ?? Timeout.InfiniteTimeSpan, clock);
+            using var pending = CancellationTokenSource.CreateLinkedTokenSource(token, ingress.Token);
+            if (transport.BeforeIngressRequest is not null) await transport.BeforeIngressRequest(request.RequestUri);
+            using var response = await client.PostAsync(path, new StringContent(payload, Encoding.UTF8, "application/json"), pending.Token);
+            var body = await response.Content.ReadAsStringAsync(pending.Token);
+            body = transport.AlterIngressBody?.Invoke(body) ?? body;
+            transport.IngressResponses.Enqueue((path, clock.Now - started, System.Diagnostics.Stopwatch.GetElapsedTime(timestamp)));
+            if (transport.AfterIngressResponse is not null) await transport.AfterIngressResponse(path, response.StatusCode);
+            return new(response.StatusCode) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
+        }
+        public void Dispose()
+        {
+            stop.TrySetResult();
+            Assert.Equal(0, Execution.WaitAsync(TimeSpan.FromSeconds(60)).GetAwaiter().GetResult());
+            native.Dispose();
+            error.Dispose();
         }
     }
 }

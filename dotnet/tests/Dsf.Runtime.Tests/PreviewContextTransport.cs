@@ -16,7 +16,7 @@ internal sealed partial class PreviewContextTransport : HttpMessageHandler
     internal IntentWorkflowTransport Intent = null!;
     internal SourceInventoryTransport Source => Intent.Source;
     internal readonly Dictionary<string, JsonNode> Native = new(StringComparer.OrdinalIgnoreCase);
-    internal readonly List<(string Principal, string Method, Uri Uri)> Requests = [];
+    internal readonly System.Collections.Concurrent.ConcurrentQueue<(string Principal, string Method, Uri Uri)> Requests = new();
     internal Action<HttpRequestMessage>? BeforeRequest { get; set; }
     internal bool EnforceCouncilScopes { get; set; }
     internal string? CapabilityETag { get; set; }
@@ -30,7 +30,7 @@ internal sealed partial class PreviewContextTransport : HttpMessageHandler
     internal string ContextEndpoint = "https://context.private.azurecontainerapps.io";
     internal int ContextCalls;
     internal const string ModelEndpoint = "https://preview-models.private.azurecontainerapps.io";
-    internal readonly List<Uri> ModelServiceRequests = [];
+    internal readonly System.Collections.Concurrent.ConcurrentQueue<Uri> ModelServiceRequests = new();
     internal Func<string, string>? ChangeModelResponse { get; set; }
     internal Func<HttpRequestMessage, HttpResponseMessage?>? ModelNativeResponse { get; set; }
     private HttpMessageInvoker inner = null!;
@@ -363,7 +363,7 @@ internal sealed partial class PreviewContextTransport : HttpMessageHandler
         if (uri.Host == FactoryPreviewValidation.Prefix(Source.Manifest.Identity.FactoryId) + "-cosmos.documents.azure.com")
             return await EvaluationRequestAsync(request, token);
         var principal = TokenPrincipal(request);
-        Requests.Add((principal, request.Method.Method, uri));
+        Requests.Enqueue((principal, request.Method.Method, uri));
         if (await SupplementalRequestAsync(request, principal, token) is { } supplementalReply) return supplementalReply;
         if (uri.Host == new Uri(TelemetryEndpoint).Host)
         {
@@ -469,7 +469,7 @@ internal sealed partial class PreviewContextTransport : HttpMessageHandler
         private readonly HttpMessageInvoker factory = new(owner, false);
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
         {
-            owner.ModelServiceRequests.Add(request.RequestUri!);
+            owner.ModelServiceRequests.Enqueue(request.RequestUri!);
             var uri = request.RequestUri!;
             if (owner.Models.Routes!.Any(r => uri.Host == new Uri(r.Selection.Endpoint).Host
                 || uri.Host == "management.azure.com" && uri.AbsolutePath.StartsWith(r.Selection.AccountResourceId, StringComparison.OrdinalIgnoreCase)))

@@ -181,8 +181,14 @@ public sealed class PreviewExecutionTests
         Assert.NotEqual(HttpStatusCode.OK, result.Status);
         Assert.DoesNotContain("ReadyAwaitingActivation", result.Body);
         Assert.Equal(inference, transport.Intent.Models.Inference.Count);
-        Assert.Equal(writes, transport.EvaluationWrites.Count);
         Assert.Single(transport.EvaluationDocuments);
+        var coordinator = JsonNode.Parse(transport.EvaluationDocuments.Single().Value)!;
+        Assert.Null(coordinator["inputs"]);
+        Assert.Null(coordinator["run"]);
+        Assert.Null(coordinator["pendingRun"]);
+        Assert.Empty(coordinator["dispatches"]!.AsArray());
+        if (coordinator["admission"] is null) Assert.Equal(writes, transport.EvaluationWrites.Count);
+        else Assert.Contains((string?)coordinator["admission"]!["state"], new[] { "Released", "Unknown" });
     }
 
     [Theory]

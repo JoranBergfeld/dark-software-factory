@@ -740,7 +740,7 @@ The protected execution record contains:
 ```json
 {
   "policy": {
-    "revision": "supervised-conveyor-v1",
+    "revision": "supervised-conveyor-v2",
     "requestSeconds": 5400,
     "maximumDispatches": 62,
     "jurorSeconds": 120
@@ -847,14 +847,39 @@ These sequential checks are point-in-time observations, not cross-provider
 atomicity. Neither Ready nor historical completion means activated or onboarding
 complete.
 
-Preparation is bounded to 180 seconds; complete execution to 5,400 seconds;
+The COUNCIL `/evaluate` route durably admits work before HTTP `202`; it does
+not await the conveyor. `FactoryPreviewWorker` is a bounded hosted worker,
+not a detached request task or unbounded queue. Its admission is stored in the
+existing native evaluation document and binds original operation/request,
+approval, capability revision, worker identity and native CAS. Only a confirmed
+admission can enqueue work. Request/poll disconnection never cancels accepted
+work; host shutdown, missing workers and unacknowledged native transitions
+remain unknown. A new process cannot claim an old worker based on elapsed time.
+An explicitly confirmed release may preserve/reuse exactly observed native
+checkpoints and confirmed judgments, without replay or changing original
+operation/provenance.
+
+`/evaluation` and `/inputs` return bounded protocol-2 observations. A live
+execution reports `Queued`/`Running`; complete current inspection uses the same
+bounded hosted reader with **no** admission, model dispatch or native write.
+Polling a read request retains its nonce; a new observation uses a new nonce.
+Only one reader/result is held in memory, never a persisted second queue.
+Results have bounded observation lifetimes and cannot outlive captured
+application evidence. Restarting a reader permits only repeating read-only
+checks, never restarting an uncertain executor.
+
+Every HTTP route and individual consumer is bounded to 180 seconds, below
+[Container Apps' 240-second ingress timeout](https://learn.microsoft.com/azure/container-apps/ingress-overview#http).
+Complete hosted execution remains bounded to 5,400 seconds;
 each input acquisition and inspection to 1,800 seconds. Existing individual
 consumer and freshness bounds remain stricter where applicable: the total
 deadline is not a promise that every constituent can exhaust its own budget.
 The model journal permits at most 62 evaluation dispatches, leaving room for
 the acquired consumer's two authority observations within its 64-observation
 limit. Each native document stays below 2,080,768 UTF-8 bytes; dispatch intent
-reserves another 128 KiB for its result. Initial/final snapshots, journal and
+reserves another 128 KiB for its result plus 4 KiB for admission closeout.
+Admission and active-worker writes reserve the complete bounded closeout
+before native dispatch. Initial/final snapshots, journal and
 proof share the coordinator's bound. Complete HTTP reports are at most 4 MiB.
 All overflows/timeouts are explicit nonready outcomes, never truncated
 completeness. Interrupted HTTP/native requests must be inspected before any

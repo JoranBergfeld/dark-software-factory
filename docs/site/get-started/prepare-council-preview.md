@@ -326,9 +326,23 @@ use prompts for missing values; it does not infer approval. Effective Azure
 and GitHub operator authority and exact current native preparation are checked
 before contacting the protected COUNCIL `/evaluate` route.
 
+`/evaluate` conditionally records the original operation and its single eligible
+worker in the approved native Cosmos item **before** returning HTTP `202`.
+The CLI then polls read-only `/evaluation` every five seconds. Each HTTP hop is
+bounded to 180 seconds, below Container Apps' 240-second ingress timeout; the
+accepted hosted worker, not an open HTTP request, owns the longer evaluation.
+Closing the terminal or losing that acceptance response does not cancel work.
+Inspect the original operation rather than submitting another identity.
+
 The runtime acquires current adopted intent, supporting complete analysis and
 unknowns, exact application/environment scope, genuine fresh application
 records, every selected supplemental source, and verified native model routes.
+Once configuration is protected, unchanged original preparation proofs remain
+reviewed provenance rather than expiring the configured operation mid-evaluation.
+Operator-side checks still verify their retained hashes and all current native
+receipts/material inputs; only the runtime's new source/model observations can
+establish current readiness. This does not relax initial planning, approval or
+publication freshness, or permit changed grants/configuration.
 It runs the existing conveyor in `OnboardingPreview`, with dry-run publication
 and no issue filer or activation authority. Structured synthesis must actually
 produce a candidate; semantic grounding must revisit original evidence and
@@ -347,6 +361,7 @@ The output is complete bounded JSON in both terminal and redirected use:
 | Field | Inspect |
 | --- | --- |
 | `readiness`, `reason`, `nextActor` | Current outcome and responsible next actor; never infer readiness from run status alone. |
+| `observedAt` | Time of this bounded observation; currentness is point-in-time, not a lease. |
 | `evaluation.inputs.context` | Adopted charter, analysis/unknowns, application boundary, exact source/model/judgment revisions. |
 | `evaluation.inputs.telemetry`, `.supplemental`, `.observations` | Original scoped records, freshness/query/source proofs, content hashes and nonnavigable WebIQ identifiers. |
 | `evaluation.run.proposals[].grounding` | Individual supported claims, actual supporting quotes, counterevidence and residual uncertainty; citation existence alone is insufficient. |
@@ -375,6 +390,15 @@ This invokes `/evaluation`; it never creates a seed, executes synthesis/jury,
 writes checkpoints or publishes anything. Do not use preparation's
 `--configure --status` to inspect an already-used seed.
 
+While the original worker is active, inspection returns `Queued` or `Running`
+without starting another evaluation. Completed-state inspection may return
+`Checking` while a bounded read-only reader performs the complete current
+checks; the CLI waits for that observation. The reader has one bounded slot,
+no persistent effects, and can be repeated after a reader-process restart.
+It is not a second evaluation queue. HTTP observations bind protocol `2`,
+factory, original operation/approval and the caller's observation request ID.
+Use a new request ID for a new observation; polling retains that ID.
+
 The runtime validates the complete durable proof and current required
 authority. Captured evidence becoming stale or material charter, analysis,
 source, model, selection, configuration or native-grant drift withholds
@@ -392,11 +416,21 @@ evaluation rechecks its existing proof without inference or state writes.
 Lost/canceled dispatch outcomes remain quarantined; a lease expiring is not
 proof that a remote request stopped. No forced retry, alternate operation,
 root reset, deletion, upsert or automatic recovery is available.
+Only a definitely stopped worker can conditionally release exact confirmed
+state. A restarted process cannot take over an unconfirmed `Queued`/`Running`
+worker, even before its first model call. Lost native admission/start receipts
+and host shutdown remain auditable, nonreplayable uncertainty. Confirmed model
+results and exactly reconciled native checkpoints remain reusable after a
+confirmed release, never by assuming a lease has fenced the old worker.
 
 The CLI permits 9,000 seconds for chained current checks and the runtime's
-5,400-second execution budget; no hidden 100-second default HTTP timeout
-overrides that allowance. Runtime execution has at most 62 native model
+5,400-second execution budget. These are **operation**, not HTTP-ingress,
+budgets. Execution policy `supervised-conveyor-v2` requires the reviewed image
+with durable admission; an old synchronous image/configuration is not silently
+upgraded or reused. Runtime execution has at most 62 native model
 dispatches and a 120-second juror budget. Responses are at most 4 MiB.
+Individual model/source hosts retain their existing 180-second hop bounds.
+The complete input/proof reader retains its 1,800-second operation budget.
 The approved input/execution policies pin additional evidence, context and
 native-document limits. Overflow, cancellation or timeout is incomplete or
 unknown, never silently truncated or successful.

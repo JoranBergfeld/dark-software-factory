@@ -131,11 +131,16 @@ public sealed class PreviewCapabilityHostTests
         {
             var target = scenario == "broad-sql" ? transport.Account + "/sqlroleassignments/" + Guid.NewGuid()
                 : transport.Group + "/providers/microsoft.authorization/roleassignments/" + Guid.NewGuid();
-            transport.Native[target] = JsonSerializer.SerializeToNode(new { id = target, properties = new
+            transport.Native[target] = JsonSerializer.SerializeToNode(new
             {
-                principalId = transport.Models.Bindings![0].PrincipalId, scope = scenario == "broad-sql" ? transport.Account : transport.Group,
-                roleDefinitionId = scenario == "broad-sql" ? targets[1].Target : config.MetadataRoleDefinitionId,
-            } })!;
+                id = target,
+                properties = new
+                {
+                    principalId = transport.Models.Bindings![0].PrincipalId,
+                    scope = scenario == "broad-sql" ? transport.Account : transport.Group,
+                    roleDefinitionId = scenario == "broad-sql" ? targets[1].Target : config.MetadataRoleDefinitionId,
+                }
+            })!;
         }
         var response = await transport.RunAsync();
         Assert.Equal(HttpStatusCode.Forbidden, response.Status);
@@ -223,8 +228,13 @@ public sealed class PreviewCapabilityHostTests
         environment["AZURE_CLIENT_ID"] = transport.Models.Bindings![0].ClientId;
         var runner = new PreviewContextRunner(transport.Source) { Route = "/source-context", Request = transport.Request };
         Assert.Equal(0, await RuntimeCliApplication.InvokeAsync(["serve-preview"], environment, new StringWriter(), new StringWriter(),
-            RuntimeDependencies.Production() with { WebHostRunner = runner, PreviewHttp = http,
-                PreviewCredential = new SourceTestCredential(transport.Source), PreviewClock = transport.Source.Clock }, CancellationToken.None));
+            RuntimeDependencies.Production() with
+            {
+                WebHostRunner = runner,
+                PreviewHttp = http,
+                PreviewCredential = new SourceTestCredential(transport.Source),
+                PreviewClock = transport.Source.Clock
+            }, CancellationToken.None));
         Assert.Equal(HttpStatusCode.Forbidden, runner.Status);
         Assert.Equal(0, transport.ContextCalls);
         Assert.DoesNotContain(transport.Requests, r => r.Uri.Host == new Uri(transport.Source.ProgressEndpoint).Host);
@@ -345,8 +355,13 @@ public sealed class PreviewCapabilityHostTests
         var runner = new PreviewContextRunner(transport.Source)
         { Route = route, Caller = transport.Models.Bindings![0].PrincipalId!, Client = transport.Models.Bindings[0].ClientId!, Request = new { } };
         Assert.Equal(0, await RuntimeCliApplication.InvokeAsync(["serve-source"], transport.Source.Environment, new StringWriter(), new StringWriter(),
-            RuntimeDependencies.Production() with { WebHostRunner = runner, SourceHttp = http, SourceCredential = new SourceTestCredential(transport.Source),
-                SourceClock = transport.Source.Clock }, CancellationToken.None));
+            RuntimeDependencies.Production() with
+            {
+                WebHostRunner = runner,
+                SourceHttp = http,
+                SourceCredential = new SourceTestCredential(transport.Source),
+                SourceClock = transport.Source.Clock
+            }, CancellationToken.None));
         Assert.Equal(route == "/charter-review" ? HttpStatusCode.Conflict : HttpStatusCode.Forbidden, runner.Status);
         Assert.DoesNotContain("coordinate volunteer shifts", runner.Body);
     }
@@ -360,7 +375,9 @@ public sealed class PreviewCapabilityHostTests
         var exit = await RuntimeCliApplication.InvokeAsync(["serve-source-context"], transport.Source.Environment,
             new StringWriter(), new StringWriter(), RuntimeDependencies.Production() with
             {
-                WebHostRunner = runner, SourceHttp = http, SourceCredential = new SourceTestCredential(transport.Source),
+                WebHostRunner = runner,
+                SourceHttp = http,
+                SourceCredential = new SourceTestCredential(transport.Source),
                 SourceClock = transport.Source.Clock,
             }, CancellationToken.None);
         Assert.Equal(0, exit);
@@ -392,12 +409,41 @@ internal sealed class PreviewContextRunner(SourceInventoryTransport source) : IW
             http.DefaultRequestHeaders.Add("X-MS-CLIENT-PRINCIPAL-ID", Caller);
             http.DefaultRequestHeaders.Add("X-MS-CLIENT-PRINCIPAL", Convert.ToBase64String(JsonSerializer.SerializeToUtf8Bytes(new
             {
-                auth_typ = "aad", claims = new[] { new { typ = "oid", val = Caller }, new { typ = "appid", val = Client },
+                auth_typ = "aad",
+                claims = new[] { new { typ = "oid", val = Caller }, new { typ = "appid", val = Client },
                     new { typ = "tid", val = source.Manifest.Identity.TenantId } },
             })));
-            using var response = await http.PostAsJsonAsync(Route, Request, FactoryGitHubJson.Options, token);
-            Status = response.StatusCode;
-            Body = await response.Content.ReadAsStringAsync(token);
+            var route = Route;
+            while (true)
+            {
+                using var response = await http.PostAsJsonAsync(route, Request, FactoryGitHubJson.Options, token);
+                Status = response.StatusCode;
+                Body = await response.Content.ReadAsStringAsync(token);
+                if (Status is not (HttpStatusCode.OK or HttpStatusCode.Accepted)) break;
+                using var body = JsonDocument.Parse(Body);
+                if (!body.RootElement.TryGetProperty("protocol", out var protocol) || protocol.GetInt32() != 2) break;
+                var observation = body.RootElement.Deserialize<PreviewHttpObservation>(FactorySourceValidation.RecordJson)!;
+                if (observation.Readiness is PreviewReadiness.Queued or PreviewReadiness.Running or PreviewReadiness.Checking)
+                {
+                    route = route == "/evaluate" ? "/evaluation" : route;
+                    await Task.Delay(10, token);
+                    continue;
+                }
+                if (observation.Evaluation is { } evaluation) Body = evaluation.GetRawText();
+                else
+                {
+                    var state = observation.Readiness switch
+                    {
+                        PreviewReadiness.Blocked => FactoryCharterState.Blocked,
+                        PreviewReadiness.Partial => FactoryCharterState.Partial,
+                        PreviewReadiness.Failed => FactoryCharterState.Failed,
+                        _ => FactoryCharterState.Unknown
+                    };
+                    Status = HttpStatusCode.Forbidden;
+                    Body = JsonSerializer.Serialize(new PreviewContextFailure(state, observation.Reason ?? "PreviewNotReady"), FactoryGitHubJson.Options);
+                }
+                break;
+            }
         }
         finally { await app.StopAsync(CancellationToken.None); }
     }

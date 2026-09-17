@@ -26,7 +26,7 @@ public static partial class RuntimeVerbs
 internal static partial class RuntimeWorkflow
 {
     internal static async Task<PreviewExecutionResult> ExecutePreviewAsync(FactoryHostSettings settings, RuntimeDependencies dependencies,
-        PreviewCapabilityRequest request, HttpClient http, CancellationToken cancellationToken)
+        PreviewCapabilityRequest request, HttpClient http, CancellationToken cancellationToken, PreviewWorkAdmission? admission = null)
     {
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(FactoryPreviewExecution.Policy.RequestSeconds), dependencies.PreviewClock);
         using var pending = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline.Token);
@@ -37,23 +37,31 @@ internal static partial class RuntimeWorkflow
             throw new PreviewCapabilityException(FactoryCharterState.Blocked, "ApprovedPreviewExecutionSeedRequired");
         var store = new PreviewExecutionStore(authority, credential, http, dependencies.PreviewClock);
         var run = await store.ReadAsync(token);
+        if (store.Document.Admission is not null) store.RequireWorker(admission);
         if (run is not null && store.Document.PendingRun is null && (store.Document.Phase == PreviewExecutionPhase.Failed
             || store.Document.Phase == PreviewExecutionPhase.Evaluated && store.Document.Proof is not null))
-            return await InspectPreviewAsync(settings, dependencies, request, http, token);
+            return await InspectPreviewAsync(settings, dependencies, request, http, token, admission);
         var acquired = await AcquirePreviewInputsAsync(settings, dependencies, store.Document.Inputs?.Request ?? request, http, token);
         if (acquired.Snapshot.CapabilityRevision != authority.Revision)
             throw new PreviewCapabilityException(FactoryCharterState.Blocked, "PreviewCapabilityChangedBeforeExecution");
         var inputs = store.Document.Inputs ?? acquired.Snapshot;
         ValidateCapturedInputs(inputs, acquired.Snapshot, dependencies.PreviewClock.GetUtcNow());
-        await store.ClaimAsync(run, token);
+        await store.ClaimAsync(run, token, admission);
         if (store.Document.Inputs is null) await store.CaptureAsync(inputs, token);
         acquired.Models.AttachJournal(store);
         var sourceKinds = new[] { "azuremonitor" }.Concat(inputs.Supplemental.Sources.Select(s => s.Evidence.Proof.Kind)).ToArray();
         if (run is null)
         {
-            run = new ConveyorRun { Id = store.RunId, Profile = ConveyorProfile.OnboardingPreview, DryRun = true,
-                EvaluationContext = inputs.Context, EvaluationRevision = FactoryModelsValidation.Hash(inputs.Context),
-                ProductHints = [inputs.Manifest.Identity.ProductKey], SourceKinds = sourceKinds };
+            run = new ConveyorRun
+            {
+                Id = store.RunId,
+                Profile = ConveyorProfile.OnboardingPreview,
+                DryRun = true,
+                EvaluationContext = inputs.Context,
+                EvaluationRevision = FactoryModelsValidation.Hash(inputs.Context),
+                ProductHints = [inputs.Manifest.Identity.ProductKey],
+                SourceKinds = sourceKinds
+            };
             await store.SaveAsync(run, "evaluation:initialized", token);
         }
         var services = PreviewServices(inputs, run, acquired.Models, store);
@@ -69,13 +77,13 @@ internal static partial class RuntimeWorkflow
             var final = await AcquirePreviewInputsAsync(settings, dependencies, inputs.Request, http, token);
             ValidateCapturedInputs(inputs, final.Snapshot, dependencies.PreviewClock.GetUtcNow());
             await store.ProveAsync(final.Snapshot, candidates, token);
-            return await InspectPreviewAsync(settings, dependencies, request, http, token);
+            return await InspectPreviewAsync(settings, dependencies, request, http, token, admission);
         }
         return Report(store, run) with { Reason = "EvaluationIncompleteOrFailed" };
     }
 
     internal static async Task<PreviewExecutionResult> InspectPreviewAsync(FactoryHostSettings settings, RuntimeDependencies dependencies,
-        PreviewCapabilityRequest request, HttpClient http, CancellationToken cancellationToken)
+        PreviewCapabilityRequest request, HttpClient http, CancellationToken cancellationToken, PreviewWorkAdmission? admission = null)
     {
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(FactoryPreviewInputValidation.Policy.RequestSeconds), dependencies.PreviewClock);
         using var pending = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline.Token);
@@ -85,6 +93,9 @@ internal static partial class RuntimeWorkflow
         var store = new PreviewExecutionStore(authority, credential, http, dependencies.PreviewClock);
         var run = await store.ReadAsync(token) ?? throw new PreviewCapabilityException(FactoryCharterState.Blocked, "PreviewEvaluationNotStarted");
         var report = Report(store, run);
+        if (admission is not null) store.RequireWorker(admission);
+        else if (store.Document.Admission is { State: not PreviewWorkState.Released })
+            return report with { Readiness = PreviewReadiness.Unknown, Reason = "OriginalPreviewWorkerOrReleaseUnconfirmed" };
         if (store.Document.Dispatches.Any(d => d.State is PreviewModelDispatchState.Unknown or PreviewModelDispatchState.Dispatched)
             || store.Document.PendingRun is not null)
             return report with { Readiness = PreviewReadiness.Unknown, Reason = "PreviewDispatchOrCheckpointUnconfirmed" };
@@ -111,12 +122,18 @@ internal static partial class RuntimeWorkflow
         }
         catch (PreviewCapabilityException exception)
         {
-            return report with { Readiness = exception.State switch
+            return report with
             {
-                FactoryCharterState.Canceled => PreviewReadiness.Canceled, FactoryCharterState.Unknown => PreviewReadiness.Unknown,
-                FactoryCharterState.Partial => PreviewReadiness.Partial, FactoryCharterState.Failed => PreviewReadiness.Failed,
-                _ => PreviewReadiness.Blocked,
-            }, Reason = exception.Message };
+                Readiness = exception.State switch
+                {
+                    FactoryCharterState.Canceled => PreviewReadiness.Canceled,
+                    FactoryCharterState.Unknown => PreviewReadiness.Unknown,
+                    FactoryCharterState.Partial => PreviewReadiness.Partial,
+                    FactoryCharterState.Failed => PreviewReadiness.Failed,
+                    _ => PreviewReadiness.Blocked,
+                },
+                Reason = exception.Message
+            };
         }
         catch (Exception exception) when (exception is InvalidOperationException or System.Text.Json.JsonException or ArgumentException or KeyNotFoundException)
         { return report with { Readiness = PreviewReadiness.Unknown, Reason = "DurablePreviewEvaluationUnconfirmed" }; }
@@ -125,18 +142,24 @@ internal static partial class RuntimeWorkflow
     private static PreviewExecutionResult Report(PreviewExecutionStore store, ConveyorRun run) =>
         new(store.Document.Phase, store.Document.Inputs ?? throw new InvalidOperationException("Captured inputs required."),
             run, store.Document.Run ?? throw new InvalidOperationException("Confirmed native run required."), store.Document.Dispatches)
-        { Proof = store.Document.Proof, Readiness = store.Document.PendingRun is not null
+        {
+            Proof = store.Document.Proof,
+            Readiness = store.Document.PendingRun is not null
             || store.Document.Dispatches.Any(d => d.State is PreviewModelDispatchState.Dispatched or PreviewModelDispatchState.Unknown)
-                ? PreviewReadiness.Unknown : store.Document.Phase == PreviewExecutionPhase.Failed ? PreviewReadiness.Failed : PreviewReadiness.NotReady };
+                ? PreviewReadiness.Unknown : store.Document.Phase == PreviewExecutionPhase.Failed ? PreviewReadiness.Failed : PreviewReadiness.NotReady
+        };
 
     private static ConveyorServices PreviewServices(PreviewInputSnapshot inputs, ConveyorRun run, IFactoryPreviewModelWorkloads models, PreviewExecutionStore store)
     {
         var context = new PreviewConveyorContext(inputs, run, models);
         var lenses = inputs.Context.Judgment.Lenses.Select(l => l.Name switch
         {
-            "value" => ModelDeliberationLens.Value(l.Weight), "cost" => ModelDeliberationLens.Cost(l.Weight),
-            "feasibility" => ModelDeliberationLens.Feasibility(l.Weight), "security" => ModelDeliberationLens.Security(l.Weight),
-            "strategic-fit" => ModelDeliberationLens.StrategicFit(l.Weight), _ => throw new InvalidOperationException("Unsupported approved lens."),
+            "value" => ModelDeliberationLens.Value(l.Weight),
+            "cost" => ModelDeliberationLens.Cost(l.Weight),
+            "feasibility" => ModelDeliberationLens.Feasibility(l.Weight),
+            "security" => ModelDeliberationLens.Security(l.Weight),
+            "strategic-fit" => ModelDeliberationLens.StrategicFit(l.Weight),
+            _ => throw new InvalidOperationException("Unsupported approved lens."),
         }).ToArray();
         return new ConveyorServices(inputs.Manifest.Identity.ProductKey,
             run.SourceKinds.Select(kind => (IEvidenceGatherer)new CapturedPreviewEvidence(kind, inputs)).ToArray(),
@@ -192,8 +215,12 @@ internal static partial class RuntimeWorkflow
         public Task<string> ResolveAsync(string scope, EvidenceCluster cluster, CancellationToken token)
         {
             token.ThrowIfCancellationRequested();
-            return Task.FromResult(FactoryModelsValidation.Hash(new { inputs.Manifest.Identity.FactoryId, inputs.Capability.OperationId,
-                References = cluster.Evidence.Select(e => e.Reference).ToArray() }));
+            return Task.FromResult(FactoryModelsValidation.Hash(new
+            {
+                inputs.Manifest.Identity.FactoryId,
+                inputs.Capability.OperationId,
+                References = cluster.Evidence.Select(e => e.Reference).ToArray()
+            }));
         }
     }
 }

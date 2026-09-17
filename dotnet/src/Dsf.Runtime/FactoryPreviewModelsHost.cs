@@ -37,7 +37,7 @@ public static partial class RuntimeVerbs
                 var input = await context.Request.ReadFromJsonAsync<PreviewModelRequest>(FactorySourceValidation.RecordJson, token) ?? throw new JsonException();
                 ValidatePreviewModelRequest(input);
                 var credential = dependencies.ModelCredential ?? new ManagedIdentityCredential(ManagedIdentityId.FromUserAssignedClientId(settings.ManagedIdentityClientId));
-                var http = dependencies.ModelHttp ?? ModelHttp;
+                var http = dependencies.ModelHttp ?? PreviewHttp;
                 IFactoryPreviewCapability validator = new AzureFactoryPreviewCapability(settings, PreviewHostKind.ModelEvaluation, credential, http, dependencies.ModelClock);
                 var current = await validator.CheckAsync(input.Preview, token);
                 if (!NativeCaller(context, current.Council.PrincipalId!, current.Manifest.Identity.TenantId, current.Council.ClientId))

@@ -15,6 +15,7 @@ internal sealed partial class PreviewPreparationTransport
     private HttpMessageInvoker? supplementalNative;
     internal int WebQueries;
     internal string WebPayload = """{"webResults":[]}""";
+    private DateTimeOffset? webSecretCreated;
     private IEnumerable<JsonNode> HostedResources => Resources.Values.Concat(supplemental?.Resources.Values ?? Enumerable.Empty<JsonNode>());
 
     internal Task SelectWebAsync() => SelectSupplementalAsync(false);
@@ -58,11 +59,10 @@ internal sealed partial class PreviewPreparationTransport
         if (uri.Host.EndsWith(".vault.azure.net", StringComparison.Ordinal))
         {
             Assert.Equal("/secrets/webiq-api-key/" + new string('a', 32), uri.AbsolutePath);
+            var created = webSecretCreated ??= scenario.Source.Source!.Clock.Now.AddDays(-1);
             return Reply(new { id = uri.GetLeftPart(UriPartial.Path), value = "private-web-key", attributes = new
-            { enabled = true, created = scenario.Source.Source!.Clock.Now.AddDays(-1).ToUnixTimeSeconds(),
-                updated = scenario.Source.Source.Clock.Now.AddDays(-1).ToUnixTimeSeconds(),
-                nbf = scenario.Source.Source.Clock.Now.AddDays(-1).ToUnixTimeSeconds(),
-                exp = scenario.Source.Source.Clock.Now.AddDays(1).ToUnixTimeSeconds() } });
+            { enabled = true, created = created.ToUnixTimeSeconds(), updated = created.ToUnixTimeSeconds(),
+                nbf = created.ToUnixTimeSeconds(), exp = created.AddDays(2).ToUnixTimeSeconds() } });
         }
         if (uri.Host == "api.microsoft.ai")
         {

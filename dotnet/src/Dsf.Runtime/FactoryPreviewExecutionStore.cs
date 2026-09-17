@@ -27,6 +27,8 @@ internal sealed record PreviewEvaluationDocument(
     [JsonRequired] public string? Failure { get; init; }
     [JsonRequired] public PreviewInputSnapshot? FinalInputs { get; init; }
     [JsonRequired] public PreviewReadinessProof? Proof { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public PreviewWorkAdmission? Admission { get; init; }
     internal string CalculateChecksum() => FactoryModelsValidation.Hash(this with { Checksum = "" });
     internal PreviewEvaluationDocument Initial() => new(Protocol, Id, Product, FactoryId, OperationId, CreatedAt);
 }
@@ -88,16 +90,7 @@ internal sealed partial class PreviewExecutionStore(PreviewCapabilitySnapshot au
 
     internal async Task<ConveyorRun?> ReadAsync(CancellationToken token)
     {
-        var seed = authority.Capability.Configuration.Execution?.Seed
-            ?? throw new PreviewCapabilityException(FactoryCharterState.Blocked, "ApprovedPreviewExecutionSeedRequired");
-        var native = await gateway.ReadCheckpointAsync(endpoint, product, FactoryPreviewValidation.PreviewContainer, product, Id, token)
-            ?? throw new PreviewCapabilityException(FactoryCharterState.Unknown, "SeededPreviewStateMissingNoReinitialization");
-        using var body = JsonDocument.Parse(native.Json, new JsonDocumentOptions { AllowDuplicateProperties = false });
-        document = Parse(body.RootElement);
-        if (seed.Id != Id || seed.ResourceId != Resource(body.RootElement) || seed.Checksum != Document.Initial().CalculateChecksum()
-            || Document.Phase == PreviewExecutionPhase.Prepared && native.ETag != seed.ETag)
-            throw new PreviewCapabilityException(FactoryCharterState.Unknown, "PreviewSeedReceiptChanged");
-        version = native.ETag;
+        await ReadDocumentAsync(token);
         runs = new(endpoint, product, "runs", product, gateway, ConveyorProfile.OnboardingPreview);
         var run = await runs.LoadAsync(RunId, token);
         if (run is null)
@@ -117,21 +110,45 @@ internal sealed partial class PreviewExecutionStore(PreviewCapabilitySnapshot au
         return run;
     }
 
-    internal async Task ClaimAsync(ConveyorRun? run, CancellationToken token)
+    internal async Task ReadDocumentAsync(CancellationToken token)
+    {
+        var seed = authority.Capability.Configuration.Execution?.Seed
+            ?? throw new PreviewCapabilityException(FactoryCharterState.Blocked, "ApprovedPreviewExecutionSeedRequired");
+        var native = await gateway.ReadCheckpointAsync(endpoint, product, FactoryPreviewValidation.PreviewContainer, product, Id, token)
+            ?? throw new PreviewCapabilityException(FactoryCharterState.Unknown, "SeededPreviewStateMissingNoReinitialization");
+        using var body = JsonDocument.Parse(native.Json, new JsonDocumentOptions { AllowDuplicateProperties = false });
+        document = Parse(body.RootElement);
+        if (seed.Id != Id || seed.ResourceId != Resource(body.RootElement) || seed.Checksum != Document.Initial().CalculateChecksum()
+            || Document.Phase == PreviewExecutionPhase.Prepared && native.ETag != seed.ETag)
+            throw new PreviewCapabilityException(FactoryCharterState.Unknown, "PreviewSeedReceiptChanged");
+        version = native.ETag;
+    }
+
+    internal async Task ClaimAsync(ConveyorRun? run, CancellationToken token, PreviewWorkAdmission? admission = null)
     {
         if (Document.Dispatches.Any(d => d.State is PreviewModelDispatchState.Dispatched or PreviewModelDispatchState.Unknown))
             throw new PreviewCapabilityException(FactoryCharterState.Unknown, "PriorPreviewModelDispatchUnconfirmedNoReplay");
-        owner = Guid.NewGuid();
-        await WriteAsync(Document with { Owner = owner, Phase = PreviewExecutionPhase.Executing, PendingRun = null,
-            Run = run is null ? null : await RunReceiptAsync(run, token) }, token);
+        if (Document.Admission is not null) RequireWorker(admission);
+        else if (admission is not null) throw new PreviewCapabilityException(FactoryCharterState.Unknown, "PreviewAdmissionMissing");
+        owner = admission?.WorkerId ?? Guid.NewGuid();
+        await WriteAsync(Document with
+        {
+            Owner = owner,
+            Phase = PreviewExecutionPhase.Executing,
+            PendingRun = null,
+            Run = run is null ? null : await RunReceiptAsync(run, token)
+        }, token);
     }
 
     internal Task CaptureAsync(PreviewInputSnapshot inputs, CancellationToken token) =>
         WriteAsync(Document with { Inputs = inputs }, token);
 
     internal Task FinishAsync(ConveyorRun run, CancellationToken token) =>
-        WriteAsync(Document with { Phase = run.Status == RunStatus.Error ? PreviewExecutionPhase.Failed : PreviewExecutionPhase.Evaluated,
-            Failure = run.FailureReason }, token);
+        WriteAsync(Document with
+        {
+            Phase = run.Status == RunStatus.Error ? PreviewExecutionPhase.Failed : PreviewExecutionPhase.Evaluated,
+            Failure = run.FailureReason
+        }, token);
 
     internal Task ProveAsync(PreviewInputSnapshot current, IReadOnlyList<PreviewCandidateProof> candidates, CancellationToken token)
     {
@@ -178,10 +195,17 @@ internal sealed partial class PreviewExecutionStore(PreviewCapabilitySnapshot au
         if (poisoned || version is null || owner == Guid.Empty || next.Owner != owner)
             throw new PreviewCapabilityException(FactoryCharterState.Unknown, "PreviewWriterUnconfirmedNoRetry");
         next = next with { Checksum = next.CalculateChecksum() };
+        var payload = JsonSerializer.Serialize(next, FactoryGitHubJson.Options);
+        if (next.Admission is { State: PreviewWorkState.Queued or PreviewWorkState.Running }
+            && System.Text.Encoding.UTF8.GetByteCount(payload) + AdmissionLifecycleBytes > AzureCosmosDocumentGateway.MaximumCheckpointBytes)
+            throw new CosmosCheckpointException(CosmosCheckpointFailure.Capacity);
         try
         {
             var saved = await gateway.WriteCheckpointAsync(endpoint, product, FactoryPreviewValidation.PreviewContainer, product, Id,
-                JsonSerializer.Serialize(next, FactoryGitHubJson.Options), version, token);
+                payload, version, token);
+            using var receipt = JsonDocument.Parse(saved.Json);
+            if (Resource(receipt.RootElement) != authority.Capability.Configuration.Execution!.Seed.ResourceId)
+                throw new PreviewCapabilityException(FactoryCharterState.Unknown, "PreviewWriteIncarnationUnconfirmed");
             version = saved.ETag;
             document = next;
         }
@@ -221,6 +245,7 @@ internal sealed partial class PreviewExecutionStore(PreviewCapabilitySnapshot au
                 || FactoryModelsValidation.Hash(inputs.ExecutionConfiguration) != FactoryModelsValidation.Hash(authority.Capability.Configuration.Execution)))
             throw new PreviewCapabilityException(FactoryCharterState.Unknown, "PreviewExecutionStateUnconfirmed");
         foreach (var dispatch in document.Dispatches) ValidateDispatch(dispatch);
+        ValidateAdmission(document);
         if (document.FinalInputs is { } final && final.Revision != final.CalculateRevision())
             throw new PreviewCapabilityException(FactoryCharterState.Unknown, "PreviewFinalInputsUnconfirmed");
         if (document.Proof is { } proof && (document.Phase != PreviewExecutionPhase.Evaluated || document.PendingRun is not null

@@ -10,12 +10,15 @@ namespace Dsf.Cli;
 internal sealed record PreviewOperatorEvaluation(PreviewReadiness Readiness, Guid? OperationId, string? ApprovalFingerprint,
     string? Reason, JsonElement? Evaluation = null)
 {
+    public DateTimeOffset? ObservedAt { get; init; }
     public bool CurrentReady => Readiness == PreviewReadiness.ReadyAwaitingActivation;
     public string NextActor => Readiness switch
     {
         PreviewReadiness.ReadyAwaitingActivation => "Operator: review the proof; activation requires separate approval. Nothing was published.",
         PreviewReadiness.Unknown or PreviewReadiness.Canceled => "Operator: inspect the original operation; uncertain effects cannot be retried or reset.",
         PreviewReadiness.Blocked => "Prerequisite owner: reconcile current authority without replacing the original operation.",
+        PreviewReadiness.Queued or PreviewReadiness.Running => "Original runtime worker: continue admitted work; inspection never starts another evaluation.",
+        PreviewReadiness.Checking => "Runtime reader: finish current read-only inspection.",
         _ => "Operator: inspect incomplete evaluation and retained evidence; no readiness or activation authority.",
     };
 }
@@ -52,11 +55,15 @@ public static partial class CliApplication
                 .EvaluateAsync(admission, operationId.Value, approval, readOnly, pending.Token);
         }
         catch (ReservationStoreException e)
-        { result = new(e.State == FactoryReservationState.Unknown ? PreviewReadiness.Unknown
-            : e.State == FactoryReservationState.Canceled ? PreviewReadiness.Canceled : PreviewReadiness.Blocked, operationId, approval, e.Message); }
+        {
+            result = new(e.State == FactoryReservationState.Unknown ? PreviewReadiness.Unknown
+            : e.State == FactoryReservationState.Canceled ? PreviewReadiness.Canceled : PreviewReadiness.Blocked, operationId, approval, e.Message);
+        }
         catch (OperationCanceledException)
-        { result = new(readOnly ? PreviewReadiness.Canceled : PreviewReadiness.Unknown, operationId, approval,
-            "PreviewRequestCanceled; inspect original durable state before continuation."); }
+        {
+            result = new(readOnly ? PreviewReadiness.Canceled : PreviewReadiness.Unknown, operationId, approval,
+            "PreviewRequestCanceled; inspect original durable state before continuation.");
+        }
         catch (Exception e) when (e is JsonException or FormatException or ArgumentException or InvalidOperationException
             or KeyNotFoundException or HttpRequestException or IOException or PreviewCapabilityException
             or CharterAdoptionEvidenceException or CharterOperationException or ModelCapabilityException
@@ -92,31 +99,56 @@ internal sealed partial class FactoryPreviewPreparationService
             || capability.ApprovalFingerprint != approval || capability.Configuration.ExecutionRevision is null)
             throw Failure("ExactConfiguredOperationAndCapabilityApprovalRequired");
         await VerifyPublicationAsync(store, confirmed, publication, values, token);
-        await RequirePublicationCurrentAsync(admission, preparation, store, token);
+        await RequirePublicationCurrentAsync(admission, preparation, store, token, configuredEvaluation: true);
         var review = PublicationReview(confirmed, values, publication.Seed, final: true);
         var identity = manifest.Identity;
         var credential = new OwnerReservationStore.OperatorCredential(azure, identity.TenantId, identity.SubscriptionId,
             identity.AzureActorId, "api://" + capability.Configuration.AudienceClientId);
-        var input = new PreviewCapabilityRequest(operation, approval, FactoryPreviewPublication.RequestId(operation, "evaluation"));
-        using var request = new HttpRequestMessage(HttpMethod.Post, review.SeedEndpoint + (readOnly ? "/evaluation" : "/evaluate"))
-        { Content = JsonContent.Create(input, options: FactoryGitHubJson.Options) };
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", (await credential.GetTokenAsync(
-            new Azure.Core.TokenRequestContext(["api://" + capability.Configuration.AudienceClientId + "/.default"]), token)).Token);
-        using var response = await (http ?? throw Failure("PreviewNativeTransportRequired")).SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token);
-        await response.Content.LoadIntoBufferAsync(4 * 1024 * 1024, token);
-        using var document = JsonDocument.Parse(await response.Content.ReadAsStreamAsync(token), new JsonDocumentOptions { AllowDuplicateProperties = false });
-        if (response.StatusCode != HttpStatusCode.OK)
+        var input = new PreviewCapabilityRequest(operation, approval, Guid.NewGuid());
+        var route = readOnly ? "/evaluation" : "/evaluate";
+        PreviewHttpObservation observation;
+        while (true)
         {
-            var failure = document.RootElement.Deserialize<PreviewContextFailure>(FactorySourceValidation.RecordJson) ?? throw new JsonException();
-            return new(failure.State switch
+            using var request = new HttpRequestMessage(HttpMethod.Post, review.SeedEndpoint + route)
+            { Content = JsonContent.Create(input, options: FactoryGitHubJson.Options) };
+            using var hop = new CancellationTokenSource(FactoryPreviewValidation.RequestBudget, clock);
+            using var pending = CancellationTokenSource.CreateLinkedTokenSource(token, hop.Token);
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", (await credential.GetTokenAsync(
+                new Azure.Core.TokenRequestContext(["api://" + capability.Configuration.AudienceClientId + "/.default"]), pending.Token)).Token);
+            using var response = await (http ?? throw Failure("PreviewNativeTransportRequired")).SendAsync(request, HttpCompletionOption.ResponseHeadersRead, pending.Token);
+            await response.Content.LoadIntoBufferAsync(4 * 1024 * 1024, pending.Token);
+            using var document = JsonDocument.Parse(await response.Content.ReadAsStreamAsync(pending.Token), new JsonDocumentOptions { AllowDuplicateProperties = false });
+            if (response.StatusCode is not (HttpStatusCode.OK or HttpStatusCode.Accepted))
             {
-                FactoryCharterState.Canceled => PreviewReadiness.Canceled, FactoryCharterState.Partial => PreviewReadiness.Partial,
-                FactoryCharterState.Failed => PreviewReadiness.Failed, FactoryCharterState.Blocked => PreviewReadiness.Blocked,
-                _ => PreviewReadiness.Unknown,
-            }, operation, approval, failure.Reason.Length <= 256 ? failure.Reason : "PreviewResponseUnconfirmed");
+                var failure = document.RootElement.Deserialize<PreviewContextFailure>(FactorySourceValidation.RecordJson) ?? throw new JsonException();
+                return new(failure.State switch
+                {
+                    FactoryCharterState.Canceled => PreviewReadiness.Canceled,
+                    FactoryCharterState.Partial => PreviewReadiness.Partial,
+                    FactoryCharterState.Failed => PreviewReadiness.Failed,
+                    FactoryCharterState.Blocked => PreviewReadiness.Blocked,
+                    _ => PreviewReadiness.Unknown,
+                }, operation, approval, failure.Reason.Length <= 256 ? failure.Reason : "PreviewResponseUnconfirmed");
+            }
+            observation = document.RootElement.Deserialize<PreviewHttpObservation>(FactorySourceValidation.RecordJson) ?? throw new JsonException();
+            if (observation.Protocol != 2 || observation.FactoryId != identity.FactoryId || observation.OperationId != operation
+                || observation.RequestId != input.RequestId || observation.ApprovalFingerprint != approval || !Enum.IsDefined(observation.Readiness)
+                || observation.ObservedAt.Offset != TimeSpan.Zero || observation.ObservedAt > clock.GetUtcNow()
+                || observation.ObservedAt < clock.GetUtcNow() - FactoryPreviewValidation.RequestBudget)
+                throw Unknown("PreviewObservationResponseBindingChanged");
+            if ((response.StatusCode == HttpStatusCode.Accepted)
+                != (observation.Readiness is PreviewReadiness.Queued or PreviewReadiness.Running or PreviewReadiness.Checking)
+                || observation.Readiness == PreviewReadiness.ReadyAwaitingActivation && observation.Evaluation is null)
+                throw Unknown("CompleteNativePreviewObservationRequired");
+            if (observation.Readiness is not (PreviewReadiness.Queued or PreviewReadiness.Running or PreviewReadiness.Checking)
+                || readOnly && observation.Readiness is PreviewReadiness.Queued or PreviewReadiness.Running) break;
+            route = "/evaluation";
+            await Task.Delay(TimeSpan.FromSeconds(5), token);
         }
-        var report = document.RootElement;
+        if (observation.Evaluation is not { } report)
+            return new(observation.Readiness, operation, approval, observation.Reason) { ObservedAt = observation.ObservedAt };
         var readiness = report.GetProperty("readiness").Deserialize<PreviewReadiness>(FactorySourceValidation.RecordJson);
+        if (readiness != observation.Readiness) throw Unknown("PreviewObservationReadinessChanged");
         var reported = report.GetProperty("inputs").GetProperty("capability");
         if (!Enum.IsDefined(readiness) || reported.GetProperty("operationId").GetGuid() != operation
             || reported.GetProperty("approvalFingerprint").GetString() != approval
@@ -129,10 +161,11 @@ internal sealed partial class FactoryPreviewPreparationService
                 throw Unknown("PreviewEvaluationProofBindingChanged");
         }
         var result = new PreviewOperatorEvaluation(readiness, operation, approval,
-            report.TryGetProperty("reason", out var reason) ? reason.GetString() : null, report.Clone());
+            report.TryGetProperty("reason", out var reason) ? reason.GetString() : null, report.Clone())
+        { ObservedAt = observation.ObservedAt };
         try
         {
-            await RequirePublicationCurrentAsync(admission, preparation, store, token);
+            await RequirePublicationCurrentAsync(admission, preparation, store, token, configuredEvaluation: true);
             var current = (await store.ReadNamespaceAsync("dsf/factory/", token)).ToDictionary(p => p.Key, p => p.Value.Value);
             await VerifyPublicationAsync(store, confirmed, publication, current, token);
         }

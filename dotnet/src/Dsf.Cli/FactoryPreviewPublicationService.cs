@@ -46,7 +46,8 @@ internal sealed partial class FactoryPreviewPreparationService
                 if (publication.Phase is not (PreviewPublicationPhase.SeedAwaitingApproval or PreviewPublicationPhase.ConfiguredAwaitingEvaluation))
                     return Result(preparation, publication.Phase == PreviewPublicationPhase.KnownFailed ? PreviewPreparationState.KnownFailed
                         : PreviewPreparationState.Unknown, "HeldOrUnknownPublication; no seed replay or automatic takeover.")
-                        with { PublicationState = publication };
+                        with
+                    { PublicationState = publication };
             }
             await RequirePublicationCurrentAsync(admission, preparation, store, token);
             review = PublicationReview(confirmed, values, publication?.Seed, final: publication?.Seed is not null);
@@ -62,7 +63,7 @@ internal sealed partial class FactoryPreviewPreparationService
                 await VerifyPublicationAsync(store, confirmed, publication, values, token);
                 var currentCapability = Parse<FactoryPreviewCapability>(values[ProductConfigurationKeys.FactoryPreview]);
                 var retainedSeed = await RequestSeedAsync(admission, review with
-                    { SeedRequest = review.SeedRequest with { ApprovalFingerprint = currentCapability.ApprovalFingerprint } }, "preparation", token);
+                { SeedRequest = review.SeedRequest with { ApprovalFingerprint = currentCapability.ApprovalFingerprint } }, "preparation", token);
                 if (retainedSeed != publication.Seed) throw Unknown("OriginalNativeSeedReceiptChanged");
             }
             if (publication?.Phase == PreviewPublicationPhase.ConfiguredAwaitingEvaluation)
@@ -154,8 +155,10 @@ internal sealed partial class FactoryPreviewPreparationService
                         throw Unknown("PublicationAccountingOwnershipUnconfirmed");
                     if (activeRecord is not null)
                         await PublishRecordAsync(store, activeRecord.Key, Parse<PreviewPublicationStep>(activeRecord.Value) with
-                            { State = rejected ? PreviewPreparationEffectState.KnownFailed : PreviewPreparationEffectState.Unknown,
-                                NativeRevision = acceptedTarget?.ETag.ToString() }, activeRecord, cleanup.Token);
+                        {
+                            State = rejected ? PreviewPreparationEffectState.KnownFailed : PreviewPreparationEffectState.Unknown,
+                            NativeRevision = acceptedTarget?.ETag.ToString()
+                        }, activeRecord, cleanup.Token);
                     publication = publication with { Phase = rejected ? PreviewPublicationPhase.KnownFailed : PreviewPublicationPhase.Unknown, Reason = detail };
                     await PublishRecordAsync(store, observed.Key, publication, observed, cleanup.Token);
                 }
@@ -184,9 +187,12 @@ internal sealed partial class FactoryPreviewPreparationService
         return FactoryPreviewPublication.Review(preparation, models, github, seed, final);
     }
 
-    private async Task RequirePublicationCurrentAsync(FactoryReservationResult admission, Journal preparation, OwnerReservationStore store, CancellationToken token)
+    private async Task RequirePublicationCurrentAsync(FactoryReservationResult admission, Journal preparation, OwnerReservationStore store,
+        CancellationToken token, bool configuredEvaluation = false)
     {
-        var current = await ReadPlanAsync(admission, preparation.Plan.Selection, store, token, preparation.Plan);
+        // After protected configuration, these proofs are reviewed provenance; the runtime re-observes every selected capability.
+        var current = await ReadPlanAsync(admission, preparation.Plan.Selection, store, token, preparation.Plan,
+            approvedPreparation: configuredEvaluation ? preparation : null);
         if (!SameReviewedInputs(preparation.Plan, current))
             throw Failure("PreviewPublicationPredecessorOrNativeAuthorityChanged");
         await VerifyConfirmedAsync(preparation, token);
@@ -240,20 +246,20 @@ internal sealed partial class FactoryPreviewPreparationService
         foreach (var stage in final ? new[] { seed, execution } : new[] { seed })
             expectedKeys.Add(FactoryPreviewPublication.ApprovalKey(journal.OperationId, stage.Stage));
         foreach (var stage in final ? new[] { seed, execution } : new[] { seed })
-        foreach (var (write, index) in stage.Writes.Select((w, i) => (w, i)))
-        {
-            var key = FactoryPreviewPublication.StepKey(journal.OperationId, stage.Stage, index);
-            expectedKeys.Add(key);
-            var record = records[key];
-            var step = Parse<PreviewPublicationStep>(record.Value);
-            if (record.ContentType != FactoryPreviewValidation.RecordContentType || step.Index != index || step.Target != write.Key
-                || step.PayloadSha256 != FactoryReservationRecords.Hash(write.Value) || step.State != PreviewPreparationEffectState.Confirmed
-                || step.RequestId != FactoryPreviewPublication.RequestId(journal.OperationId, stage.Stage + ":" + index)
-                || string.IsNullOrEmpty(step.NativeRevision)) throw new JsonException();
-            if (final && stage == seed && execution.Writes.Any(w => w.Key == write.Key)) continue;
-            var current = await store.ReadAsync(write.Key, token);
-            if (current is null || current.Value != write.Value || current.ETag.ToString() != step.NativeRevision) throw new JsonException();
-        }
+            foreach (var (write, index) in stage.Writes.Select((w, i) => (w, i)))
+            {
+                var key = FactoryPreviewPublication.StepKey(journal.OperationId, stage.Stage, index);
+                expectedKeys.Add(key);
+                var record = records[key];
+                var step = Parse<PreviewPublicationStep>(record.Value);
+                if (record.ContentType != FactoryPreviewValidation.RecordContentType || step.Index != index || step.Target != write.Key
+                    || step.PayloadSha256 != FactoryReservationRecords.Hash(write.Value) || step.State != PreviewPreparationEffectState.Confirmed
+                    || step.RequestId != FactoryPreviewPublication.RequestId(journal.OperationId, stage.Stage + ":" + index)
+                    || string.IsNullOrEmpty(step.NativeRevision)) throw new JsonException();
+                if (final && stage == seed && execution.Writes.Any(w => w.Key == write.Key)) continue;
+                var current = await store.ReadAsync(write.Key, token);
+                if (current is null || current.Value != write.Value || current.ETag.ToString() != step.NativeRevision) throw new JsonException();
+            }
         if (!expectedKeys.SetEquals(records.Keys)) throw new JsonException();
     }
 

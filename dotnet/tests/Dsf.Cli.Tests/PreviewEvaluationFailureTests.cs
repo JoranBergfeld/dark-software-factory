@@ -71,7 +71,7 @@ public sealed class PreviewEvaluationInputTests
     [InlineData("orphan")]
     [InlineData("grant")]
     [InlineData("config")]
-    public async Task Configured_cli_requires_current_real_inputs_before_model_or_state_effects(string fault)
+    public async Task Configured_cli_requires_current_real_inputs_before_run_or_model_effects(string fault)
     {
         using var transport = await PreviewEvaluationTests.ConfiguredAsync();
         var pins = PreviewEvaluationTests.Pins(transport);
@@ -102,7 +102,17 @@ public sealed class PreviewEvaluationInputTests
         Assert.NotEqual(0, result.Exit);
         Assert.False((bool)result.Result["currentReady"]!);
         Assert.Empty(transport.EvaluationInference);
-        Assert.Equal(native, transport.SeedDocuments);
+        if (fault is "empty" or "stale" or "scope")
+        {
+            var coordinator = JsonNode.Parse(Assert.Single(transport.SeedDocuments).Value)!;
+            Assert.Null(coordinator["inputs"]);
+            Assert.Null(coordinator["run"]);
+            Assert.Null(coordinator["pendingRun"]);
+            Assert.Empty(coordinator["dispatches"]!.AsArray());
+            Assert.Contains((string?)coordinator["admission"]!["state"], new[] { "Released", "Unknown" });
+            Assert.False(string.IsNullOrWhiteSpace((string?)coordinator["admission"]!["reason"]));
+        }
+        else Assert.Equal(native, transport.SeedDocuments);
         PreviewEvaluationTests.AssertNoForbiddenEffects(transport, start);
     }
 }

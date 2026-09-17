@@ -47,7 +47,7 @@ public static partial class RuntimeVerbs
                 var credential = dependencies.SourceCredential ?? new ManagedIdentityCredential(ManagedIdentityId.FromUserAssignedClientId(settings.ManagedIdentityClientId));
                 var workload = new FactoryWorkloadCredential(credential, configuration.TenantId, configuration.SourcePrincipalId,
                     configuration.SourceClientId, configuration.SourceIdentityId, clock, requireGuidV2Audience: true);
-                var http = dependencies.SourceHttp ?? SupplementalHttp;
+                var http = dependencies.SourceHttp ?? PreviewHttp;
                 var authority = await AuthorityAsync();
                 var native = new PreviewSupplementalNative(authority, workload, http);
                 await native.CheckAsync(token);

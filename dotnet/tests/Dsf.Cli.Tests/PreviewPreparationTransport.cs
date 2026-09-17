@@ -208,7 +208,7 @@ internal sealed partial class PreviewPreparationTransport(CharterScenario scenar
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing) { source.Dispose(); models.Dispose(); telemetry?.Dispose(); Telemetry.Dispose(); supplementalNative?.Dispose(); supplemental?.Dispose(); scenario.Dispose(); }
+        if (disposing) { StopPreviewHosts(); source.Dispose(); models.Dispose(); telemetry?.Dispose(); Telemetry.Dispose(); supplementalNative?.Dispose(); supplemental?.Dispose(); scenario.Dispose(); }
         base.Dispose(disposing);
     }
 }

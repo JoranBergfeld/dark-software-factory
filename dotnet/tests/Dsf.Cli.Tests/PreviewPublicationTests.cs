@@ -75,10 +75,11 @@ public sealed class PreviewPublicationTests
         Assert.Equal(retained, transport.Scenario.Arm.Product.Export());
     }
 
-    internal static async Task<PreviewPreparationTransport> PreparedAsync(bool web = false)
+    internal static async Task<PreviewPreparationTransport> PreparedAsync(bool web = false, bool foundry = false)
     {
         var transport = await PreviewPreparationTransport.CreateAsync();
         if (web) await transport.SelectWebAsync();
+        if (foundry) await transport.SelectFoundryAsync();
         var machine = transport.Scenario.Machine;
         var plan = await machine.InvokeAsync("preview", "--preview-config", transport.Selection.ToJsonString());
         Assert.True(plan.Exit == 0, plan.Terminal.Output + plan.Terminal.Error);
