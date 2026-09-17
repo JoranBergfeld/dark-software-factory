@@ -444,6 +444,7 @@ public sealed class FactoryModelsHostTests
         public string Scenario { get; set; } = "";
         public Action? OnInference { get; set; }
         public Func<string, string>? Completion { get; set; }
+        public Func<string, string, string>? Judgment { get; set; }
         private const string Account = "/subscriptions/22222222-2222-2222-2222-222222222222/resourcegroups/models/providers/microsoft.cognitiveservices/accounts/models";
         private const string Endpoint = "https://models.services.ai.azure.com";
 
@@ -615,7 +616,8 @@ public sealed class FactoryModelsHostTests
                 message = new { content = Scenario == "malformed-judgment" && route.Name == "juror-2" ? "GO:" : route.Name == "synthesis"
                     ? Completion?.Invoke((string)body["messages"]![0]!["content"]!)
                         ?? "Preserve the stable logical problem identity when equivalent descriptions refer to the same underlying problem."
-                    : "GO: Preserving stable identifiers avoids filing duplicate issues when descriptions differ but the underlying problem is unchanged." } } } });
+                    : Judgment?.Invoke(route.Name, (string)body["messages"]![0]!["content"]!)
+                        ?? "GO: Preserving stable identifiers avoids filing duplicate issues when descriptions differ but the underlying problem is unchanged." } } } });
         }
         private static double[] Vector(double first, double second, int dimensions)
         {

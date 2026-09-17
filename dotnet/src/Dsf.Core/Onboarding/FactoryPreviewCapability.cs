@@ -27,6 +27,10 @@ public sealed record FactoryPreviewConfiguration(
     public string? SupplementalRevision { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public PreviewInputConfiguration? Inputs { get; init; }
+    [JsonIgnore]
+    public PreviewExecutionConfiguration? Execution { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ExecutionRevision { get; init; }
 }
 
 public sealed record FactoryPreviewCapability(
@@ -176,6 +180,16 @@ public static class FactoryPreviewValidation
             throw new PreviewCapabilityException(FactoryCharterState.Unknown, "ProtectedPreviewCapabilityMissing");
         var capability = FactorySourceValidation.ReadRecord<FactoryPreviewCapability>(values, ProductConfigurationKeys.FactoryPreview);
         var config = capability.Configuration;
+        var executionKey = FactoryPreviewExecution.ConfigurationKey(capability.OperationId);
+        if (config.ExecutionRevision is { } executionRevision)
+        {
+            var protectedExecution = FactorySourceValidation.ReadRecord<PreviewExecutionConfiguration>(values, executionKey);
+            if (!FactorySourceValidation.Hash(executionRevision) || FactoryModelsValidation.Hash(protectedExecution) != executionRevision)
+                throw new JsonException("Exact protected preview execution configuration required.");
+            config = config with { Execution = protectedExecution };
+            capability = capability with { Configuration = config };
+        }
+        else if (values.ContainsKey(executionKey)) throw new JsonException("Unpinned preview execution configuration.");
         if (config.SupplementalRevision is { } supplementalRevision)
         {
             var supplemental = FactorySourceValidation.ReadRecord<PreviewSupplementalConfiguration>(values,
@@ -203,6 +217,11 @@ public static class FactoryPreviewValidation
             throw new PreviewCapabilityException(FactoryCharterState.Blocked, "PreviewApprovalOrCurrentInputsChanged");
         FactorySourceValidation.ValidateSelection(new(config.RuntimeImage, config.AudienceClientId));
         if (config.Inputs is not null) FactoryPreviewInputValidation.Validate(config.Inputs);
+        if (config.Execution is { } execution && (execution.Policy != FactoryPreviewExecution.Policy
+            || config.Inputs is null || execution.Seed.Id != FactoryPreviewExecution.Id(manifest.Identity.FactoryId, capability.OperationId)
+            || !FactorySourceValidation.Hash(execution.Seed.Checksum) || execution.Seed.ResourceId.Length is < 1 or > 512
+            || execution.Seed.ETag.Length is < 3 or > 256 || execution.Seed.ETag[0] != '"' || execution.Seed.ETag[^1] != '"'))
+            throw new PreviewCapabilityException(FactoryCharterState.Blocked, "ApprovedPreviewExecutionPolicyAndSeedRequired");
         if (config.ModelEvaluation is { } evaluation)
         {
             if (evaluation.Purpose != PreviewModelHostConfiguration.PurposeName) throw new JsonException();

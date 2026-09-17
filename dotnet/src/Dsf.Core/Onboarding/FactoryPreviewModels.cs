@@ -16,4 +16,16 @@ public interface IFactoryPreviewModelWorkloads : IFactoryModelWorkloads
 {
     IReadOnlyList<PreviewModelObservation> Observations { get; }
     Task<ModelAuthorityResult> ReadAuthorityAsync(CancellationToken cancellationToken);
+    void AttachJournal(IPreviewModelDispatchJournal journal);
 }
+
+/// <summary>Durable evaluation dispatch/replay around the actual authenticated transport.</summary>
+public interface IPreviewModelDispatchJournal
+{
+    Task<PreviewModelResult> ExecuteAsync(PreviewModelRequest request,
+        Func<PreviewModelRequest, CancellationToken, Task<PreviewModelResult>> dispatch, CancellationToken cancellationToken);
+}
+
+public enum PreviewModelDispatchState { Intended, Dispatched, Confirmed, KnownFailed, Unknown }
+public sealed record PreviewModelDispatch(
+    string Identity, PreviewModelRequest Request, PreviewModelDispatchState State, PreviewModelResult? Result, string? Failure);

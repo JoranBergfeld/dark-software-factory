@@ -284,6 +284,7 @@ CLI verbs and are not yet created by provisioning assets.
 | Runtime command | Host suffix | Workload identity | POST route | Native Entra caller |
 | --- | --- | --- | --- | --- |
 | `serve-preview` | `-preview` | Original COUNCIL UAMI only | `/source-context`, `/model-authority`, `/telemetry-evidence`, `/supplemental-evidence`, `/inputs` | Factory's approved Azure operator only |
+| `serve-preview` (supervised evaluation) | `-preview` | Original COUNCIL UAMI only | `/prepare-evaluation`, `/evaluate`, `/evaluation` (readonly status) | Factory's approved Azure operator only |
 | `serve-preview` (selected supplemental callback) | `-preview` | Original COUNCIL UAMI only | `/supplemental-authority` | Requested selected source's original principal **and client** only |
 | `serve-source-context` | `-context` | Original CODE UAMI only | `/council-context` | Original COUNCIL principal **and client** only |
 | `serve-preview-models` (explicit selection) | `-preview-models` | Original COUNCIL UAMI only | `/evaluate` | Original COUNCIL principal **and client** only |
@@ -327,6 +328,7 @@ registry. No runtime principal receives governance-write permission.
 | `dsf/factory/preview-bindings/{operation:D}/{name}` | Original completed `FoundationOperation`; names `council`, `code`, `hosting`, `account`, `database`, `runs` |
 | `dsf/factory/preview-operations/{operation:D}/{index:D4}` | Completed creation receipt, kind `decide-preview-operation`, exact target/API, request hash, provider IDs, deployment operation and current native revision |
 | `dsf/factory/preview-supplemental/{operation:D}` (selected sources only) | Exact `PreviewSupplementalConfiguration`, pinned by `configuration.supplementalRevision` in the capability |
+| `dsf/factory/preview-execution-configuration/{operation:D}` (evaluation only) | Exact `PreviewExecutionConfiguration`, pinned by `configuration.executionRevision`; versioned policy and operator-retained native seed receipt |
 | Factory manifest | Both `previewOperationId` and `previewApprovalFingerprint` must match the protected capability and request |
 
 Preview records are unlabeled and use content type
@@ -379,11 +381,12 @@ unboundedly before checking size. Admission and each consumer operation have
 180-second deadlines. A consumer retains at most 64 confirmed observations;
 overflow fails explicitly. Unknown/canceled dispatch or malformed returned
 provenance prevents further dispatch on that consumer instance. This is not a
-durable dispatch journal, a cross-process retry fence, a complete candidate
-evaluation or a readiness proof.
+durable dispatch journal by itself. Supervised execution below attaches the
+native journal before any evaluation output; plain model consumption grants
+neither cross-process replay permission nor readiness.
 
 The model consumer does not replace current-evidence or adopted-intent gates.
-The aggregate `CouncilEvaluationContext` operation remains separate integration work.
+The aggregate `CouncilEvaluationContext` operation below composes these gates.
 
 #### Genuine application telemetry consumer
 
@@ -498,7 +501,7 @@ An unusable native query returns a bounded non-Ready capture (HTTP 409) with
 return sanitized `PreviewContextFailure`, preserving uncertainty. A source
 proof's `Ready` state means usable telemetry only: it is **not council
 readiness, a completed preview or activation**. This read-only operation does
-not yet persist preview evidence; checkpoint 2c must persist its bounded
+not persist evidence; supervised execution below persists its bounded
 provenance with the actual conveyor run.
 
 #### Selected supplemental consumption
@@ -587,8 +590,8 @@ discovery or cross-provider atomic fencing.
 
 This operation is read-only: no publication, activation, source removal,
 configuration repair, checkpoint or readiness claim. The aggregate operation
-below composes these consumers; actual conveyor execution and durable readiness
-proof remain subsequent work.
+below composes these consumers; supervised execution separately evaluates and
+persists the result.
 
 #### Trusted aggregate input capture
 
@@ -704,9 +707,156 @@ authority observations have no inference outputs and count toward the existing
 64-observation consumer budget. Later calls still revalidate current authority
 and enforce unknown-dispatch safeguards. This operation performs **no**
 synthesis, embedding, grounding, lenses, jury or conveyor execution and writes
-no progress/run/proof/governance/publication/activation state. Checkpoint 2c
-must consume these inputs with the actual conveyor and conditionally persist
-bounded inputs, provenance and complete revision-bound evaluation proof.
+no progress/run/proof/governance/publication/activation state. The supervised
+operation below consumes these exact inputs with the actual conveyor.
+
+#### Durable supervised evaluation and current inspection
+
+All three new `serve-preview` routes require the existing approved operator
+and `PreviewCapabilityRequest`; they accept no authored context, model result,
+run ID, force flag, lease-expiry assertion or activation approval.
+
+| Route | Shared runtime API | Result |
+| --- | --- | --- |
+| `POST /prepare-evaluation` | `RuntimeVerbs.PreparePreviewExecutionAsync` | Create-once `PreviewExecutionSeed`, without input collection or inference |
+| `POST /evaluate` | `RuntimeVerbs.ExecutePreviewAsync` | Actual conveyor execution or compatible durable continuation; `PreviewExecutionResult` |
+| `POST /evaluation` | `RuntimeVerbs.InspectPreviewAsync` | Readonly durable/current inspection; same result shape, no inference or writes |
+
+Preparation requires the existing current protected/native preview capability,
+including its narrow own-state permission. COUNCIL creates one initial native
+document and returns its ID, native `_rid`, quoted ETag and complete checksum;
+capability is rechecked before releasing that receipt. Reading the same untouched
+seed again performs no write. **The runtime cannot approve its own receipt.**
+Milestone 3 must retain and show the returned receipt, then have the operator
+approve the exact separate `PreviewExecutionConfiguration` record and its hash
+in `configuration.executionRevision`, recomputing the capability and manifest
+approval pins. No fabricated seed, absent record, unpinned record or missing
+native document authorizes initialization after this approval.
+
+The protected execution record contains:
+
+```json
+{
+  "policy": {
+    "revision": "supervised-conveyor-v1",
+    "requestSeconds": 5400,
+    "maximumDispatches": 62,
+    "jurorSeconds": 120
+  },
+  "seed": {
+    "id": "<returned preview identity>",
+    "resourceId": "<returned native _rid>",
+    "eTag": "<returned quoted native ETag>",
+    "checksum": "<returned initial checksum>"
+  }
+}
+```
+
+These exact policy values are repository-defined, fingerprinted inputs, not
+ambient overrides. The separate record preserves the existing App Configuration
+capacity bounds with both supplemental sources selected. The shared capability
+reader resolves it from the same protected snapshot. Hydrated `Execution` is
+JSON-ignored; captured inputs explicitly retain `executionConfiguration`, so
+its exact policy and native receipt survive independent serialized readers.
+Omission blocks execution as `ApprovedPreviewExecutionSeedRequired`.
+
+The stable coordinator ID is `preview-` plus
+`FactoryModelsValidation.Hash(new { FactoryId, OperationId })`; its run ID
+appends `-run`. One approved capability operation binds one captured evaluation.
+Changing a caller request nonce cannot start another run or replace captured
+inputs. Changed material inputs require newly reviewed authority, not forced
+retry or an automatic fresh evaluation under the old receipt.
+
+`PreviewExecutionStore` is the actual native Cosmos implementation of
+`IRunStore` and `IPreviewModelDispatchJournal`. It uses the proven COUNCIL
+workload credential against `https://{P}-cosmos.documents.azure.com`, database
+`K`, and partition value `K` on `/product`. The `council-preview` container
+holds protocol 1, kind `council-preview-evaluation`, explicit
+`OnboardingPreview`, owner, phase, original inputs, model journal, run receipt,
+pending checkpoint intent, final input snapshot and readiness proof.
+The `runs` container holds the complete actual conveyor run through the
+existing `CosmosRunStore` with expected `OnboardingPreview` profile.
+
+Both documents use native create-only POST and conditional `If-Match` PUT,
+never upsert. The coordinator writes a pending run checksum/station **before**
+writing the separate run item, then confirms the actual run `_rid`/ETag/checksum.
+These are **not cross-key transactions**. A lost acknowledgment can be
+reconciled only when the independent native read exactly matches that pending
+intent and retained incarnation. Missing, erased, corrupt, wrong-profile or
+incompatible items remain Unknown; they cannot become a fresh run. Complete
+serialized checksums and required fields cover context, evidence, proposals,
+semantic checks, rounds, jurors, model observations and payloads.
+
+Execution obtains `Snapshot` and `Models` from the real
+`AcquirePreviewInputsAsync`, retains the original source/proof/content
+references, and composes the actual `ConveyorLine`. It explicitly sets
+`OnboardingPreview` and dry-run, with **no filer**, learning write or activation
+authority. The captured evidence adapter supplies only actual acquired
+observations. The problem key is evaluation-local, derived from factory,
+operation and cluster references; it is **not live cross-run publication dedup
+or create-once issue authority**. Legacy run/sweep/HTTP admission and greenfield
+taxonomy remain unchanged.
+
+Before each actual evaluation model call, the native journal stores its exact
+request/configuration/identity as Intended, then Dispatched. Confirmation
+retains the real response, native model authority/observations and input/output
+hashes. A parsed explicit native rejection can be KnownFailed; uncertain
+transport, malformed acknowledgment or cancellation is Unknown. Neither can
+be replayed. An independent worker can reuse a compatible Confirmed response,
+including the original request nonce, without rerunning saved judgments.
+Intended work can continue after successful ownership CAS. Dispatched/Unknown
+work blocks takeover even if no response arrived or a clock/lease expired.
+CAS protects the next local dispatch, **not an already-running remote request**.
+A poisoned writer cannot retry writes; unknown-state recording has its own
+bounded 30-second attempt. No recovery/reset operation is introduced.
+
+`OnboardingReadiness.ValidateComplete` requires at least one genuine candidate,
+complete native embedding coverage and structured synthesis, semantic support
+and counterevidence checks, every enabled lens/round and three distinct native
+model-family jurors. It ties every observation to exactly one confirmed native
+dispatch, reparses actual answers, checks deterministic recommendation and
+disposition, and reconstructs the exact intended publication. Empty synthesis,
+early terminal, missing/skipped judgments, malformed output, error or partial
+state cannot prove readiness. Unanimous GO, either SPLIT and unanimous NO-GO
+all qualify when fully evaluated; GO is not an activation prerequisite.
+Payloads remain unassigned, labeled only `dsf:proposal`, and entirely unpublished.
+
+`PreviewReadinessProof` binds factory/operation/preview identity, capability,
+original and final input revisions, evaluation/judgment revisions, native run
+receipt, complete dispatch revision, completion time and each candidate's
+disposition/payload hash. Original and final snapshots remain separate in the
+coordinator; rereads never overwrite original evidence. A terminal compatible
+evaluation interrupted before proof completion can finish current checks and
+proof persistence without rejudging.
+
+The result separates historical run/proof from current `readiness`.
+`ReadyAwaitingActivation` requires a complete durable proof, actual fresh
+source/model/telemetry/every-selected-source checks, and final readonly native
+run/coordinator verification. Material source/adoption/analysis/configuration/
+model changes, changed selected supplemental content, stale captured application
+records, incomplete native state or expired current source proofs withhold it.
+Routine new telemetry rows and fresh read nonces/timestamps do not replace or
+invalidate still-fresh captured application records. Current queries reauthorize
+that original content; its old proof timestamps remain historical, not renewed.
+Status rechecks freshness after its final native reads. A historical proof is
+retained in noncurrent reports when current admission still permits reading it;
+missing/revoked capability fails closed before private history is released.
+These sequential checks are point-in-time observations, not cross-provider
+atomicity. Neither Ready nor historical completion means activated or onboarding
+complete.
+
+Preparation is bounded to 180 seconds; complete execution to 5,400 seconds;
+each input acquisition and inspection to 1,800 seconds. Existing individual
+consumer and freshness bounds remain stricter where applicable: the total
+deadline is not a promise that every constituent can exhaust its own budget.
+The model journal permits at most 62 evaluation dispatches, leaving room for
+the acquired consumer's two authority observations within its 64-observation
+limit. Each native document stays below 2,080,768 UTF-8 bytes; dispatch intent
+reserves another 128 KiB for its result. Initial/final snapshots, journal and
+proof share the coordinator's bound. Complete HTTP reports are at most 4 MiB.
+All overflows/timeouts are explicit nonready outcomes, never truncated
+completeness. Interrupted HTTP/native requests must be inspected before any
+explicit continuation; an HTTP timeout does not prove remote work stopped.
 
 #### Reviewed deployment contract
 
@@ -757,6 +907,18 @@ audiences, native caller policies and exact scopes/actions listed here remain
 mandatory; the aggregate adds no direct source/backend or governance-write
 privilege. Operator routes remain operator-only even when selected-source
 principals are present in native ingress authorization for callbacks.
+
+Supervised execution also adds **no host, environment setting, ARM action,
+container, role or resource scope**. The reviewed COUNCIL image must explicitly
+include the preparation/evaluation/inspection routes above. Its existing native
+Cosmos grants are exactly read-metadata and item read/create/replace on `runs`
+and `council-preview`; no delete, query, upsert permission, unrelated store,
+source credential, protected-governance write or activation grant is added.
+Provisioning must perform the operator-reviewed native seed receipt/configuration
+handoff described above, after creating and checking those original resources
+and grants. No seed can be calculated from an ARM container creation receipt.
+CLI forwarding, installation and provisioning automation remain milestone 3;
+retention/export, activation/publication and recovery remain separate tickets.
 
 Each new host must use the approved immutable image, original private managed
 environment, one assigned UAMI, `dotnet dsf-runtime.dll`, and its exact command

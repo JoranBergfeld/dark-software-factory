@@ -47,7 +47,15 @@ internal sealed class FactoryPreviewModelConsumer(IFactoryPreviewCapability vali
 {
     private readonly List<PreviewModelObservation> observations = [];
     private bool unconfirmed;
+    private IPreviewModelDispatchJournal? journal;
     public IReadOnlyList<PreviewModelObservation> Observations => observations.ToArray();
+    public void AttachJournal(IPreviewModelDispatchJournal value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        if (journal is not null || observations.Any(o => o.Output is not null) || unconfirmed)
+            throw new PreviewCapabilityException(FactoryCharterState.Blocked, "PreviewDispatchJournalMustPrecedeEvaluation");
+        journal = value;
+    }
 
     public async Task<ModelAuthorityResult> ReadAuthorityAsync(CancellationToken token) =>
         (await InvokeAsync("authority", null, null, token)).Authority;
@@ -73,6 +81,36 @@ internal sealed class FactoryPreviewModelConsumer(IFactoryPreviewCapability vali
         using var pending = CancellationTokenSource.CreateLinkedTokenSource(token, deadline.Token);
         var bounded = pending.Token;
         try
+        {
+            await RevalidateAsync(bounded);
+            var result = journal is not null && route != "authority"
+                ? await journal.ExecuteAsync(input, DispatchAsync, bounded) : await DispatchAsync(input, bounded);
+            observations.Add(new(result.RequestId, result.InputSha256, result.CapabilityRevision, result.Authority,
+                result.Completion?.Observation ?? result.Deduplication?.Observation));
+            return result;
+        }
+        catch (PreviewCapabilityException e)
+        {
+            unconfirmed |= dispatched && e.State is FactoryCharterState.Unknown or FactoryCharterState.Canceled;
+            throw;
+        }
+        catch (OperationCanceledException)
+        {
+            unconfirmed |= dispatched;
+            throw new PreviewCapabilityException(token.IsCancellationRequested ? FactoryCharterState.Canceled : FactoryCharterState.Unknown, "PreviewModelDispatchCanceledOrUnconfirmed");
+        }
+        catch (Exception e) when (e is HttpRequestException or IOException or Azure.RequestFailedException or AuthenticationFailedException)
+        {
+            unconfirmed |= dispatched;
+            throw new PreviewCapabilityException(FactoryCharterState.Unknown, "PreviewModelDispatchUnconfirmed");
+        }
+        catch (Exception e) when (e is JsonException or InvalidOperationException or ArgumentException or KeyNotFoundException or SupplementalSourceException or ModelCapabilityException)
+        {
+            unconfirmed |= dispatched;
+            throw new PreviewCapabilityException(FactoryCharterState.Failed, "InvalidPreviewModelResult");
+        }
+
+        async Task<PreviewModelResult> DispatchAsync(PreviewModelRequest input, CancellationToken bounded)
         {
             await RevalidateAsync(bounded);
             var workload = new FactoryWorkloadCredential(credential, snapshot.Manifest.Identity.TenantId, snapshot.Council, clock);
@@ -111,29 +149,7 @@ internal sealed class FactoryPreviewModelConsumer(IFactoryPreviewCapability vali
                 FactoryModelsValidation.ValidateTextResult(snapshot.Models!, route, result.Completion);
             }
             await RevalidateAsync(bounded);
-            observations.Add(new(result.RequestId, result.InputSha256, result.CapabilityRevision, result.Authority,
-                result.Completion?.Observation ?? result.Deduplication?.Observation));
             return result;
-        }
-        catch (PreviewCapabilityException e)
-        {
-            unconfirmed |= dispatched && e.State is FactoryCharterState.Unknown or FactoryCharterState.Canceled;
-            throw;
-        }
-        catch (OperationCanceledException)
-        {
-            unconfirmed |= dispatched;
-            throw new PreviewCapabilityException(token.IsCancellationRequested ? FactoryCharterState.Canceled : FactoryCharterState.Unknown, "PreviewModelDispatchCanceledOrUnconfirmed");
-        }
-        catch (Exception e) when (e is HttpRequestException or IOException or Azure.RequestFailedException or AuthenticationFailedException)
-        {
-            unconfirmed |= dispatched;
-            throw new PreviewCapabilityException(FactoryCharterState.Unknown, "PreviewModelDispatchUnconfirmed");
-        }
-        catch (Exception e) when (e is JsonException or InvalidOperationException or ArgumentException or KeyNotFoundException or SupplementalSourceException or ModelCapabilityException)
-        {
-            unconfirmed |= dispatched;
-            throw new PreviewCapabilityException(FactoryCharterState.Failed, "InvalidPreviewModelResult");
         }
     }
 

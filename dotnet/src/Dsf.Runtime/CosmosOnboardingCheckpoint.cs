@@ -7,6 +7,7 @@ namespace Dsf.Runtime;
 internal sealed partial class CosmosRunStore
 {
     private readonly HashSet<string> unconfirmedCheckpoints = new(StringComparer.Ordinal);
+    internal string? CheckpointETag(string id) => checkpointVersions.GetValueOrDefault(id);
 
     private async Task SaveOnboardingCheckpointAsync(string id, string document, CancellationToken token)
     {

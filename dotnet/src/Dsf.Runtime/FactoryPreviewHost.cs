@@ -36,15 +36,20 @@ public static partial class RuntimeVerbs
             app.MapPost("/supplemental-evidence", (Func<HttpContext, Task<IResult>>)(context => HandleAsync(context, supplementalEvidence: true)));
             app.MapPost("/supplemental-authority", (Func<HttpContext, Task<IResult>>)(context => HandleAsync(context, supplementalAuthority: true)));
             app.MapPost("/inputs", (Func<HttpContext, Task<IResult>>)(context => HandleAsync(context, inputs: true)));
+            app.MapPost("/prepare-evaluation", (Func<HttpContext, Task<IResult>>)(context => HandleAsync(context, prepareEvaluation: true)));
+            app.MapPost("/evaluate", (Func<HttpContext, Task<IResult>>)(context => HandleAsync(context, evaluate: true)));
+            app.MapPost("/evaluation", (Func<HttpContext, Task<IResult>>)(context => HandleAsync(context, evaluationStatus: true)));
         }
         return app;
 
         async Task<IResult> HandleAsync(HttpContext context, bool modelAuthority = false, bool telemetryEvidence = false,
-            bool supplementalEvidence = false, bool supplementalAuthority = false, bool inputs = false)
+            bool supplementalEvidence = false, bool supplementalAuthority = false, bool inputs = false, bool prepareEvaluation = false, bool evaluate = false,
+            bool evaluationStatus = false)
         {
             context.Response.Headers.CacheControl = "no-store";
             var clock = kind == PreviewHostKind.SourceContext ? dependencies.SourceClock : dependencies.PreviewClock;
-            using var deadline = new CancellationTokenSource(inputs ? TimeSpan.FromSeconds(FactoryPreviewInputValidation.Policy.RequestSeconds)
+            using var deadline = new CancellationTokenSource(evaluate ? TimeSpan.FromSeconds(FactoryPreviewExecution.Policy.RequestSeconds)
+                : inputs || evaluationStatus ? TimeSpan.FromSeconds(FactoryPreviewInputValidation.Policy.RequestSeconds)
                 : FactoryPreviewValidation.RequestBudget, clock);
             using var pending = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted, deadline.Token);
             try
@@ -69,6 +74,16 @@ public static partial class RuntimeVerbs
                 if (!NativeCaller(context, kind == PreviewHostKind.SourceContext ? capability.Council.PrincipalId! : capability.Manifest.Identity.AzureActorId,
                     capability.Manifest.Identity.TenantId, kind == PreviewHostKind.SourceContext ? capability.Council.ClientId : null))
                     throw new PreviewCapabilityException(FactoryCharterState.Blocked, "ApprovedPreviewCallerRequired");
+                if (prepareEvaluation)
+                    return Results.Json(await PreparePreviewExecutionAsync(settings, dependencies, request, token), FactoryGitHubJson.Options);
+                if (evaluate || evaluationStatus)
+                {
+                    var evaluation = evaluate ? await ExecutePreviewAsync(settings, dependencies, request, token)
+                        : await InspectPreviewAsync(settings, dependencies, request, token);
+                    var evaluationBytes = JsonSerializer.SerializeToUtf8Bytes(evaluation, new JsonSerializerOptions(FactoryGitHubJson.Options) { IgnoreReadOnlyProperties = false });
+                    return evaluationBytes.Length > 4 * 1024 * 1024 ? Error(FactoryCharterState.Partial, "PreviewEvaluationResponseCapacityExceeded", 409)
+                        : Results.Content(System.Text.Encoding.UTF8.GetString(evaluationBytes), "application/json");
+                }
                 if (inputs)
                 {
                     var acquired = await AcquirePreviewInputsAsync(settings, dependencies, request, token);
@@ -127,9 +142,12 @@ public static partial class RuntimeVerbs
                 return Results.Content(System.Text.Encoding.UTF8.GetString(bytes), "application/json",
                     statusCode: result.State == FactoryCharterState.Adopted ? 200 : 409);
             }
-            catch (Exception e) when (inputs && e is PreviewCapabilityException or OperationCanceledException
+            catch (Exception e) when ((inputs || evaluate || evaluationStatus) && e is PreviewCapabilityException or OperationCanceledException
                 && deadline.IsCancellationRequested && !context.RequestAborted.IsCancellationRequested)
-            { return Error(FactoryCharterState.Unknown, "PreviewInputCollectionDeadlineExceeded", 409); }
+            { return Error(FactoryCharterState.Unknown, evaluate ? "PreviewEvaluationDeadlineExceeded" : "PreviewInputCollectionDeadlineExceeded", 409); }
+            catch (CosmosCheckpointException exception)
+            { return Error(exception.Failure == CosmosCheckpointFailure.Capacity ? FactoryCharterState.Partial : FactoryCharterState.Unknown,
+                "NativePreviewState" + exception.Failure, 409); }
             catch (PreviewCapabilityException e) { return Error(e.State, e.Message, 403); }
             catch (SupplementalSourceException e) when (e.Reason == SupplementalReason.CapacityExceeded)
             { return Error(FactoryCharterState.Partial, "PreviewContextCapacityExceeded", 409); }

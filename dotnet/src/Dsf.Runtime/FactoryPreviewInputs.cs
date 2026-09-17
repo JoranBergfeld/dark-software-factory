@@ -102,7 +102,7 @@ internal static partial class RuntimeWorkflow
                 authority.Manifest, authority.Capability, authority.Revision, authority.GovernanceRevision, context, observations,
                 source, selection, telemetryConfiguration, telemetry, supplemental, config.Supplemental, models.Observations,
                 new(SourceRevision(currentSource), currentTelemetry.SourceAuthorityRevision, SupplementalRevisions(currentSupplemental),
-                    ModelRevision(models.Observations[^1].Authority)));
+                    ModelRevision(models.Observations[^1].Authority))) { ExecutionConfiguration = config.Execution };
             snapshot = snapshot with { Revision = snapshot.CalculateRevision() };
             if (JsonSerializer.SerializeToUtf8Bytes(snapshot, FactoryGitHubJson.Options).Length > inputs.Policy.SnapshotBytes)
                 throw new PreviewCapabilityException(FactoryCharterState.Partial, "CompletePreviewInputsExceedSnapshotBudget");

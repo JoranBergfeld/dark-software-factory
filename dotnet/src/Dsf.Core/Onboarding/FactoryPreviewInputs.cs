@@ -20,6 +20,8 @@ public sealed record PreviewInputSnapshot(
     IReadOnlyList<PreviewModelObservation> ModelObservations, PreviewInputRecheck Recheck)
 {
     [JsonRequired] public string Revision { get; init; } = "";
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public PreviewExecutionConfiguration? ExecutionConfiguration { get; init; }
     public string CalculateRevision() => FactoryModelsValidation.Hash(this with { Revision = "" });
 }
 

@@ -360,6 +360,8 @@ internal sealed partial class PreviewContextTransport : HttpMessageHandler
     {
         BeforeRequest?.Invoke(request);
         var uri = request.RequestUri!;
+        if (uri.Host == FactoryPreviewValidation.Prefix(Source.Manifest.Identity.FactoryId) + "-cosmos.documents.azure.com")
+            return await EvaluationRequestAsync(request, token);
         var principal = TokenPrincipal(request);
         Requests.Add((principal, request.Method.Method, uri));
         if (await SupplementalRequestAsync(request, principal, token) is { } supplementalReply) return supplementalReply;

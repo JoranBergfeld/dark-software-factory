@@ -387,7 +387,7 @@ internal sealed class PreviewContextRunner(SourceInventoryTransport source) : IW
         await app.StartAsync(token);
         try
         {
-            using var http = new HttpClient { BaseAddress = new(app.Urls.Single()) };
+            using var http = new HttpClient { BaseAddress = new(app.Urls.Single()), Timeout = Timeout.InfiniteTimeSpan };
             http.DefaultRequestHeaders.Add("X-MS-CLIENT-PRINCIPAL-IDP", "aad");
             http.DefaultRequestHeaders.Add("X-MS-CLIENT-PRINCIPAL-ID", Caller);
             http.DefaultRequestHeaders.Add("X-MS-CLIENT-PRINCIPAL", Convert.ToBase64String(JsonSerializer.SerializeToUtf8Bytes(new
