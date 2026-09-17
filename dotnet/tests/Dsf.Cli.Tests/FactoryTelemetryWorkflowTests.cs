@@ -690,7 +690,7 @@ public sealed class FactoryTelemetryWorkflowTests
 
     internal static async Task<(ReservationMachine Machine, FactoryFoundationTests.FoundationTransport Arm)> FoundationAsync(
         CancellationToken token = default, string factoryGroup = "widget-decide", bool mixedTables = false,
-        Action<BoundaryPlanFixture>? configure = null)
+        Action<BoundaryPlanFixture>? configure = null, TimeProvider? creationClock = null)
     {
         var machine = new ReservationMachine(new ReservationTestStore()) { Token = token };
         machine.Boundary.Input["factoryResourceGroup"] = factoryGroup;
@@ -708,7 +708,7 @@ public sealed class FactoryTelemetryWorkflowTests
         var reviewed = await machine.Boundary.ReviewAsync();
         var fingerprint = (string)reviewed.Plan["fingerprint"]!;
         Assert.Equal(0, (await machine.ReserveAsync(fingerprint)).Exit);
-        var arm = new FactoryFoundationTests.FoundationTransport(machine.Store) { CompleteCreates = true, CompleteDeployment = true };
+        var arm = new FactoryFoundationTests.FoundationTransport(machine.Store, creationClock) { CompleteCreates = true, CompleteDeployment = true };
         machine.Boundary.Repository.ReservationHttp = new HttpClient(arm);
         Assert.Equal(0, (await machine.InvokeAsync("provision", "--reviewed-fingerprint", fingerprint)).Exit);
         return (machine, arm);

@@ -796,7 +796,7 @@ public sealed class FactoryFoundationTests
         machine.Boundary.AssertReadOnly();
     }
 
-    internal sealed class FoundationTransport(ReservationTestStore owner) : HttpMessageHandler
+    internal sealed class FoundationTransport(ReservationTestStore owner, TimeProvider? creationClock = null) : HttpMessageHandler
     {
         private readonly HttpMessageInvoker ownerClient = new(owner.Client());
         public ReservationTestStore Product { get; set; } = new();
@@ -821,6 +821,7 @@ public sealed class FactoryFoundationTests
         public string? GuidField { get; init; }
         public JsonNode? GuidValue { get; init; }
         private readonly Dictionary<string, JsonNode> created = new(StringComparer.OrdinalIgnoreCase);
+        public IReadOnlyDictionary<string, JsonNode> CreatedResources => created;
         public List<string> Writes { get; } = [];
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
@@ -911,7 +912,7 @@ public sealed class FactoryFoundationTests
                         ["id"] = target,
                         ["etag"] = Guid.NewGuid().ToString(),
                         ["managedBy"] = (string?)intent["managedBy"],
-                        ["systemData"] = new JsonObject { ["createdAt"] = DateTimeOffset.UtcNow, ["createdBy"] = BoundaryPlanFixture.Principal },
+                        ["systemData"] = new JsonObject { ["createdAt"] = (creationClock ?? TimeProvider.System).GetUtcNow(), ["createdBy"] = BoundaryPlanFixture.Principal },
                         ["properties"] = new JsonObject
                         {
                             ["provisioningState"] = "Succeeded",
@@ -923,6 +924,15 @@ public sealed class FactoryFoundationTests
                     if (ResourceDamage == "old-incarnation") created[target]["systemData"]!["createdAt"] = "2000-01-01T00:00:00Z";
                     if (ResourceDamage == "human-modified") created[target]["systemData"]!["lastModifiedAt"] = DateTimeOffset.UtcNow.AddSeconds(1);
                     if (ResourceDamage == "duplicate-principal") created[target]["properties"]!["principalId"] = BoundaryPlanFixture.Principal;
+                    if (target.EndsWith("-cosmos", StringComparison.Ordinal))
+                    {
+                        var properties = created[target]["properties"]!;
+                        properties["disableLocalAuth"] = true;
+                        properties["publicNetworkAccess"] = "Disabled";
+                        properties["documentEndpoint"] = "https://" + target.Split('/').Last() + ".documents.azure.com:443/";
+                    }
+                    if (target.Contains("/sqldatabases/", StringComparison.Ordinal))
+                        created[target]["properties"]!["resource"] = new JsonObject { ["id"] = target.Split('/').Last() };
                     if (CosmosNativeReceipts && target.Contains("/sqldatabases/", StringComparison.Ordinal))
                     {
                         created[target].AsObject().Remove("systemData");
@@ -946,6 +956,9 @@ public sealed class FactoryFoundationTests
                             ["_ts"] = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
                         };
                     }
+                    if (target.Contains("/containers/", StringComparison.Ordinal))
+                        created[target]["properties"]!["resource"]!["partitionKey"] = new JsonObject
+                            { ["kind"] = "Hash", ["version"] = 2, ["paths"] = new JsonArray("/product") };
                     if (target.Contains("/microsoft.insights/components/", StringComparison.Ordinal))
                     {
                         // Components_CreateOrUpdate 2020-02-02 returns 200 and native properties, not systemData.

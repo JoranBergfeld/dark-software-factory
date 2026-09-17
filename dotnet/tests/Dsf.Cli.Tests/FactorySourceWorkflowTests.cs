@@ -148,9 +148,11 @@ public sealed class FactorySourceWorkflowTests
     }
 
     internal static async Task<(ReservationMachine Machine, FactoryFoundationTests.FoundationTransport Arm,
-        FactoryGitHubAuthorityWorkflowTests.AuthorityWorkflowTransport Previous)> ReadyAsync()
+        FactoryGitHubAuthorityWorkflowTests.AuthorityWorkflowTransport Previous)> ReadyAsync(bool telemetry = false)
     {
-        var (machine, arm) = await FactoryGitHubAuthorityWorkflowTests.FoundationAsync();
+        var (machine, arm) = telemetry
+            ? await FactoryTelemetryWorkflowTests.FoundationAsync(creationClock: new ReservationClock())
+            : await FactoryGitHubAuthorityWorkflowTests.FoundationAsync();
         var preview = await machine.InvokeAsync("github", FactoryGitHubAuthorityWorkflowTests.Preparation);
         var transport = new FactoryGitHubAuthorityWorkflowTests.AuthorityWorkflowTransport(arm) { Complete = true };
         machine.Boundary.Repository.ReservationHttp = new HttpClient(transport);

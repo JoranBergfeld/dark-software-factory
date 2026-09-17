@@ -878,12 +878,17 @@ not redeployed. TELEMETRY reuses the original `{P}-source` UAMI, not a new
 client. Supplemental coordinator settings use the actual returned COUNCIL
 FQDN and the runtime's exact serialized configuration shape.
 
-**This asset is not a complete provisioning workflow.** The reviewed metadata
-role assignments described below, native effect journal/receipts, conditional
-capability publication, operator-approved seed binding, and
-`dsf onboard decide preview` workflow remain unwired. Do not deploy the asset
-manually as a substitute: ARM deployment alone cannot establish create-once
-ownership, current capability, readiness or activation. Its SQL identifier
+**Native preparation is now wired through
+[`dsf onboard decide preview`](../get-started/prepare-council-preview.md).**
+It derives a current readonly plan, requires its exact fingerprint, invokes
+this asset and creates the reviewed scoped native metadata assignments.
+It records conditional preparation intent and exact native creation receipts.
+Existing exact custom metadata role definitions remain explicit administrator
+prerequisites, not definitions the command creates or broadens.
+Capability/manifest publication, operator-approved native seed binding and
+evaluation CLI consumption remain unwired. Do not deploy the asset manually
+as a substitute: ARM deployment alone cannot establish current capability,
+readiness or activation. Its SQL identifier
 parameters must come from the shared reviewed target helpers, not Bicep
 `guid()` or guessed IDs. Existing API registrations, private reachability and
 registry image access remain prerequisites; no networking or shared-resource
@@ -947,8 +952,63 @@ source credential, protected-governance write or activation grant is added.
 Provisioning must perform the operator-reviewed native seed receipt/configuration
 handoff described above, after creating and checking those original resources
 and grants. No seed can be calculated from an ARM container creation receipt.
-CLI forwarding, installation and provisioning automation remain milestone 3;
-retention/export, activation/publication and recovery remain separate tickets.
+CLI forwarding, installation, reviewed planning and native provisioning are
+implemented. Conditional capability/seed publication and operator evaluation
+integration remain milestone 3; retention/export, activation/publication and
+recovery remain separate tickets.
+
+The native preparation journal is separate from the protected runtime
+capability: `dsf/factory/preview-preparation/current` holds its conditional
+coordinator; `{operation:D}/plan/{index:D4}`, `/effects/{index:D4}` and
+`/effects/{index:D4}/receipts/{index:D4}` below the same namespace hold the
+immutable bounded plan, per-effect accounting and native receipts. Content
+type is `application/vnd.dsf.preview-preparation+json;version=1`.
+`PreviewPreparationPlan` includes the exact manifest, source/adoption/analysis
+references, current record hashes, native prerequisite revisions, compiled
+request body, operator permissions and configuration fingerprint.
+`PreviewPreparationEffect` records intended/dispatched/confirmed/known-failed/
+unknown state, original request identity and receipt hashes. Native HTTP
+acknowledgements are persisted before further parsing/polling; bounded body
+hash, provider request/correlation and observed deployment state remain
+available even when native deployment is partial/failed or receipt completion
+is uncertain.
+
+`FactoryPreviewPreparationService.PlanAsync`, `PrepareAsync` and `InspectAsync`
+are the CLI continuation seams. Independent readers verify chunk/checksum
+integrity, the original operation/fingerprint and every receipt. Coordinator,
+chunk, effect and receipt CAS operations are **per key**, not a transaction.
+Unacknowledged cross-key progress stays unknown; missing roots with surviving
+history, incomplete chunks or orphaned receipt writes never become a fresh
+preparation. Confirmed steps are inspected, not redeployed. Owner release is
+explicit; elapsed time cannot fence an outstanding ARM request.
+
+Deployment resources use actual ARM deployment-operation IDs, target IDs,
+status codes, tracking IDs and correlation, plus current resource properties,
+host creation metadata or Cosmos RID. SQL role metadata has no invented
+creation timestamp: its properties revision is paired with its real native
+deployment creation receipt. The native `councilEndpoint` output is matched
+to the actual host FQDN and retained with the output checksum. Direct ARM
+metadata assignments have their actual 201/request/correlation and
+createdOn/createdBy/principal/role/scope/condition receipts;
+`deploymentTarget` and `operationId` are explicitly null for those writes.
+The next capability-publication increment must consume this distinction,
+not invent deployment-operation receipts for direct assignments.
+It must also integrate exact receipt-backed metadata overlays with current
+model/telemetry/supplemental verification. Native preparation does not broaden
+legacy verification isolation checks or upgrade their pinned host images:
+old verification paths cannot treat the new assignments as implicit legacy
+consent. Retained proof expiry remains a blocker until that currentness
+handoff is complete; no source removal, grant cleanup or coordinator reset
+is an acceptable substitute.
+
+Preparation remains `ConfirmedNotReady`, with `currentReady=false`: it writes
+neither `dsf/factory/preview` capability records nor manifest preview pins,
+native execution seed, readiness proof, publication or activation state.
+Its 3,600-second deadline, 30-second accounting closeout, 512-KiB plan,
+128 4-KiB chunks, 64-effect ceiling and 4-MiB native-response ceiling are
+fingerprinted policy. Each complete lifecycle record must fit the native
+10-KiB App Configuration limit before effects. Current checks remain
+point-in-time observations, not cross-provider atomicity.
 
 Each new host must use the approved immutable image, original private managed
 environment, one assigned UAMI, `dotnet dsf-runtime.dll`, and its exact command

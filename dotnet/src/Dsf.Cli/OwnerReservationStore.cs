@@ -81,10 +81,42 @@ internal sealed class OwnerReservationStore : IFactoryCharterEvidenceReader
         { throw new ReservationStoreException(FactoryReservationState.Unknown, "Charter namespace absence unconfirmed; no new operation."); }
     }
 
-    public async Task<ConfigurationSetting> WriteAsync(string key, string value, ETag? revision, CancellationToken token, Guid? correlation = null)
+    internal async Task<IReadOnlyDictionary<string, ConfigurationSetting>> ReadNamespaceAsync(string prefix, CancellationToken token)
     {
-        CheckSize(key, ProductConfigurationKeys.NoLabel, value);
-        var setting = new ConfigurationSetting(key, value, null, revision ?? default) { ContentType = ContentType };
+        var records = new Dictionary<string, ConfigurationSetting>(StringComparer.Ordinal);
+        var bytes = 0;
+        var count = 0;
+        try
+        {
+            var selector = new SettingSelector { KeyFilter = prefix + "*", LabelFilter = "*" };
+            await foreach (var page in client.GetConfigurationSettingsAsync(selector, token).AsPages())
+            {
+                if (++count > 64 || (bytes += page.GetRawResponse().Content.ToMemory().Length) > 4 * 1024 * 1024)
+                    throw new JsonException();
+                using var native = JsonDocument.Parse(page.GetRawResponse().Content.ToMemory(),
+                    new JsonDocumentOptions { AllowDuplicateProperties = false });
+                if (native.RootElement.GetProperty("items").GetArrayLength() != page.Values.Count) throw new JsonException();
+                foreach (var record in page.Values)
+                {
+                    VerifyRecord(record, record.Key);
+                    if (!record.Key.StartsWith(prefix, StringComparison.Ordinal) || !records.TryAdd(record.Key, record)
+                        || records.Count > 1024) throw new JsonException();
+                    CheckSize(record.Key, ProductConfigurationKeys.NoLabel, record.Value, record.ContentType);
+                }
+            }
+            if (count == 0) throw new JsonException();
+            return records;
+        }
+        catch (Exception e) when (e is RequestFailedException or HttpRequestException or AuthenticationFailedException
+            or JsonException or FormatException or InvalidOperationException or KeyNotFoundException)
+        { throw new ReservationStoreException(FactoryReservationState.Unknown, "Complete unlabelled product record namespace unconfirmed; no absence or current authority asserted."); }
+    }
+
+    public async Task<ConfigurationSetting> WriteAsync(string key, string value, ETag? revision, CancellationToken token, Guid? correlation = null,
+        string? contentType = null)
+    {
+        CheckSize(key, ProductConfigurationKeys.NoLabel, value, contentType);
+        var setting = new ConfigurationSetting(key, value, null, revision ?? default) { ContentType = contentType ?? ContentType };
         try
         {
             token.ThrowIfCancellationRequested();
@@ -93,7 +125,7 @@ internal sealed class OwnerReservationStore : IFactoryCharterEvidenceReader
                 ? (await writer.AddConfigurationSettingAsync(setting, token)).Value
                 : (await writer.SetConfigurationSettingAsync(setting, onlyIfUnchanged: true, token)).Value;
             VerifyRecord(record, key);
-            if (record.Value != value)
+            if (record.Value != value || record.ContentType != setting.ContentType)
                 throw new ReservationStoreException(FactoryReservationState.Unknown, "Owner response did not confirm the exact conditional value; reconcile remote state.");
             return record;
         }
@@ -114,9 +146,9 @@ internal sealed class OwnerReservationStore : IFactoryCharterEvidenceReader
             throw new ReservationStoreException(FactoryReservationState.Unknown, "Owner response did not identify the exact unlabelled record and revision; provider details withheld.");
     }
 
-    public static void CheckSize(string key, string label, string value)
+    public static void CheckSize(string key, string label, string value, string? contentType = null)
     {
-        if (RecordSizeBytes(key, label, value) > RecordLimit)
+        if (RecordSizeBytes(key, label, value) + Encoding.UTF8.GetByteCount(contentType ?? ContentType) - Encoding.UTF8.GetByteCount(ContentType) > RecordLimit)
             throw new ReservationStoreException(FactoryReservationState.Failed, "Reservation record exceeds the bounded 10 KB App Configuration budget; nothing was truncated.");
     }
 

@@ -195,7 +195,8 @@ internal sealed class TelemetryWorkflowTransport(FactoryFoundationTests.Foundati
 
     private static JsonNode Component() => new JsonObject { ["id"] = FactoryTelemetryWorkflowTests.Component,
         ["type"] = "Microsoft.Insights/components", ["location"] = "swedencentral", ["tags"] = new JsonObject { ["environment"] = "production" },
-        ["properties"] = new JsonObject { ["WorkspaceResourceId"] = BoundaryPlanFixture.Logs.ToLowerInvariant() } };
+        ["properties"] = new JsonObject { ["WorkspaceResourceId"] = BoundaryPlanFixture.Logs.ToLowerInvariant(),
+            ["AppId"] = "987f4bfd-b5fd-40d7-9fc3-123456789abc", ["CreationDate"] = "2026-09-14T23:00:00Z" } };
     private static JsonObject Env(string name, string value) => new() { ["name"] = name, ["value"] = value };
     private static JsonObject SystemData() => new() { ["createdAt"] = new ReservationClock().GetUtcNow(), ["lastModifiedAt"] = new ReservationClock().GetUtcNow() };
     private static HttpResponseMessage Reply(HttpStatusCode status, JsonNode value)

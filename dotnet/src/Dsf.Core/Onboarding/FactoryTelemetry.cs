@@ -204,7 +204,7 @@ public static class FactoryTelemetryValidation
         return effects;
     }
 
-    public static void RequireVerifiedHistory(FactoryTelemetry authority, IReadOnlyDictionary<string, string> values)
+    public static TelemetryProof RequireVerifiedHistory(FactoryTelemetry authority, IReadOnlyDictionary<string, string> values)
     {
         if (authority.State != TelemetryState.Ready || authority.LastFailure != TelemetryReason.None
             || authority.CheckId is null || authority.CheckId == Guid.Empty
@@ -224,6 +224,7 @@ public static class FactoryTelemetryValidation
             || proof.Queries.Count != authority.Configuration.Backends.Sum(b => b.Tables.Count)
             || proof.Queries.Any(q => q.Reason is not (TelemetryReason.None or TelemetryReason.Empty or TelemetryReason.Stale)))
             throw new JsonException("Incomplete historical telemetry verification.");
+        return proof;
     }
 
     public static IReadOnlyList<TelemetryAccessGrant> Grants(FactoryTelemetryConfiguration configuration, string subscription)

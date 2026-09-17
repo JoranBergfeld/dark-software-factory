@@ -1130,12 +1130,15 @@ internal sealed class ReservationTestStore
                 var query = Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(request.RequestUri.Query);
                 var filter = query["key"].ToString();
                 Assert.EndsWith("*", filter);
-                Assert.Equal("*", query["label"]);
-                Assert.Equal("key", query["$select"]);
+                Assert.Contains(query["label"].ToString(), new[] { "*", "\0" });
+                var projection = query.GetValueOrDefault("$select").ToString();
+                var keyOnly = projection == "key";
+                Assert.True(keyOnly || string.IsNullOrEmpty(projection));
                 lock (store.gate)
                     return Reply(HttpStatusCode.OK, new JsonObject { ["items"] = new JsonArray(store.records.Keys
                         .Where(key => key.StartsWith(filter[..^1], StringComparison.Ordinal))
-                        .Select(key => (JsonNode)new JsonObject { ["key"] = key }).ToArray()) });
+                        .Order(StringComparer.Ordinal)
+                        .Select(key => keyOnly ? (JsonNode)new JsonObject { ["key"] = key } : JsonNode.Parse(store.records[key])!).ToArray()) });
             }
             var key = Uri.UnescapeDataString(request.RequestUri.AbsolutePath["/kv/".Length..]);
             var body = request.Content is null ? null : await request.Content.ReadAsStringAsync(cancellationToken);
@@ -1189,7 +1192,7 @@ internal sealed class ReservationTestStore
             {
                 Content = new StringContent(record?.ToJsonString() ?? "{}", Encoding.UTF8, "application/vnd.microsoft.appconfig.kv+json"),
             };
-            if (record is not null) response.Headers.TryAddWithoutValidation("ETag", "\"" + (string)record["etag"]! + "\"");
+            if (record?["etag"] is { } etag) response.Headers.TryAddWithoutValidation("ETag", "\"" + etag.GetValue<string>() + "\"");
             return response;
         }
     }
