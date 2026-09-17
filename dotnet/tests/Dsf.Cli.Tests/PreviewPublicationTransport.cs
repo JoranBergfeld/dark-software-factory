@@ -16,6 +16,8 @@ internal sealed partial class PreviewPreparationTransport
 {
     internal readonly Dictionary<string, string> SeedDocuments = new(StringComparer.Ordinal);
     internal int SeedCreates;
+    internal string SeedResourceId = "PD5DALigD00BAAAAAAAAAA==";
+    internal string RunResourceId = "PD5DALigD00CAAAAAAAAAA==";
     internal string? SeedFailure { get; set; }
     internal Action? BeforeSeed { get; set; }
     internal string LastPreviewResponse = "";
@@ -101,7 +103,7 @@ internal sealed partial class PreviewPreparationTransport
             path += "/" + (string)body["id"]!;
             if (SeedDocuments.ContainsKey(path)) return new(HttpStatusCode.Conflict);
             if (path.Contains("/council-preview/", StringComparison.Ordinal)) { BeforeSeed?.Invoke(); SeedCreates++; }
-            body["_rid"] = "PD5DALigD00BAAAAAAAAAA==";
+            body["_rid"] = path.Contains("/council-preview/", StringComparison.Ordinal) ? SeedResourceId : RunResourceId;
             body["_etag"] = "\"" + Guid.NewGuid().ToString("D") + "\"";
             SeedDocuments.Add(path, body.ToJsonString());
             if (SeedFailure == "lost") throw new HttpRequestException("lost-private-native-seed-response");

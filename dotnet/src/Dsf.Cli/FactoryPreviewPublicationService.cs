@@ -215,10 +215,10 @@ internal sealed partial class FactoryPreviewPreparationService
             throw new PreviewCapabilityException(failed.State, failed.Reason.Length <= 256 ? failed.Reason : "PreviewNativeSeedUnconfirmed");
         }
         var seed = Parse<PreviewExecutionSeed>(body);
+        _ = NativeCosmosResourceId.RequireDocument(seed.ResourceId);
         using var intended = JsonDocument.Parse(review.SeedIntent.Document);
         if (seed.Id != FactoryPreviewExecution.Id(identity.FactoryId, review.SeedRequest.OperationId)
-            || seed.Checksum != intended.RootElement.GetProperty("checksum").GetString() || seed.ResourceId.Length is < 1 or > 512
-            || !Convert.TryFromBase64String(seed.ResourceId, stackalloc byte[384], out var bytes) || bytes == 0
+            || seed.Checksum != intended.RootElement.GetProperty("checksum").GetString()
             || seed.ETag.Length is < 3 or > 256 || seed.ETag[0] != '"' || seed.ETag[^1] != '"')
             throw Unknown("NativeSeedReceiptMalformed");
         return seed;

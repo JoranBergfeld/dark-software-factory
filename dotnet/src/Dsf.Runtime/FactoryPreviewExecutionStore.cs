@@ -4,6 +4,7 @@ using System.Text.Json.Serialization;
 using Azure.Core;
 using Azure.Identity;
 using Dsf.Core.Onboarding;
+using Dsf.Core.Runtime;
 using Dsf.FeatureCouncil.Conveyor;
 
 namespace Dsf.Runtime;
@@ -198,10 +199,7 @@ internal sealed partial class PreviewExecutionStore(PreviewCapabilitySnapshot au
 
     private static string Resource(JsonElement body)
     {
-        var resource = body.GetProperty("_rid").GetString() ?? throw new JsonException();
-        if (resource.Length > 512 || !Convert.TryFromBase64String(resource, stackalloc byte[384], out var bytes) || bytes == 0)
-            throw new JsonException("Invalid native preview resource identity.");
-        return resource;
+        return NativeCosmosResourceId.RequireDocument(body.GetProperty("_rid").GetString());
     }
 
     private void Validate(PreviewEvaluationDocument document)

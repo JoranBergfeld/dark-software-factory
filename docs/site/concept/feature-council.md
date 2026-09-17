@@ -1032,6 +1032,12 @@ payload hashes and `PreviewSeedIntent` (native target, product partition,
 complete bounded initial document, execution policy). It does not claim a
 native resource identity before the provider returns one.
 
+Seed and run/checkpoint receipts retain the exact native Cosmos document RID.
+Cosmos uses `-` instead of `/`, not Base64URL's replacement for `+`; validation
+normalizes only for decoding, requires the native 16-byte document shape and
+canonical padding, and never rewrites receipt or proof identities. Malformed
+identities after a native write remain unconfirmed, not eligible for replay.
+
 `dsf/factory/preview-publication/current` holds `PreviewPublicationJournal`;
 `{operation:D}/{seed|execution}/{index:D4}` under that namespace holds each
 `PreviewPublicationStep`. Each stage also retains an immutable `/approval`

@@ -549,7 +549,10 @@ internal sealed partial class PreviewContextTransport
             {
                 Assert.Equal(prefix + collection + "/docs", path);
                 if (EvaluationDocuments.ContainsKey(key)) return new(HttpStatusCode.Conflict);
-                body["_rid"] = Convert.ToBase64String(Guid.NewGuid().ToByteArray());
+                var rid = Guid.NewGuid().ToByteArray();
+                rid[4] |= 0x80;
+                rid[15] &= 0x0f;
+                body["_rid"] = Convert.ToBase64String(rid).Replace('/', '-');
             }
             else
             {

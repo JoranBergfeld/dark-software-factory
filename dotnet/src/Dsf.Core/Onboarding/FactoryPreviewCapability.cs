@@ -226,6 +226,7 @@ public static class FactoryPreviewValidation
             || !FactorySourceValidation.Hash(execution.Seed.Checksum) || execution.Seed.ResourceId.Length is < 1 or > 512
             || execution.Seed.ETag.Length is < 3 or > 256 || execution.Seed.ETag[0] != '"' || execution.Seed.ETag[^1] != '"'))
             throw new PreviewCapabilityException(FactoryCharterState.Blocked, "ApprovedPreviewExecutionPolicyAndSeedRequired");
+        if (config.Execution is not null) _ = NativeCosmosResourceId.RequireDocument(config.Execution.Seed.ResourceId);
         if (config.ModelEvaluation is { } evaluation)
         {
             if (evaluation.Purpose != PreviewModelHostConfiguration.PurposeName) throw new JsonException();
