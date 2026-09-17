@@ -11,7 +11,7 @@ using Xunit;
 
 namespace Dsf.Runtime.Tests;
 
-internal sealed class PreviewContextTransport : HttpMessageHandler
+internal sealed partial class PreviewContextTransport : HttpMessageHandler
 {
     internal IntentWorkflowTransport Intent = null!;
     internal SourceInventoryTransport Source => Intent.Source;
@@ -57,7 +57,8 @@ internal sealed class PreviewContextTransport : HttpMessageHandler
 
         """;
 
-    internal static async Task<PreviewContextTransport> CreateAsync(bool modelEvaluation = false)
+    internal static async Task<PreviewContextTransport> CreateAsync(bool modelEvaluation = false, bool telemetryEvidence = false,
+        bool mixedTables = false, bool multipleBackends = false, string? telemetryTable = null)
     {
         var result = new PreviewContextTransport { Intent = await IntentWorkflowTransport.CreateAsync() };
         result.inner = new(result.Intent, false);
@@ -96,6 +97,7 @@ internal sealed class PreviewContextTransport : HttpMessageHandler
         source.Values[ProductConfigurationKeys.CharterAdoptionReceipt(adoption.Revision, "receipt")] = JsonSerializer.Serialize(adoption, json);
         source.Values[ProductConfigurationKeys.CharterAdoptionReceipt(adoption.Revision, "intent")] = JsonSerializer.Serialize(operation with { State = CharterEffectState.Intended }, json);
         for (var i = 0; i < parts.Length; i++) source.Values[ProductConfigurationKeys.CharterAdoptionPayload(adoption.Revision, i)] = JsonSerializer.Serialize(parts[i], json);
+        if (telemetryEvidence) await result.PrepareTelemetryAsync(mixedTables, multipleBackends, telemetryTable);
         result.Prepare(adoption.Revision, modelEvaluation);
         return result;
     }
@@ -140,7 +142,8 @@ internal sealed class PreviewContextTransport : HttpMessageHandler
             "example.azurecr.io/dsf/runtime@sha256:" + new string('7', 64), "abababab-abab-abab-abab-abababababab", roleId,
             FactoryModelsValidation.Hash(JsonSerializer.SerializeToElement(role["properties"])), resources.ToDictionary(p => p.Key, p => FactoryModelsValidation.Hash(p.Value)))
         { ModelEvaluation = modelEvaluation ? new(PreviewModelHostConfiguration.PurposeName,
-            "example.azurecr.io/dsf/runtime@sha256:" + new string('8', 64), "acacacac-acac-acac-acac-acacacacacac") : null };
+            "example.azurecr.io/dsf/runtime@sha256:" + new string('8', 64), "acacacac-acac-acac-acac-acacacacacac") : null,
+            Telemetry = TelemetrySelection };
         foreach (var pair in resources)
             Source.Values[ProductConfigurationKeys.PreviewBinding(operation, pair.Key)] = JsonSerializer.Serialize(pair.Value, FactoryGitHubJson.Options);
         var created = Source.Clock.Now.ToString("O");
@@ -165,7 +168,8 @@ internal sealed class PreviewContextTransport : HttpMessageHandler
         }
         foreach (var kind in FactoryPreviewValidation.HostKinds(config))
         {
-            var identity = kind == PreviewHostKind.SourceContext ? binding[1] : binding[0];
+            var projection = kind == PreviewHostKind.TelemetryEvidence ? config.Telemetry : null;
+            var identity = projection?.SourceIdentity ?? (kind == PreviewHostKind.SourceContext ? binding[1] : binding[0]);
             var model = kind == PreviewHostKind.ModelEvaluation ? config.ModelEvaluation : null;
             var target = FactoryPreviewValidation.HostTarget(Group, manifest.Identity.FactoryId, kind);
             var host = Source.Resources[Source.HostTarget].DeepClone();
@@ -173,22 +177,35 @@ internal sealed class PreviewContextTransport : HttpMessageHandler
             host["systemData"] = JsonSerializer.SerializeToNode(new { createdAt = created, lastModifiedAt = created });
             host["identity"]!["userAssignedIdentities"] = new JsonObject { [identity.Target] = new JsonObject() };
             var container = host["properties"]!["template"]!["containers"]![0]!;
-            container["image"] = model?.RuntimeImage ?? config.RuntimeImage;
-            container["args"] = new JsonArray(kind == PreviewHostKind.Council ? "serve-preview" : model is not null ? "serve-preview-models" : "serve-source-context");
+            container["image"] = projection?.RuntimeImage ?? model?.RuntimeImage ?? config.RuntimeImage;
+            container["args"] = new JsonArray(projection is not null ? "serve-preview-telemetry"
+                : kind == PreviewHostKind.Council ? "serve-preview" : model is not null ? "serve-preview-models" : "serve-source-context");
             foreach (var value in container["env"]!.AsArray())
                 if ((string?)value!["name"] == "AZURE_CLIENT_ID") value["value"] = identity.ClientId;
-            host["properties"]!["configuration"]!["ingress"]!["fqdn"] = new Uri(kind == PreviewHostKind.Council ? CouncilEndpoint : model is not null ? ModelEndpoint : ContextEndpoint).Host;
+            host["properties"]!["configuration"]!["ingress"]!["fqdn"] = new Uri(projection is not null ? TelemetryEndpoint
+                : kind == PreviewHostKind.Council ? CouncilEndpoint : model is not null ? ModelEndpoint : ContextEndpoint).Host;
             Native[target] = host;
             var auth = Source.Resources[Source.HostTarget + "/authconfigs/current"].DeepClone();
             auth["id"] = target + "/authconfigs/current";
             auth["systemData"] = host["systemData"]!.DeepClone();
             var aad = auth["properties"]!["identityProviders"]!["azureActiveDirectory"]!;
-            var audience = model?.AudienceClientId ?? config.AudienceClientId;
+            var audience = projection?.AudienceClientId ?? model?.AudienceClientId ?? config.AudienceClientId;
             aad["registration"]!["clientId"] = audience;
             aad["validation"]!["allowedAudiences"] = new JsonArray(audience, "api://" + audience);
             aad["validation"]!["defaultAuthorizationPolicy"]!["allowedPrincipals"]!["identities"] =
                 new JsonArray(kind == PreviewHostKind.Council ? manifest.Identity.AzureActorId : binding[0].PrincipalId);
             Native[target + "/authconfigs/current"] = auth;
+        }
+        if (config.Telemetry is { } selected)
+        {
+            foreach (var scope in FactoryPreviewTelemetryValidation.MetadataScopes(manifest, Models, operation, selected))
+            {
+                var grant = FactoryModelsValidation.Grant(scope, selected.MetadataRoleDefinitionId, selected.SourceIdentity.PrincipalId!, "");
+                Native[grant.Target] = JsonSerializer.SerializeToNode(new { id = grant.Target, properties = new { scope,
+                    roleDefinitionId = grant.RoleDefinitionId, principalId = grant.PrincipalId, principalType = "ServicePrincipal",
+                    createdOn = created, updatedOn = created, createdBy = manifest.Identity.AzureActorId,
+                    condition = (string?)null, conditionVersion = (string?)null } })!;
+            }
         }
         var targets = FactoryPreviewValidation.Targets(manifest, Models, Source.GitHub, operation, roleId, config);
         var effects = targets.Select((target, i) =>
@@ -270,6 +287,11 @@ internal sealed class PreviewContextTransport : HttpMessageHandler
         }
         worker.Capability = JsonSerializer.Deserialize<FactoryPreviewCapability>(worker.Source.Values[ProductConfigurationKeys.FactoryPreview], FactorySourceValidation.RecordJson)!;
         worker.Models = FactoryModelsValidation.ReadPreparation(worker.Source.Manifest, worker.Source.Values);
+        if (worker.Capability.Configuration.Telemetry is not null)
+        {
+            worker.Telemetry = FactoryTelemetryValidation.ReadPreparation(worker.Source.Manifest, worker.Source.Values, requireChecking: false);
+            worker.TelemetrySelection = worker.Capability.Configuration.Telemetry;
+        }
         worker.Request = first.Request with { RequestId = Guid.NewGuid() };
         return worker;
     }
@@ -305,6 +327,15 @@ internal sealed class PreviewContextTransport : HttpMessageHandler
         var uri = request.RequestUri!;
         var principal = TokenPrincipal(request);
         Requests.Add((principal, request.Method.Method, uri));
+        if (uri.Host == new Uri(TelemetryEndpoint).Host)
+        {
+            Assert.Equal(Models.Bindings![0].PrincipalId, principal);
+            Assert.Equal("/evidence", uri.AbsolutePath);
+            var input = JsonSerializer.Deserialize<PreviewCapabilityRequest>(await request.Content!.ReadAsStringAsync(token), FactorySourceValidation.RecordJson)!;
+            var result = await RunTelemetryAsync(request: input);
+            return new(result.Status) { Content = new StringContent(ChangeTelemetryResponse?.Invoke(result.Body) ?? result.Body, Encoding.UTF8, "application/json") };
+        }
+        if (uri.Host == "api.loganalytics.io") return await QueryTelemetryAsync(request, principal, token);
         if (uri.Host == new Uri(ModelEndpoint).Host)
         {
             Assert.Equal(Models.Bindings![0].PrincipalId, principal);
@@ -326,12 +357,18 @@ internal sealed class PreviewContextTransport : HttpMessageHandler
         if (uri.Host == "management.azure.com")
         {
             Assert.Equal(HttpMethod.Get, request.Method);
-            Assert.Contains(principal, new[] { Source.Code.PrincipalId, Models.Bindings![0].PrincipalId });
+            Assert.Contains(principal, new[] { Source.Code.PrincipalId, Models.Bindings![0].PrincipalId, Telemetry?.Configuration.SourceIdentity.PrincipalId });
             var path = uri.AbsolutePath;
+            if (Telemetry is not null && principal == Telemetry.Configuration.SourceIdentity.PrincipalId
+                && !FactoryPreviewTelemetryValidation.MetadataScopes(Source.Manifest, Models, Capability.OperationId, Capability.Configuration.Telemetry!)
+                    .Concat(Telemetry.Configuration.AccessGrants.Select(g => g.Scope))
+                    .Any(scope => path.Equals(scope, StringComparison.OrdinalIgnoreCase) || path.StartsWith(scope + "/", StringComparison.OrdinalIgnoreCase)))
+                return new(HttpStatusCode.Forbidden);
             if (EnforceCouncilScopes && principal == Models.Bindings[0].PrincipalId
                 && !FactoryPreviewValidation.MetadataScopes(Source.Manifest, Models, Source.GitHub, Capability.OperationId, Capability.Configuration)
                     .Any(scope => path.Equals(scope, StringComparison.OrdinalIgnoreCase) || path.StartsWith(scope + "/", StringComparison.OrdinalIgnoreCase)))
                 return new(HttpStatusCode.Forbidden);
+            if (TelemetryNativeResponse?.Invoke(request) is { } telemetryReply) return telemetryReply;
             if (path.EndsWith("/roleassignments", StringComparison.OrdinalIgnoreCase))
             {
                 var scope = path[..^"/providers/microsoft.authorization/roleassignments".Length];

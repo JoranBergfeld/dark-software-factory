@@ -7,7 +7,7 @@ using Dsf.Core.Runtime;
 namespace Dsf.Core.Onboarding;
 
 public enum PreviewCapabilityState { Prepared, Partial, Blocked, Canceled, Unknown }
-public enum PreviewHostKind { Council, SourceContext, ModelEvaluation }
+public enum PreviewHostKind { Council, SourceContext, ModelEvaluation, TelemetryEvidence }
 
 public sealed record PreviewCapabilityRequest(Guid OperationId, string ApprovalFingerprint, Guid RequestId);
 
@@ -19,6 +19,8 @@ public sealed record FactoryPreviewConfiguration(
 {
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public PreviewModelHostConfiguration? ModelEvaluation { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public PreviewTelemetrySelection? Telemetry { get; init; }
 }
 
 public sealed record FactoryPreviewCapability(
@@ -27,10 +29,14 @@ public sealed record FactoryPreviewCapability(
 
 public sealed record PreviewCapabilitySnapshot(
     FactoryManifest Manifest, FactoryPreviewCapability Capability, FoundationOperation Council, FoundationOperation Code,
-    string CouncilEndpoint, string SourceContextEndpoint, string Revision)
+    string? CouncilEndpoint, string? SourceContextEndpoint, string Revision)
 {
+    public string GovernanceRevision { get; init; } = "";
     public string? ModelEndpoint { get; init; }
     public FactoryModels? Models { get; init; }
+    public string? TelemetryEndpoint { get; init; }
+    public FactoryTelemetry? Telemetry { get; init; }
+    public IReadOnlyList<FoundationOperation> TelemetryEffects { get; init; } = [];
 }
 
 public sealed record PreviewSourceContext(
@@ -87,11 +93,13 @@ public static class FactoryPreviewValidation
             PreviewHostKind.Council => "-preview",
             PreviewHostKind.SourceContext => "-context",
             PreviewHostKind.ModelEvaluation => "-preview-models",
+            PreviewHostKind.TelemetryEvidence => "-preview-telemetry",
             _ => throw new ArgumentOutOfRangeException(nameof(kind)),
         });
-    public static IReadOnlyList<PreviewHostKind> HostKinds(FactoryPreviewConfiguration? config) => config?.ModelEvaluation is null
-        ? [PreviewHostKind.Council, PreviewHostKind.SourceContext]
-        : [PreviewHostKind.Council, PreviewHostKind.SourceContext, PreviewHostKind.ModelEvaluation];
+    public static IReadOnlyList<PreviewHostKind> HostKinds(FactoryPreviewConfiguration? config) =>
+        new[] { PreviewHostKind.Council, PreviewHostKind.SourceContext }
+            .Concat(config?.ModelEvaluation is null ? [] : new[] { PreviewHostKind.ModelEvaluation })
+            .Concat(config?.Telemetry is null ? [] : new[] { PreviewHostKind.TelemetryEvidence }).ToArray();
     public static string Deployment(string group, Guid operation) => group + "/providers/microsoft.resources/deployments/preview-" + operation.ToString("N");
     public static string Account(string group, Guid factory) => group + "/providers/microsoft.documentdb/databaseaccounts/" + Prefix(factory) + "-cosmos";
     public static string Database(string account, string product) => account + "/sqldatabases/" + product;
@@ -111,7 +119,10 @@ public static class FactoryPreviewValidation
             group + "/providers/microsoft.appconfiguration/configurationstores/dsfo-" + manifest.Identity.FactoryId.ToString("N"),
             HostTarget(group, manifest.Identity.FactoryId, PreviewHostKind.Council),
             HostTarget(group, manifest.Identity.FactoryId, PreviewHostKind.SourceContext), Deployment(group, operation) }
-            .Concat(configuration?.ModelEvaluation is null ? [] : new[] { HostTarget(group, manifest.Identity.FactoryId, PreviewHostKind.ModelEvaluation) }).ToArray();
+            .Concat(configuration?.ModelEvaluation is null ? [] : new[] { HostTarget(group, manifest.Identity.FactoryId, PreviewHostKind.ModelEvaluation) })
+            .Concat(configuration?.Telemetry is not { } telemetry ? [] : new[] { telemetry.SourceIdentity.Target,
+                FactoryPreviewTelemetryValidation.OriginalHost(group, manifest.Identity.FactoryId),
+                HostTarget(group, manifest.Identity.FactoryId, PreviewHostKind.TelemetryEvidence) }).ToArray();
     }
 
     public static IReadOnlyList<(string Target, string Api)> Targets(
@@ -130,7 +141,9 @@ public static class FactoryPreviewValidation
             {
                 var host = HostTarget(group, manifest.Identity.FactoryId, kind);
                 return new[] { (host, "2025-01-01"), (host + "/authconfigs/current", "2025-01-01") };
-            })).ToArray();
+            })).Concat(configuration?.Telemetry is not { } telemetry ? [] :
+                FactoryPreviewTelemetryValidation.MetadataScopes(manifest, models, operation, telemetry).Select(scope =>
+                    (FactoryModelsValidation.Grant(scope, telemetry.MetadataRoleDefinitionId, telemetry.SourceIdentity.PrincipalId!, "").Target, "2022-04-01"))).ToArray();
     }
 
     public static (FactoryPreviewCapability Capability, Dictionary<string, FoundationOperation> Bindings, FoundationOperation[] Effects)
@@ -166,6 +179,7 @@ public static class FactoryPreviewValidation
             if (evaluation.Purpose != PreviewModelHostConfiguration.PurposeName) throw new JsonException();
             FactorySourceValidation.ValidateSelection(new(evaluation.RuntimeImage, evaluation.AudienceClientId));
         }
+        if (config.Telemetry is not null) _ = FactoryPreviewTelemetryValidation.Read(manifest, config, values);
         var rolePrefix = "/subscriptions/" + manifest.Identity.SubscriptionId + "/providers/microsoft.authorization/roledefinitions/";
         if (!config.MetadataRoleDefinitionId.StartsWith(rolePrefix, StringComparison.Ordinal)
             || !Guid.TryParseExact(config.MetadataRoleDefinitionId[rolePrefix.Length..], "D", out var roleId) || roleId == Guid.Empty)

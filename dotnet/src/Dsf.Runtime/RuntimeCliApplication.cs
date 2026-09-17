@@ -150,6 +150,23 @@ public static class RuntimeCliApplication
             }
         });
         root.Subcommands.Add(previewModels);
+        var previewTelemetry = new Command("serve-preview-telemetry", "serve protected council-only application telemetry evidence; never publish or activate");
+        previewTelemetry.SetAction(async (_, token) =>
+        {
+            try
+            {
+                var settings = FactoryHostSettings.Read(env, "Preview telemetry");
+                await using var host = RuntimeVerbs.BuildPreviewTelemetryHost(settings, dependencies);
+                await dependencies.WebHostRunner.RunAsync(host, token);
+                return Success;
+            }
+            catch (RuntimeVerbException exception)
+            {
+                await stderr.WriteLineAsync(exception.Message);
+                return Failure;
+            }
+        });
+        root.Subcommands.Add(previewTelemetry);
         foreach (var kind in new[] { Dsf.Core.Onboarding.PreviewHostKind.Council, Dsf.Core.Onboarding.PreviewHostKind.SourceContext })
         {
             var preview = new Command(kind == Dsf.Core.Onboarding.PreviewHostKind.Council ? "serve-preview" : "serve-source-context",

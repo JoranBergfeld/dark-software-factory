@@ -346,7 +346,7 @@ public sealed class FactoryTelemetryHostTests
         Assert.Contains("product-governance", runner.Body);
     }
 
-    private sealed class TelemetryRunner(TelemetryTransport? transport = null) : IWebHostRunner
+    internal sealed class TelemetryRunner(TelemetryTransport? transport = null) : IWebHostRunner
     {
         public HttpStatusCode? Response { get; private set; }
         public string Body { get; private set; } = "";
@@ -420,7 +420,7 @@ public sealed class FactoryTelemetryHostTests
         private readonly int freshnessSeconds;
         private readonly bool mixedTables;
 
-        public TelemetryTransport(int freshnessSeconds = 86400, bool multipleBackends = false, bool mixedTables = false)
+        public TelemetryTransport(int freshnessSeconds = 86400, bool multipleBackends = false, bool mixedTables = false, string? table = null)
         {
             this.freshnessSeconds = freshnessSeconds;
             this.mixedTables = mixedTables;
@@ -430,7 +430,7 @@ public sealed class FactoryTelemetryHostTests
             var hosting = Binding("hosting");
             var endpoint = "https://dsfo-" + original.Identity.FactoryId.ToString("N") + ".azconfig.io";
             var backends = new List<TelemetryBackend> { new(Workspace, WorkspaceId,
-                mixedTables ? ["AppRequests", "AppTraces"] : ["AppRequests"], [Component]) };
+                mixedTables ? ["AppRequests", "AppTraces"] : [table ?? "AppRequests"], [Component]) };
             if (multipleBackends) backends.Add(new(Workspace + "-second", "55555555-5555-5555-5555-555555555555", ["AppRequests"], [Component + "-second"]));
             var config = new FactoryTelemetryConfiguration(1, original.Identity.FactoryId, original.Identity.PlanFingerprint,
                 original.Identity.ApplicationEnvironment, backends.SelectMany(b => b.ApplicationResourceIds).ToArray(),
@@ -522,7 +522,7 @@ public sealed class FactoryTelemetryHostTests
                     : freshnessSeconds == 1800 ? "2026-09-16T11:30:00Z" : "2026-09-15T12:00:00Z",
                     Scenario == "wrong-scope" ? Component + "-other" : backend.ApplicationResourceIds[0], Scenario == "missing-id" ? "" : ItemId,
                     Scenario == "wrong-workspace" ? "ffffffff-ffff-ffff-ffff-ffffffffffff" : backend.WorkspaceId,
-                    Scenario == "wrong-table" ? "AzureActivity" : "AppRequests" } };
+                    Scenario == "wrong-table" ? "AzureActivity" : ((string)Queries[^1]["query"]!).Split(' ')[0] } };
             if (Scenario == "ragged-row") rows[0] = [.. rows[0], "secret-provider-detail"];
             return Reply(new { tables = new[] { new
             {

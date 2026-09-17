@@ -10,6 +10,7 @@ public enum TelemetryReason
 {
     None, Empty, Stale, PartialResponse, WrongScope, Unsupported, AmbiguousAuthority,
     PermissionDenied, NetworkUnavailable, MalformedResponse, AuthorityChanged,
+    SensitiveContent,
 }
 
 public sealed record TelemetryBackend(
@@ -201,6 +202,28 @@ public static class FactoryTelemetryValidation
             effects.Add(effect);
         }
         return effects;
+    }
+
+    public static void RequireVerifiedHistory(FactoryTelemetry authority, IReadOnlyDictionary<string, string> values)
+    {
+        if (authority.State != TelemetryState.Ready || authority.LastFailure != TelemetryReason.None
+            || authority.CheckId is null || authority.CheckId == Guid.Empty
+            || authority.LastCheckReference != authority.VerifiedProofReference || authority.LastCheckSha256 != authority.VerifiedProofSha256
+            || authority.VerifiedProofReference != ProductConfigurationKeys.TelemetryProof(authority.OperationId, authority.CheckId.Value)
+            || !values.TryGetValue(authority.VerifiedProofReference, out var value))
+            throw new JsonException("Complete telemetry check and verified receipt required.");
+        var proof = JsonSerializer.Deserialize<TelemetryProof>(value, FactorySourceValidation.RecordJson) ?? throw new JsonException();
+        if (Hash(proof) != authority.VerifiedProofSha256 || proof.State != TelemetryState.Ready || proof.Reason != TelemetryReason.None
+            || proof.CheckId != authority.CheckId || proof.FactoryId != authority.Configuration.FactoryId || proof.OperationId != authority.OperationId
+            || proof.ConfigurationRevision != authority.ApprovalFingerprint || proof.SourcePrincipalId != authority.Configuration.SourceIdentity.PrincipalId
+            || proof.ApplicationEnvironment != authority.Configuration.ApplicationEnvironment
+            || proof.WindowEnd > proof.ObservedAt || proof.WindowEnd - proof.WindowStart != TimeSpan.FromSeconds(authority.Configuration.FreshnessSeconds))
+            throw new JsonException("Telemetry receipt identity or integrity mismatch.");
+        FactoryTelemetryLimits.ValidateProof(authority.Configuration, proof);
+        if (!HasFreshEvidence(authority with { Proof = proof }, proof.WindowEnd)
+            || proof.Queries.Count != authority.Configuration.Backends.Sum(b => b.Tables.Count)
+            || proof.Queries.Any(q => q.Reason is not (TelemetryReason.None or TelemetryReason.Empty or TelemetryReason.Stale)))
+            throw new JsonException("Incomplete historical telemetry verification.");
     }
 
     public static IReadOnlyList<TelemetryAccessGrant> Grants(FactoryTelemetryConfiguration configuration, string subscription)

@@ -32,10 +32,11 @@ public static partial class RuntimeVerbs
         {
             Func<HttpContext, Task<IResult>> modelAuthority = context => HandleAsync(context, modelAuthority: true);
             app.MapPost("/model-authority", modelAuthority);
+            app.MapPost("/telemetry-evidence", (Func<HttpContext, Task<IResult>>)(context => HandleAsync(context, telemetryEvidence: true)));
         }
         return app;
 
-        async Task<IResult> HandleAsync(HttpContext context, bool modelAuthority = false)
+        async Task<IResult> HandleAsync(HttpContext context, bool modelAuthority = false, bool telemetryEvidence = false)
         {
             context.Response.Headers.CacheControl = "no-store";
             try
@@ -61,6 +62,14 @@ public static partial class RuntimeVerbs
                     if (observation.CapabilityRevision != capability.Revision)
                         throw new PreviewCapabilityException(FactoryCharterState.Blocked, "PreviewCapabilityChangedDuringModelRead");
                     return Results.Json(new PreviewModelAuthorityContext(request.RequestId, capability.Revision, observation.Authority), FactoryGitHubJson.Options);
+                }
+                if (telemetryEvidence)
+                {
+                    var evidence = await ReadPreviewTelemetryAsync(settings, dependencies, request, token);
+                    if (evidence.GovernanceRevision != capability.GovernanceRevision)
+                        throw new PreviewCapabilityException(FactoryCharterState.Blocked, "PreviewCapabilityChangedDuringTelemetryRead");
+                    return Results.Json(evidence, FactoryGitHubJson.Options,
+                        statusCode: evidence.Capture.Proof.State == TelemetryState.Ready ? 200 : 409);
                 }
                 SourceCharterContextResult result;
                 if (kind == PreviewHostKind.SourceContext)

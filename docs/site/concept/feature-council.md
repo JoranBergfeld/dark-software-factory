@@ -277,17 +277,18 @@ cross-provider transaction or a complete council readiness assessment.
 
 ### Protected council source-context consumption
 
-Two **runtime** commands provide connected, read-only source consumption; an
-explicitly selected third host provides model evaluation. They are not `dsf`
+Two **runtime** commands provide connected, read-only source consumption;
+explicitly selected hosts provide model evaluation and telemetry evidence. They are not `dsf`
 CLI verbs and are not yet created by provisioning assets.
 
 | Runtime command | Host suffix | Workload identity | POST route | Native Entra caller |
 | --- | --- | --- | --- | --- |
-| `serve-preview` | `-preview` | Original COUNCIL UAMI only | `/source-context` | Factory's approved Azure operator only |
+| `serve-preview` | `-preview` | Original COUNCIL UAMI only | `/source-context`, `/model-authority`, `/telemetry-evidence` | Factory's approved Azure operator only |
 | `serve-source-context` | `-context` | Original CODE UAMI only | `/council-context` | Original COUNCIL principal **and client** only |
 | `serve-preview-models` (explicit selection) | `-preview-models` | Original COUNCIL UAMI only | `/evaluate` | Original COUNCIL principal **and client** only |
+| `serve-preview-telemetry` (explicit selection) | `-preview-telemetry` | Original TELEMETRY UAMI only | `/evidence` | Original COUNCIL principal **and client** only |
 
-Both accept `PreviewCapabilityRequest`: `operationId`, `approvalFingerprint`,
+Source/context/telemetry routes accept `PreviewCapabilityRequest`: `operationId`, `approvalFingerprint`,
 and a nonempty `requestId`. `RuntimeCliApplication` runs the real hosts through
 `IWebHostRunner`; `IFactoryPreviewCapability.CheckAsync` validates current
 protected and native authority. The source route then calls
@@ -378,9 +379,125 @@ provenance prevents further dispatch on that consumer instance. This is not a
 durable dispatch journal, a cross-process retry fence, a complete candidate
 evaluation or a readiness proof.
 
-Telemetry/supplemental council-consumption routes and their aggregate
-`CouncilEvaluationContext` operation are not implemented by this model
-consumer. It does not replace their current-evidence or adopted-intent gates.
+The model consumer does not replace current-evidence or adopted-intent gates.
+Selected supplemental consumption and the aggregate `CouncilEvaluationContext`
+operation remain separate integration work.
+
+#### Genuine application telemetry consumer
+
+The operator-only `POST /telemetry-evidence` on `serve-preview` invokes
+`RuntimeVerbs.ReadPreviewTelemetryAsync` and shared `RuntimeWorkflow`. COUNCIL
+obtains its own audience-bound token and calls **COUNCIL-only** `POST /evidence`
+on the new `serve-preview-telemetry` host. That host runs under the original
+TELEMETRY UAMI (`factory:source-azuremonitor`), not COUNCIL or CODE. It uses
+`FactoryTelemetryQuery.ObserveEvidenceAsync`, sharing the actual native query,
+schema, row attribution, freshness, complete-table checks and proof machinery
+with the existing operator `/proof`. The coordinator receives no telemetry
+credential or backend grant. No inference, issue/PR/label mutation, handoff,
+state write or activation occurs.
+
+Both routes accept only the existing `PreviewCapabilityRequest`
+(`operationId`, `approvalFingerprint`, `requestId`), not queries or content.
+`FactoryPreviewConfiguration.telemetry` is a protected
+`PreviewTelemetrySelection`. Milestone 3 must present and approve **all** of:
+
+| Pin | Required value |
+| --- | --- |
+| `purpose` | `council-telemetry-evidence-v1` |
+| `configurationRevision` | Exact existing #208 telemetry configuration fingerprint: application environment/resources, all backends/workspaces/tables, source/hosting bindings, original query revision and freshness |
+| `deploymentRevision` | Hash of the complete original telemetry creation receipts |
+| `sourceIdentity`, `applications` | Exact original source `FoundationOperation`; sorted distinct selected backend Application Insights resource IDs |
+| `runtimeImage`, `audienceClientId` | Separately reviewed immutable evidence-host image and native Entra audience |
+| `projectionRevision` | `azuremonitor-app-content-v1` |
+| `rowsPerTable`, `queries` | Explicit latest-row sample size and complete exact content-query dictionary, separate from original #208 queries |
+| `metadataRoleDefinitionId`, `metadataRoleRevision` | Exact custom TELEMETRY metadata role and native properties hash |
+| `accessRoleRevisions` | Native properties hashes for every original telemetry access-role definition |
+
+Missing selection is blocked as
+`PreviewTelemetryProjectionRequired:dsf/factory/preview.configuration.telemetry`.
+An unapproved or changed selection cannot inherit approval. Current preparation
+must be `Ready`/`observed`, with complete original effects and matching persisted
+last-check/verified-proof references and hashes. Missing/corrupt receipts remain
+Unknown; explicit source Partial/Failed/Canceled/Unknown states are preserved.
+The receipt is historical integrity, **not current evidence authorization**:
+new native queries and current permission checks are always required.
+The operator-persisted telemetry root has `proof: null`; the independent proof
+record is validated using `FactoryTelemetryValidation.RequireVerifiedHistory`.
+
+The first-party content projection supports only these fields in addition to
+native `TimeGenerated`, `_ResourceId`, `_ItemId`, `TenantId`, and `Type`:
+
+| Analytics table | Content fields |
+| --- | --- |
+| `AppRequests` | `Name` string, `Success` bool, `ResultCode` string, `DurationMs` real |
+| `AppDependencies` | `Name` string, `DependencyType` string, `Success` bool, `ResultCode` string, `DurationMs` real |
+| `AppExceptions` | `ExceptionType` string, `OuterMessage` string |
+| `AppTraces` | `Message` string, `SeverityLevel` int (0..4) |
+| `AppEvents` | `Name` string |
+
+For example, the exact separately approved two-row request query is:
+
+```kusto
+AppRequests | top 2 by TimeGenerated desc | project TimeGenerated, _ResourceId, _ItemId, TenantId, Type, Name, Success, ResultCode, DurationMs
+```
+
+The native API timespan is `[now - freshnessSeconds, now]`. No application
+filter is added to hide foreign rows. Empty tables use the **original**
+metadata-only stale probe; it never creates content. Every selected table must
+be checked, with at least one fresh attributable content record per backend.
+An empty table can coexist with usable records in another selected table;
+an empty required backend cannot. `TenantId` in these native rows is the
+workspace/customer ID; Entra token tenant validation is separate.
+
+All content is **untrusted application input**, never instructions or proof of
+semantic support. Null/absent/type-mismatched content, protected/non-Analytics
+tables, unsupported workspace authorization modes, wrong attribution,
+duplicate references, partial/error/malformed responses and excess rows fail
+explicitly. Strings are limited to 2,048 JSON bytes per field, nonblank, without
+unsupported controls; durations must be finite/nonnegative. Conservative
+screening rejects recognized credentials, bearer/JWT material, email/IP
+addresses, absolute URLs and query-string content, without echoing it.
+There is no silent redaction or substitute summary. This screening is **not
+universal PII/DLP detection**; the operator must approve the data exposure and
+select only suitable first-party fields. Custom properties, users, sessions,
+URLs, dynamic payloads and arbitrary projection expressions are unsupported.
+
+`rowsPerTable` is 1..8, with at most 32 potential rows across all selected
+backend/table pairs and at most eight distinct application components. This
+is an explicit latest-row **sample, not exhaustive telemetry**. Native
+truncation/partial errors cannot masquerade as that sampling policy. Native
+query/metadata bodies and the complete evidence envelope are streamed/bounded
+to 128 KiB; no unbounded SDK response buffering before the check. Requests are
+4 KiB and the complete operation is bounded to 180 seconds. Overflow yields
+Partial, not truncated completeness. No automatic query retry.
+
+HTTP 200 returns `PreviewTelemetryEvidence`: request ID, protected-record
+`governanceRevision`, source-native `sourceAuthorityRevision`,
+`selectionRevision`, and `TelemetryEvidenceCapture`. The capture contains
+actual typed content fields, exact row references and timestamps, content and
+query hashes, native query observations/request IDs, current source proof,
+and the complete configured native metadata/grant/reference revision map.
+Source and coordinator check request/pins, whole-result integrity and freshness
+before release. Routine new telemetry rows do **not** change configuration
+authority or invalidate still-fresh captured rows.
+
+The source rechecks current workspace/component mapping, table policy,
+access-role definitions and direct/inherited grants before/after collection.
+Both hosts fence protected-record/native-host changes; TELEM checks its own
+identity and metadata scopes, while COUNCIL checks factory/council/own-state
+and participating-host bindings. `governanceRevision` is common to these
+different least-authority native views; `Revision`/`sourceAuthorityRevision`
+also include the consumer's actual native observations. These are sequential
+point-in-time checks, not cross-provider fencing or global discovery of all
+tenant grants/components. Dedication remains owner-reviewed.
+
+An unusable native query returns a bounded non-Ready capture (HTTP 409) with
+**no content rows** and its reason. Authority/transport/provenance failures
+return sanitized `PreviewContextFailure`, preserving uncertainty. A source
+proof's `Ready` state means usable telemetry only: it is **not council
+readiness, a completed preview or activation**. This read-only operation does
+not yet persist preview evidence; checkpoint 2c must persist its bounded
+provenance with the actual conveyor run.
 
 #### Reviewed deployment contract
 
@@ -392,7 +509,8 @@ Original source/model hosts, images, caller lists and creation receipts remain
 unchanged: `/charter-review` remains operator-only; `/materialize` remains
 CODE-only. Legacy model `/proof` remains operator-only; synthesis, deduplication
 and authority remain CODE-only; existing juror callers remain unchanged.
-Telemetry and supplemental endpoints are unchanged.
+Original telemetry `/proof` remains operator-only and unchanged; supplemental
+endpoints are unchanged.
 
 When `modelEvaluation` is selected, the same reviewed plan additionally creates
 `G/providers/microsoft.app/containerapps/{P}-preview-models` and its native auth
@@ -401,6 +519,15 @@ original COUNCIL UAMI and `serve-preview-models`; its only native caller is
 COUNCIL. It has the same four environment names, isolated host shape and
 private environment requirements below. The existing source/council images and
 the new model image must all appear explicitly in the operator-reviewed plan.
+
+Selecting `telemetry` additionally creates
+`G/providers/microsoft.app/containerapps/{P}-preview-telemetry` and
+`.../authconfigs/current`. Use the separate selected image/audience, **original
+TELEMETRY UAMI**, `serve-preview-telemetry`, and only the original COUNCIL
+principal as native caller. The same host-shape restrictions and four settings
+apply, with `AZURE_CLIENT_ID` set to TELEMETRY's original client ID. The
+COUNCIL host image must explicitly include `/telemetry-evidence` in the reviewed
+plan; neither this nor any source/model image change is implicit.
 
 Each new host must use the approved immutable image, original private managed
 environment, one assigned UAMI, `dotnet dsf-runtime.dll`, and its exact command
@@ -414,7 +541,7 @@ is Single. Each host has exactly:
 DSF_PRODUCT=K
 AZURE_APPCONFIG_ENDPOINT=https://dsfo-F.azconfig.io
 DSF_FACTORY_PROFILE_PIN=<original protected profile pin>
-AZURE_CLIENT_ID=<that host's original CODE or COUNCIL client ID>
+AZURE_CLIENT_ID=<that host's original CODE, COUNCIL or TELEMETRY client ID>
 ```
 
 COUNCIL retains its already approved product-config Data Reader assignment.
@@ -457,6 +584,51 @@ assignments at those scopes are checked for unapproved access. CODE retains
 its existing factory metadata/source-progress rights; no new CODE grant or
 application-backend access is required.
 
+Telemetry selection adds **three** exact scopes for COUNCIL's existing
+14-action metadata role: original TELEMETRY UAMI, original `{P}-telemetry`
+host, and new `{P}-preview-telemetry` host. No workspace/component data or
+metadata grant goes to COUNCIL.
+
+TELEMETRY retains its original product App Configuration Data Reader
+(`516239f1-63e1-4d78-a4de-a74fb236a071`) and each selected workspace's
+Monitoring Data Reader (`73c42c96-874c-492b-b04d-ab87d138a893`). Those exact
+role definitions/assignments are revalidated; no extra backend data grant
+is introduced. It additionally needs this separately approved custom ARM role
+with **exactly nine actions**, no data actions, exclusions or wildcards:
+
+```text
+Microsoft.App/containerApps/read
+Microsoft.App/containerApps/authConfigs/read
+Microsoft.App/managedEnvironments/read
+Microsoft.AppConfiguration/configurationStores/read
+Microsoft.ManagedIdentity/userAssignedIdentities/read
+Microsoft.Authorization/roleAssignments/read
+Microsoft.Authorization/roleDefinitions/read
+Microsoft.Resources/deployments/operations/read
+Microsoft.Insights/components/read
+```
+
+Assign it to TELEMETRY at seven exact factory scopes: its own original UAMI,
+COUNCIL UAMI, managed environment, product App Configuration, original
+`{P}-telemetry`, new `{P}-preview-telemetry`, and the exact preview deployment.
+Also assign it at **each selected Application Insights component resource**,
+solely for current component-to-workspace mapping and scoped grant metadata.
+The custom role's reviewed `assignableScopes` must cover these actual factory
+and application resources, but assignments must never be group/subscription
+wide. `FactoryPreviewTelemetryValidation.MetadataScopes` enumerates the exact
+resource scopes; assignment IDs use the existing deterministic
+`FactoryModelsValidation.Grant` contract. Native grant creation receipts belong
+to the same preview operation.
+
+Workspace/table metadata reads use `2026-03-01`; component reads use
+`2020-02-02`; ARM role reads use `2022-04-01`, ACA/auth use `2025-01-01`,
+and deployment-operation reads use `2022-09-01`. Workspaces must retain their
+selected customer IDs, `enableLogAccessUsingOnlyResourcePermissions=false`
+and `dataAuthorizationMode=false`; tables must be General/Analytics.
+TELEMETRY needs neither CODE/source-progress/Cosmos/model-account privileges
+nor subscription-wide assignment/component inventory. Current grant inventory
+is scoped to the reviewed resources, not a claim of global exclusivity.
+
 Factory Cosmos account `G/providers/microsoft.documentdb/databaseaccounts/{P}-cosmos`
 must retain its original incarnation, disabled local auth and disabled public
 networking. Its original SQL database is `K`, with existing `runs` and new
@@ -477,8 +649,13 @@ resource/SQL-role/assignment IDs and the complete 18-receipt target list:
 container, SQL role, two SQL assignments, ten metadata assignments, and four
 host/auth resources. Selecting model evaluation produces **21** receipts:
 eleven metadata assignments and six host/auth resources, with the other four
-resources unchanged. `FactoryPreviewValidation.Targets` and `MetadataScopes`
-must receive the approved configuration to enumerate that selection.
+resources unchanged. With `A` distinct selected application components,
+telemetry adds `12 + A` receipts: three COUNCIL metadata assignments, two
+evidence host/auth resources and `7 + A` TELEMETRY metadata assignments.
+Thus source+telemetry needs `30 + A` receipts, or `33 + A` with model evaluation
+(31/34 respectively for one component). Original #208 receipts remain separate
+and pinned. `FactoryPreviewValidation.Targets` and `MetadataScopes` must receive
+the approved configuration to enumerate the selections.
 Receipt indices are not deployment execution order:
 resource-scoped grants depend on their target resources existing.
 

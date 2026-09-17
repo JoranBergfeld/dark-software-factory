@@ -32,18 +32,26 @@ internal sealed class AzureFactoryPreviewCapability(
             var (capability, bindings, effects) = FactoryPreviewValidation.Read(manifest, models, github, source, sourceEffects, values, request, clock.GetUtcNow());
             if (kind == PreviewHostKind.ModelEvaluation && capability.Configuration.ModelEvaluation is null)
                 throw Denied("ApprovedPreviewModelConsumerRequired");
-            var own = bindings[kind == PreviewHostKind.SourceContext ? "code" : "council"];
+            var telemetry = capability.Configuration.Telemetry is null ? null : FactoryPreviewTelemetryValidation.Read(manifest, capability.Configuration, values);
+            if (kind == PreviewHostKind.TelemetryEvidence && telemetry is null)
+                throw Denied("PreviewTelemetryProjectionRequired:dsf/factory/preview.configuration.telemetry");
+            var telemetryEffects = telemetry is null ? [] : FactoryTelemetryValidation.ReadCompletedEffects(telemetry, values);
+            var own = kind == PreviewHostKind.TelemetryEvidence ? telemetry!.Configuration.SourceIdentity
+                : bindings[kind == PreviewHostKind.SourceContext ? "code" : "council"];
             if (settings.ManagedIdentityClientId != own.ClientId) throw Denied("PreviewWorkloadIdentityMismatch");
             var nativeCredential = new FactoryWorkloadCredential(credential, manifest.Identity.TenantId, own, clock);
             _ = await nativeCredential.GetTokenAsync(new TokenRequestContext(["https://appconfig.azure.com/.default"]), token);
             var native = new NativePreviewBindings(manifest, models, github, source, sourceEffects, capability, bindings, effects,
-                nativeCredential, http, clock);
-            var endpoints = await native.CheckAsync(token);
+                telemetry, telemetryEffects, nativeCredential, http, clock);
+            var endpoints = kind == PreviewHostKind.TelemetryEvidence
+                ? (Council: (string?)null, Source: (string?)null, Models: (string?)null, Telemetry: await native.CheckTelemetryAsync(true, token))
+                : await native.CheckAsync(token);
             var current = await ReadAsync(nativeCredential, token);
             if (FactoryModelsValidation.Hash(records) != FactoryModelsValidation.Hash(current)) throw Denied("PreviewGovernanceChanged");
             var revision = FactoryModelsValidation.Hash(new { Records = records, Native = native.Revisions });
             return new(manifest, capability, bindings["council"], bindings["code"], endpoints.Council, endpoints.Source, revision)
-            { ModelEndpoint = endpoints.Models, Models = models };
+            { ModelEndpoint = endpoints.Models, Models = models, GovernanceRevision = FactoryModelsValidation.Hash(records),
+                Telemetry = telemetry, TelemetryEffects = telemetryEffects, TelemetryEndpoint = endpoints.Telemetry };
         }
         catch (PreviewCapabilityException) { throw; }
         catch (OperationCanceledException) { throw; }
@@ -85,17 +93,18 @@ internal sealed class AzureFactoryPreviewCapability(
     private static PreviewCapabilityException Denied(string reason) => new(FactoryCharterState.Blocked, reason);
 }
 
-internal sealed class NativePreviewBindings(
+internal sealed partial class NativePreviewBindings(
     FactoryManifest manifest, FactoryModels models, FactoryGitHubAuthority github, FactorySource source,
     IReadOnlyList<FoundationOperation> sourceEffects, FactoryPreviewCapability capability,
     IReadOnlyDictionary<string, FoundationOperation> bindings, IReadOnlyList<FoundationOperation> effects,
+    FactoryTelemetry? telemetry, IReadOnlyList<FoundationOperation> telemetryEffects,
     TokenCredential credential, HttpClient http, TimeProvider clock)
 {
     internal SortedDictionary<string, string> Revisions { get; } = new(StringComparer.Ordinal);
     private string Group => FactoryPreviewValidation.Group(models);
     private string Account => bindings["account"].Target;
 
-    internal async Task<(string Council, string Source, string? Models)> CheckAsync(CancellationToken token)
+    internal async Task<(string? Council, string? Source, string? Models, string? Telemetry)> CheckAsync(CancellationToken token)
     {
         foreach (var (name, binding) in bindings)
         {
@@ -212,7 +221,8 @@ internal sealed class NativePreviewBindings(
         var council = await NewHostAsync(PreviewHostKind.Council, token);
         var context = await NewHostAsync(PreviewHostKind.SourceContext, token);
         var model = capability.Configuration.ModelEvaluation is null ? null : await NewHostAsync(PreviewHostKind.ModelEvaluation, token);
-        return (council, context, model);
+        var evidence = telemetry is null ? null : await CheckTelemetryAsync(false, token);
+        return (council, context, model, evidence);
     }
 
     private async Task OriginalHostsAsync(CancellationToken token)
@@ -262,13 +272,18 @@ internal sealed class NativePreviewBindings(
             RequireIncarnation(native, effect);
         }
         var model = kind == PreviewHostKind.ModelEvaluation ? capability.Configuration.ModelEvaluation : null;
-        return FactoryHostedWorkloadPolicy.Validate(host, auth, bindings[kind == PreviewHostKind.SourceContext ? "code" : "council"], bindings["hosting"],
-            model?.RuntimeImage ?? capability.Configuration.RuntimeImage, kind switch
+        var projection = kind == PreviewHostKind.TelemetryEvidence ? capability.Configuration.Telemetry : null;
+        return FactoryHostedWorkloadPolicy.Validate(host, auth,
+            projection?.SourceIdentity ?? bindings[kind == PreviewHostKind.SourceContext ? "code" : "council"], bindings["hosting"],
+            projection?.RuntimeImage ?? model?.RuntimeImage ?? capability.Configuration.RuntimeImage, kind switch
             {
                 PreviewHostKind.Council => "serve-preview", PreviewHostKind.SourceContext => "serve-source-context",
-                PreviewHostKind.ModelEvaluation => "serve-preview-models", _ => throw new ArgumentOutOfRangeException(nameof(kind)),
+                PreviewHostKind.ModelEvaluation => "serve-preview-models",
+                PreviewHostKind.TelemetryEvidence => "serve-preview-telemetry",
+                _ => throw new ArgumentOutOfRangeException(nameof(kind)),
             },
-            Product, ProductEndpoint, manifest.ProfilePin, manifest.Identity.TenantId, model?.AudienceClientId ?? capability.Configuration.AudienceClientId,
+            Product, ProductEndpoint, manifest.ProfilePin, manifest.Identity.TenantId,
+            projection?.AudienceClientId ?? model?.AudienceClientId ?? capability.Configuration.AudienceClientId,
             [kind == PreviewHostKind.Council ? manifest.Identity.AzureActorId : bindings["council"].PrincipalId!]);
     }
 

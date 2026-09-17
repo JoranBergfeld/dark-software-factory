@@ -15,13 +15,14 @@ public static class FactoryTelemetryLimits
 
     public static bool FitsDetail(string value) => value.Length <= DetailJsonBytes && StringJsonBytes(value) <= DetailJsonBytes;
 
-    public static void ValidateProof(FactoryTelemetryConfiguration configuration, TelemetryProof proof)
+    public static void ValidateProof(FactoryTelemetryConfiguration configuration, TelemetryProof proof, PreviewTelemetrySelection? projection = null)
     {
         var count = configuration.Backends.Sum(b => b.Tables.Count);
         if (!FitsDetail(proof.Detail) || proof.Records.Count > count || proof.Queries.Count > count
             || proof.Records.Select(r => (r.BackendResourceId, r.Table)).Distinct().Count() != proof.Records.Count
             || proof.Queries.Select(q => (q.BackendResourceId, q.Table)).Distinct().Count() != proof.Queries.Count
-            || proof.AttributionBasis != FactoryTelemetryValidation.Attribution || proof.CoverageLimitations != FactoryTelemetryValidation.Coverage)
+            || proof.AttributionBasis != FactoryTelemetryValidation.Attribution
+            || proof.CoverageLimitations != (projection is null ? FactoryTelemetryValidation.Coverage : FactoryPreviewTelemetryValidation.Coverage))
             throw new JsonException("Proof exceeds its reviewed lifecycle bounds; no truncation permitted.");
         foreach (var record in proof.Records) Reference(record);
         foreach (var query in proof.Queries)
@@ -29,7 +30,7 @@ public static class FactoryTelemetryLimits
             var backend = Backend(query.BackendResourceId);
             if (!backend.Tables.Contains(query.Table) || !Enum.IsDefined(query.Reason)
                 || query.Records is < 0 or >= 500000
-                || query.QuerySha256 != FactoryTelemetryValidation.Hash(configuration.Queries[query.Table])
+                || query.QuerySha256 != FactoryTelemetryValidation.Hash((projection?.Queries ?? configuration.Queries)[query.Table])
                 || query.ProviderRequestId is not null && (!Guid.TryParse(query.ProviderRequestId, out var request)
                     || request.ToString() != query.ProviderRequestId))
                 throw new JsonException("Query observation exceeds its reviewed bounds.");
