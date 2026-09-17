@@ -46,21 +46,43 @@ internal sealed partial class PreviewExecutionStore(PreviewCapabilitySnapshot au
     internal PreviewEvaluationDocument Document => document ?? throw new InvalidOperationException("Preview state must be read first.");
     internal string RunId => Id + "-run";
 
-    internal async Task<PreviewExecutionSeed> PrepareAsync(TimeProvider clock, CancellationToken token)
+    internal async Task<PreviewExecutionSeed> PrepareAsync(TimeProvider clock, CancellationToken token, bool readOnly = false)
     {
         var native = await gateway.ReadCheckpointAsync(endpoint, product, FactoryPreviewValidation.PreviewContainer, product, Id, token);
         if (native is null)
         {
+            if (readOnly) throw new PreviewCapabilityException(FactoryCharterState.Unknown, "ReferencedPreviewSeedMissingNoReinitialization");
             var initial = new PreviewEvaluationDocument(1, Id, product, authority.Manifest.Identity.FactoryId, authority.Capability.OperationId, clock.GetUtcNow());
+            if (authority.SeedIntent is { } intent)
+            {
+                if (intent.Endpoint != endpoint || intent.Database != product || intent.Container != FactoryPreviewValidation.PreviewContainer
+                    || intent.Partition != product || intent.Policy != FactoryPreviewExecution.Policy) throw new JsonException();
+                using var seedBody = JsonDocument.Parse(intent.Document);
+                var reviewed = seedBody.RootElement.Deserialize<PreviewEvaluationDocument>(FactorySourceValidation.RecordJson) ?? throw new JsonException();
+                if (reviewed.Checksum != reviewed.CalculateChecksum())
+                    throw new PreviewCapabilityException(FactoryCharterState.Unknown, "NativeSeedIntentChecksumChanged");
+                if (reviewed.CreatedAt > clock.GetUtcNow())
+                    throw new PreviewCapabilityException(FactoryCharterState.Unknown, "NativeSeedIntentClockUnconfirmed");
+                initial = Parse(seedBody.RootElement);
+            }
             initial = initial with { Checksum = initial.CalculateChecksum() };
             native = await gateway.WriteCheckpointAsync(endpoint, product, FactoryPreviewValidation.PreviewContainer, product, Id,
-                JsonSerializer.Serialize(initial, FactoryGitHubJson.Options), null, token);
+                authority.SeedIntent?.Document ?? JsonSerializer.Serialize(initial, FactoryGitHubJson.Options), null, token);
         }
         using var body = JsonDocument.Parse(native.Json, new JsonDocumentOptions { AllowDuplicateProperties = false });
         var document = Parse(body.RootElement);
         if (document.Phase != PreviewExecutionPhase.Prepared || document.Owner != Guid.Empty || document.Checksum != document.Initial().CalculateChecksum())
             throw new PreviewCapabilityException(FactoryCharterState.Blocked, "PreviewStateAlreadyInUse");
-        return new(Id, Resource(body.RootElement), native.ETag, document.Checksum);
+        var seed = new PreviewExecutionSeed(Id, Resource(body.RootElement), native.ETag, document.Checksum);
+        if (authority.SeedIntent is { } intended)
+        {
+            using var expected = JsonDocument.Parse(intended.Document);
+            if (seed.Checksum != expected.RootElement.GetProperty("checksum").GetString())
+                throw new PreviewCapabilityException(FactoryCharterState.Unknown, "ExistingNativeSeedDoesNotMatchReviewedIntent");
+        }
+        if (authority.Capability.Configuration.Execution is { } configuration && configuration.Seed != seed)
+            throw new PreviewCapabilityException(FactoryCharterState.Unknown, "PreviewSeedReceiptChanged");
+        return seed;
     }
 
     internal async Task<ConveyorRun?> ReadAsync(CancellationToken token)
@@ -219,6 +241,9 @@ internal sealed partial class PreviewExecutionStore(PreviewCapabilitySnapshot au
 
 public static partial class RuntimeVerbs
 {
+    public static Task<PreviewExecutionSeed> InspectPreviewPreparationAsync(FactoryHostSettings settings, RuntimeDependencies dependencies,
+        PreviewCapabilityRequest request, CancellationToken token) =>
+        RuntimeWorkflow.PreparePreviewExecutionAsync(settings, dependencies, request, dependencies.PreviewHttp ?? PreviewHttp, token, readOnly: true);
     public static Task<PreviewExecutionSeed> PreparePreviewExecutionAsync(FactoryHostSettings settings, RuntimeDependencies dependencies,
         PreviewCapabilityRequest request, CancellationToken token) =>
         RuntimeWorkflow.PreparePreviewExecutionAsync(settings, dependencies, request, dependencies.PreviewHttp ?? PreviewHttp, token);
@@ -227,16 +252,17 @@ public static partial class RuntimeVerbs
 internal static partial class RuntimeWorkflow
 {
     internal static async Task<PreviewExecutionSeed> PreparePreviewExecutionAsync(FactoryHostSettings settings, RuntimeDependencies dependencies,
-        PreviewCapabilityRequest request, HttpClient http, CancellationToken cancellationToken)
+        PreviewCapabilityRequest request, HttpClient http, CancellationToken cancellationToken, bool readOnly = false)
     {
         using var deadline = new CancellationTokenSource(FactoryPreviewValidation.RequestBudget, dependencies.PreviewClock);
         using var pending = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline.Token);
         var token = pending.Token;
         var credential = dependencies.PreviewCredential ?? new ManagedIdentityCredential(ManagedIdentityId.FromUserAssignedClientId(settings.ManagedIdentityClientId));
         var authority = await new AzureFactoryPreviewCapability(settings, PreviewHostKind.Council, credential, http, dependencies.PreviewClock).CheckAsync(request, token);
-        if (authority.Capability.Configuration.Execution is not null)
+        if (!readOnly && (authority.Capability.Configuration.Execution is not null
+            || authority.Publication is { Phase: not PreviewPublicationPhase.SeedDispatched }))
             throw new PreviewCapabilityException(FactoryCharterState.Blocked, "ApprovedPreviewSeedCannotBeReinitialized");
-        var seed = await new PreviewExecutionStore(authority, credential, http, dependencies.PreviewClock).PrepareAsync(dependencies.PreviewClock, token);
+        var seed = await new PreviewExecutionStore(authority, credential, http, dependencies.PreviewClock).PrepareAsync(dependencies.PreviewClock, token, readOnly);
         var current = await new AzureFactoryPreviewCapability(settings, PreviewHostKind.Council, credential, http, dependencies.PreviewClock).CheckAsync(request, token);
         if (current.Revision != authority.Revision)
             throw new PreviewCapabilityException(FactoryCharterState.Blocked, "PreviewCapabilityChangedDuringPreparation");

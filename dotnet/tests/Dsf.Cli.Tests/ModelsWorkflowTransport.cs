@@ -108,7 +108,9 @@ internal sealed class ModelsWorkflowTransport(FactoryFoundationTests.FoundationT
             if (path.EndsWith("/roledefinitions/516239f1-63e1-4d78-a4de-a74fb236a071", StringComparison.Ordinal))
                 return Reply(HttpStatusCode.OK, JsonSerializer.SerializeToNode(new
                 {
-                    id = path, properties = new { type = "BuiltInRole", permissions = new[] { new
+                    id = "/subscriptions/" + (string)Manifest["identity"]!["subscriptionId"]!
+                        + "/providers/microsoft.authorization/roledefinitions/516239f1-63e1-4d78-a4de-a74fb236a071",
+                    properties = new { type = "BuiltInRole", permissions = new[] { new
                     {
                         actions = Array.Empty<string>(), notActions = Array.Empty<string>(), notDataActions = Array.Empty<string>(),
                         dataActions = new[] { "Microsoft.AppConfiguration/configurationStores/keyValues/read",

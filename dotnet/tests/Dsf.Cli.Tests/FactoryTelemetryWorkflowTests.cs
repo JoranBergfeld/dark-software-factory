@@ -710,7 +710,8 @@ public sealed class FactoryTelemetryWorkflowTests
         Assert.Equal(0, (await machine.ReserveAsync(fingerprint)).Exit);
         var arm = new FactoryFoundationTests.FoundationTransport(machine.Store, creationClock) { CompleteCreates = true, CompleteDeployment = true };
         machine.Boundary.Repository.ReservationHttp = new HttpClient(arm);
-        Assert.Equal(0, (await machine.InvokeAsync("provision", "--reviewed-fingerprint", fingerprint)).Exit);
+        var provisioned = await machine.InvokeAsync("provision", "--reviewed-fingerprint", fingerprint);
+        Assert.True(provisioned.Exit == 0, provisioned.Terminal.Output + provisioned.Terminal.Error);
         return (machine, arm);
     }
 }

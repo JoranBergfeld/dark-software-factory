@@ -58,6 +58,8 @@ internal sealed partial class FactorySupplementalService
             if (admission.Foundation!.Operations.Any(o => o.PrincipalId is not null && o.PrincipalId == identity.PrincipalId)
                 || effects.Any(e => e != identity && e.Target.Contains("/userassignedidentities/", StringComparison.Ordinal)
                     && e.PrincipalId == identity.PrincipalId)) throw new JsonException();
+            var preview = await FactoryPreviewMetadataProof.ReadAsync(admission, Store(admission),
+                new FactoryPreparationArm(azure, http, admission.Identity!), identity.PrincipalId!, clock, token);
             var paths = new[] { "/subscriptions/" + manifest.Identity.SubscriptionId + "/providers/microsoft.authorization/roleassignments?$filter=assignedTo('" + identity.PrincipalId + "')" }
                 .Concat(grants.Select(g => g.Scope + "/providers/microsoft.authorization/roleassignments?$filter=atScope()+and+assignedTo('" + identity.PrincipalId + "')"))
                 .Append(config.FactoryGroup + "/providers/microsoft.authorization/roleassignments?$filter=atScope()+and+assignedTo('" + identity.PrincipalId + "')");
@@ -66,6 +68,7 @@ internal sealed partial class FactorySupplementalService
                 using var response = await GetAsync(admission, path, "2022-04-01", token);
                 foreach (var assignment in Complete(response.RootElement))
                 {
+                    if (preview.Includes(assignment)) continue;
                     var effect = effects.SingleOrDefault(e => Same(e.Target, assignment.GetProperty("id").GetString()));
                     var grant = grants.SingleOrDefault(g => Same(g.Target, assignment.GetProperty("id").GetString()));
                     if (effect is null || grant is null || Observe(effect, assignment, grant).NativeRevision != effect.NativeRevision)

@@ -13,7 +13,7 @@ public sealed record PreviewPreparationSelection(Guid OperationId, string Runtim
     string MetadataRoleDefinitionId, PreviewWorkloadSelection Models, PreviewTelemetryPreparationSelection Telemetry,
     IReadOnlyList<PreviewSupplementalPreparationSelection> Supplemental, CouncilJudgmentConfiguration Judgment);
 
-public enum PreviewPreparationState { Reviewed, Partial, ConfirmedNotReady, Blocked, KnownFailed, Unknown, Canceled }
+public enum PreviewPreparationState { Reviewed, Partial, ConfirmedNotReady, SeedAwaitingApproval, ConfiguredAwaitingEvaluation, Blocked, KnownFailed, Unknown, Canceled }
 public enum PreviewPreparationEffectState { Intended, Dispatched, Confirmed, KnownFailed, Unknown }
 public enum PreviewPreparationAction { WorkloadDeployment, MetadataAssignment }
 public sealed record PreviewPreparationPolicy(string Revision, int RequestSeconds, int MaximumEffects, int PlanBytes,
@@ -63,11 +63,16 @@ public sealed record PreviewPreparationResult(PreviewPreparationState State, str
     PreviewPreparationPlan? Plan = null, PreviewPreparationCoordinator? Preparation = null,
     IReadOnlyList<PreviewPreparationEffect>? Effects = null, IReadOnlyList<PreviewPreparationReceipt>? Receipts = null)
 {
-    public string? ApprovalFingerprint => Plan?.Fingerprint;
+    public PreviewPublicationReview? Publication { get; init; }
+    public PreviewPublicationJournal? PublicationState { get; init; }
+    public string? ApprovalFingerprint => Publication?.ApprovalFingerprint ?? Plan?.Fingerprint;
     public bool CurrentReady => false;
     public string NextActor => State switch
     {
-        PreviewPreparationState.ConfirmedNotReady => "Operator/configuration administrator: capability publication and native execution-seed approval remain separate; evaluation is not yet authorized.",
+        PreviewPreparationState.ConfirmedNotReady => "Operator: review the --configure continuation; capability and native execution-seed approvals remain separate.",
+        PreviewPreparationState.SeedAwaitingApproval => "Operator: inspect and approve the exact returned native seed and execution configuration fingerprint.",
+        PreviewPreparationState.ConfiguredAwaitingEvaluation => "Operator: supervised evaluation remains separate; configuration is not readiness or activation.",
+        PreviewPreparationState.Reviewed when Publication is not null => "Operator: approve this exact protected publication and native seed intent, or leave the review read-only.",
         PreviewPreparationState.Unknown => "Azure/configuration administrator: reconcile original request IDs and retained keys; no replay, name adoption or reset.",
         _ => "Operator: review exact native preparation and prerequisites; capability publication and execution-seed approval remain separate.",
     };

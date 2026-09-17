@@ -89,6 +89,7 @@ internal sealed partial class NativePreviewBindings
             foreach (var effect in effects.Where(e => e.Target == previewTarget || e.Target == previewTarget + "/authconfigs/current"
                 || scopes.Any(s => e.Target == FactoryModelsValidation.Grant(s, selection.MetadataRoleDefinitionId, config.SourceIdentity.PrincipalId!, "").Target)))
             {
+                if (effect.DeploymentTarget is null) continue;
                 var operation = await GetAsync(effect.DeploymentTarget! + "/operations/" + effect.ProviderOperationId, "2022-09-01", token);
                 var p = operation.GetProperty("properties");
                 if (operation.GetProperty("operationId").GetString() != effect.ProviderOperationId

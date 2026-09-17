@@ -89,6 +89,7 @@ internal sealed partial class FactoryModelsService
             }
         }
         var principal = selected.Bindings[0].PrincipalId;
+        var preview = await FactoryPreviewMetadataProof.ReadAsync(admission, Store(admission), arm, principal!, clock, token);
         var paths = new[] { "/subscriptions/" + admission.Identity!.SubscriptionId + "/providers/microsoft.authorization/roleassignments?$filter=assignedTo('" + principal + "')" }
             .Concat(selected.Grants.Select(g => g.Scope + "/providers/microsoft.authorization/roleassignments?$filter=atScope()+and+assignedTo('" + principal + "')"));
         foreach (var path in paths)
@@ -96,6 +97,7 @@ internal sealed partial class FactoryModelsService
             using var roles = await ReadNativeAsync(arm, path, "2022-04-01", token);
             foreach (var role in CompleteValues(roles.RootElement))
             {
+                if (preview.Includes(role)) continue;
                 var grant = selected.Grants.SingleOrDefault(g => Same(g.Target, role.GetProperty("id").GetString()));
                 if (grant is null || !effects.Any(e => e.Target == grant.Target && e.State == FoundationOperationState.Completed))
                     throw FactoryModelsValidation.Failure(ModelCapabilityReason.PermissionDenied, "model-workload", "Unreviewed inherited/group/preexisting authority; grantor must reconcile, never adopted.");

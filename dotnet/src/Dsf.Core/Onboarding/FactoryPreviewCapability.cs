@@ -31,6 +31,8 @@ public sealed record FactoryPreviewConfiguration(
     public PreviewExecutionConfiguration? Execution { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? ExecutionRevision { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? PreparationRevision { get; init; }
 }
 
 public sealed record FactoryPreviewCapability(
@@ -51,6 +53,8 @@ public sealed record PreviewCapabilitySnapshot(
     public IReadOnlyList<FoundationOperation> SupplementalEffects { get; init; } = [];
     public IReadOnlyList<FoundationOperation> Effects { get; init; } = [];
     public IReadOnlyDictionary<string, string> SupplementalEndpoints { get; init; } = new Dictionary<string, string>();
+    public PreviewPublicationJournal? Publication { get; init; }
+    public PreviewSeedIntent? SeedIntent { get; init; }
 }
 
 public sealed record PreviewSourceContext(
@@ -256,6 +260,25 @@ public static class FactoryPreviewValidation
                 throw new JsonException("Original factory binding required.");
         }
         var targets = Targets(manifest, models, github, capability.OperationId, config.MetadataRoleDefinitionId, config);
+        FoundationOperation[]? prepared = null;
+        if (config.PreparationRevision is not null)
+        {
+            var history = FactoryPreviewPublication.ReadConfirmed(manifest, values, now);
+            if (history.Plan.Fingerprint != config.PreparationRevision) throw new JsonException("Original native preparation required.");
+            prepared = FactoryPreviewPublication.Effects(history, manifest, models, github);
+            var publication = FactoryPreviewPublication.ValidatePublished(history, models, github, values, now);
+            if (publication.Protocol != 1 || publication.FactoryId != manifest.Identity.FactoryId || publication.OperationId != capability.OperationId
+                || publication.PreparationRevision != config.PreparationRevision || publication.ApprovedBy != manifest.Identity.AzureActorId
+                || publication.Owner == Guid.Empty || publication.ApprovedAt > now
+                || publication.Phase is not (PreviewPublicationPhase.SeedDispatched or PreviewPublicationPhase.SeedAwaitingApproval or PreviewPublicationPhase.ConfiguredAwaitingEvaluation)
+                || publication.Phase == PreviewPublicationPhase.SeedDispatched
+                    && request.RequestId != FactoryPreviewPublication.RequestId(capability.OperationId, "native-seed")
+                || publication.Phase == PreviewPublicationPhase.ConfiguredAwaitingEvaluation && config.Execution?.Seed != publication.Seed
+                || publication.Phase != PreviewPublicationPhase.ConfiguredAwaitingEvaluation && config.Execution is not null)
+                throw new PreviewCapabilityException(FactoryCharterState.Unknown, "PreviewPublicationIncompleteOrQuarantined");
+        }
+        else if (values.Keys.Any(k => FactoryPreviewPublication.IsPreparationRecord(k) || k.StartsWith(FactoryPreviewPublication.Namespace, StringComparison.Ordinal)))
+            throw new PreviewCapabilityException(FactoryCharterState.Unknown, "PreparedPreviewHistoryCannotBeDowngraded");
         if (capability.EffectHashes.Count != targets.Count) throw new JsonException("Complete preview deployment receipts required.");
         var effects = targets.Select((target, i) =>
         {
@@ -263,11 +286,13 @@ public static class FactoryPreviewValidation
             if (effect.SchemaVersion != 1 || effect.Kind != OperationKind || effect.FactoryId != config.FactoryId
                 || effect.OperationId != capability.OperationId || effect.Index != i || effect.Target != target.Target
                 || effect.ResourceId != effect.Target || effect.ApiVersion != target.Api
-                || effect.DeploymentTarget != Deployment(group, capability.OperationId)
+                || (prepared is null ? effect.DeploymentTarget != Deployment(group, capability.OperationId)
+                    || !FactoryTelemetryValidation.IsProviderOperationId(effect.ProviderOperationId)
+                    : FactoryModelsValidation.Hash(effect) != FactoryModelsValidation.Hash(prepared[i]))
                 || effect.StartedAt < capability.ApprovedAt || effect.StartedAt > now || effect.ClientRequestId == Guid.Empty
                 || effect.State != FoundationOperationState.Completed || effect.Disposition != FoundationResourceDisposition.Created
                 || effect.HttpStatus is not (200 or 201) || !FactorySourceValidation.Hash(effect.RequestSha256)
-                || !FactorySourceValidation.Hash(effect.NativeRevision) || !FactoryTelemetryValidation.IsProviderOperationId(effect.ProviderOperationId)
+                || !FactorySourceValidation.Hash(effect.NativeRevision)
                 || !Guid.TryParse(effect.ProviderRequestId, out var provider) || provider == Guid.Empty
                 || !Guid.TryParse(effect.ProviderCorrelationId, out var correlation) || correlation == Guid.Empty
                 || FactoryModelsValidation.Hash(effect) != capability.EffectHashes[i])

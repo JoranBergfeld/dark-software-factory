@@ -1,9 +1,11 @@
 # Prepare council preview infrastructure
 
-`dsf onboard decide preview` now reviews and provisions **native preparation
-only**. It does not publish the protected preview capability, create an
-execution seed, call the evaluation routes, grant activation, or file anything.
-`ConfirmedNotReady` is not council readiness or completed onboarding.
+`dsf onboard decide preview` reviews and provisions native preparation.
+Its explicit `--configure` continuation publishes the protected capability,
+conditionally creates the native execution seed through the real COUNCIL host,
+and requires separate approval of that returned seed. Neither
+`ConfirmedNotReady` nor `ConfiguredAwaitingEvaluation` means readiness or
+completed onboarding. No issue, PR, label, delivery or activation effect occurs.
 
 First retain the reserved inactive foundation, verified GitHub authority,
 complete source inventory/analysis, adopted charter, current model proof and
@@ -149,13 +151,16 @@ dsf onboard decide preview --status \
 | --- | --- |
 | `Reviewed` | No writes; operator may approve the exact fingerprint. |
 | `Partial` | Durable preparation exists, but native effects are incomplete; inspect original records. |
-| `ConfirmedNotReady` | Exact native effects/receipts confirmed; capability and seed approval remain a separate next increment. |
+| `ConfirmedNotReady` | Exact native effects/receipts confirmed; use the separately approved `--configure` continuation. |
+| `SeedAwaitingApproval` | Native seed returned; operator must approve its exact identity, ETag, checksum and execution configuration. |
+| `ConfiguredAwaitingEvaluation` | Protected configuration and native seed verified; evaluation remains separate. |
 | `Blocked` | Required current authority/configuration differs or is unavailable; prerequisite owner must reconcile it. |
 | `KnownFailed` | Definitive rejection, distinct from uncertain acceptance; no automatic retry. |
 | `Canceled` | Cancellation recorded; inspect whether any effect was dispatched. |
 | `Unknown` | Lost acknowledgement, incomplete/corrupt/orphaned history, ambiguous native outcome or ownership change; retain resources and request IDs, never replay. |
 
-Exit `0` means only a successful review or confirmed native preparation;
+Exit `0` means a successful review, confirmed preparation, returned seed awaiting
+approval, or verified configuration awaiting evaluation;
 failure states exit `1`, cancellation `130`. `currentReady` is always false.
 Status verifies serialized journal integrity and current native receipts
 without any state, deployment, publication or activation write. It retains
@@ -175,13 +180,100 @@ effects, 4-MiB native responses, and the native 10-KiB App Configuration
 record limit. Full lifecycle capacity is checked before the first write.
 Overflow never truncates records or expands scope.
 
-**Remaining integration:** conditional capability/manifest publication,
-operator-approved native seed/execution configuration, and CLI consumption
-of `/prepare-evaluation`, `/evaluate` and `/evaluation`. Runtime proof APIs
-already exist, but native preparation alone cannot authorize or replace them.
-Legacy model/telemetry/supplemental verification isolation checks are not
-expanded by this increment. Their old `--verify-only` paths do not recognize
-the new metadata assignments as legacy consent. The capability handoff must
-integrate receipt-bound current proof refresh without a broad admission
-switch, implicit old-host upgrade, removing selected sources or resetting
-held state. Expired predecessor proof remains a blocker meanwhile.
+## Configure the confirmed preparation
+
+Use the original four locators; do **not** supply another `--preview-config`
+or `--resume`. The continuation derives every binding, operation, configuration
+and manifest pin from the original protected plan and actual confirmed native
+receipts. It never redeploys or adopts a resource.
+
+```bash
+dsf onboard decide preview --configure \
+  --owner-appconfig-endpoint https://OWNER.azconfig.io \
+  --product PRODUCT --tenant TENANT_GUID --subscription SUBSCRIPTION_GUID \
+  --json
+```
+
+Inspect `publication`: exact protected key/value writes, previous-value hashes,
+COUNCIL endpoint/request identity, and `seedIntent` containing the database,
+container, `/product` partition value, complete initial document and execution
+policy. The initial document is only an intended request, **not** a native seed
+receipt. Approve this review by repeating the command with
+`--approve EXACT_PUBLICATION_FINGERPRINT`.
+
+The command conditionally publishes the bindings/effects, capability and
+manifest pins, then invokes `POST /prepare-evaluation` through the authenticated
+COUNCIL host. The runtime verifies native authority and conditionally creates
+the one intended Cosmos item; no context collection, synthesis or juror
+evaluation is performed. Its actual `_rid`, quoted ETag and checksum appear
+in `publication.execution.seed`.
+
+The result is `SeedAwaitingApproval`, with a **different** approval fingerprint.
+Inspect that complete execution configuration, then repeat `--configure` with
+`--approve EXACT_RETURNED_SEED_CONFIGURATION_FINGERPRINT`. This conditionally
+creates the execution configuration and updates the exact capability/manifest
+pins. The real host rechecks the native seed without writing. Success is
+`ConfiguredAwaitingEvaluation`, never Ready or activated.
+
+Interactive use displays each review and prompts for that exact fingerprint;
+blank approval remains read-only. Redirected/`--json` use never prompts or
+assumes approval. All four locators remain required. Two stages need two
+explicit approvals; the runtime has no protected-configuration writer and
+cannot approve its own returned receipt.
+
+Read-only configuration/seed inspection:
+
+```bash
+dsf onboard decide preview --configure --status \
+  --owner-appconfig-endpoint https://OWNER.azconfig.io \
+  --product PRODUCT --tenant TENANT_GUID --subscription SUBSCRIPTION_GUID \
+  --json
+```
+
+Status uses `POST /preparation`, a read-only authenticated runtime route.
+`publicationState` retains the typed coordinator and any returned native seed;
+each stage's original explicit approval remains separately persisted.
+It never calls the create route to infer absence or repair erased state.
+Already confirmed configuration is reverified without republishing or
+recreating the seed. A missing root with surviving history, missing journal
+step, modified grant/incarnation, missing native item or lost acknowledgment
+remains nonready. Unknown effects are quarantined; neither this continuation
+nor `--resume` retries them.
+
+The originally reviewed COUNCIL image must implement `/prepare-evaluation`
+and `/preparation` with this protected publication protocol. Entra audience,
+private network reachability and operator access remain explicit prerequisites.
+An older pinned host image is not silently upgraded, nor does DSF repair
+private routing. An administrator must reconcile an unsupported or uncertain
+original preparation; selecting another operation ID is not recovery.
+
+Protected publication uses the same 3,600-second outer deadline and 30-second
+accounting closeout. `publication.policy` pins these repository defaults as
+`protected-preview-publication-v1` in both explicit approval fingerprints.
+Each stage allows at most 96 writes and a 512-KiB review;
+the exact initial seed document is at most 16 KiB and the returned receipt at
+most 4 KiB. Complete lifecycle records must fit native 10-KiB limits, including
+the later execution pin. The protected namespace is bounded to 1,024 records
+and 4 MiB, with no silent omission or truncation.
+
+### Refresh predecessor proof
+
+Existing `models --verify-only`, `telemetry --verify-only` and selected
+`supplemental --verify-only` commands now recognize **only** exact metadata
+additions authorized by the confirmed preparation. They recheck the original
+principal, role/actions, scope, condition, creator, native incarnation and
+receipt revision. Unknown, unrelated, replaced or broader grants still fail.
+No source credentials or backend grants move to COUNCIL.
+
+Use these existing commands explicitly when proof expires, with the same
+operator locators and originally reviewed inputs. They execute their actual
+proof paths; `--configure` does not silently run model probes or repair
+evidence. A compatible refreshed proof does not repin the preparation:
+material model/source/configuration, charter/adoption, selected-source and
+native resource changes still block. Current checks are point-in-time, not
+cross-provider atomicity.
+
+**Remaining operator integration:** CLI evaluation/output consumption of
+`/evaluate` and `/evaluation`, final connected evaluation scenarios and fresh
+installed-tool acceptance. Runtime evaluation/proof APIs already exist;
+configuration and a native seed alone are not completed readiness.

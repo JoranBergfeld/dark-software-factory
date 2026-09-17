@@ -1024,19 +1024,15 @@ public sealed class FactoryFoundationTests
                     complete["properties"]!["provisioningState"] = "Creating";
                     return JsonReply(HttpStatusCode.Created, complete);
                 }
+                var nativeConfiguration = JsonNode.Parse(Writes[^1])!;
+                nativeConfiguration["id"] = request.RequestUri.AbsolutePath;
+                nativeConfiguration["properties"] ??= new JsonObject();
+                nativeConfiguration["properties"]!["provisioningState"] = "Succeeded";
+                nativeConfiguration["properties"]!["creationDate"] = DateTimeOffset.UtcNow;
+                nativeConfiguration["properties"]!["endpoint"] = "https://" + request.RequestUri.Segments.Last() + ".azconfig.io";
+                created[request.RequestUri.AbsolutePath] = nativeConfiguration.DeepClone();
                 var response = new HttpResponseMessage(HttpStatusCode.Created)
-                {
-                    Content = new StringContent(new JsonObject
-                    {
-                        ["id"] = request.RequestUri.AbsolutePath,
-                        ["properties"] = new JsonObject
-                        {
-                            ["provisioningState"] = "Succeeded",
-                            ["creationDate"] = DateTimeOffset.UtcNow,
-                            ["endpoint"] = "https://" + request.RequestUri.Segments.Last() + ".azconfig.io",
-                        },
-                    }.ToJsonString(), Encoding.UTF8, "application/json"),
-                };
+                { Content = new StringContent(nativeConfiguration.ToJsonString(), Encoding.UTF8, "application/json") };
                 response.Headers.Add("x-ms-request-id", Guid.NewGuid().ToString());
                 response.Headers.Date = DateTimeOffset.UtcNow;
                 if (CreateDamage == "malformed-json") response.Content = new StringContent("{secret-provider-detail");

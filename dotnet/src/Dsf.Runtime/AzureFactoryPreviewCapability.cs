@@ -4,6 +4,7 @@ using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Azure.Core;
 using Dsf.Core.Onboarding;
 using Dsf.Core.Runtime;
@@ -30,6 +31,19 @@ internal sealed class AzureFactoryPreviewCapability(
             models = FactoryModelsValidation.ReadVerified(manifest, values,
                 new(models.OperationId, models.ApprovalFingerprint, models.LastProofReference ?? "", models.LastProofSha256 ?? ""), clock.GetUtcNow());
             var (capability, bindings, effects) = FactoryPreviewValidation.Read(manifest, models, github, source, sourceEffects, values, request, clock.GetUtcNow());
+            if (capability.Configuration.PreparationRevision is not null)
+            {
+                var steps = values.Where(p => p.Key.StartsWith(FactoryPreviewPublication.Namespace, StringComparison.Ordinal)
+                    && p.Key != FactoryPreviewPublication.RootKey && !p.Key.EndsWith("/approval", StringComparison.Ordinal))
+                    .Select(p => (Execution: p.Key.Contains("/execution/", StringComparison.Ordinal),
+                        Step: JsonSerializer.Deserialize<PreviewPublicationStep>(p.Value, FactorySourceValidation.RecordJson) ?? throw new JsonException()));
+                foreach (var target in steps.GroupBy(s => s.Step.Target))
+                {
+                    var last = target.OrderBy(s => s.Execution).Last().Step;
+                    if (!records.NativeVersions.TryGetValue(last.Target, out var version) || version != last.NativeRevision)
+                        throw new PreviewCapabilityException(FactoryCharterState.Unknown, "ProtectedPublicationNativeRevisionChanged");
+                }
+            }
             if (kind == PreviewHostKind.ModelEvaluation && capability.Configuration.ModelEvaluation is null)
                 throw Denied("ApprovedPreviewModelConsumerRequired");
             var telemetry = capability.Configuration.Telemetry is null ? null : FactoryPreviewTelemetryValidation.Read(manifest, capability.Configuration, values);
@@ -51,44 +65,56 @@ internal sealed class AzureFactoryPreviewCapability(
             var current = await ReadAsync(nativeCredential, token);
             if (FactoryModelsValidation.Hash(records) != FactoryModelsValidation.Hash(current)) throw Denied("PreviewGovernanceChanged");
             var revision = FactoryModelsValidation.Hash(new { Records = records, Native = native.Revisions });
+            var preparation = capability.Configuration.PreparationRevision is null ? null : FactoryPreviewPublication.ReadConfirmed(manifest, values, clock.GetUtcNow());
             return new(manifest, capability, bindings["council"], bindings["code"], endpoints.Council, endpoints.Source, revision)
             { ModelEndpoint = endpoints.Models, Models = models, GovernanceRevision = FactoryModelsValidation.Hash(records),
                 Telemetry = telemetry, TelemetryEffects = telemetryEffects, TelemetryEndpoint = endpoints.Telemetry,
                 Supplemental = supplemental, SupplementalEffects = supplementalEffects, Effects = effects,
-                SupplementalEndpoints = native.SupplementalEndpoints };
+                SupplementalEndpoints = native.SupplementalEndpoints,
+                Publication = preparation is null ? null : FactoryPreviewPublication.ValidatePublished(preparation, models, github, values, clock.GetUtcNow()),
+                SeedIntent = preparation is null ? null : FactoryPreviewPublication.Review(preparation, models, github, null, false).SeedIntent };
         }
         catch (PreviewCapabilityException) { throw; }
         catch (OperationCanceledException) { throw; }
-        catch (ModelCapabilityException)
-        { throw Denied("CurrentPreviewModelOrIdentityAuthorityRequired"); }
+        catch (ModelCapabilityException e)
+        { throw Denied("CurrentPreviewModelOrIdentityAuthorityRequired:" + e.Reason); }
         catch (Exception e) when (e is JsonException or InvalidOperationException or FormatException or KeyNotFoundException or ArgumentException
             or HttpRequestException or IOException or Azure.RequestFailedException or Azure.Identity.AuthenticationFailedException)
         { throw new PreviewCapabilityException(FactoryCharterState.Unknown, "ProtectedPreviewBindingsUnconfirmed"); }
     }
 
-    private sealed record ProtectedRecords(SortedDictionary<string, string> Values, SortedDictionary<string, string> Versions);
+    private sealed record ProtectedRecords(SortedDictionary<string, string> Values, SortedDictionary<string, string> Versions)
+    {
+        [JsonIgnore] public IReadOnlyDictionary<string, string> NativeVersions { get; init; } = new Dictionary<string, string>();
+    }
 
     private async Task<ProtectedRecords> ReadAsync(TokenCredential currentCredential, CancellationToken token)
     {
         var values = new SortedDictionary<string, string>(StringComparer.Ordinal);
         var versions = new SortedDictionary<string, string>(StringComparer.Ordinal);
+        var nativeVersions = new Dictionary<string, string>(StringComparer.Ordinal);
         var audit = new HashSet<string>(StringComparer.Ordinal);
+        var bytes = 0;
         await foreach (var setting in new AzureConfigurationSettingsGateway(currentCredential, http)
             .ListRecordsAsync(settings.ProductEndpoint, ProductConfigurationKeys.NoLabel, token))
         {
             var key = setting.Key;
             var metadata = Metadata(setting);
+            bytes += Encoding.UTF8.GetByteCount(key + setting.Value + metadata.GetRawText()) + 512;
             if (Encoding.UTF8.GetByteCount(key + setting.Value + metadata.GetRawText()) + 512 > FactoryCharterLimits.RecordBytes
+                || bytes > FactoryPreviewPublication.Policy.NamespaceBytes
                 || string.IsNullOrEmpty(setting.ETag.ToString())
-                || key.StartsWith("dsf/factory/preview", StringComparison.Ordinal) && setting.ContentType != FactoryPreviewValidation.RecordContentType)
+                || key.StartsWith("dsf/factory/preview", StringComparison.Ordinal) && setting.ContentType !=
+                    (FactoryPreviewPublication.IsPreparationRecord(key) ? FactoryPreviewPublication.PreparationContentType : FactoryPreviewValidation.RecordContentType))
                 throw new JsonException();
             if (key.StartsWith(FactoryCharterLimits.AuditPrefix, StringComparison.Ordinal))
             {
                 if (!audit.Add(key) || audit.Count > FactoryCharterLimits.MaximumAuditRecords) throw new JsonException();
                 if (key is not (ProductConfigurationKeys.CharterAdopted or ProductConfigurationKeys.CharterAdoptionOperation)) continue;
             }
-            if (values.Count >= 512 || !values.TryAdd(key, setting.Value)) throw new JsonException();
+            if (values.Count >= FactoryPreviewPublication.Policy.MaximumRecords || !values.TryAdd(key, setting.Value)) throw new JsonException();
             versions.Add(key, FactoryModelsValidation.Hash(metadata));
+            nativeVersions.Add(key, setting.ETag.ToString());
         }
         var supplemental = new HashSet<string>(StringComparer.Ordinal);
         foreach (var prefix in FactoryPreviewSupplementalValidation.NamespacePrefixes)
@@ -103,7 +129,17 @@ internal sealed class AzureFactoryPreviewCapability(
         }
         if (!supplemental.SetEquals(values.Keys.Where(FactoryPreviewSupplementalValidation.IsSelectionRecord)))
             throw new PreviewCapabilityException(FactoryCharterState.Unknown, "SupplementalNamespaceUnconfirmed");
-        return new(values, versions);
+        var previews = new HashSet<string>(StringComparer.Ordinal);
+        await foreach (var setting in new AzureConfigurationSettingsGateway(currentCredential, http)
+            .ListRecordsAsync(settings.ProductEndpoint, "*", token, "dsf/factory/preview*"))
+        {
+            if (setting.Label is not null || !previews.Add(setting.Key) || !values.TryGetValue(setting.Key, out var value) || value != setting.Value
+                || !versions.TryGetValue(setting.Key, out var version) || version != FactoryModelsValidation.Hash(Metadata(setting)))
+                throw new PreviewCapabilityException(FactoryCharterState.Unknown, "PreviewNamespaceUnconfirmed");
+        }
+        if (!previews.SetEquals(values.Keys.Where(k => k.StartsWith("dsf/factory/preview", StringComparison.Ordinal))))
+            throw new PreviewCapabilityException(FactoryCharterState.Unknown, "PreviewNamespaceUnconfirmed");
+        return new(values, versions) { NativeVersions = nativeVersions };
 
         static JsonElement Metadata(Azure.Data.AppConfiguration.ConfigurationSetting setting) => JsonSerializer.SerializeToElement(new
         { ETag = setting.ETag.ToString(), setting.Label, setting.ContentType,
@@ -180,6 +216,7 @@ internal sealed partial class NativePreviewBindings(
 
         foreach (var effect in effects)
         {
+            if (effect.DeploymentTarget is null) continue;
             var operation = await GetAsync(effect.DeploymentTarget! + "/operations/" + effect.ProviderOperationId, "2022-09-01", token);
             var op = operation.GetProperty("properties");
             if (operation.GetProperty("operationId").GetString() != effect.ProviderOperationId

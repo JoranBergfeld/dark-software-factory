@@ -249,6 +249,7 @@ command <root> desc="Dark Software Factory — factory CLI (create product insta
         option --approve type=String arity=1..1 desc="explicit exact current native preparation fingerprint"
         option --status type=Boolean arity=0..1 default=False choices=[False, True] desc="read retained preparation and current native receipts without writes"
         option --resume type=Boolean arity=0..1 default=False choices=[False, True] desc="conditionally continue released known-undispatched steps of the original approved plan"
+        option --configure type=Boolean arity=0..1 default=False choices=[False, True] desc="review/approve protected capability publication, then the exact returned native execution seed"
         option --json type=Boolean arity=0..1 default=False choices=[False, True] desc="structured nonsecret preparation review; never prompt"
       command reserve desc="reserve durable factory identity and owner-scoped claims; never provision"
         option --input type=String arity=1..1 desc="complete reviewed version-1 selection JSON file"

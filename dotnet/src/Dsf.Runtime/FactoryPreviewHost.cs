@@ -37,6 +37,7 @@ public static partial class RuntimeVerbs
             app.MapPost("/supplemental-authority", (Func<HttpContext, Task<IResult>>)(context => HandleAsync(context, supplementalAuthority: true)));
             app.MapPost("/inputs", (Func<HttpContext, Task<IResult>>)(context => HandleAsync(context, inputs: true)));
             app.MapPost("/prepare-evaluation", (Func<HttpContext, Task<IResult>>)(context => HandleAsync(context, prepareEvaluation: true)));
+            app.MapPost("/preparation", (Func<HttpContext, Task<IResult>>)(context => HandleAsync(context, preparationStatus: true)));
             app.MapPost("/evaluate", (Func<HttpContext, Task<IResult>>)(context => HandleAsync(context, evaluate: true)));
             app.MapPost("/evaluation", (Func<HttpContext, Task<IResult>>)(context => HandleAsync(context, evaluationStatus: true)));
         }
@@ -44,7 +45,7 @@ public static partial class RuntimeVerbs
 
         async Task<IResult> HandleAsync(HttpContext context, bool modelAuthority = false, bool telemetryEvidence = false,
             bool supplementalEvidence = false, bool supplementalAuthority = false, bool inputs = false, bool prepareEvaluation = false, bool evaluate = false,
-            bool evaluationStatus = false)
+            bool evaluationStatus = false, bool preparationStatus = false)
         {
             context.Response.Headers.CacheControl = "no-store";
             var clock = kind == PreviewHostKind.SourceContext ? dependencies.SourceClock : dependencies.PreviewClock;
@@ -76,6 +77,8 @@ public static partial class RuntimeVerbs
                     throw new PreviewCapabilityException(FactoryCharterState.Blocked, "ApprovedPreviewCallerRequired");
                 if (prepareEvaluation)
                     return Results.Json(await PreparePreviewExecutionAsync(settings, dependencies, request, token), FactoryGitHubJson.Options);
+                if (preparationStatus)
+                    return Results.Json(await InspectPreviewPreparationAsync(settings, dependencies, request, token), FactoryGitHubJson.Options);
                 if (evaluate || evaluationStatus)
                 {
                     var evaluation = evaluate ? await ExecutePreviewAsync(settings, dependencies, request, token)

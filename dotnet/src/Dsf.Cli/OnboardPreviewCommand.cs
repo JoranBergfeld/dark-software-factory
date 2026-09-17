@@ -21,8 +21,9 @@ public static partial class CliApplication
         var approval = StringOption("--approve", "explicit exact current native preparation fingerprint");
         var status = BoolOption("--status", "read retained preparation and current native receipts without writes");
         var resume = BoolOption("--resume", "conditionally continue released known-undispatched steps of the original approved plan");
+        var configure = BoolOption("--configure", "review/approve protected capability publication, then the exact returned native execution seed");
         var json = BoolOption("--json", "structured nonsecret preparation review; never prompt");
-        AddOptions(command, endpoint, product, tenant, subscription, configuration, approval, status, resume, json);
+        AddOptions(command, endpoint, product, tenant, subscription, configuration, approval, status, resume, configure, json);
         command.SetAction(async (parse, token) =>
         {
             PreviewPreparationResult result;
@@ -35,13 +36,15 @@ public static partial class CliApplication
                 var subscriptionId = Guid.Parse(Input(subscription)).ToString();
                 var inspect = parse.GetValue(status);
                 var continuing = parse.GetValue(resume);
+                var configuring = parse.GetValue(configure);
                 var approved = parse.GetValue(approval)?.Trim();
                 if (inspect && (continuing || approved is not null || parse.GetValue(configuration) is not null)
                     || continuing && parse.GetValue(configuration) is not null
+                    || configuring && (continuing || parse.GetValue(configuration) is not null)
                     || approved is not null && !FactorySourceValidation.Hash(approved))
                     throw new ReservationStoreException(FactoryReservationState.Blocked, "ConflictingPreviewModeOrInvalidApproval; no provider access.");
                 PreviewPreparationSelection? selection = null;
-                if (!inspect && !continuing)
+                if (!inspect && !continuing && !configuring)
                 {
                     var input = Input(configuration);
                     if (System.Text.Encoding.UTF8.GetByteCount(input) > 16 * 1024) throw new JsonException();
@@ -54,13 +57,27 @@ public static partial class CliApplication
                 var runner = azure ?? new SystemAzureCliRunner();
                 var time = clock ?? TimeProvider.System;
                 var reviews = reviewer ?? RepositoryAttachmentReviewer.Create(runner);
-                using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(FactoryPreviewPreparation.Policy.RequestSeconds), time);
+                using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(configuring
+                    ? FactoryPreviewPublication.Policy.RequestSeconds : FactoryPreviewPreparation.Policy.RequestSeconds), time);
                 using var pending = CancellationTokenSource.CreateLinkedTokenSource(token, deadline.Token);
                 var transport = http ?? PreviewPreparationHttp;
                 var reservations = new FactoryReservationService(reviews, runner, transport, time);
                 var admission = await reservations.StatusAsync(owner, tenantId, subscriptionId, key, pending.Token);
                 var service = new FactoryPreviewPreparationService(reviews, runner, transport, time);
-                if (inspect) result = await service.InspectAsync(admission, pending.Token);
+                if (configuring)
+                {
+                    result = await service.ConfigureAsync(admission, approved, inspect, pending.Token);
+                    if (interactive && !inspect && approved is null && result.Publication is not null)
+                    {
+                        terminal.WriteLine(JsonSerializer.Serialize(result, ReviewJson));
+                        approved = terminal.Prompt("Type this exact publication approvalFingerprint; blank leaves configuration read-only: ")?.Trim();
+                        terminal.WriteLine(CliPresentation.EquivalentCommand(terminal.Capabilities,
+                            $"dsf onboard decide preview --owner-appconfig-endpoint {owner} --product {key} --tenant {tenantId} --subscription {subscriptionId} --configure"
+                            + (string.IsNullOrEmpty(approved) ? "" : " --approve " + ReviewText(approved))));
+                        if (!string.IsNullOrEmpty(approved)) result = await service.ConfigureAsync(admission, approved, false, pending.Token);
+                    }
+                }
+                else if (inspect) result = await service.InspectAsync(admission, pending.Token);
                 else if (approved is not null) result = await service.PrepareAsync(admission, selection, approved, continuing, pending.Token);
                 else
                 {
@@ -81,7 +98,8 @@ public static partial class CliApplication
                             result = await service.PrepareAsync(admission, selection, approved, false, pending.Token);
                     }
                 }
-                if (result.State is PreviewPreparationState.Reviewed or PreviewPreparationState.ConfirmedNotReady)
+                if (result.State is PreviewPreparationState.Reviewed or PreviewPreparationState.ConfirmedNotReady
+                    or PreviewPreparationState.SeedAwaitingApproval or PreviewPreparationState.ConfiguredAwaitingEvaluation)
                 {
                     var current = await reservations.StatusAsync(owner, tenantId, subscriptionId, key, pending.Token);
                     if (current.State != FactoryReservationState.Reserved || current.Identity != admission.Identity
@@ -101,7 +119,8 @@ public static partial class CliApplication
                 or CharterAdoptionEvidenceException or CharterOperationException or PreviewCapabilityException or ModelCapabilityException)
             { result = new(PreviewPreparationState.Blocked, "Complete explicit preview selection and current adopted/source/model/telemetry/selected-source authority required. Provider details withheld."); }
             terminal.WriteLine(JsonSerializer.Serialize(result, ReviewJson));
-            return result.State is PreviewPreparationState.Reviewed or PreviewPreparationState.ConfirmedNotReady ? Success
+            return result.State is PreviewPreparationState.Reviewed or PreviewPreparationState.ConfirmedNotReady
+                or PreviewPreparationState.SeedAwaitingApproval or PreviewPreparationState.ConfiguredAwaitingEvaluation ? Success
                 : result.State == PreviewPreparationState.Canceled ? CanceledExitCode : Failure;
 
             string Input(Option<string> option)

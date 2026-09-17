@@ -712,13 +712,14 @@ operation below consumes these exact inputs with the actual conveyor.
 
 #### Durable supervised evaluation and current inspection
 
-All three new `serve-preview` routes require the existing approved operator
+These `serve-preview` routes require the existing approved operator
 and `PreviewCapabilityRequest`; they accept no authored context, model result,
 run ID, force flag, lease-expiry assertion or activation approval.
 
 | Route | Shared runtime API | Result |
 | --- | --- | --- |
 | `POST /prepare-evaluation` | `RuntimeVerbs.PreparePreviewExecutionAsync` | Create-once `PreviewExecutionSeed`, without input collection or inference |
+| `POST /preparation` | `RuntimeVerbs.InspectPreviewPreparationAsync` | Readonly original native seed/configuration verification; never initialize missing state |
 | `POST /evaluate` | `RuntimeVerbs.ExecutePreviewAsync` | Actual conveyor execution or compatible durable continuation; `PreviewExecutionResult` |
 | `POST /evaluation` | `RuntimeVerbs.InspectPreviewAsync` | Readonly durable/current inspection; same result shape, no inference or writes |
 
@@ -727,8 +728,9 @@ including its narrow own-state permission. COUNCIL creates one initial native
 document and returns its ID, native `_rid`, quoted ETag and complete checksum;
 capability is rechecked before releasing that receipt. Reading the same untouched
 seed again performs no write. **The runtime cannot approve its own receipt.**
-Milestone 3 must retain and show the returned receipt, then have the operator
-approve the exact separate `PreviewExecutionConfiguration` record and its hash
+`dsf onboard decide preview --configure` retains and shows the returned receipt,
+then requires the operator to approve the exact separate
+`PreviewExecutionConfiguration` record and its hash
 in `configuration.executionRevision`, recomputing the capability and manifest
 approval pins. No fabricated seed, absent record, unpinned record or missing
 native document authorizes initialization after this approval.
@@ -953,8 +955,9 @@ Provisioning must perform the operator-reviewed native seed receipt/configuratio
 handoff described above, after creating and checking those original resources
 and grants. No seed can be calculated from an ARM container creation receipt.
 CLI forwarding, installation, reviewed planning and native provisioning are
-implemented. Conditional capability/seed publication and operator evaluation
-integration remain milestone 3; retention/export, activation/publication and
+implemented, including conditional capability/manifest publication and native
+seed approval. Operator evaluation integration remains milestone 3;
+retention/export, activation/publication and
 recovery remain separate tickets.
 
 The native preparation journal is separate from the protected runtime
@@ -991,15 +994,15 @@ to the actual host FQDN and retained with the output checksum. Direct ARM
 metadata assignments have their actual 201/request/correlation and
 createdOn/createdBy/principal/role/scope/condition receipts;
 `deploymentTarget` and `operationId` are explicitly null for those writes.
-The next capability-publication increment must consume this distinction,
-not invent deployment-operation receipts for direct assignments.
-It must also integrate exact receipt-backed metadata overlays with current
-model/telemetry/supplemental verification. Native preparation does not broaden
-legacy verification isolation checks or upgrade their pinned host images:
-old verification paths cannot treat the new assignments as implicit legacy
-consent. Retained proof expiry remains a blocker until that currentness
-handoff is complete; no source removal, grant cleanup or coordinator reset
-is an acceptable substitute.
+`FactoryPreviewPublication.ReadConfirmed` validates this complete protected
+history; `Effects` preserves the distinction when deriving runtime operation
+records. Direct assignments require their exact receipt and native current
+principal/role/scope/condition/incarnation, not fictitious deployment operations.
+`FactoryPreviewMetadataProof` permits current model/telemetry/supplemental proof
+refresh only for those exact receipt-backed metadata additions. Unrelated
+grants and changed native roles still fail; pinned host images are not upgraded.
+Proof expiry remains a blocker until an explicit real proof refresh succeeds.
+No source removal, grant cleanup or coordinator reset substitutes for it.
 
 Preparation remains `ConfirmedNotReady`, with `currentReady=false`: it writes
 neither `dsf/factory/preview` capability records nor manifest preview pins,
@@ -1009,6 +1012,60 @@ Its 3,600-second deadline, 30-second accounting closeout, 512-KiB plan,
 fingerprinted policy. Each complete lifecycle record must fit the native
 10-KiB App Configuration limit before effects. Current checks remain
 point-in-time observations, not cross-provider atomicity.
+
+The separately reviewed `FactoryPreviewPreparationService.ConfigureAsync`
+continuation uses `FactoryPreviewPublication.Review` and the original native
+receipts. `PreviewPublicationReview` lists exact protected writes, previous
+payload hashes and `PreviewSeedIntent` (native target, product partition,
+complete bounded initial document, execution policy). It does not claim a
+native resource identity before the provider returns one.
+
+`dsf/factory/preview-publication/current` holds `PreviewPublicationJournal`;
+`{operation:D}/{seed|execution}/{index:D4}` under that namespace holds each
+`PreviewPublicationStep`. Each stage also retains an immutable `/approval`
+`PreviewPublicationApproval`: original fingerprint, approver, timestamp and
+owner are not erased when the next stage replaces the coordinator. These use
+`application/vnd.dsf.preview+json;version=1`. Stable per-step request IDs,
+payload hashes, intended/dispatched/confirmed/known-failed/unknown state and
+returned App Configuration ETags survive serialized independent clients.
+All intent records precede protected writes; each target uses create-only or
+exact previous-ETag CAS. Publication order is bindings/effects, capability,
+manifest, then the narrow seed-dispatch stage. Partial/unknown publication
+cannot pass the runtime gate. Each store operation is per key; there is no
+cross-key or cross-provider transaction.
+
+The runtime requires `configuration.preparationRevision` to match that complete
+original preparation and verifies the published journal and exact payloads.
+Surviving preparation/publication history cannot be downgraded to a capability
+without this pin. The seed route accepts the reviewed stable seed request only
+in `SeedDispatched`, before execution approval. Actual conditional Cosmos
+creation uses the reviewed initial document; COUNCIL returns the native
+`PreviewExecutionSeed`. The operator then approves a separate `execution`
+review, creating the protected execution configuration and conditionally
+replacing capability/manifest pins. The result is
+`ConfiguredAwaitingEvaluation`, with `currentReady=false`.
+
+`/preparation` verifies current authority and the original untouched seed
+without any write. Missing or changed state is not reseeded. Confirmed
+continuations revalidate without replay; lost or canceled write responses
+retain unknown quarantine, original request identity and any returned seed.
+Rejected receipt accounting cannot reclassify an accepted native write as
+no-effect; its returned revision remains attached to the quarantined step.
+No lease expiry, root deletion, replacement operation or guessed resource name
+authorizes takeover. The protected configuration writer remains the approved
+operator, never a runtime-writable Cosmos record or source identity.
+
+Publication adds no ARM resources, grants or runtime settings. It requires
+the already reviewed image to support the four preparation/evaluation routes;
+an older image or unreachable endpoint remains blocked, not implicitly
+upgraded. `PreviewPublicationPolicy` (`protected-preview-publication-v1`) is
+included in each approval fingerprint. Complete stage reviews are bounded to 512 KiB/96 writes, initial
+seed documents to 16 KiB, returned seed responses to 4 KiB, and lifecycle
+records to the native 10-KiB limit. Readers require the complete unlabelled
+preview namespace within 1,024 records/4 MiB; labeled/orphaned history is
+Unknown. Compatible current proof refresh may change timestamps/proof
+references, but cannot change the original material source/adoption/analysis,
+model/configuration, selection, native bindings or reviewed query pins.
 
 Each new host must use the approved immutable image, original private managed
 environment, one assigned UAMI, `dotnet dsf-runtime.dll`, and its exact command

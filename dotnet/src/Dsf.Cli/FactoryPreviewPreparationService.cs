@@ -31,7 +31,7 @@ internal sealed partial class FactoryPreviewPreparationService(
     }
 
     private async Task<PreviewPreparationPlan> ReadPlanAsync(FactoryReservationResult admission, PreviewPreparationSelection selection,
-        OwnerReservationStore store, CancellationToken token)
+        OwnerReservationStore store, CancellationToken token, PreviewPreparationPlan? continuation = null)
     {
         var records = await store.ReadNamespaceAsync("dsf/factory/", token);
         var values = records.Where(p => !p.Key.StartsWith(FactoryPreviewPreparation.Namespace + "/", StringComparison.Ordinal))
@@ -42,9 +42,18 @@ internal sealed partial class FactoryPreviewPreparationService(
             if (!values.ContainsKey(key)) throw Failure("RequiredPreviewPredecessorMissing:" + key);
         var manifest = FactoryGovernance.ReadInactiveManifest(values[ProductConfigurationKeys.FactoryManifest],
             values[ProductConfigurationKeys.FactoryProfile], admission.Identity!.ProductKey, admission.Foundation!.ProductEndpoint!, admission.Foundation.ProfilePin);
-        if (manifest.Identity != admission.Identity || manifest.PreviewOperationId is not null
-            || manifest.PreviewApprovalFingerprint is not null || values.Keys.Any(k => k.StartsWith("dsf/factory/preview", StringComparison.Ordinal)))
+        if (manifest.Identity != admission.Identity || (continuation is null
+            ? manifest.PreviewOperationId is not null || manifest.PreviewApprovalFingerprint is not null
+                || values.Keys.Any(k => k.StartsWith("dsf/factory/preview", StringComparison.Ordinal))
+            : manifest.PreviewOperationId is not null && manifest.PreviewOperationId != continuation.Selection.OperationId
+                || FactoryPreviewValidation.ManifestBasis(manifest) != FactoryPreviewValidation.ManifestBasis(continuation.Manifest)))
             throw Failure("CurrentInactiveUnpublishedPreviewAuthorityRequired");
+        if (continuation is not null)
+        {
+            manifest = continuation.Manifest;
+            foreach (var key in values.Keys.Where(k => k.StartsWith("dsf/factory/preview", StringComparison.Ordinal)).ToArray()) values.Remove(key);
+            values[ProductConfigurationKeys.FactoryManifest] = Serialize(manifest);
+        }
         RequireSupplementalNamespace(manifest, selection, values);
         var rolePrefix = "/subscriptions/" + manifest.Identity.SubscriptionId + "/providers/microsoft.authorization/roledefinitions/";
         if (new[] { selection.MetadataRoleDefinitionId, selection.Telemetry.MetadataRoleDefinitionId }
@@ -57,6 +66,8 @@ internal sealed partial class FactoryPreviewPreparationService(
         var models = FactoryModelsValidation.ReadPreparation(manifest, values);
         if (models.State != ModelCapabilityState.Verified || models.Stage != "observed" || models.VerifiedUntil is null || models.VerifiedUntil <= clock.GetUtcNow())
             throw Failure("CurrentVerifiedModelCapabilitiesRequired");
+        models = FactoryModelsValidation.ReadVerified(manifest, values,
+            new(models.OperationId, models.ApprovalFingerprint, models.LastProofReference ?? "", models.LastProofSha256 ?? ""), clock.GetUtcNow());
         var telemetry = FactoryTelemetryValidation.ReadPreparation(manifest, values, requireChecking: false);
         var telemetryEffects = FactoryTelemetryValidation.ReadCompletedEffects(telemetry, values);
         var telemetryProof = FactoryTelemetryValidation.RequireVerifiedHistory(telemetry, values);

@@ -136,6 +136,8 @@ internal sealed partial class FactoryTelemetryService
     {
         var config = selected.Configuration;
         var principal = config.SourceIdentity.PrincipalId!;
+        var preview = await FactoryPreviewMetadataProof.ReadAsync(admission, Store(admission),
+            new FactoryPreparationArm(azure, http, admission.Identity!), principal, clock, token);
         var paths = new[] { "/subscriptions/" + admission.Identity!.SubscriptionId
             + "/providers/microsoft.authorization/roleassignments?$filter=assignedTo('" + principal + "')" }
             .Concat(config.AccessGrants.Select(g => g.Scope + "/providers/microsoft.authorization/roleassignments?$filter=atScope()+and+assignedTo('" + principal + "')"));
@@ -144,6 +146,7 @@ internal sealed partial class FactoryTelemetryService
             using var assignments = await GetAsync(admission, path, "2022-04-01", token);
             foreach (var assignment in CompleteValues(assignments))
             {
+                if (preview.Includes(assignment)) continue;
                 var id = assignment.GetProperty("id").GetString();
                 var grant = config.AccessGrants.SingleOrDefault(g => Same(g.Target, id));
                 if (grant is null || !effects.Any(e => Same(e.Target, id) && e.State == FoundationOperationState.Completed)
