@@ -187,8 +187,7 @@ internal sealed partial class FactoryPreviewPreparationService
     private async Task RequirePublicationCurrentAsync(FactoryReservationResult admission, Journal preparation, OwnerReservationStore store, CancellationToken token)
     {
         var current = await ReadPlanAsync(admission, preparation.Plan.Selection, store, token, preparation.Plan);
-        if (FactoryModelsValidation.Hash(current with { RecordRevisions = new Dictionary<string, string>() })
-            != FactoryModelsValidation.Hash(preparation.Plan with { RecordRevisions = new Dictionary<string, string>() }))
+        if (!SameReviewedInputs(preparation.Plan, current))
             throw Failure("PreviewPublicationPredecessorOrNativeAuthorityChanged");
         await VerifyConfirmedAsync(preparation, token);
         var identity = preparation.Plan.Manifest.Identity;

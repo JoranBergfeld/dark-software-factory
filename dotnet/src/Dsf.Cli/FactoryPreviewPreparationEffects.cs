@@ -16,8 +16,13 @@ internal sealed partial class FactoryPreviewPreparationService
             return Result(journal, PreviewPreparationState.Unknown, "NativePreparationOutcomeUnknown; no replay or lease-based takeover.");
         try
         {
-            await RequireCurrentAsync(admission, journal.Plan, store, token);
-            await VerifyConfirmedAsync(journal, token);
+            if (journal.Coordinator.State == PreviewPreparationState.ConfirmedNotReady)
+                await RequirePublicationCurrentAsync(admission, journal, store, token);
+            else
+            {
+                await RequireCurrentAsync(admission, journal.Plan, store, token, journal);
+                await VerifyConfirmedAsync(journal, token);
+            }
         }
         catch (Exception e) when (e is ReservationStoreException or PreviewCapabilityException or CharterAdoptionEvidenceException
             or CharterOperationException or ModelCapabilityException or System.Text.Json.JsonException or InvalidOperationException
@@ -56,7 +61,7 @@ internal sealed partial class FactoryPreviewPreparationService
                     || journal.Coordinator.State is PreviewPreparationState.Unknown or PreviewPreparationState.KnownFailed
                     || journal.Effects.Any(e => e.State is not (PreviewPreparationEffectState.Intended or PreviewPreparationEffectState.Confirmed)))
                     return Result(journal, PreviewPreparationState.Unknown, "HeldOrUncertainNativePreparationCannotBeReplayed");
-                await RequireCurrentAsync(admission, plan, store, token);
+                await RequireCurrentAsync(admission, plan, store, token, journal);
                 await VerifyConfirmedAsync(journal, token);
                 effects.AddRange(journal.Effects);
                 effectRecords.AddRange(journal.EffectRecords);
@@ -94,7 +99,7 @@ internal sealed partial class FactoryPreviewPreparationService
                 active = step.Index;
                 nativeDispatched = false;
                 acknowledgment = null;
-                await RequireCurrentAsync(admission, plan, store, token);
+                await RequireCurrentAsync(admission, plan, store, token, journal);
                 await RequireHeldAsync();
                 await AbsentAsync(arm, step.Target, step.ApiVersion, token);
                 if (step.Action == PreviewPreparationAction.WorkloadDeployment)
@@ -125,7 +130,7 @@ internal sealed partial class FactoryPreviewPreparationService
                 coordinator = coordinator with { ConfirmedEffects = effects.Count(e => e.State == PreviewPreparationEffectState.Confirmed) };
                 await SaveRootAsync(token);
             }
-            await RequireCurrentAsync(admission, plan, store, token);
+            await RequireCurrentAsync(admission, plan, store, token, journal);
             await RequireHeldAsync();
             journal = new(plan, coordinator, root!, effects, effectRecords, receipts);
             await VerifyConfirmedAsync(journal, token);

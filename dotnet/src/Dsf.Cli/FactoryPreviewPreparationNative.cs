@@ -171,14 +171,32 @@ internal sealed partial class FactoryPreviewPreparationService
     }
 
     private async Task RequireCurrentAsync(FactoryReservationResult admission, PreviewPreparationPlan plan,
-        OwnerReservationStore store, CancellationToken token)
+        OwnerReservationStore store, CancellationToken token, Journal? approvedPreparation = null)
     {
-        var current = await ReadPlanAsync(admission, plan.Selection, store, token);
-        if (current.Fingerprint != plan.Fingerprint) throw Failure("PreviewPreparationInputsOrNativeAuthorityChanged");
+        // Only a retained, integrity-checked approval supplies historical proof time.
+        // Native authority stays current; refreshed observations must pass current checks.
+        var current = await ReadPlanAsync(admission, plan.Selection, store, token, approvedPreparation: approvedPreparation);
+        if (approvedPreparation is null ? current.Fingerprint != plan.Fingerprint : !SameReviewedInputs(plan, current))
+            throw Failure("PreviewPreparationInputsOrNativeAuthorityChanged");
         var identity = plan.Manifest.Identity;
         var owner = await new FactoryReservationService(reviewer, azure, http, clock)
             .StatusAsync(identity.OwnerEndpoint, identity.TenantId, identity.SubscriptionId, identity.ProductKey, token);
         if (owner.State != FactoryReservationState.Reserved || owner.Identity != identity || owner.Foundation?.State != FactoryFoundationState.Inactive)
             throw Unknown("CurrentOwnerRegistryAndInactiveFoundationUnconfirmed");
+    }
+
+    private static bool SameReviewedInputs(PreviewPreparationPlan reviewed, PreviewPreparationPlan current)
+    {
+        var mutable = new[] { Dsf.Core.Runtime.ProductConfigurationKeys.FactoryModels,
+            Dsf.Core.Runtime.ProductConfigurationKeys.FactoryTelemetry, Dsf.Core.Runtime.ProductConfigurationKeys.FactorySupplemental };
+        if (reviewed.RecordRevisions.Any(p => !current.RecordRevisions.TryGetValue(p.Key, out var hash)
+                || !mutable.Contains(p.Key) && hash != p.Value)
+            || current.RecordRevisions.Keys.Except(reviewed.RecordRevisions.Keys).Any(key =>
+                !key.StartsWith("dsf/factory/model-proofs/", StringComparison.Ordinal)
+                && !key.StartsWith("dsf/factory/telemetry-proofs/", StringComparison.Ordinal)
+                && !key.StartsWith("dsf/factory/supplemental-proofs/", StringComparison.Ordinal)))
+            return false;
+        return FactoryModelsValidation.Hash(current with { RecordRevisions = reviewed.RecordRevisions })
+            == reviewed.Fingerprint;
     }
 }

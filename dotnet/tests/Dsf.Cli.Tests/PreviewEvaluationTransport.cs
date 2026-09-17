@@ -16,9 +16,13 @@ internal sealed partial class PreviewPreparationTransport
     internal void Restart()
     {
         var documents = JsonSerializer.Deserialize<Dictionary<string, string>>(JsonSerializer.Serialize(SeedDocuments))!;
+        var resources = JsonSerializer.Deserialize<Dictionary<string, JsonNode>>(
+            JsonSerializer.Serialize(scenario.Source.Source!.Resources))!;
         SeedDocuments.Clear();
         foreach (var pair in documents) SeedDocuments.Add(pair.Key, pair.Value);
         scenario.Reconstruct();
+        scenario.Source.Source!.Resources.Clear();
+        foreach (var pair in resources) scenario.Source.Source.Resources.Add(pair.Key, pair.Value);
         scenario.Machine.Boundary.Repository.ReservationClock = scenario.Source.Source!.Clock;
     }
 

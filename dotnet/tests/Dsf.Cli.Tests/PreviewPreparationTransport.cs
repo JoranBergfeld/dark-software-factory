@@ -74,10 +74,12 @@ internal sealed partial class PreviewPreparationTransport(CharterScenario scenar
         {
             var body = JsonNode.Parse(await request.Content!.ReadAsStringAsync(token))!;
             if (path.Contains("/deployments/preview-", StringComparison.Ordinal)
-                || (string?)body["properties"]?["roleDefinitionId"] is CouncilRole or TelemetryRole or WebRole)
+                || (string?)body["properties"]?["roleDefinitionId"] is CouncilRole or TelemetryRole or WebRole or FoundryRole)
                 return await CreatePreviewAsync(request, body, token);
-            if (supplementalNative is not null && ((string?)body["properties"]?["roleDefinitionId"])?.EndsWith(
-                "/" + FactorySupplementalValidation.SecretsRole, StringComparison.Ordinal) == true)
+            if (supplementalNative is not null && (string?)body["properties"]?["roleDefinitionId"] is { } role
+                && (role.EndsWith("/" + FactorySupplementalValidation.SecretsRole, StringComparison.Ordinal)
+                    || role.EndsWith("/" + FactorySupplementalValidation.SearchDataRole, StringComparison.Ordinal)
+                    || role.EndsWith("/77777777-7777-7777-7777-777777777777", StringComparison.Ordinal)))
                 return await supplementalNative.SendAsync(request, token);
         }
         if (await OptionalNativeAsync(request, token) is { } optionalResponse) return optionalResponse;

@@ -24,12 +24,13 @@ internal sealed class FactoryPreviewMetadataProof(IReadOnlyDictionary<string, st
         }
         if (records.Values.Any(r => r.ContentType != (FactoryPreviewPublication.IsPreparationRecord(r.Key)
             ? FactoryPreviewPublication.PreparationContentType : FactoryPreviewValidation.RecordContentType))) throw Unconfirmed();
-        ConfirmedPreviewPreparation history;
-        try { history = FactoryPreviewPublication.ReadConfirmed(manifest, records.ToDictionary(p => p.Key, p => p.Value.Value), clock.GetUtcNow()); }
+        DefinitePreviewPreparation history;
+        try { history = FactoryPreviewPublication.ReadDefinite(manifest, records.ToDictionary(p => p.Key, p => p.Value.Value), clock.GetUtcNow()); }
         catch (PreviewCapabilityException) { throw Unconfirmed(); }
         if (history.Plan.Manifest.Identity != admission.Identity) throw Unconfirmed();
         var revisions = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var grant in history.Plan.Steps.Select(s => s.Grant).OfType<PreviewPreparationGrant>().Where(g => g.PrincipalId == principal))
+        foreach (var grant in history.Plan.Steps.Where(s => history.Effects[s.Index].State == PreviewPreparationEffectState.Confirmed)
+            .Select(s => s.Grant).OfType<PreviewPreparationGrant>().Where(g => g.PrincipalId == principal))
         {
             var receipt = history.Receipts.Single(r => r.Target == grant.Target);
             var role = await ReadAsync(grant.RoleDefinitionId);

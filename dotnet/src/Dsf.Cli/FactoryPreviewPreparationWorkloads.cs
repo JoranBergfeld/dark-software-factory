@@ -8,7 +8,7 @@ internal sealed partial class FactoryPreviewPreparationService
 {
     private async Task<(FactorySupplemental? Source, IReadOnlyList<FoundationOperation> Effects, PreviewSupplementalConfiguration? Configuration)> SupplementalAsync(
         FactoryPreparationArm arm, FactoryManifest manifest, PreviewPreparationSelection selection, IReadOnlyDictionary<string, string> values,
-        IDictionary<string, PreviewPreparationNative> native, CancellationToken token)
+        IDictionary<string, PreviewPreparationNative> native, DateTimeOffset? approvedObservationsAt, CancellationToken token)
     {
         RequireSupplementalNamespace(manifest, selection, values);
         if (!values.TryGetValue(ProductConfigurationKeys.FactorySupplemental, out var raw))
@@ -30,7 +30,7 @@ internal sealed partial class FactoryPreviewPreparationService
                 || FactoryTelemetryValidation.Hash(JsonSerializer.Deserialize<SupplementalProof>(proofJson, FactorySourceValidation.RecordJson)!) != check.ProofSha256)
                 throw Failure("CompleteSelectedSupplementalProofRequired:" + selected.Kind);
             var proof = JsonSerializer.Deserialize<SupplementalProof>(proofJson, FactorySourceValidation.RecordJson) ?? throw new JsonException();
-            FactorySupplementalValidation.ValidateProof(source, identity, proof, clock.GetUtcNow());
+            FactorySupplementalValidation.ValidateProof(source, identity, proof, approvedObservationsAt ?? clock.GetUtcNow());
             var input = selection.Supplemental.Single(s => s.Kind == selected.Kind);
             var role = await MetadataRoleAsync(arm, input.MetadataRoleDefinitionId,
                 FactoryPreviewSupplementalValidation.MetadataActions(selected.Kind), native, token);

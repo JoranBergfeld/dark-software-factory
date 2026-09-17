@@ -27,6 +27,8 @@ public sealed record PreviewPublicationApproval(Guid OperationId, string Stage, 
     string ApprovalFingerprint, string ApprovedBy, DateTimeOffset ApprovedAt, Guid Owner);
 public sealed record ConfirmedPreviewPreparation(PreviewPreparationPlan Plan, PreviewPreparationCoordinator Coordinator,
     IReadOnlyList<PreviewPreparationEffect> Effects, IReadOnlyList<PreviewPreparationReceipt> Receipts);
+public sealed record DefinitePreviewPreparation(PreviewPreparationPlan Plan, PreviewPreparationCoordinator Coordinator,
+    IReadOnlyList<PreviewPreparationEffect> Effects, IReadOnlyList<PreviewPreparationReceipt> Receipts);
 
 public static class FactoryPreviewPublication
 {
@@ -139,14 +141,29 @@ public static class FactoryPreviewPublication
 
     public static ConfirmedPreviewPreparation ReadConfirmed(FactoryManifest manifest, IReadOnlyDictionary<string, string> values, DateTimeOffset now)
     {
+        DefinitePreviewPreparation history;
+        try { history = ReadDefinite(manifest, values, now); }
+        catch (PreviewCapabilityException)
+        { throw new PreviewCapabilityException(FactoryCharterState.Unknown, "ConfirmedNativePreparationHistoryRequired"); }
+        if (history.Coordinator.State != PreviewPreparationState.ConfirmedNotReady || history.Coordinator.Owner != Guid.Empty
+            || history.Coordinator.ConfirmedEffects != history.Plan.Steps.Count)
+            throw new PreviewCapabilityException(FactoryCharterState.Unknown, "ConfirmedNativePreparationHistoryRequired");
+        return new(history.Plan, history.Coordinator, history.Effects, history.Receipts);
+    }
+
+    public static DefinitePreviewPreparation ReadDefinite(FactoryManifest manifest, IReadOnlyDictionary<string, string> values, DateTimeOffset now)
+    {
         try
         {
             T Read<T>(string key) => JsonSerializer.Deserialize<T>(values[key], Json) ?? throw new JsonException();
             var root = Read<PreviewPreparationCoordinator>(FactoryPreviewPreparation.RootKey);
             var policy = FactoryPreviewPreparation.Policy;
             if (root.Protocol != 1 || root.Kind != FactoryPreviewPreparation.Kind || root.FactoryId != manifest.Identity.FactoryId
-                || root.OperationId == Guid.Empty || root.State != PreviewPreparationState.ConfirmedNotReady || root.Owner != Guid.Empty
+                || root.OperationId == Guid.Empty
+                || root.State is not (PreviewPreparationState.Partial or PreviewPreparationState.Blocked or PreviewPreparationState.Canceled or PreviewPreparationState.ConfirmedNotReady)
+                || root.State == PreviewPreparationState.ConfirmedNotReady && root.Owner != Guid.Empty
                 || root.ApprovedBy != manifest.Identity.AzureActorId || root.ApprovedAt < manifest.Identity.CreatedAt || root.ApprovedAt > now
+                || root.ApprovedAt.Offset != TimeSpan.Zero
                 || root.PlanBytes is < 1 || root.PlanBytes > policy.PlanBytes
                 || root.PlanChunks != (root.PlanBytes + policy.ChunkBytes - 1) / policy.ChunkBytes || root.PlanChunks > policy.MaximumChunks)
                 throw new JsonException();
@@ -165,7 +182,7 @@ public static class FactoryPreviewPublication
             FactoryPreviewPreparation.Validate(plan.Selection);
             if (plan.Protocol != 1 || plan.Policy != policy || plan.Selection.OperationId != root.OperationId
                 || plan.Manifest.Identity != manifest.Identity || plan.Fingerprint != root.PlanFingerprint
-                || plan.Steps.Count is < 1 || plan.Steps.Count > policy.MaximumEffects || root.ConfirmedEffects != plan.Steps.Count
+                || plan.Steps.Count is < 1 || plan.Steps.Count > policy.MaximumEffects
                 || FactoryPreviewValidation.ManifestBasis(manifest) != FactoryPreviewValidation.ManifestBasis(plan.Manifest))
                 throw new JsonException();
             var effects = new List<PreviewPreparationEffect>();
@@ -177,8 +194,16 @@ public static class FactoryPreviewPublication
                 var effect = Read<PreviewPreparationEffect>(key);
                 if (step.Index != effects.Count || effect.Protocol != 1 || effect.FactoryId != root.FactoryId || effect.OperationId != root.OperationId
                     || effect.PlanFingerprint != plan.Fingerprint || effect.Index != step.Index || effect.Target != step.Target
-                    || effect.BodySha256 != step.BodySha256 || effect.RequestId == Guid.Empty || effect.IntendedAt < root.ApprovedAt || effect.IntendedAt > now
-                    || effect.State != PreviewPreparationEffectState.Confirmed || effect.ReceiptHashes.Count != step.ResourceTargets.Count
+                    || effect.BodySha256 != step.BodySha256 || effect.RequestId == Guid.Empty || effect.IntendedAt < root.ApprovedAt || effect.IntendedAt > now)
+                    throw new JsonException();
+                if (effect.State == PreviewPreparationEffectState.Intended)
+                {
+                    if (effect.ReceiptHashes.Count != 0 || effect.Acknowledgment is not null || effect.CouncilEndpoint is not null
+                        || effect.DeploymentOutputsSha256 is not null) throw new JsonException();
+                    effects.Add(effect);
+                    continue;
+                }
+                if (effect.State != PreviewPreparationEffectState.Confirmed || effect.ReceiptHashes.Count != step.ResourceTargets.Count
                     || effect.Acknowledgment is not { StatusCode: 201, BodySha256: not null, RequestId: not null, CorrelationId: not null } ack
                     || !FactorySourceValidation.Hash(ack.BodySha256)
                     || ack.ObservedAt < effect.IntendedAt || ack.ObservedAt > now || ack.ObservedAt.Offset != TimeSpan.Zero
@@ -206,11 +231,13 @@ public static class FactoryPreviewPublication
                 effects.Add(effect);
             }
             if (!keys.SetEquals(values.Keys.Where(IsPreparationRecord))
-                || effects.Select(e => e.RequestId).Distinct().Count() != effects.Count) throw new JsonException();
+                || effects.Select(e => e.RequestId).Distinct().Count() != effects.Count
+                || root.ConfirmedEffects != effects.Count(e => e.State == PreviewPreparationEffectState.Confirmed)
+                || root.State == PreviewPreparationState.ConfirmedNotReady && root.ConfirmedEffects != plan.Steps.Count) throw new JsonException();
             return new(plan, root, effects, receipts);
         }
         catch (Exception e) when (e is JsonException or KeyNotFoundException or InvalidOperationException or ArgumentException or FormatException)
-        { throw new PreviewCapabilityException(FactoryCharterState.Unknown, "ConfirmedNativePreparationHistoryRequired"); }
+        { throw new PreviewCapabilityException(FactoryCharterState.Unknown, "DefiniteNativePreparationHistoryRequired"); }
     }
 
     public static FoundationOperation[] Effects(ConfirmedPreviewPreparation preparation, FactoryManifest manifest, FactoryModels models, FactoryGitHubAuthority github)

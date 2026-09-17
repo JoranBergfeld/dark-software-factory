@@ -183,6 +183,14 @@ effects, 4-MiB native responses, and the native 10-KiB App Configuration
 record limit. Full lifecycle capacity is checked before the first write.
 Overflow never truncates records or expands scope.
 
+Source capability observations can expire while ARM is deploying. An unchanged
+observation that was fresh at the protected original approval remains historical
+evidence for that native preparation, not current readiness. Native resources,
+roles, configuration, source/adoption and original record hashes are still
+checked; expiry alone does not force a deployment replay or another approval.
+Initial planning/approval, capability publication and evaluation still require
+fresh observations.
+
 ## Configure the confirmed preparation
 
 Use the original four locators; do **not** supply another `--preview-config`
@@ -263,18 +271,39 @@ and 4 MiB, with no silent omission or truncation.
 
 Existing `models --verify-only`, `telemetry --verify-only` and selected
 `supplemental --verify-only` commands now recognize **only** exact metadata
-additions authorized by the confirmed preparation. They recheck the original
+additions with confirmed native receipts in the approved preparation. This also
+works while other steps remain known-undispatched. They recheck the original
 principal, role/actions, scope, condition, creator, native incarnation and
 receipt revision. Unknown, unrelated, replaced or broader grants still fail.
 No source credentials or backend grants move to COUNCIL.
 
 Use these existing commands explicitly when proof expires, with the same
-operator locators and originally reviewed inputs. They execute their actual
-proof paths; `--configure` does not silently run model probes or repair
-evidence. A compatible refreshed proof does not repin the preparation:
+operator locators and originally reviewed inputs:
+
+```bash
+dsf onboard decide models --verify-only \
+  --owner-appconfig-endpoint https://OWNER.azconfig.io \
+  --product PRODUCT --tenant TENANT_GUID --subscription SUBSCRIPTION_GUID --json
+```
+
+Substitute `telemetry` or `supplemental` for the selected proof needing refresh.
+These commands execute their actual proof paths and may incur model/query
+costs. `--configure` does not silently run probes or repair evidence.
+If a current model dependency stops native preparation, refresh its proof,
+then use `preview --resume --approve ORIGINAL_PREPARATION_FINGERPRINT` with
+the same four locators. Only released, known-undispatched work can continue;
+confirmed resources and request identities are reused, never redeployed.
+For already confirmed native preparation, refresh expired proofs before
+`preview --configure`.
+
+A compatible refreshed proof does not repin the preparation:
 material model/source/configuration, charter/adoption, selected-source and
-native resource changes still block. Current checks are point-in-time, not
-cross-provider atomicity.
+native resource changes still block. Original reviewed proof records remain
+immutable and required; fresh checks append their own protected proof records
+and update separate current-observation references. Erasing the original proof,
+an unknown/dispatched native effect, missing history or receipt mismatch cannot
+be repaired by proof refresh. Current checks are point-in-time, not
+cross-provider atomicity. None of these steps asserts stale readiness.
 
 ## Evaluate intentionally
 

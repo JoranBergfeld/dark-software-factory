@@ -963,6 +963,15 @@ GO, SPLIT and NO-GO produce only `ReadyAwaitingActivation`; retained proof is
 not activation authority. Retention/export, activation/publication and
 recovery remain separate tickets.
 
+Native preparation distinguishes immutable approval evidence from current
+capability observations. The original fresh proof may age during a deployment
+without invalidating unchanged approved native work. Explicit proof refresh can
+recognize only exact, natively reverified metadata assignments whose preparation
+effects are confirmed, even while other effects remain intended. Dispatched or
+unknown effects never qualify. Compatible new proof records remain separate from
+the original reviewed provenance; publication and evaluation still require
+current proofs, and all material/native-incarnation checks remain enforced.
+
 The native preparation journal is separate from the protected runtime
 capability: `dsf/factory/preview-preparation/current` holds its conditional
 coordinator; `{operation:D}/plan/{index:D4}`, `/effects/{index:D4}` and

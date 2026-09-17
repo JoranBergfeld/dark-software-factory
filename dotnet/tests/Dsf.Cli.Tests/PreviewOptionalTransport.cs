@@ -10,22 +10,28 @@ namespace Dsf.Cli.Tests;
 internal sealed partial class PreviewPreparationTransport
 {
     internal const string WebRole = BoundaryPlanFixture.Root + "/providers/microsoft.authorization/roledefinitions/f3333333-3333-3333-3333-333333333333";
+    internal const string FoundryRole = BoundaryPlanFixture.Root + "/providers/microsoft.authorization/roledefinitions/f4444444-4444-4444-4444-444444444444";
     private SupplementalWorkflowTransport? supplemental;
     private HttpMessageInvoker? supplementalNative;
     internal int WebQueries;
     internal string WebPayload = """{"webResults":[]}""";
     private IEnumerable<JsonNode> HostedResources => Resources.Values.Concat(supplemental?.Resources.Values ?? Enumerable.Empty<JsonNode>());
 
-    internal async Task SelectWebAsync()
+    internal Task SelectWebAsync() => SelectSupplementalAsync(false);
+    internal Task SelectFoundryAsync() => SelectSupplementalAsync(true);
+
+    private async Task SelectSupplementalAsync(bool foundry)
     {
         supplemental = new(scenario.Arm);
         supplementalNative = new(supplemental, false);
         supplemental.HostedProof = (request, token) => PreviewHostAsync(request, token);
-        var selected = await FactorySupplementalWorkflowTests.PrepareWebAsync(scenario.Machine);
+        var selection = FactorySupplementalWorkflowTests.Selection();
+        if (foundry) selection["sources"] = new JsonArray(FactorySupplementalWorkflowTests.FoundrySelection());
+        var selected = await FactorySupplementalWorkflowTests.PrepareSelectionAsync(scenario.Machine, selection);
         Assert.True(selected.Exit == 0, (string?)selected.Result["detail"] + "\n" + string.Join("\n", HostFailures)
             + "\n" + string.Join("\n", Requests.TakeLast(10)));
-        Selection["supplemental"] = new JsonArray(new JsonObject { ["kind"] = "webiq", ["runtimeImage"] = FactoryTelemetryWorkflowTests.Image,
-            ["audienceClientId"] = "ab444444-4444-4444-4444-444444444444", ["metadataRoleDefinitionId"] = WebRole });
+        Selection["supplemental"] = new JsonArray(new JsonObject { ["kind"] = foundry ? "foundryiq" : "webiq", ["runtimeImage"] = FactoryTelemetryWorkflowTests.Image,
+            ["audienceClientId"] = "ab444444-4444-4444-4444-444444444444", ["metadataRoleDefinitionId"] = foundry ? FoundryRole : WebRole });
     }
 
     private async Task<HttpResponseMessage?> OptionalNativeAsync(HttpRequestMessage request, CancellationToken token)
@@ -33,6 +39,22 @@ internal sealed partial class PreviewPreparationTransport
         if (supplemental is null) return null;
         var uri = request.RequestUri!;
         var path = uri.AbsolutePath.ToLowerInvariant();
+        if (uri.Host == "product-search.search.windows.net")
+        {
+            Assert.Equal("?api-version=2026-04-01", uri.Query);
+            var body = uri.AbsolutePath switch
+            {
+                "/knowledgebases" => """{"value":[{"name":"product-kb"}]}""",
+                "/knowledgesources" => """{"value":[{"name":"product-docs"}]}""",
+                "/knowledgebases('product-kb')" => """{"name":"product-kb","@odata.etag":"kb-v1","outputMode":"extractiveData","knowledgeSources":[{"name":"product-docs"}]}""",
+                "/knowledgesources('product-docs')" => """{"name":"product-docs","@odata.etag":"source-v1","kind":"searchIndex","searchIndexParameters":{"searchIndexName":"product-index"}}""",
+                "/indexes" => """{"value":[{"name":"product-index","@odata.etag":"index-v1","fields":[{"name":"id","type":"Edm.String","key":true}]}]}""",
+                "/knowledgebases('product-kb')/retrieve" => """{"response":[],"activity":[{"id":1,"type":"searchIndex","knowledgeSourceName":"product-docs","count":0}],"references":[]}""",
+                _ => throw new InvalidOperationException("Unexpected selected Search request: " + uri.AbsolutePath),
+            };
+            Assert.Equal(uri.AbsolutePath.EndsWith("/retrieve", StringComparison.Ordinal) ? HttpMethod.Post : HttpMethod.Get, request.Method);
+            return new(HttpStatusCode.OK) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
+        }
         if (uri.Host.EndsWith(".vault.azure.net", StringComparison.Ordinal))
         {
             Assert.Equal("/secrets/webiq-api-key/" + new string('a', 32), uri.AbsolutePath);
@@ -57,13 +79,18 @@ internal sealed partial class PreviewPreparationTransport
         if (request.Method == HttpMethod.Get && (path.EndsWith("-vault", StringComparison.Ordinal)
             || path.EndsWith("-hosting", StringComparison.Ordinal)))
             return await supplementalNative!.SendAsync(request, token);
-        if (request.Method == HttpMethod.Get && path.EndsWith(WebRole.Split('/').Last(), StringComparison.Ordinal))
-            return Reply(new { id = WebRole, properties = new { type = "CustomRole", roleName = "Preview WebIQ metadata",
+        if (request.Method == HttpMethod.Get && (path.EndsWith(WebRole.Split('/').Last(), StringComparison.Ordinal)
+            || path.EndsWith(FoundryRole.Split('/').Last(), StringComparison.Ordinal)))
+            return Reply(new { id = path.EndsWith(FoundryRole.Split('/').Last(), StringComparison.Ordinal) ? FoundryRole : WebRole,
+                properties = new { type = "CustomRole", roleName = "Preview supplemental metadata",
                 assignableScopes = new[] { BoundaryPlanFixture.Root }, permissions = new[] { new
-                { actions = FactoryPreviewSupplementalValidation.MetadataActions("webiq"), notActions = Array.Empty<string>(),
+                { actions = FactoryPreviewSupplementalValidation.MetadataActions(path.EndsWith(FoundryRole.Split('/').Last(), StringComparison.Ordinal) ? "foundryiq" : "webiq"), notActions = Array.Empty<string>(),
                     dataActions = Array.Empty<string>(), notDataActions = Array.Empty<string>() } } } });
         if (supplemental.Resources.ContainsKey(path) || path.EndsWith("/" + FactorySupplementalValidation.SecretsRole, StringComparison.Ordinal)
-            || path.Contains("-webiq", StringComparison.Ordinal) && !path.Contains("-preview-webiq", StringComparison.Ordinal))
+            || path == SupplementalWorkflowTransport.Search || path.EndsWith("/" + FactorySupplementalValidation.SearchDataRole, StringComparison.Ordinal)
+            || path.EndsWith("/77777777-7777-7777-7777-777777777777", StringComparison.Ordinal)
+            || path.Contains("-webiq", StringComparison.Ordinal) && !path.Contains("-preview-webiq", StringComparison.Ordinal)
+            || path.Contains("-foundryiq", StringComparison.Ordinal) && !path.Contains("-preview-foundryiq", StringComparison.Ordinal))
             return await supplementalNative!.SendAsync(request, token);
         return null;
     }

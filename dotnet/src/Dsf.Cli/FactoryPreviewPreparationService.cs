@@ -31,7 +31,8 @@ internal sealed partial class FactoryPreviewPreparationService(
     }
 
     private async Task<PreviewPreparationPlan> ReadPlanAsync(FactoryReservationResult admission, PreviewPreparationSelection selection,
-        OwnerReservationStore store, CancellationToken token, PreviewPreparationPlan? continuation = null)
+        OwnerReservationStore store, CancellationToken token, PreviewPreparationPlan? continuation = null,
+        Journal? approvedPreparation = null)
     {
         var records = await store.ReadNamespaceAsync("dsf/factory/", token);
         var values = records.Where(p => !p.Key.StartsWith(FactoryPreviewPreparation.Namespace + "/", StringComparison.Ordinal))
@@ -64,14 +65,15 @@ internal sealed partial class FactoryPreviewPreparationService(
         FactoryGitHubAuthorityValidation.ValidateVerified(github);
         var (source, sourceEffects) = FactorySourceValidation.Read(manifest, github, values);
         var models = FactoryModelsValidation.ReadPreparation(manifest, values);
-        if (models.State != ModelCapabilityState.Verified || models.Stage != "observed" || models.VerifiedUntil is null || models.VerifiedUntil <= clock.GetUtcNow())
+        var proofTime = ObservationTime(ProductConfigurationKeys.FactoryModels);
+        if (models.State != ModelCapabilityState.Verified || models.Stage != "observed" || models.VerifiedUntil is null || models.VerifiedUntil <= proofTime)
             throw Failure("CurrentVerifiedModelCapabilitiesRequired");
         models = FactoryModelsValidation.ReadVerified(manifest, values,
-            new(models.OperationId, models.ApprovalFingerprint, models.LastProofReference ?? "", models.LastProofSha256 ?? ""), clock.GetUtcNow());
+            new(models.OperationId, models.ApprovalFingerprint, models.LastProofReference ?? "", models.LastProofSha256 ?? ""), proofTime);
         var telemetry = FactoryTelemetryValidation.ReadPreparation(manifest, values, requireChecking: false);
         var telemetryEffects = FactoryTelemetryValidation.ReadCompletedEffects(telemetry, values);
         var telemetryProof = FactoryTelemetryValidation.RequireVerifiedHistory(telemetry, values);
-        if (!FactoryTelemetryValidation.HasFreshEvidence(telemetry with { Proof = telemetryProof }, clock.GetUtcNow()))
+        if (!FactoryTelemetryValidation.HasFreshEvidence(telemetry with { Proof = telemetryProof }, ObservationTime(ProductConfigurationKeys.FactoryTelemetry)))
             throw Failure("CurrentFreshTelemetryProofRequired");
         var retained = await FactoryCharterAdoptionReader.ReadAsync(manifest.Identity.FactoryId, store, token)
             ?? throw Failure("CurrentAdoptedCharterRequired");
@@ -155,7 +157,9 @@ internal sealed partial class FactoryPreviewPreparationService(
             Inputs = new(FactoryPreviewInputValidation.Policy, selection.Judgment),
         };
         _ = FactoryPreviewTelemetryValidation.Read(manifest, configuration, values);
-        var (supplemental, supplementalEffects, optional) = await SupplementalAsync(arm, manifest, selection, values, native, token);
+        var (supplemental, supplementalEffects, optional) = await SupplementalAsync(arm, manifest, selection, values, native,
+            approvedPreparation is not null && OriginalObservation(ProductConfigurationKeys.FactorySupplemental)
+                ? approvedPreparation.Coordinator.ApprovedAt : null, token);
         configuration = configuration with { Supplemental = optional, SupplementalRevision = optional is null ? null : FactoryModelsValidation.Hash(optional) };
         _ = FactoryPreviewSupplementalValidation.Read(manifest, configuration, values);
         foreach (var (target, image, verb, identity, audience, callers) in new[]
@@ -209,6 +213,12 @@ internal sealed partial class FactoryPreviewPreparationService(
                 "Existing reviewed metadata role definitions, Entra API registrations/consent, registry access and private operator/workload reachability are prerequisites.",
                 "Native preparation only: no capability or manifest publication, source repair, issue/PR/label mutation, activation or readiness."])
         { OperatorPermissions = operatorPermissions };
+
+        bool OriginalObservation(string key) => approvedPreparation is not null
+            && approvedPreparation.Plan.RecordRevisions.TryGetValue(key, out var reviewed)
+            && values.TryGetValue(key, out var current) && FactoryReservationRecords.Hash(current) == reviewed;
+        DateTimeOffset ObservationTime(string key) => OriginalObservation(key)
+            ? approvedPreparation!.Coordinator.ApprovedAt : clock.GetUtcNow();
     }
 
     private OwnerReservationStore Store(FactoryReservationResult admission)
