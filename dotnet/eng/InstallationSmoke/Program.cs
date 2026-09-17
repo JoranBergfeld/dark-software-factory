@@ -43,6 +43,7 @@ try
         ["onboard-github-auth"] = 0,
         ["onboard-models"] = 0,
         ["onboard-source"] = 0,
+        ["onboard-preview-workloads"] = 0,
     };
     foreach (var (name, minimumNestedDeployments) in templates)
     {
@@ -127,6 +128,19 @@ try
     Require(sourceHost.ExitCode == 1 && sourceHost.Output.Contains("DSF_FACTORY_PROFILE_PIN", StringComparison.Ordinal)
         && sourceHost.Output.Contains("AZURE_CLIENT_ID", StringComparison.Ordinal)
         && !sourceHost.Output.Contains("AZURE_OPENAI", StringComparison.Ordinal), "Installed source host is not isolated.");
+
+    File.WriteAllText(Path.Combine(scratch.FullName, "azure.log"), "");
+    foreach (var verb in new[] { "serve-preview", "serve-source-context", "serve-preview-models",
+        "serve-preview-telemetry", "serve-preview-supplemental" })
+    {
+        var previewHost = await Run(verb);
+        Require(previewHost.ExitCode == 1 && new[] { "DSF_FACTORY_PROFILE_PIN", "AZURE_CLIENT_ID",
+            "DSF_PRODUCT", "AZURE_APPCONFIG_ENDPOINT" }.All(name => previewHost.Output.Contains(name, StringComparison.Ordinal))
+            && !previewHost.Output.Contains("AZURE_OPENAI", StringComparison.Ordinal),
+            $"Installed CLI did not reach the protected preview runtime: {verb}: {previewHost.Output}");
+    }
+    Require(File.ReadAllText(Path.Combine(scratch.FullName, "azure.log")).Length == 0,
+        "Preview hosts reached Azure before their required settings were present.");
 
     var inferHelp = await Run("onboard", "decide", "infer", "--help");
     Require(inferHelp.ExitCode == 0 && inferHelp.Output.Contains("--new-analysis", StringComparison.Ordinal)
@@ -285,7 +299,7 @@ try
         File.WriteAllBytes(missing, bytes);
     }
 
-    Console.WriteLine($"Installed payload smoke passed: repository review, boundary plan, reservation/foundation/GitHub/models/source/infer/charter/status/resume, inactive runtime admission, eight runtime verbs, {templates.Count} ARM assets, provisioning preview, bootstrap, preflight.");
+    Console.WriteLine($"Installed payload smoke passed: repository review, boundary plan, reservation/foundation/GitHub/models/source/infer/charter/status/resume, inactive runtime admission, thirteen runtime verbs including five protected preview hosts, {templates.Count} ARM assets, provisioning preview, bootstrap, preflight.");
     return 0;
 }
 finally

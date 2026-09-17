@@ -860,6 +860,36 @@ explicit continuation; an HTTP timeout does not prove remote work stopped.
 
 #### Reviewed deployment contract
 
+The installed `dsf` now forwards `serve-preview`, `serve-source-context`,
+`serve-preview-models`, `serve-preview-telemetry` and
+`serve-preview-supplemental` to its version-matched bundled runtime. These are
+protected workload entry points, **not operator preparation or activation
+commands**. Missing product, profile, endpoint or original workload identity
+settings fail before provider access.
+
+The package includes compiled `assets/infra/onboard-preview-workloads.json`
+from `infra/onboard-preview-workloads.bicep`. This self-contained asset describes
+the four required new hosts/auth policies, zero to two selected supplemental
+hosts/auth policies, `council-preview`, its custom SQL role and the two exact
+COUNCIL container assignments. Original environment, identities, account and
+database are `existing`; original source/model/telemetry hosts and `runs` are
+not redeployed. TELEMETRY reuses the original `{P}-source` UAMI, not a new
+`{P}-telemetry` identity. Consumer auth constrains both COUNCIL principal and
+client. Supplemental coordinator settings use the actual returned COUNCIL
+FQDN and the runtime's exact serialized configuration shape.
+
+**This asset is not a complete provisioning workflow.** The reviewed metadata
+role assignments described below, native effect journal/receipts, conditional
+capability publication, operator-approved seed binding, and
+`dsf onboard decide preview` workflow remain unwired. Do not deploy the asset
+manually as a substitute: ARM deployment alone cannot establish create-once
+ownership, current capability, readiness or activation. Its SQL identifier
+parameters must come from the shared reviewed target helpers, not Bicep
+`guid()` or guessed IDs. Existing API registrations, private reachability and
+registry image access remain prerequisites; no networking or shared-resource
+repair is included. Four to six always-on hosts each request 0.25 CPU/0.5 GiB;
+their compute and additional Cosmos state incur costs even before readiness.
+
 Let `G` be the original factory resource group, `F` the factory GUID in lowercase
 32-character form, `P = df-{first 14 characters of F}`, and `K` the product key.
 The operator-reviewed plan must explicitly create **new** Container Apps
@@ -1107,7 +1137,8 @@ configuration records and native receipts into the deployment plan/assets.
 The existing operator #208/#213 native isolation checks must recognize only
 the corresponding separately approved, receipt-backed preview metadata
 overlays; their original rejection of arbitrary extra grants must not be
-relaxed. This slice changes neither CLI/provisioning assets nor live resources.
+relaxed. The packaged workload/state asset does not yet provision these metadata
+overlays or publish capability records. No live resources were changed.
 
 Actual ARM deployment operations must report Create/Succeeded with matching
 target, tracking/operation IDs and Created/201 or OK/200 status. Native
@@ -1116,10 +1147,11 @@ resources are checked by exact properties and deployment receipts, not invented
 timestamps. These are point-in-time checks, **not cross-provider atomic fencing**,
 global tenant permission discovery or a proof of successful Cosmos data-plane
 persistence. This path writes no governance, source progress, preview/run state,
-GitHub issue/PR/label, handoff or activation. Aggregate evidence acquisition is
-implemented; conveyor composition and persisted readiness proof remain
-checkpoint 2c work. Generic inactive `run`, `sweep`, HTTP and dry-run admission
-is unchanged.
+GitHub issue/PR/label, handoff or activation during capability checks.
+Aggregate acquisition and the separate actual conveyor/native readiness proof
+operations are implemented above; operator provisioning remains separate and
+incomplete. Generic inactive `run`, `sweep`, HTTP and dry-run admission is
+unchanged.
 
 **See also:** the [loop overview](the-loop.md), the next phase
 [Creation phase](creation.md), and the decision-path redesign in

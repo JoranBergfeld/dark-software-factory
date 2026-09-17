@@ -233,6 +233,19 @@ public static partial class CliApplication
         var supplementalHost = new Command("serve-supplemental", "serve isolated optional evidence proof (runtime)");
         supplementalHost.SetAction((_, token) => RuntimeShell(["serve-supplemental"], token));
         root.Subcommands.Add(supplementalHost);
+        foreach (var (verb, description) in new[]
+        {
+            ("serve-preview", "serve protected supervised council evaluation; never publish or activate (runtime)"),
+            ("serve-source-context", "serve protected council-only adopted source context (runtime)"),
+            ("serve-preview-models", "serve protected council-only native model evaluation (runtime)"),
+            ("serve-preview-telemetry", "serve protected council-only application telemetry evidence (runtime)"),
+            ("serve-preview-supplemental", "serve protected council-only selected supplemental evidence (runtime)"),
+        })
+        {
+            var previewHost = new Command(verb, description);
+            previewHost.SetAction((_, token) => RuntimeShell([verb], token));
+            root.Subcommands.Add(previewHost);
+        }
         root.Subcommands.Add(BuildCharterCommand(terminal, appConfig, charterRepository, charterStore));
 
         return root;

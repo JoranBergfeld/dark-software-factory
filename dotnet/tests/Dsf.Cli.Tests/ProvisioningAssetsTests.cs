@@ -50,6 +50,7 @@ public sealed class ProvisioningAssetsTests
     [InlineData("onboard-models.json")]
     [InlineData("onboard-source.json")]
     [InlineData("onboard-supplemental.json")]
+    [InlineData("onboard-preview-workloads.json")]
     public void Default_resolver_uses_shipped_assembly_relative_templates(string entrypoint)
     {
         Assert.Equal(
