@@ -415,6 +415,42 @@ public sealed class FactoryAuditTests
         Assert.Equal(progress, System.Text.Json.JsonSerializer.Serialize(source.Progress));
     }
 
+    [Theory]
+    [InlineData("partial", "Partial")]
+    [InlineData("adoption", "Unknown")]
+    public async Task Retention_reports_expected_context_failures_as_structured_outcomes(string fault, string expected)
+    {
+        using var transport = await PreviewEvaluationTests.ConfiguredAsync();
+        var source = transport.Scenario.Source.Source!;
+        var statuses = new System.Collections.Concurrent.ConcurrentQueue<System.Net.HttpStatusCode>();
+        var changed = false;
+        transport.BeforeIngressRequest = async uri =>
+        {
+            if (uri.AbsolutePath != "/retain-council-context" || changed) return;
+            changed = true;
+            if (fault == "partial")
+                Assert.Equal("Partial", (string?)(await transport.Scenario.Machine.InvokeAsync("infer", "--new-analysis")).Result["state"]);
+            else
+            {
+                var adoption = JsonNode.Parse(transport.Values()[ProductConfigurationKeys.CharterAdopted])!;
+                transport.Scenario.Arm.Product.RejectReadKey =
+                    ProductConfigurationKeys.CharterAdoptionPayload((Guid)adoption["revision"]!, 0);
+            }
+        };
+        transport.AfterIngressResponse = (path, status) =>
+        {
+            if (path == "/retain-council-context") statuses.Enqueue(status);
+            return Task.CompletedTask;
+        };
+        var preview = await transport.Scenario.Machine.InvokeAsync("preview", ["--evaluate", .. PreviewEvaluationTests.Pins(transport)]);
+        Assert.True(changed);
+        Assert.Equal(expected, (string?)preview.Result["readiness"]);
+        Assert.Contains(System.Net.HttpStatusCode.Conflict, statuses);
+        Assert.DoesNotContain(System.Net.HttpStatusCode.InternalServerError, statuses);
+        Assert.Empty(transport.EvaluationInference);
+        Assert.DoesNotContain(source.Progress.Keys, key => key.EndsWith("/retention", StringComparison.Ordinal));
+    }
+
     [Fact]
     public async Task Changed_native_retention_interlock_stops_expiry_before_any_delete()
     {

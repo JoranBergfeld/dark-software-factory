@@ -165,6 +165,10 @@ public static partial class RuntimeVerbs
                 "NativePreviewState" + exception.Failure, 409);
             }
             catch (PreviewCapabilityException e) { return Error(e.State, e.Message, 403); }
+            catch (CharterAdoptionEvidenceException)
+            { return Error(FactoryCharterState.Unknown, "Protected adoption history or current pointer unconfirmed.", 409); }
+            catch (IntentException e)
+            { return Error(Enum.Parse<FactoryCharterState>(e.State.ToString()), e.Message, 409); }
             catch (SourceAcquisitionException e)
             { return Error(Enum.Parse<FactoryCharterState>(FactoryIntentWorkflow.Map(e.State).ToString()), e.Message, 409); }
             catch (SupplementalSourceException e) when (e.Reason == SupplementalReason.CapacityExceeded)
