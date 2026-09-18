@@ -19,12 +19,12 @@ internal sealed class FactoryGitHubProposalPublisher(TokenCredential credential,
         if (original.State is FactoryPublicationState.Dispatched or FactoryPublicationState.Unknown)
             return Result(FactoryPublicationState.Unknown, "Original issued request unconfirmed; no second create.");
         var access = await new FactoryGitHubVerifier(http, credential, clock).AcquireProposalAccessAsync(authority, token);
-        var review = await access.ReviewAsync(token);
+        var review = await access.ReviewAsync(original.Intent.AutomationReview, token);
         await journal.DispatchAsync(token, review);
         var createIssued = false;
         try
         {
-            if (await access.ReviewAsync(token) != review)
+            if (await access.ReviewAsync(original.Intent.AutomationReview, token) != review)
                 throw new InvalidOperationException("Current mutation review changed after native dispatch claim.");
             createIssued = true;
             var receipt = await access.CreateAsync(journal.Document.Intent, token);

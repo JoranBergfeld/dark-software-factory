@@ -172,7 +172,10 @@
         }
       },
       "dsf.core": {
-        "type": "Project"
+        "type": "Project",
+        "dependencies": {
+          "YamlDotNet": "[16.3.0, )"
+        }
       },
       "dsf.featurecouncil": {
         "type": "Project",

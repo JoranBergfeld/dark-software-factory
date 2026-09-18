@@ -4,7 +4,10 @@ public enum FactoryPublicationState { Intended, Dispatched, NotDispatched, Rejec
 
 public sealed record FactoryPublicationIntent(int Protocol, Guid FactoryId, string Product, long RepositoryId,
     string LogicalIntent, Guid InvocationId, string Title, string Body, string InputsSha256,
-    IReadOnlyList<AuditRecordIdentity> References);
+    IReadOnlyList<AuditRecordIdentity> References)
+{
+    [System.Text.Json.Serialization.JsonRequired] public RepositoryMutationReview AutomationReview { get; init; } = null!;
+}
 
 public sealed record FactoryPublicationAttempt(Guid Id, DateTimeOffset IssuedAt, FactoryPublicationState State,
     int? StatusCode = null, string? RequestId = null)
@@ -115,6 +118,8 @@ public static class FactoryPublication
             || string.IsNullOrWhiteSpace(intent.Title) || intent.Title.Length > 256 || intent.Title.Any(char.IsControl)
             || string.IsNullOrWhiteSpace(intent.Body) || System.Text.Encoding.UTF8.GetByteCount(intent.Body) > 60000
             || !FactorySourceValidation.Hash(intent.InputsSha256) || intent.References is not { Count: > 0 and <= 128 }
+            || intent.AutomationReview is not { Mutation: RepositoryMutationClass.ProposalIssue, State: RepositoryReviewState.Confirmed,
+                Declaration: RepositoryAutomationDeclaration.Clear, VisibleInventoryComplete: true, DeclarationOwner.Length: > 0 }
             || intent.References.Any(r => r.FactoryId != intent.FactoryId || !Enum.IsDefined(r.Store)
                 || string.IsNullOrWhiteSpace(r.Key) || string.IsNullOrWhiteSpace(r.NativeRevision) || !FactorySourceValidation.Hash(r.Sha256))
             || intent.References.Select(r => (r.Store, r.Key)).Distinct().Count() != intent.References.Count)

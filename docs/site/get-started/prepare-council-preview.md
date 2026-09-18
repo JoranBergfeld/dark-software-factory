@@ -632,8 +632,10 @@ repository-only permissions are `metadata:read`, `contents:read`,
 contents token is unchanged. GitHub cannot confine `issues:write` to
 create-only, and the App-key-holder residual remains. Current label semantics
 and complete workflow/webhook inventories are checked before and after the
-dispatch claim. This initial dispatch policy conservatively blocks any active
-workflow or webhook rather than treating unknown automation as safe.
+dispatch claim using the attachment review's shared mutation-class policy.
+Unrelated push, pull-request and check automation does not itself block issue-only
+creation. Applicable issue/opened, opaque dispatch consumers and uninspectable
+hooks remain blocked/unknown; declarations do not override missing evidence.
 
 Operator-reviewed native rollout/grants, exact current activation and pause
 checks at the dispatch boundary, actual unanimous-GO live-execution routing,

@@ -161,7 +161,8 @@ public sealed class FactoryPublicationJournalTests
             new(Guid.Parse("db0a6eac-4211-4e3c-abe9-5ab62ba5929e"), AuditStoreKind.Preview,
                 "dbs/acme/colls/council-preview/docs/live-reviewed", "\"preview-v1\"", new string('b', 64))
                 { NativeResourceId = "AQIDBAUGBwgJCgsMDQ4PEA==" }
-        ]);
+        ]) { AutomationReview = new(RepositoryMutationClass.ProposalIssue, RepositoryReviewState.Confirmed,
+            RepositoryAutomationDeclaration.Clear, "original-automation-owner", true, ["Explicit original issue-only mutation review."]) };
 
     internal static FactoryPublicationJournal Journal(HttpClient http, FactoryPublicationIntent intent) =>
         new(intent, new CheckpointCredential(), http, TimeProvider.System);

@@ -525,6 +525,8 @@ internal sealed class AuthorityTransport : HttpMessageHandler
     private readonly bool publicationEnabled;
     public string? IssueFailure { get; set; }
     public string? PublicationConflict { get; set; }
+    public string? WorkflowEvent { get; init; }
+    public string? HookEvent { get; init; }
     public Action? BeforeIssueCreate { get; set; }
     public string IssueBody { get; set; } = "";
     public List<string> IssueCreates { get; } = [];
@@ -615,10 +617,14 @@ internal sealed class AuthorityTransport : HttpMessageHandler
             "/installation/repositories" => Reply(new { total_count = 1, repositories = new[] { repository } }),
             "/repositories/913" => Reply(repository),
             _ when PublicationEnabled && path == "/repos/" + RepositoryName + "/actions/workflows" => Reply(
-                PublicationConflict == "workflow" ? new { total_count = 1, workflows = new[] { new { id = 1, state = "active" } } }
+                PublicationConflict == "workflow" || WorkflowEvent is not null ? new { total_count = 1, workflows = new[] { new { id = 1, state = "active",
+                    path = ".github/workflows/existing.yml" } } }
                     : (object)new { total_count = 0, workflows = Array.Empty<object>() }),
-            _ when PublicationEnabled && path == "/repos/" + RepositoryName + "/hooks" => Reply(PublicationConflict == "hook"
-                ? new[] { new { id = 1, active = true, events = new[] { "issues" } } } : (object)Array.Empty<object>()),
+            _ when PublicationEnabled && path == "/repos/" + RepositoryName + "/contents/.github/workflows/existing.yml" => Reply(new
+                { type = "file", encoding = "base64", sha = new string('c', 40),
+                    content = Convert.ToBase64String(Encoding.UTF8.GetBytes("on: " + (WorkflowEvent ?? "issues") + "\njobs:\n  build:\n    steps:\n      - run: dotnet test\n")) }),
+            _ when PublicationEnabled && path == "/repos/" + RepositoryName + "/hooks" => Reply(PublicationConflict == "hook" || HookEvent is not null
+                ? new[] { new { id = 1, active = true, events = new[] { HookEvent ?? "issues" } } } : (object)Array.Empty<object>()),
             _ when PublicationEnabled && path == "/repos/" + RepositoryName + "/labels/dsf%3Aproposal" => Reply(new { id = 10, name = "dsf:proposal",
                 description = PublicationConflict == "label" ? "Assigns delivery to bot" : DecideRepositoryLabels.Meanings["dsf:proposal"] }),
             _ when path == "/repos/" + RepositoryName + "/git/ref/heads/" + Uri.EscapeDataString(DefaultBranch)

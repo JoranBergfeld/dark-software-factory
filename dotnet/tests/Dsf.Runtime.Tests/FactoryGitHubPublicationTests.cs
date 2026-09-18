@@ -10,6 +10,41 @@ namespace Dsf.Runtime.Tests;
 public sealed class FactoryGitHubPublicationTests
 {
     [Theory]
+    [InlineData("push")]
+    [InlineData("pull_request")]
+    [InlineData("check_run")]
+    [InlineData("check_suite")]
+    public async Task Current_unrelated_workflow_and_webhook_do_not_block_proposal_mutation(string subscription)
+    {
+        using var native = new PublicationTransport();
+        using var github = new AuthorityTransport { PublicationEnabled = true, WorkflowEvent = subscription, HookEvent = subscription };
+        using var remote = new PublicationWorkflowTransport(native, github);
+        using var http = new HttpClient(remote);
+
+        var result = await Publisher(http).CreateAsync(FactoryPublicationJournalTests.Intent(), Authority(github), CancellationToken.None);
+
+        Assert.Equal(FactoryPublicationState.Confirmed, result.State);
+        Assert.Single(github.IssueCreates);
+        Assert.Contains(github.Paths, p => p.EndsWith("/contents/.github/workflows/existing.yml", StringComparison.Ordinal));
+        Assert.NotNull(result.Attempts.Single().MutationReviewSha256);
+    }
+
+    [Theory]
+    [InlineData("issues")]
+    [InlineData("repository_dispatch")]
+    [InlineData("unknown_event")]
+    public async Task Applicable_or_opaque_workflow_is_not_cleared_by_an_owner_claim(string subscription)
+    {
+        using var native = new PublicationTransport();
+        using var github = new AuthorityTransport { PublicationEnabled = true, WorkflowEvent = subscription };
+        using var remote = new PublicationWorkflowTransport(native, github);
+        using var http = new HttpClient(remote);
+        await Assert.ThrowsAnyAsync<InvalidOperationException>(() =>
+            Publisher(http).CreateAsync(FactoryPublicationJournalTests.Intent(), Authority(github), CancellationToken.None));
+        Assert.Empty(github.IssueCreates);
+    }
+
+    [Theory]
     [InlineData("receipt-id")]
     [InlineData("receipt-request")]
     [InlineData("response")]

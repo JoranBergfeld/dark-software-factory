@@ -20,8 +20,9 @@ internal sealed class FactoryGitHubProposalAccess(HttpClient http, TimeProvider 
         new Dictionary<string, string> { ["metadata"] = "read", ["contents"] = "read", ["issues"] = "write",
             ["actions"] = "read", ["repository_hooks"] = "read" });
     private bool issued;
+    internal GitHubAuthorityProof Proof => proof;
 
-    internal async Task<string> ReviewAsync(CancellationToken token)
+    internal async Task<string> ReviewAsync(RepositoryMutationReview original, CancellationToken token)
     {
         if (proof.TokenExpiresAt <= clock.GetUtcNow().AddSeconds(30)) throw new InvalidOperationException("Fresh publication token required.");
         var repository = await RepositoryAsync(token);
@@ -29,23 +30,27 @@ internal sealed class FactoryGitHubProposalAccess(HttpClient http, TimeProvider 
         if (label.GetProperty("id").GetInt64() <= 0 || label.GetProperty("name").GetString() != "dsf:proposal"
             || label.GetProperty("description").GetString() != DecideRepositoryLabels.Meanings["dsf:proposal"])
             throw new InvalidOperationException("Existing reviewed proposal-only label required; no label creation or repair.");
-        var workflows = await GetAsync("/repos/" + proof.Repository + "/actions/workflows?per_page=100", token);
-        var inventory = workflows.GetProperty("workflows");
-        if (workflows.GetProperty("total_count").GetInt32() != inventory.GetArrayLength() || inventory.GetArrayLength() > 100
-            || inventory.EnumerateArray().Any(w => w.GetProperty("id").GetInt64() <= 0
-                || w.GetProperty("state").GetString() is not ("disabled_manually" or "disabled_inactivity" or "deleted")))
-            throw new InvalidOperationException("Active, incomplete or opaque workflow inventory blocks proposal mutation.");
-        var hooks = await GetAsync("/repos/" + proof.Repository + "/hooks?per_page=100", token);
-        if (hooks.ValueKind != JsonValueKind.Array || hooks.GetArrayLength() >= 100
-            || hooks.EnumerateArray().Any(h => h.GetProperty("id").GetInt64() <= 0 || h.GetProperty("active").GetBoolean()))
-            throw new InvalidOperationException("Active, incomplete or opaque webhook inventory blocks proposal mutation.");
+        var observed = new List<object>();
+        var policy = new RepositoryAutomationPolicy(async (path, cancellation) =>
+        {
+            var body = await GetAsync("/" + path, cancellation);
+            observed.Add(new { Path = path, Sha256 = FactoryModelsValidation.Hash(body) });
+            return new(200, body);
+        });
+        var name = proof.Repository!.Split('/');
+        var reviews = await policy.ReviewAsync(new(original.DeclarationOwner,
+                new Dictionary<RepositoryMutationClass, RepositoryAutomationDeclaration> { [RepositoryMutationClass.ProposalIssue] = original.Declaration }),
+            new(proof.RepositoryId, proof.AccountId, name[0], name[1], proof.DefaultBranch!, "", false, false, true), [], token);
+        var current = reviews.Single(r => r.Mutation == RepositoryMutationClass.ProposalIssue);
+        if (current.State != RepositoryReviewState.Confirmed)
+            throw new InvalidOperationException("Current applicable repository automation is blocked or unconfirmed.");
         if (!JsonElement.DeepEquals(repository, await RepositoryAsync(token)))
             throw new InvalidOperationException("Durable repository changed during publication review.");
         return FactoryModelsValidation.Hash(new
         {
             Repository = repository,
             Label = new { Id = label.GetProperty("id").GetInt64(), Name = "dsf:proposal", Meaning = label.GetProperty("description").GetString() },
-            Workflows = workflows, Hooks = hooks.EnumerateArray().Select(h => new { Id = h.GetProperty("id").GetInt64(), Active = false }).ToArray()
+            OriginalReview = original, CurrentReview = current, Inventory = observed
         });
     }
 
