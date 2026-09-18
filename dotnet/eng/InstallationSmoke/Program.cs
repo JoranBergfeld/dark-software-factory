@@ -168,6 +168,18 @@ try
     }
     Require(File.ReadAllText(Path.Combine(scratch.FullName, "azure.log")).Length == 0, "Incomplete audit reached Azure.");
 
+    var pauseHelp = await Run("onboard", "decide", "pause", "--help");
+    Require(pauseHelp.ExitCode == 0 && new[] { "--request", "--operation", "--owner-appconfig-endpoint" }
+        .All(option => pauseHelp.Output.Contains(option, StringComparison.Ordinal)), "Installed deliberate pause grammar is incomplete.");
+    foreach (var action in new[] { Array.Empty<string>(), new[] { "--request" },
+        new[] { "--request", "--operation", Guid.Empty.ToString() } })
+    {
+        var incompletePause = await Run(["onboard", "decide", "pause", .. action, "--json"]);
+        Require(incompletePause.ExitCode == 1 && incompletePause.Output.Contains("\"state\": \"Blocked\"", StringComparison.Ordinal)
+            && incompletePause.Output.Contains("required", StringComparison.Ordinal), "Installed pause accepted incomplete explicit inputs.");
+    }
+    Require(File.ReadAllText(Path.Combine(scratch.FullName, "azure.log")).Length == 0, "Incomplete pause reached Azure.");
+
     var inferHelp = await Run("onboard", "decide", "infer", "--help");
     Require(inferHelp.ExitCode == 0 && inferHelp.Output.Contains("--new-analysis", StringComparison.Ordinal)
         && inferHelp.Output.Contains("--status-only", StringComparison.Ordinal), "Installed charter inference grammar is unavailable.");

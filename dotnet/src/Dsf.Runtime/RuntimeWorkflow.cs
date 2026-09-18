@@ -11,6 +11,8 @@ namespace Dsf.Runtime;
 /// </summary>
 internal static partial class RuntimeWorkflow
 {
+    internal static void EnsureCouncilAdmissionOpen(IEnumerable<string> keys) => FactoryPause.RequireAdmissionOpen(keys);
+
     internal static async Task<SourceCharterContextResult> ReadSourceCharterContextAsync(
         FactorySourceAccess source, IFactoryCharterEvidenceReader records, HttpClient http, TimeProvider clock, CancellationToken token)
     {
@@ -81,6 +83,8 @@ internal static partial class RuntimeWorkflow
         var envPin = env?.GetValueOrDefault(RuntimeIntegrationSettings.FactoryProfilePin);
         if (values.Keys.Any(key => key.StartsWith("dsf/factory/", StringComparison.Ordinal)))
         {
+            try { EnsureCouncilAdmissionOpen(values.Keys); }
+            catch (PreviewCapabilityException e) { throw new RuntimeVerbException(e.Message); }
             try
             {
                 var manifest = FactoryGovernance.ReadInactiveManifest(

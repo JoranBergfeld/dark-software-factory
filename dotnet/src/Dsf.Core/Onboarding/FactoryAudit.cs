@@ -75,6 +75,24 @@ public static class FactoryAudit
             Link(Require(AuditStoreKind.Governance, ProductConfigurationKeys.FactoryManifest),
                 Require(AuditStoreKind.Governance, ProductConfigurationKeys.FactoryPlanChunk(i)));
         var values = input.Where(r => r.Identity.Store == AuditStoreKind.Governance).ToDictionary(r => r.Identity.Key, r => r.Content);
+        var pauses = values.Keys.Where(k => k.StartsWith(FactoryPause.Key, StringComparison.Ordinal)
+            || k.StartsWith(FactoryPause.HistoryPrefix, StringComparison.Ordinal)).ToArray();
+        if (pauses.Length != 0)
+        {
+            var root = Require(AuditStoreKind.Governance, FactoryPause.Key);
+            var pause = FactoryPause.Read(root.Content, manifest);
+            if (pause.RequestedAt > now || pauses.Length > 2) throw new JsonException("Protected pause namespace is inconsistent.");
+            var history = records.GetValueOrDefault((AuditStoreKind.Governance, FactoryPause.HistoryKey(pause.OperationId)));
+            if (history is null)
+                throw new FactoryAuditException(FactoryAuditState.Partial, "Pause closes admission but its audit copy is unconfirmed; no complete closure receipt.");
+            if (history.Content != root.Content) throw new JsonException("Protected pause audit copy differs.");
+            Link(root, history);
+            var profile = Require(AuditStoreKind.Governance, ProductConfigurationKeys.FactoryProfile);
+            if (TextHash(profile.Content) != pause.ProfilePin) throw new JsonException("Reviewed pause profile missing.");
+            Link(history, profile);
+            for (var i = 0; i < pause.ReviewedManifest.PlanChunks; i++)
+                Link(history, Require(AuditStoreKind.Governance, ProductConfigurationKeys.FactoryPlanChunk(i)));
+        }
         if (manifest.GitHubAuthorityOperationId is not null || values.ContainsKey(ProductConfigurationKeys.FactoryGitHubAuthority))
         {
             var github = FactoryGitHubAuthorityValidation.ReadPreparation(manifest, values);

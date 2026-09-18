@@ -174,9 +174,13 @@ public sealed class PreviewModelConsumerTests
             else transport.Source.Values[ProductConfigurationKeys.FactoryPreview] =
                 JsonSerializer.Serialize(transport.Capability with { State = PreviewCapabilityState.Blocked }, FactoryGitHubJson.Options);
         };
-        Assert.Equal(FactoryCharterState.Blocked, (await Assert.ThrowsAsync<PreviewCapabilityException>(() =>
+        Assert.Equal(FactoryCharterState.Unknown, (await Assert.ThrowsAsync<PreviewCapabilityException>(() =>
             consumer.SynthesizeAsync(Input, CancellationToken.None))).State);
         Assert.Single(consumer.Observations);
+        var dispatched = transport.Intent.Models.Inference.Count;
+        Assert.Equal(FactoryCharterState.Unknown, (await Assert.ThrowsAsync<PreviewCapabilityException>(() =>
+            consumer.SynthesizeAsync(Input, CancellationToken.None))).State);
+        Assert.Equal(dispatched, transport.Intent.Models.Inference.Count);
     }
 
     [Fact]

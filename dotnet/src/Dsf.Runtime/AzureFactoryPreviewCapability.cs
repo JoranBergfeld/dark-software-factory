@@ -90,6 +90,10 @@ internal sealed class AzureFactoryPreviewCapability(
 
     private async Task<ProtectedRecords> ReadAsync(TokenCredential currentCredential, CancellationToken token)
     {
+        foreach (var prefix in new[] { FactoryPause.Key, FactoryPause.HistoryPrefix })
+            await foreach (var setting in new AzureConfigurationSettingsGateway(currentCredential, http)
+                .ListRecordsAsync(settings.ProductEndpoint, "*", token, prefix + "*"))
+                RuntimeWorkflow.EnsureCouncilAdmissionOpen([setting.Key]);
         var values = new SortedDictionary<string, string>(StringComparer.Ordinal);
         var versions = new SortedDictionary<string, string>(StringComparer.Ordinal);
         var nativeVersions = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -100,6 +104,7 @@ internal sealed class AzureFactoryPreviewCapability(
             .ListRecordsAsync(settings.ProductEndpoint, ProductConfigurationKeys.NoLabel, token))
         {
             var key = setting.Key;
+            RuntimeWorkflow.EnsureCouncilAdmissionOpen([key]);
             var metadata = Metadata(setting);
             if (key.StartsWith(FactoryAudit.Namespace, StringComparison.Ordinal))
             {

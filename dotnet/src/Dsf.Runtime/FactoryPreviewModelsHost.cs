@@ -28,6 +28,7 @@ public static partial class RuntimeVerbs
         async Task<IResult> EvaluateAsync(HttpContext context)
         {
             context.Response.Headers.CacheControl = "no-store";
+            var evaluated = false;
             try
             {
                 if (context.Request.Headers["X-MS-CLIENT-PRINCIPAL-IDP"] != "aad") throw new JsonException();
@@ -50,6 +51,7 @@ public static partial class RuntimeVerbs
                 if (input.Route == "embedding") groups = await workloads.DeduplicateAsync(input.Items!, token);
                 else if (input.Route == "synthesis") text = await workloads.SynthesizeAsync(input.Input!, token);
                 else if (input.Route != "authority") text = await workloads.JudgeAsync(input.Route, input.Input!, token);
+                evaluated = input.Route != "authority";
                 if (input.Route != "authority") authority = await workloads.ReadAuthorityAsync(input.Preview.RequestId, token);
                 var final = await validator.CheckAsync(input.Preview, token);
                 if (final.Revision != current.Revision)
@@ -59,10 +61,11 @@ public static partial class RuntimeVerbs
                 if (bytes.Length > PreviewModelResponseBytes) throw new JsonException();
                 return Results.Content(System.Text.Encoding.UTF8.GetString(bytes), "application/json");
             }
-            catch (PreviewCapabilityException e) { return Failure(e.State, e.Message, 403); }
+            catch (PreviewCapabilityException e)
+            { return Failure(evaluated ? FactoryCharterState.Unknown : e.State, e.Message, 403); }
             catch (ModelCapabilityException e)
             {
-                return Failure(e.Reason == ModelCapabilityReason.MalformedResponse ? FactoryCharterState.Failed
+                return Failure(evaluated ? FactoryCharterState.Unknown : e.Reason == ModelCapabilityReason.MalformedResponse ? FactoryCharterState.Failed
                     : e.Reason == ModelCapabilityReason.NetworkUnavailable ? FactoryCharterState.Unknown : FactoryCharterState.Blocked,
                     "NativeModel" + e.Reason, 409);
             }
@@ -71,7 +74,7 @@ public static partial class RuntimeVerbs
             catch (Exception e) when (e is HttpRequestException or IOException or Azure.RequestFailedException or AuthenticationFailedException)
             { return Failure(FactoryCharterState.Unknown, "ModelDispatchUnconfirmed", 409); }
             catch (Exception e) when (e is JsonException or InvalidOperationException or ArgumentException or KeyNotFoundException or BadHttpRequestException or SupplementalSourceException)
-            { return Failure(FactoryCharterState.Failed, "InvalidPreviewModelRequestOrResponse", 403); }
+            { return Failure(evaluated ? FactoryCharterState.Unknown : FactoryCharterState.Failed, "InvalidPreviewModelRequestOrResponse", 403); }
         }
 
         static IResult Failure(FactoryCharterState state, string reason, int status) =>

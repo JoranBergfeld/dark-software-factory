@@ -54,6 +54,10 @@ internal sealed class FactoryPreviewWorker(FactoryHostSettings settings, Runtime
             }
             if (active is not null)
                 return Observation(authority, request, PreviewReadiness.Checking, "CurrentReadOnlyInspectionInProgress");
+            if (completed is { } prior && prior.Inputs == inputs && prior.Observation.RequestId == request.RequestId
+                && prior.Observation.FactoryId == authority.Manifest.Identity.FactoryId && prior.Observation.OperationId == request.OperationId
+                && prior.Observation.ApprovalFingerprint == request.ApprovalFingerprint && prior.AuthorityRevision != authority.Revision)
+                return Observation(authority, request, PreviewReadiness.Unknown, "PreviewGovernanceChangedDuringObservation");
             if (completed is { } cached && cached.Inputs == inputs && cached.AuthorityRevision == authority.Revision
                 && cached.Observation is { } previous
                 && previous.FactoryId == authority.Manifest.Identity.FactoryId && previous.OperationId == request.OperationId
@@ -75,8 +79,21 @@ internal sealed class FactoryPreviewWorker(FactoryHostSettings settings, Runtime
             if (execute && store is not null && store.Document.Proof is null
                 && store.Document.Phase != PreviewExecutionPhase.Failed)
             {
+                await RuntimeWorkflow.RequireCurrentPreviewAdmissionAsync(settings, authority, request, credential,
+                    http, dependencies.PreviewClock, token);
                 var admission = await store.AdmitAsync(workerId, request, token);
-                // Only a confirmed CAS permits work. Request cancellation after this point is not rollback.
+                try
+                {
+                    await RuntimeWorkflow.RequireCurrentPreviewAdmissionAsync(settings, authority, request, credential,
+                        http, dependencies.PreviewClock, token);
+                }
+                catch (Exception exception) when (exception is PreviewCapabilityException || Unconfirmed(exception))
+                {
+                    using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(30), dependencies.PreviewClock);
+                    await store.QuarantineWorkAsync(admission, "PreviewAdmissionAuthorityUnconfirmedNoDispatch", cleanup.Token);
+                    return Observation(authority, request, PreviewReadiness.Unknown, "PreviewAdmissionAuthorityUnconfirmedNoDispatch");
+                }
+                // The CAS and governance reads are not a cross-store transaction. Later stop requests may drain admitted work.
                 active = new(authority, admission.Request, admission, false);
                 if (!queue.Writer.TryWrite(active)) throw new InvalidOperationException("Bounded preview worker unavailable.");
                 return Observation(authority, request, PreviewReadiness.Queued, "DurablyAdmittedAwaitingOriginalWorker");
@@ -123,6 +140,8 @@ internal sealed class FactoryPreviewWorker(FactoryHostSettings settings, Runtime
         {
             if (work.Admission is not null)
             {
+                await RuntimeWorkflow.RequireCurrentPreviewAdmissionAsync(settings, work.Authority, work.Request, credential,
+                    http, dependencies.PreviewClock, token);
                 var store = Store(work.Authority);
                 await store.ReadDocumentAsync(token);
                 await store.BeginWorkAsync(work.Admission, token);

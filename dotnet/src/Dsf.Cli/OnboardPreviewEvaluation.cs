@@ -59,6 +59,11 @@ public static partial class CliApplication
             result = new(e.State == FactoryReservationState.Unknown ? PreviewReadiness.Unknown
             : e.State == FactoryReservationState.Canceled ? PreviewReadiness.Canceled : PreviewReadiness.Blocked, operationId, approval, e.Message);
         }
+        catch (PreviewCapabilityException e)
+        {
+            result = new(e.State == FactoryCharterState.Blocked ? PreviewReadiness.Blocked : PreviewReadiness.Unknown,
+                operationId, approval, e.Message);
+        }
         catch (OperationCanceledException)
         {
             result = new(readOnly ? PreviewReadiness.Canceled : PreviewReadiness.Unknown, operationId, approval,
@@ -89,6 +94,8 @@ internal sealed partial class FactoryPreviewPreparationService
         bool readOnly, CancellationToken token)
     {
         var store = Store(admission);
+        FactoryPause.RequireAdmissionOpen((await store.ReadNamespaceAsync(FactoryPause.Key, token)).Keys);
+        FactoryPause.RequireAdmissionOpen((await store.ReadNamespaceAsync(FactoryPause.HistoryPrefix, token, maximumRecords: 128)).Keys);
         var preparation = await ReadJournalAsync(admission, store, token) ?? throw Unknown("ConfirmedNativePreparationRequired");
         var values = (await store.ReadFactoryAuthorityAsync(token)).ToDictionary(p => p.Key, p => p.Value.Value);
         var manifest = Parse<FactoryManifest>(values[ProductConfigurationKeys.FactoryManifest]);

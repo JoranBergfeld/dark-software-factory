@@ -26,6 +26,14 @@ public static partial class RuntimeVerbs
 
 internal static partial class RuntimeWorkflow
 {
+    internal static async Task RequireCurrentPreviewAdmissionAsync(FactoryHostSettings settings, PreviewCapabilitySnapshot expected,
+        PreviewCapabilityRequest request, Azure.Core.TokenCredential credential, HttpClient http, TimeProvider clock, CancellationToken token)
+    {
+        var current = await new AzureFactoryPreviewCapability(settings, PreviewHostKind.Council, credential, http, clock).CheckAsync(request, token);
+        if (current.Revision != expected.Revision)
+            throw new PreviewCapabilityException(FactoryCharterState.Blocked, "PreviewAdmissionAuthorityChanged");
+    }
+
     internal static async Task<PreviewExecutionResult> ExecutePreviewAsync(FactoryHostSettings settings, RuntimeDependencies dependencies,
         PreviewCapabilityRequest request, HttpClient http, CancellationToken cancellationToken, PreviewWorkAdmission? admission = null)
     {

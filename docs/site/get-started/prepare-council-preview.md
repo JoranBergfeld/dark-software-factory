@@ -436,6 +436,73 @@ native-document limits. Overflow, cancellation or timeout is incomplete or
 unknown, never silently truncated or successful.
 
 This command persists bounded preview/provenance and readonly intended
-publication. Full retention/export (#215), activation/live publication (#216)
-and uncertain-effect recovery (#217) remain separate; no command here grants
-their authority.
+publication. [Retention/export](retain-audit-evidence.md) is a separate
+operator command. Activation/live publication and uncertain-effect recovery
+remain unavailable; no command here grants their authority.
+
+## Deliberately pause council admission
+
+Pause is separate from temporary unreadiness. It requires the original
+operator's effective Azure CLI identity, owner registration access, and
+product App Configuration data-plane read/write authority. It does not require
+working models, telemetry, source analysis or a ready council.
+No runtime identity receives governance-write permissions.
+
+Read-only inspection:
+
+```bash
+dsf onboard decide pause \
+  --owner-appconfig-endpoint https://OWNER.azconfig.io \
+  --product PRODUCT --tenant TENANT_GUID --subscription SUBSCRIPTION_GUID --json
+```
+
+Explicit stop request, using one caller-chosen nonempty operation GUID:
+
+```bash
+dsf onboard decide pause --request --operation STOP_OPERATION_GUID \
+  --owner-appconfig-endpoint https://OWNER.azconfig.io \
+  --product PRODUCT --tenant TENANT_GUID --subscription SUBSCRIPTION_GUID --json
+```
+
+All four locators are required; redirected input and `--json` never prompt.
+An interactive terminal may prompt for missing values, but cannot infer
+`--request`. No activation approval is inferred from a stop request.
+
+The first native `If-None-Match: *` create of unlabelled `dsf/factory/pause`
+records the factory/repository, exact manifest revision and snapshot, profile,
+actor, time and original stop identifier. It closes admission before the
+separate protected audit copy. These writes are **not** a transaction.
+Concurrent contenders cannot overwrite the winning request.
+
+| Result | Meaning |
+| --- | --- |
+| `NotRequested` | No deliberate stop observed; not readiness, activation or permission to run. |
+| `DrainingUnknown` | Original stop and audit copy confirmed; admission closed, but outstanding work/effects are not certified stopped. |
+| `Partial` | Original stop closes admission; audit copy/readback unconfirmed. No automatic repair or replay. |
+| `Blocked` / `Failed` | Input, authority or conditional write rejected; inspect any original request. |
+| `Unknown` / `Canceled` | Stop effect or authority unconfirmed; inspect the same operation, never infer rollback. |
+
+`admissionClosed: null` means the command could not confirm that fact;
+`stopCompleted` and `isActivated` are always false. Exit `0` means successful
+inspection or a confirmed stop request, **not** completed drainage. Other
+results exit `1`, or `130` for reported cancellation.
+
+The shared runtime gate denies manual runs, sweeps, scheduled work, HTTP
+intake and incompatible resumed work. Supervised council hosts also check stop
+authority before admission and model dispatch; a stop racing native admission
+quarantines the contender before worker dispatch. A stop observed after an
+already-issued model result preserves uncertainty, not a false no-dispatch
+receipt. Existing issued effects may still finish. Cancellation, request
+timeouts and lease expiry are not remote fencing.
+
+No readiness refresh, `--resume`, live-filing boolean or repeated pause request
+clears the deliberate stop. Missing coordinator with surviving stop history
+fails closed. There is no unpause, takeover, deletion or forced-reset command.
+Historical evidence remains in protected/native records and can be inspected
+with `audit`; pause does not erase it or certify onboarding completion.
+
+Use a reviewed runtime image containing these guards. The command does not
+silently upgrade an older pinned image or certify its enforcement; older or
+already-admitted workers remain part of the unresolved draining set.
+Infrastructure, model/query costs already incurred, and retained audit storage
+remain. This safety checkpoint still leaves onboarding live filing disabled.

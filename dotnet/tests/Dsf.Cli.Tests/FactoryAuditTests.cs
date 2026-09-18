@@ -682,7 +682,7 @@ public sealed class FactoryAuditTests
         Assert.Empty(scenario.GitHubWrites);
     }
 
-    private sealed class AuditTransport(CharterScenario scenario, HttpMessageHandler? outer = null) : HttpMessageHandler
+    internal sealed class AuditTransport(CharterScenario scenario, HttpMessageHandler? outer = null) : HttpMessageHandler
     {
         private readonly HttpMessageInvoker product = new(outer ?? scenario.Source, false);
         internal List<(string Key, string ETag)> Deletes { get; } = [];

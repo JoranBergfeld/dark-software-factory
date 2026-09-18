@@ -67,6 +67,12 @@ Continue with [factory GitHub authority verification](verify-factory-github-auth
 for the separately approved key copy, authentication-only grants and deployed
 read-only proof. That step does not activate this foundation.
 
+Once the protected product manifest exists, an authorized operator can also
+[record a deliberate council pause](prepare-council-preview.md#deliberately-pause-council-admission)
+without ready source/model/telemetry dependencies. It reuses the protected
+operator store permissions; it creates no grant, host, repository mutation,
+application/tag write or completed-stop claim.
+
 ## Product authority and staged handoff
 
 The owner product claim retains the foundation operation ID, progress and
