@@ -151,6 +151,10 @@ public sealed class FactoryGitHubPublicationTests
         Assert.Equal(97001, result.Receipt.IssueId);
         Assert.Equal(17, result.Receipt.Number);
         Assert.Equal(97001, JsonNode.Parse(result.Receipt.ResponseJson)!["id"]!.GetValue<long>());
+        Assert.NotNull(result.NativeIdentity);
+        var nativeReceipt = native.Documents[FactoryPublication.Id(intent)];
+        Assert.Equal(FactoryAudit.TextHash(nativeReceipt), result.NativeIdentity.Sha256);
+        Assert.Equal((string?)JsonNode.Parse(nativeReceipt)!["_etag"], result.NativeIdentity.NativeRevision);
         Assert.Single(github.IssueCreates);
         Assert.Equal("Human edited this issue; factory must never restore its payload.", github.IssueBody);
         Assert.DoesNotContain(AuthorityTransport.InstallationToken, native.Export());

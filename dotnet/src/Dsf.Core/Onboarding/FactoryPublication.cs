@@ -32,6 +32,7 @@ public sealed record FactoryPublicationDocument(int Protocol, string Id, string 
 
 public sealed record FactoryPublicationResult(FactoryPublicationState State, FactoryPublicationDocument Journal, string? Reason = null)
 {
+    public AuditRecordIdentity? NativeIdentity { get; init; }
     public FactoryPublicationReceipt? Receipt => State == FactoryPublicationState.Confirmed ? Journal.Receipt : null;
     public IReadOnlyList<FactoryPublicationAttempt> Attempts => Journal.Attempts;
 }

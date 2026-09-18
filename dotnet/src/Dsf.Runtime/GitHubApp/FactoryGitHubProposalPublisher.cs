@@ -15,9 +15,9 @@ internal sealed class FactoryGitHubProposalPublisher(TokenCredential credential,
             throw new InvalidOperationException("Exact factory and durable repository required.");
         var journal = new FactoryPublicationJournal(intent, credential, http, clock);
         var original = await journal.OpenAsync(token);
-        if (original.State == FactoryPublicationState.Confirmed) return new(original.State, original);
+        if (original.State == FactoryPublicationState.Confirmed) return Result(original.State);
         if (original.State is FactoryPublicationState.Dispatched or FactoryPublicationState.Unknown)
-            return new(FactoryPublicationState.Unknown, original, "Original issued request unconfirmed; no second create.");
+            return Result(FactoryPublicationState.Unknown, "Original issued request unconfirmed; no second create.");
         var access = await new FactoryGitHubVerifier(http, credential, clock).AcquireProposalAccessAsync(authority, token);
         var review = await access.ReviewAsync(token);
         await journal.DispatchAsync(token, review);
@@ -29,7 +29,7 @@ internal sealed class FactoryGitHubProposalPublisher(TokenCredential credential,
             createIssued = true;
             var receipt = await access.CreateAsync(journal.Document.Intent, token);
             await journal.ConfirmAsync(receipt, token);
-            return new(FactoryPublicationState.Confirmed, journal.Document);
+            return Result(FactoryPublicationState.Confirmed);
         }
         catch (FactoryIssueRejectedException rejection)
         {
@@ -37,7 +37,7 @@ internal sealed class FactoryGitHubProposalPublisher(TokenCredential credential,
             {
                 using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(30), clock);
                 await journal.RejectedAsync(rejection.Status, rejection.RequestId, cleanup.Token);
-                return new(FactoryPublicationState.Rejected, journal.Document, "Native create explicitly rejected without effect.");
+                return Result(FactoryPublicationState.Rejected, "Native create explicitly rejected without effect.");
             }
             catch (Exception e) when (Unconfirmed(e)) { return Unknown(); }
         }
@@ -50,7 +50,7 @@ internal sealed class FactoryGitHubProposalPublisher(TokenCredential credential,
                 else
                 {
                     await journal.NotDispatchedAsync(cleanup.Token);
-                    return new(FactoryPublicationState.NotDispatched, journal.Document,
+                    return Result(FactoryPublicationState.NotDispatched,
                         "Pre-create checks failed; original process confirms no GitHub issue request was issued.");
                 }
             }
@@ -58,8 +58,10 @@ internal sealed class FactoryGitHubProposalPublisher(TokenCredential credential,
             return Unknown();
         }
 
-        FactoryPublicationResult Unknown() => new(FactoryPublicationState.Unknown, journal.Document,
+        FactoryPublicationResult Unknown() => Result(FactoryPublicationState.Unknown,
             "Original publication dispatch or receipt unconfirmed; retain native identity, never search or retry.");
+        FactoryPublicationResult Result(FactoryPublicationState state, string? reason = null) => new(state, journal.Document, reason)
+            { NativeIdentity = journal.NativeIdentity };
     }
 
     private static bool Unconfirmed(Exception e) => e is InvalidOperationException or JsonException or HttpRequestException
