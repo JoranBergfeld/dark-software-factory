@@ -5,7 +5,7 @@ using Dsf.Core.Runtime;
 namespace Dsf.Core.Onboarding;
 
 public enum FactoryAuditState { Inspected, Reviewed, Exported, Verified, Expired, Partial, Blocked, Failed, Canceled, Unknown }
-public enum AuditStoreKind { Governance, Analysis, Preview, Run }
+public enum AuditStoreKind { Governance, Analysis, Preview, Run, Publication }
 public enum AuditRetentionStatus { Protected, Retained, Eligible }
 public sealed record AuditRecordIdentity(Guid FactoryId, AuditStoreKind Store, string Key, string NativeRevision, string Sha256)
 {
@@ -314,6 +314,35 @@ public static class FactoryAudit
                     && r.Identity.NativeResourceId == run.GetProperty("resourceId").GetString()
                     && r.Identity.NativeRevision == run.GetProperty("eTag").GetString()));
             }
+        }
+        foreach (var record in input.Where(r => r.Identity.Store == AuditStoreKind.Publication))
+        {
+            using var native = JsonDocument.Parse(record.Content, new JsonDocumentOptions { AllowDuplicateProperties = false });
+            if (NativeCosmosResourceId.RequireDocument(native.RootElement.GetProperty("_rid").GetString()) != record.Identity.NativeResourceId
+                || native.RootElement.GetProperty("_etag").GetString() != record.Identity.NativeRevision
+                || record.Identity.Key != $"dbs/{native.RootElement.GetProperty("product").GetString()}/colls/{FactoryPublication.Container}/docs/{native.RootElement.GetProperty("id").GetString()}")
+                throw new JsonException("Original native publication identity required.");
+            if (record.Identity.Key.EndsWith("-origin", StringComparison.Ordinal))
+            {
+                if (native.RootElement.GetProperty("protocol").GetInt32() != 1 || native.RootElement.GetProperty("factoryId").GetGuid() != factory
+                    || native.RootElement.GetProperty("createdAt").GetDateTimeOffset() > now)
+                    throw new JsonException("Original native publication witness required.");
+                continue;
+            }
+            var publication = FactoryPublication.ReadDocument(record.Content, now);
+            if (publication.Intent.FactoryId != factory) throw new JsonException();
+            foreach (var reference in publication.Intent.References.Append(publication.Origin))
+            {
+                var target = Require(reference.Store, reference.Key);
+                if (target.Identity != reference) throw new JsonException("Original publication evidence missing or changed.");
+                Link(record, target);
+            }
+            using var witness = JsonDocument.Parse(Require(publication.Origin.Store, publication.Origin.Key).Content);
+            if (witness.RootElement.GetProperty("intentSha256").GetString() != FactoryModelsValidation.Hash(publication.Intent)
+                || witness.RootElement.GetProperty("createdAt").GetDateTimeOffset() != publication.IntendedAt
+                || witness.RootElement.GetProperty("repositoryId").GetInt64() != publication.Intent.RepositoryId
+                || witness.RootElement.GetProperty("logicalIntent").GetString() != publication.Intent.LogicalIntent)
+                throw new JsonException("Original publication creation witness differs.");
         }
         var activationValues = values.Where(p => p.Key.StartsWith(FactoryActivation.Prefix, StringComparison.Ordinal)).ToDictionary();
         if (activationValues.Count != 0)

@@ -18,7 +18,22 @@ internal sealed class FactoryGitHubVerifier(HttpClient http, TokenCredential cre
     private static readonly IReadOnlyDictionary<string, string> ReadPermissions =
         new Dictionary<string, string> { ["metadata"] = "read", ["contents"] = "read" };
 
-    public async Task<GitHubAuthorityProof> VerifyAsync(FactoryGitHubAuthority authority, CancellationToken token)
+    public Task<GitHubAuthorityProof> VerifyAsync(FactoryGitHubAuthority authority, CancellationToken token) =>
+        VerifyAsync(authority, ReadPermissions, token);
+
+    internal async Task<FactoryGitHubProposalAccess> AcquireProposalAccessAsync(FactoryGitHubAuthority authority, CancellationToken token)
+    {
+        if (FactoryGitHubProposalAccess.Permissions.Any(p => !authority.ExpectedPermissions.TryGetValue(p.Key, out var access)
+                || access != p.Value && !(p.Value == "read" && access == "write")))
+            throw new InvalidOperationException("Separately reviewed App and installation publication permissions required.");
+        var proof = await VerifyAsync(authority, FactoryGitHubProposalAccess.Permissions, token);
+        if (proof.State != GitHubAuthorityState.Verified || verifiedReadToken is null)
+            throw new InvalidOperationException("Current exact GitHub publication access unconfirmed; no create dispatched.");
+        return new(http, clock, verifiedReadToken, proof);
+    }
+
+    private async Task<GitHubAuthorityProof> VerifyAsync(FactoryGitHubAuthority authority,
+        IReadOnlyDictionary<string, string> permissions, CancellationToken token)
     {
         verifiedReadToken = null;
         var operation = "GET versioned factory signing key";
@@ -52,12 +67,12 @@ internal sealed class FactoryGitHubVerifier(HttpClient http, TokenCredential cre
             var selection = installation.GetProperty("repository_selection").GetString();
             operation = $"POST /app/installations/{authority.InstallationId}/access_tokens";
             var minted = await RequestAsync(operation, jwt,
-                new { repository_ids = new[] { authority.RepositoryId }, permissions = ReadPermissions }, token);
+                new { repository_ids = new[] { authority.RepositoryId }, permissions }, token);
             var access = minted.GetProperty("token").GetString();
             var expiry = minted.GetProperty("expires_at").GetDateTimeOffset();
             if (string.IsNullOrWhiteSpace(access) || expiry <= now.AddMinutes(2) || expiry > now.AddHours(1).AddSeconds(30)
                 || minted.GetProperty("repository_selection").GetString() != "selected"
-                || !SamePermissions(Permissions(minted), ReadPermissions))
+                || !SamePermissions(Permissions(minted), permissions))
                 throw new JsonException();
             var repositories = minted.GetProperty("repositories");
             if (repositories.GetArrayLength() != 1 || repositories[0].GetProperty("id").GetInt64() != authority.RepositoryId)
@@ -102,8 +117,8 @@ internal sealed class FactoryGitHubVerifier(HttpClient http, TokenCredential cre
                 throw new JsonException("Repository metadata changed during observation.");
             verifiedReadToken = access;
             return new(GitHubAuthorityState.Verified, "deployed-github-authentication", "none",
-                "Observed versioned factory key access and actual GitHub identity, installation membership and restricted read token. "
-                + "Issue-write grant is coarser than DSF policy; no publisher is eligible while inactive. "
+                "Observed versioned factory key access and actual GitHub identity, installation membership and exact restricted token scope. "
+                + "Issue-write grant is coarser than create-only DSF policy; token verification does not authorize publication. "
                 + "Key holder can mint broader App-authorized tokens; downscoping is discipline, not signing-key containment.")
             {
                 FactoryId = authority.FactoryId, OperationId = authority.OperationId, ObservedAt = now,
@@ -111,7 +126,7 @@ internal sealed class FactoryGitHubVerifier(HttpClient http, TokenCredential cre
                 RepositoryId = authority.RepositoryId, Repository = name, DefaultBranch = branch,
                 InstallationRepositorySelection = selection, GrantedPermissions = Permissions(installation),
                 AppPermissions = Permissions(app),
-                EffectivePermissions = ReadPermissions, TokenExpiresAt = expiry,
+                EffectivePermissions = permissions, TokenExpiresAt = expiry,
                 KeyVersionUri = secretUri.AbsoluteUri, AuthPrincipalId = authority.AuthPrincipalId,
             };
         }

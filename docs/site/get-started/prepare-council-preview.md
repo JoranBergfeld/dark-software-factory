@@ -605,6 +605,45 @@ Rollout review, native status and successful exercise return exit 0.
 Blocked/failed/unknown results return 1; none imply rollback or successful
 activation. Do not rotate operation IDs to evade uncertain history.
 
+### Create-once dispatch implementation boundary
+
+The runtime now contains an internal native Cosmos/GitHub create-once dispatch
+module. **It is not a deployed publication capability or an activation
+command.** No CLI/HTTP route calls it; existing approval-only and
+`PreparedAwaitingPublication` receipts remain insufficient. Do not deploy it
+by changing configuration, mint an issue token manually, or reuse an exercise
+as publication authorization.
+
+Its stable native identity hashes the factory GUID, durable repository ID and
+logical proposal intent, not the invocation GUID. The `proposal-publications`
+container holds an immutable creation witness and a conditional journal with
+the complete original payload/references before dispatch. Only one native
+CAS contender can issue a create. Original HTTP 201 issue identity, request
+ID and complete bounded response are retained; later candidate wording and
+human issue edits never cause replacement. Losing a create response remains
+unknown without search, ownership inference or another POST. A returned
+401/403/404/422 rejection, or an acknowledged `NotDispatched` pre-create
+failure, can retry the original payload after fresh checks.
+Incomplete witness/journal history blocks recreation.
+
+The issue token stays inside the GitHub authentication module. Its requested
+repository-only permissions are `metadata:read`, `contents:read`,
+`issues:write`, `actions:read` and `repository_hooks:read`; CODE's existing
+contents token is unchanged. GitHub cannot confine `issues:write` to
+create-only, and the App-key-holder residual remains. Current label semantics
+and complete workflow/webhook inventories are checked before and after the
+dispatch claim. This initial dispatch policy conservatively blocks any active
+workflow or webhook rather than treating unknown automation as safe.
+
+Operator-reviewed native rollout/grants, exact current activation and pause
+checks at the dispatch boundary, actual unanimous-GO live-execution routing,
+and protected discovery/retention of publication-linked native execution
+remain required before this module may be exposed. Merely shipping the module
+does not install these grants, upgrade the existing App, complete onboarding
+or confirm a first filing. The audit graph can validate supplied native
+publication records and exact reference closure; operator audit discovery is
+not yet wired to discover those records.
+
 ## Deliberately pause council admission
 
 Pause is separate from temporary unreadiness. It requires the original

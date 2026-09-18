@@ -7,6 +7,7 @@ using System.Text.Json.Nodes;
 using System.Security.Cryptography;
 using Azure.Core;
 using Dsf.Core.Runtime;
+using Dsf.Core.Onboarding;
 using Xunit;
 
 namespace Dsf.Runtime.Tests;
@@ -507,6 +508,26 @@ internal sealed class AuthorityTransport : HttpMessageHandler
     public string RepositoryName { get; init; } = "acme/renamed";
     public string DefaultBranch { get; init; } = "trunk";
     public Action? OnRepositoryRead { get; set; }
+    public bool PublicationEnabled
+    {
+        get => publicationEnabled;
+        init
+        {
+            publicationEnabled = value;
+            if (!value) return;
+            foreach (var property in new[] { "expectedPermissions", "expectedAppPermissions" })
+            {
+                Authority[property]!["actions"] = "read";
+                Authority[property]!["repository_hooks"] = "read";
+            }
+        }
+    }
+    private readonly bool publicationEnabled;
+    public string? IssueFailure { get; set; }
+    public string? PublicationConflict { get; set; }
+    public Action? BeforeIssueCreate { get; set; }
+    public string IssueBody { get; set; } = "";
+    public List<string> IssueCreates { get; } = [];
     public List<string> Paths { get; } = [];
     public IReadOnlyDictionary<string, string> Configuration { get; set; } = new Dictionary<string, string>();
     public static Dictionary<string, string> ReadFixture() => JsonSerializer.Deserialize<Dictionary<string, string>>(
@@ -534,7 +555,7 @@ internal sealed class AuthorityTransport : HttpMessageHandler
                     "Bearer authorization=\"https://login.microsoftonline.com/33333333-3333-3333-3333-333333333333\", resource=\"https://vault.azure.net\"");
                 return challenge;
             }
-            Assert.Equal("synthetic-managed-identity-token", request.Headers.Authorization.Parameter);
+            Assert.Contains(request.Headers.Authorization.Parameter, new[] { "synthetic-managed-identity-token", "test-publication-workload-token" });
             return Reply(new { value = key.ExportPkcs8PrivateKeyPem(),
                 id = (string)Authority["destinationSecretUri"]!, attributes = new { enabled = true } });
         }
@@ -542,17 +563,45 @@ internal sealed class AuthorityTransport : HttpMessageHandler
         if (path == "/repositories/913") OnRepositoryRead?.Invoke();
         var installation = new { id = 42, app_id = 7, account = new { id = 81, login = "acme", type = "Organization" },
             repository_selection = "selected", suspended_at = (string?)null,
-            permissions = new { metadata = "read", contents = "read", issues = "write" } };
+            permissions = PublicationEnabled
+                ? new Dictionary<string, string> { ["metadata"] = "read", ["contents"] = "read", ["issues"] = "write", ["actions"] = "read", ["repository_hooks"] = "read" }
+                : new Dictionary<string, string> { ["metadata"] = "read", ["contents"] = "read", ["issues"] = "write" } };
         var repository = new { id = 913, full_name = RepositoryName, name = RepositoryName.Split('/')[1],
             owner = new { id = 81, login = "acme" }, default_branch = DefaultBranch, archived = false, disabled = false, has_issues = true };
         if (request.Method == HttpMethod.Post)
         {
+            if (PublicationEnabled && path == "/repos/" + RepositoryName + "/issues")
+            {
+                var payload = await request.Content!.ReadAsStringAsync(token);
+                var issue = JsonNode.Parse(payload)!.AsObject();
+                Assert.Equal(new[] { "body", "labels", "title" }, issue.Select(p => p.Key).Order(StringComparer.Ordinal));
+                Assert.Equal(new[] { "dsf:proposal" }, issue["labels"]!.AsArray().Select(p => p!.GetValue<string>()));
+                BeforeIssueCreate?.Invoke();
+                IssueCreates.Add(payload);
+                if (IssueFailure == "lost") throw new HttpRequestException("secret-create-response-lost");
+                if (IssueFailure == "canceled") throw new OperationCanceledException("secret-create-canceled");
+                var status = IssueFailure == "rejected" ? HttpStatusCode.UnprocessableEntity
+                    : IssueFailure == "server-error" ? HttpStatusCode.InternalServerError : HttpStatusCode.Created;
+                IssueBody = (string)issue["body"]!;
+                var result = Reply(new { id = 97001L, node_id = "I_native_97001", number = 17, title = (string)issue["title"]!,
+                    body = IssueBody, html_url = "https://github.com/" + RepositoryName + "/issues/17",
+                    url = "https://api.github.com/repos/" + RepositoryName + "/issues/17",
+                    repository_url = IssueFailure == "wrong-repository" ? "https://api.github.com/repos/other/repository" : "https://api.github.com/repos/" + RepositoryName,
+                    created_at = new AuthorityClock().GetUtcNow(), state = "open", assignees = Array.Empty<object>(), milestone = (object?)null,
+                    labels = new[] { new { name = "dsf:proposal" } } }, status);
+                if (IssueFailure == "malformed") result.Content = new StringContent("{");
+                result.Headers.Add("X-GitHub-Request-Id", "original-create-receipt");
+                return result;
+            }
             Assert.Equal("/app/installations/42/access_tokens", path);
             var scope = JsonNode.Parse(await request.Content!.ReadAsStringAsync(token))!;
             Assert.True(JsonNode.DeepEquals(JsonNode.Parse("[913]"), scope["repository_ids"]));
-            Assert.True(JsonNode.DeepEquals(JsonNode.Parse("""{"metadata":"read","contents":"read"}"""), scope["permissions"]));
+            var issueScope = scope["permissions"]!["issues"] is not null;
+            Assert.True(JsonNode.DeepEquals(JsonNode.Parse(issueScope
+                ? """{"metadata":"read","contents":"read","issues":"write","actions":"read","repository_hooks":"read"}"""
+                : """{"metadata":"read","contents":"read"}"""), scope["permissions"]));
             return Reply(new { token = InstallationToken, expires_at = "2026-09-16T04:00:00Z",
-                permissions = new { metadata = "read", contents = "read" }, repository_selection = "selected",
+                permissions = scope["permissions"], repository_selection = "selected",
                 repositories = new[] { repository } }, HttpStatusCode.Created);
         }
         Assert.Equal(HttpMethod.Get, request.Method);
@@ -565,6 +614,13 @@ internal sealed class AuthorityTransport : HttpMessageHandler
             _ when path == "/repos/" + RepositoryName + "/installation" => Reply(installation),
             "/installation/repositories" => Reply(new { total_count = 1, repositories = new[] { repository } }),
             "/repositories/913" => Reply(repository),
+            _ when PublicationEnabled && path == "/repos/" + RepositoryName + "/actions/workflows" => Reply(
+                PublicationConflict == "workflow" ? new { total_count = 1, workflows = new[] { new { id = 1, state = "active" } } }
+                    : (object)new { total_count = 0, workflows = Array.Empty<object>() }),
+            _ when PublicationEnabled && path == "/repos/" + RepositoryName + "/hooks" => Reply(PublicationConflict == "hook"
+                ? new[] { new { id = 1, active = true, events = new[] { "issues" } } } : (object)Array.Empty<object>()),
+            _ when PublicationEnabled && path == "/repos/" + RepositoryName + "/labels/dsf%3Aproposal" => Reply(new { id = 10, name = "dsf:proposal",
+                description = PublicationConflict == "label" ? "Assigns delivery to bot" : DecideRepositoryLabels.Meanings["dsf:proposal"] }),
             _ when path == "/repos/" + RepositoryName + "/git/ref/heads/" + Uri.EscapeDataString(DefaultBranch)
                 => Reply(new { @ref = "refs/heads/" + DefaultBranch, @object = new { type = "commit", sha = new string('a', 40) } }),
             _ => throw new InvalidOperationException("Unexpected provider path: " + path),
