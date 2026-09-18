@@ -12,6 +12,31 @@ namespace Dsf.Runtime.Tests;
 public sealed class PreviewExecutionTests
 {
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Historical_run_receipts_remain_readable_but_changed_native_export_hash_is_rejected(bool corruptHash)
+    {
+        using var transport = await PreviewContextTransport.CreateAsync(modelEvaluation: true, telemetryEvidence: true, aggregateInputs: true);
+        await transport.PrepareEvaluationAsync();
+        var evaluation = await transport.RunEvaluationAsync("/evaluate");
+        Assert.Equal("ReadyAwaitingActivation", (string?)JsonNode.Parse(evaluation.Body)!["readiness"]);
+        var key = transport.EvaluationDocuments.Keys.Single(k => k.Contains("/council-preview/", StringComparison.Ordinal));
+        var native = JsonNode.Parse(transport.EvaluationDocuments[key])!;
+        if (corruptHash) native["run"]!["nativeDocumentSha256"] = new string('f', 64);
+        else native["run"]!.AsObject().Remove("nativeDocumentSha256");
+        using var parsed = JsonDocument.Parse(native.ToJsonString());
+        native["checksum"] = PreviewEvaluationDocument.ReadNative(parsed.RootElement).CalculateChecksum();
+        transport.EvaluationDocuments[key] = native.ToJsonString();
+        var writes = transport.EvaluationWrites.Count;
+        var inference = transport.Intent.Models.Inference.Count;
+        var status = await transport.RunEvaluationAsync("/evaluation");
+        if (corruptHash) Assert.DoesNotContain("ReadyAwaitingActivation", status.Body);
+        else Assert.Equal("ReadyAwaitingActivation", (string?)JsonNode.Parse(status.Body)!["readiness"]);
+        Assert.Equal(writes, transport.EvaluationWrites.Count);
+        Assert.Equal(inference, transport.Intent.Models.Inference.Count);
+    }
+
+    [Theory]
     [InlineData("empty")]
     [InlineData("unsupported")]
     [InlineData("citation")]
@@ -520,9 +545,10 @@ internal sealed partial class PreviewContextTransport
         Assert.Equal(0, await RuntimeCliApplication.InvokeAsync(["serve-preview"], env, new StringWriter(), new StringWriter(),
             RuntimeDependencies.Production() with { WebHostRunner = runner, PreviewHttp = http,
                 PreviewCredential = new IntentModelCredential(Source), PreviewClock = Source.Clock }, CancellationToken.None));
-        Assert.Equal(writes, Source.Writes.Count);
+        if (route != "/evaluate") Assert.Equal(writes, Source.Writes.Count);
+        else Assert.All(Source.Writes.Skip(writes), key => Assert.EndsWith("/retention", key));
         if (!governanceMayChangeExternally) Assert.Equal(records, Source.Values);
-        Assert.DoesNotContain(Requests, r => r.Method is "PUT" or "PATCH" or "DELETE");
+        Assert.DoesNotContain(Requests, r => r.Method is "PATCH" or "DELETE" || r.Method == "PUT" && !IsAnalysisRetention(r.Uri));
         return runner;
     }
 

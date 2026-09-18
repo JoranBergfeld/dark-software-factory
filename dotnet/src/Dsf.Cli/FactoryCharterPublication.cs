@@ -106,6 +106,7 @@ internal sealed partial class FactoryCharterService
             if (native.Head(review, publication.Branch["refs/heads/".Length..], token) is not null)
                 throw new CharterOperationException(FactoryCharterState.Blocked, "Proposed branch already exists; no adoption or overwrite.");
             await CheckCurrentAsync(admission, review, token);
+            await new FactoryAuditService(azure, http, clock).ProtectAnalysisAsync(admission, review, token);
             if (preceding is not null)
             {
                 await FencePublicationAsync(store, root!, token);

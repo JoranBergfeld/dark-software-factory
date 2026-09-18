@@ -9,30 +9,6 @@ using Dsf.FeatureCouncil.Conveyor;
 
 namespace Dsf.Runtime;
 
-public enum PreviewExecutionPhase { Prepared, Executing, Evaluated, Failed }
-public sealed record PreviewRunReceipt(string Id, string ResourceId, string ETag, string Checksum);
-internal sealed record PreviewCheckpointIntent(string Checksum, string Station);
-internal sealed record PreviewEvaluationDocument(
-    int Protocol, string Id, string Product, Guid FactoryId, Guid OperationId, DateTimeOffset CreatedAt)
-{
-    [JsonRequired] public string Kind { get; init; } = "council-preview-evaluation";
-    [JsonRequired] public ConveyorProfile Profile { get; init; } = ConveyorProfile.OnboardingPreview;
-    [JsonRequired] public string Checksum { get; init; } = "";
-    [JsonRequired] public Guid Owner { get; init; }
-    [JsonRequired] public PreviewExecutionPhase Phase { get; init; }
-    [JsonRequired] public PreviewInputSnapshot? Inputs { get; init; }
-    [JsonRequired] public PreviewRunReceipt? Run { get; init; }
-    [JsonRequired] public PreviewCheckpointIntent? PendingRun { get; init; }
-    [JsonRequired] public IReadOnlyList<PreviewModelDispatch> Dispatches { get; init; } = [];
-    [JsonRequired] public string? Failure { get; init; }
-    [JsonRequired] public PreviewInputSnapshot? FinalInputs { get; init; }
-    [JsonRequired] public PreviewReadinessProof? Proof { get; init; }
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public PreviewWorkAdmission? Admission { get; init; }
-    internal string CalculateChecksum() => FactoryModelsValidation.Hash(this with { Checksum = "" });
-    internal PreviewEvaluationDocument Initial() => new(Protocol, Id, Product, FactoryId, OperationId, CreatedAt);
-}
-
 internal sealed partial class PreviewExecutionStore(PreviewCapabilitySnapshot authority, TokenCredential credential, HttpClient http, TimeProvider clock)
     : IRunStore, IPreviewModelDispatchJournal
 {
@@ -107,7 +83,7 @@ internal sealed partial class PreviewExecutionStore(PreviewCapabilitySnapshot au
             if (pending.Checksum != receipt.Checksum || Document.Run is { } previous && previous.ResourceId != receipt.ResourceId)
                 throw new PreviewCapabilityException(FactoryCharterState.Unknown, "PreviewCheckpointDispatchUnconfirmed");
         }
-        else if (Document.Run != receipt)
+        else if (Document.Run != (Document.Run?.NativeDocumentSha256 is null ? receipt with { NativeDocumentSha256 = null } : receipt))
             throw new PreviewCapabilityException(FactoryCharterState.Unknown, "PreviewRunReceiptChanged");
         return run;
     }
@@ -189,7 +165,8 @@ internal sealed partial class PreviewExecutionStore(PreviewCapabilitySnapshot au
         var checksum = body.RootElement.GetProperty("onboardingChecksum").GetString();
         if (checksum != FactoryModelsValidation.Hash(run) || native.ETag != runs!.CheckpointETag(RunId))
             throw new PreviewCapabilityException(FactoryCharterState.Unknown, "ExactNativePreviewRunRequired");
-        return new(RunId, Resource(body.RootElement), native.ETag, checksum);
+        return new(RunId, Resource(body.RootElement), native.ETag, checksum)
+            { NativeDocumentSha256 = FactoryModelsValidation.Hash(body.RootElement) };
     }
 
     private async Task WriteAsync(PreviewEvaluationDocument next, CancellationToken token)
@@ -216,9 +193,7 @@ internal sealed partial class PreviewExecutionStore(PreviewCapabilitySnapshot au
 
     private PreviewEvaluationDocument Parse(JsonElement body)
     {
-        var payload = JsonNode.Parse(body.GetRawText())!.AsObject();
-        foreach (var property in AzureCosmosDocumentGateway.SystemProperties) payload.Remove(property);
-        var document = payload.Deserialize<PreviewEvaluationDocument>(FactorySourceValidation.RecordJson) ?? throw new JsonException();
+        var document = PreviewEvaluationDocument.ReadNative(body);
         Validate(document);
         return document;
     }
@@ -230,7 +205,7 @@ internal sealed partial class PreviewExecutionStore(PreviewCapabilitySnapshot au
 
     private void Validate(PreviewEvaluationDocument document)
     {
-        if (document.Protocol != 1 || document.Kind != "council-preview-evaluation" || document.Profile != ConveyorProfile.OnboardingPreview
+        if (document.Protocol != 1 || document.Kind != "council-preview-evaluation" || document.Profile != "OnboardingPreview"
             || document.Id != Id || document.Product != product
             || document.FactoryId != authority.Manifest.Identity.FactoryId || document.OperationId != authority.Capability.OperationId
             || document.CreatedAt == default || document.CreatedAt.Offset != TimeSpan.Zero || document.CreatedAt > clock.GetUtcNow()

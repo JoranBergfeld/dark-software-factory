@@ -47,6 +47,10 @@ internal static partial class RuntimeWorkflow
             throw new PreviewCapabilityException(FactoryCharterState.Blocked, "PreviewCapabilityChangedBeforeExecution");
         var inputs = store.Document.Inputs ?? acquired.Snapshot;
         ValidateCapturedInputs(inputs, acquired.Snapshot, dependencies.PreviewClock.GetUtcNow());
+        if (store.Document.Inputs is null)
+            await RuntimeVerbs.RetainPreviewSourceAsync(authority, inputs,
+                new FactoryWorkloadCredential(credential, authority.Manifest.Identity.TenantId, authority.Council, dependencies.PreviewClock),
+                http, dependencies.PreviewClock, token);
         await store.ClaimAsync(run, token, admission);
         if (store.Document.Inputs is null) await store.CaptureAsync(inputs, token);
         acquired.Models.AttachJournal(store);

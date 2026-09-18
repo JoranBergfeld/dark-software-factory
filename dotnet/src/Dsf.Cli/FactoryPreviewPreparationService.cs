@@ -34,8 +34,9 @@ internal sealed partial class FactoryPreviewPreparationService(
         OwnerReservationStore store, CancellationToken token, PreviewPreparationPlan? continuation = null,
         Journal? approvedPreparation = null)
     {
-        var records = await store.ReadNamespaceAsync("dsf/factory/", token);
-        var values = records.Where(p => !p.Key.StartsWith(FactoryPreviewPreparation.Namespace + "/", StringComparison.Ordinal))
+        var records = await store.ReadFactoryAuthorityAsync(token);
+        var values = records.Where(p => !p.Key.StartsWith(FactoryPreviewPreparation.Namespace + "/", StringComparison.Ordinal)
+                && !p.Key.StartsWith(FactoryAudit.Namespace, StringComparison.Ordinal))
             .ToDictionary(p => p.Key, p => p.Value.Value, StringComparer.Ordinal);
         foreach (var key in new[] { ProductConfigurationKeys.FactoryManifest, ProductConfigurationKeys.FactoryProfile,
             ProductConfigurationKeys.FactoryGitHubAuthority, ProductConfigurationKeys.FactorySource, ProductConfigurationKeys.FactoryModels,

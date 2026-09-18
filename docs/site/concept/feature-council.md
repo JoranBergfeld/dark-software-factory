@@ -277,9 +277,10 @@ cross-provider transaction or a complete council readiness assessment.
 
 ### Protected council source-context consumption
 
-Two **runtime** commands provide connected, read-only source consumption;
-explicitly selected hosts provide model evaluation, telemetry and supplemental evidence. They are not `dsf`
-CLI verbs and are not yet created by provisioning assets.
+Two **runtime** commands provide connected source consumption; explicitly
+selected hosts provide model evaluation, telemetry and supplemental evidence.
+The installed `dsf` CLI forwards these commands, and reviewed native preview
+preparation provisions their hosts.
 
 | Runtime command | Host suffix | Workload identity | POST route | Native Entra caller |
 | --- | --- | --- | --- | --- |
@@ -287,6 +288,7 @@ CLI verbs and are not yet created by provisioning assets.
 | `serve-preview` (supervised evaluation) | `-preview` | Original COUNCIL UAMI only | `/prepare-evaluation`, `/evaluate`, `/evaluation` (readonly status) | Factory's approved Azure operator only |
 | `serve-preview` (selected supplemental callback) | `-preview` | Original COUNCIL UAMI only | `/supplemental-authority` | Requested selected source's original principal **and client** only |
 | `serve-source-context` | `-context` | Original CODE UAMI only | `/council-context` | Original COUNCIL principal **and client** only |
+| `serve-source-context` (retention admission) | `-context` | Original CODE UAMI only | `/retain-council-context` (create-only analysis hold) | Original COUNCIL principal **and client** only |
 | `serve-preview-models` (explicit selection) | `-preview-models` | Original COUNCIL UAMI only | `/evaluate` | Original COUNCIL principal **and client** only |
 | `serve-preview-telemetry` (explicit selection) | `-preview-telemetry` | Original TELEMETRY UAMI only | `/evidence` | Original COUNCIL principal **and client** only |
 | `serve-preview-supplemental` (selected sources only) | `-preview-foundryiq`, `-preview-webiq` | That source's original distinct UAMI only | `/evidence` | Original COUNCIL principal **and client** only |
@@ -299,6 +301,16 @@ protected and native authority. The source route then calls
 The council proxy acquires its own COUNCIL token for `api://{audience}/.default`;
 it never forwards an operator token, borrows CODE credentials, or reads the
 private source-progress store.
+
+Before preview input capture, `/retain-council-context` accepts a
+`PreviewAnalysisRetentionRequest` binding the capability request, analysis
+revision/chain, source snapshot, model revision and adopted charter revision.
+CODE validates current context and creates an immutable, per-analysis native
+retention claim in its existing progress store. Operator expiry must win the
+same create-only claim before deleting that analysis. A runtime claim can only
+retain evidence; protected policy, approval and deletion authority remain
+operator-owned. The original context/input/inspection routes remain read-only.
+See [retention and private export](../get-started/retain-audit-evidence.md).
 
 The operator-only council route `/model-authority` accepts the same capability
 request. It invokes `RuntimeVerbs.OpenPreviewModelsAsync` and the shared
@@ -740,7 +752,7 @@ The protected execution record contains:
 ```json
 {
   "policy": {
-    "revision": "supervised-conveyor-v2",
+    "revision": "supervised-conveyor-v3",
     "requestSeconds": 5400,
     "maximumDispatches": 62,
     "jurorSeconds": 120

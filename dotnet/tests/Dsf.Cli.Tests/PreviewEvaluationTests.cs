@@ -77,6 +77,9 @@ public sealed class PreviewEvaluationTests
     internal static void AssertNoForbiddenEffects(PreviewPreparationTransport transport, int start) =>
         Assert.DoesNotContain(transport.Requests.Skip(start), r => r.Method is "DELETE" or "PATCH"
             || r.Method == "PUT" && !r.Uri.Host.EndsWith("-cosmos.documents.azure.com", StringComparison.Ordinal)
+                && !(r.Uri.Host == new Uri(transport.Scenario.Source.Source!.ProgressEndpoint).Host
+                    && Uri.UnescapeDataString(r.Uri.AbsolutePath).StartsWith("/kv/intent/", StringComparison.Ordinal)
+                    && Uri.UnescapeDataString(r.Uri.AbsolutePath).EndsWith("/retention", StringComparison.Ordinal))
             || r.Method != "GET" && r.Uri.Host is "api.github.com" or "github.com"
                 && !r.Uri.AbsolutePath.EndsWith("/access_tokens", StringComparison.Ordinal));
 

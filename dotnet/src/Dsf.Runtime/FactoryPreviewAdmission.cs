@@ -3,10 +3,6 @@ using Dsf.Core.Onboarding;
 
 namespace Dsf.Runtime;
 
-internal enum PreviewWorkState { Queued, Running, Released, Unknown }
-internal sealed record PreviewWorkAdmission(Guid Id, Guid WorkerId, PreviewCapabilityRequest Request,
-    string CapabilityRevision, DateTimeOffset AdmittedAt, PreviewWorkState State, PreviewReadiness Readiness, string? Reason);
-
 internal sealed partial class PreviewExecutionStore
 {
     private const int AdmissionLifecycleBytes = 4096;

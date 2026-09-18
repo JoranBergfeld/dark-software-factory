@@ -156,6 +156,18 @@ try
     }
     Require(File.ReadAllText(Path.Combine(scratch.FullName, "azure.log")).Length == 0, "Incomplete preview reached Azure.");
 
+    var auditHelp = await Run("onboard", "decide", "audit", "--help");
+    Require(auditHelp.ExitCode == 0 && new[] { "--export", "--verify-export", "--approve-policy", "--expire-analysis", "--page" }
+        .All(option => auditHelp.Output.Contains(option, StringComparison.Ordinal)), "Installed audit grammar is incomplete.");
+    foreach (var action in new[] { Array.Empty<string>(), new[] { "--export", "https://github.com/public/export" },
+        new[] { "--approve-policy" }, new[] { "--verify-export", "/private/export" } })
+    {
+        var incompleteAudit = await Run(["onboard", "decide", "audit", .. action, "--json"]);
+        Require(incompleteAudit.ExitCode == 1 && incompleteAudit.Output.Contains("\"state\": \"Blocked\"", StringComparison.Ordinal)
+            && incompleteAudit.Output.Contains("required", StringComparison.Ordinal), "Installed audit accepted incomplete inputs.");
+    }
+    Require(File.ReadAllText(Path.Combine(scratch.FullName, "azure.log")).Length == 0, "Incomplete audit reached Azure.");
+
     var inferHelp = await Run("onboard", "decide", "infer", "--help");
     Require(inferHelp.ExitCode == 0 && inferHelp.Output.Contains("--new-analysis", StringComparison.Ordinal)
         && inferHelp.Output.Contains("--status-only", StringComparison.Ordinal), "Installed charter inference grammar is unavailable.");

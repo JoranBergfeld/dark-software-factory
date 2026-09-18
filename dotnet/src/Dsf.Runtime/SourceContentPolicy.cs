@@ -40,7 +40,5 @@ internal static class SourceContentPolicy
         return SourceExclusion.None;
     }
 
-    internal static bool Sensitive(string text) => Regex.IsMatch(text,
-        @"-----BEGIN [A-Z ]*PRIVATE KEY-----|(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]{20,}|(?:AKIA|ASIA)[A-Z0-9]{16}|(?i:password|passwd|client_secret|api_key|access_token|accountkey|sharedaccesskey)\s*[""']?\s*[:=]\s*[""']?[^\s""']{8,}",
-        RegexOptions.CultureInvariant | RegexOptions.NonBacktracking, TimeSpan.FromMilliseconds(100));
+    internal static bool Sensitive(string text) => FactorySourceEvidenceIntegrity.Sensitive(text);
 }

@@ -423,13 +423,8 @@ internal sealed class FactorySourceInventory(FactorySourceAccess access, HttpCli
         if (files != progress.Files || acquired != progress.Acquired || excluded != progress.Excluded
             || failed != progress.Failed || gaps != progress.NecessaryGaps || inventory.Length != progress.Nodes + files + chunkCount)
             throw new SourceAcquisitionException(SourceState.Unknown, "InvalidAggregateCoverage");
-        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        foreach (var record in inventory)
-        {
-            token.ThrowIfCancellationRequested();
-            hash.AppendData(JsonSerializer.SerializeToUtf8Bytes(new[] { record.Key, record.Value.ETag.ToString(), record.Value.Value }));
-        }
-        var digest = Convert.ToHexStringLower(hash.GetHashAndReset());
+        token.ThrowIfCancellationRequested();
+        var digest = FactorySourceEvidenceIntegrity.InventoryDigest(inventory.Select(r => (r.Key, r.Value.ETag.ToString(), r.Value.Value)));
         var historical = records.Where(p => p.Key.StartsWith(prefix + "history/", StringComparison.Ordinal))
             .Select(p => SourceProgressStore.Parse<SelectionHistory>(p.Value))
             .Where(p => p.Snapshot.Id == progress.Snapshot.Id && p.IntegritySha256 is not null).ToArray();

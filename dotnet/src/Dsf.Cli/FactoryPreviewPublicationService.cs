@@ -23,7 +23,7 @@ internal sealed partial class FactoryPreviewPreparationService
         ConfigurationSetting? acceptedTarget = null;
         try
         {
-            var records = await store.ReadNamespaceAsync("dsf/factory/", token);
+            var records = await store.ReadFactoryAuthorityAsync(token);
             var values = records.ToDictionary(p => p.Key, p => p.Value.Value, StringComparer.Ordinal);
             var manifest = Parse<FactoryManifest>(values[ProductConfigurationKeys.FactoryManifest]);
             var confirmed = FactoryPreviewPublication.ReadConfirmed(manifest, values, clock.GetUtcNow());
@@ -122,7 +122,7 @@ internal sealed partial class FactoryPreviewPreparationService
                 root = await PublishRecordAsync(store, FactoryPreviewPublication.RootKey, publication, root, token);
                 dispatched = false;
                 await RequirePublicationCurrentAsync(admission, preparation, store, token);
-                values = (await store.ReadNamespaceAsync("dsf/factory/", token)).ToDictionary(p => p.Key, p => p.Value.Value, StringComparer.Ordinal);
+                values = (await store.ReadFactoryAuthorityAsync(token)).ToDictionary(p => p.Key, p => p.Value.Value, StringComparer.Ordinal);
                 review = PublicationReview(confirmed, values, seed, final: true);
                 CheckPublicationCapacity(review, manifest, preparation.Plan);
                 return PublicationResult(PreviewPreparationState.SeedAwaitingApproval, "Native conditional seed confirmed; approve the exact returned identity, revision and checksum before evaluation.", review);

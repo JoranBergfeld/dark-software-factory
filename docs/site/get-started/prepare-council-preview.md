@@ -425,7 +425,7 @@ confirmed release, never by assuming a lease has fenced the old worker.
 
 The CLI permits 9,000 seconds for chained current checks and the runtime's
 5,400-second execution budget. These are **operation**, not HTTP-ingress,
-budgets. Execution policy `supervised-conveyor-v2` requires the reviewed image
+budgets. Execution policy `supervised-conveyor-v3` requires the reviewed image
 with durable admission; an old synchronous image/configuration is not silently
 upgraded or reused. Runtime execution has at most 62 native model
 dispatches and a 120-second juror budget. Responses are at most 4 MiB.

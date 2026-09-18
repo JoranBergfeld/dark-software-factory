@@ -143,7 +143,7 @@ internal sealed partial class PreviewContextTransport
                 TelemetryHttp = http, TelemetryCredential = new PreviewTelemetryCredential(this), TelemetryClock = Source.Clock }, CancellationToken.None));
         Assert.Equal(writes, Source.Writes.Count);
         Assert.Equal(inference, Intent.Models.Inference.Count);
-        Assert.DoesNotContain(Requests, r => r.Method is "PUT" or "PATCH" or "DELETE");
+        Assert.DoesNotContain(Requests.Skip(requests), r => r.Method is "PUT" or "PATCH" or "DELETE");
         Assert.DoesNotContain(Requests.Skip(requests), r => r.Method == "POST" && r.Uri.AbsolutePath != "/evidence" && r.Uri.Host != "api.loganalytics.io");
         return runner;
     }

@@ -63,6 +63,8 @@ internal sealed partial class FactoryPreviewPreparationService
                     return Result(journal, PreviewPreparationState.Unknown, "HeldOrUncertainNativePreparationCannotBeReplayed");
                 await RequireCurrentAsync(admission, plan, store, token, journal);
                 await VerifyConfirmedAsync(journal, token);
+                await new FactoryAuditService(azure, http, clock).ProtectAnalysisAsync(admission,
+                    plan.Source.AnalysisRevision, plan.Source.AnalysisChain, plan.Fingerprint, token);
                 effects.AddRange(journal.Effects);
                 effectRecords.AddRange(journal.EffectRecords);
                 receipts.AddRange(journal.Receipts);
@@ -74,6 +76,8 @@ internal sealed partial class FactoryPreviewPreparationService
                 plan = await PlanAsync(admission, selection ?? throw Failure("ExplicitPreviewSelectionRequired"), token);
                 if (approval != plan.Fingerprint) throw Failure("ExactPreviewPreparationApprovalRequired; no effects.");
                 CheckCapacity(plan);
+                await new FactoryAuditService(azure, http, clock).ProtectAnalysisAsync(admission,
+                    plan.Source.AnalysisRevision, plan.Source.AnalysisChain, plan.Fingerprint, token);
                 var bytes = Encoding.UTF8.GetBytes(Serialize(plan));
                 var chunkSize = plan.Policy.ChunkBytes;
                 coordinator = new(1, FactoryPreviewPreparation.Kind, plan.Manifest.Identity.FactoryId, plan.Selection.OperationId,

@@ -35,11 +35,11 @@ internal sealed partial class PreviewPreparationTransport
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, Lazy<Task<PreviewRunner>>> previewHosts = new();
     private readonly object seedGate = new();
 
-    internal async Task<JsonNode> InspectEvaluationAsync(PreviewCapabilityRequest request)
+    internal async Task<JsonNode> InspectEvaluationAsync(PreviewCapabilityRequest request, string route = "/evaluation")
     {
         var host = HostedResources.Single(r => (string?)r["properties"]?["template"]?["containers"]?[0]?["args"]?[0] == "serve-preview");
         using var message = new HttpRequestMessage(HttpMethod.Post,
-            "https://" + (string)host["properties"]!["configuration"]!["ingress"]!["fqdn"]! + "/evaluation")
+            "https://" + (string)host["properties"]!["configuration"]!["ingress"]!["fqdn"]! + route)
         { Content = JsonContent.Create(request, options: FactoryGitHubJson.Options) };
         using var response = await PreviewHostAsync(message, CancellationToken.None);
         return JsonNode.Parse(await response.Content.ReadAsStringAsync())!;

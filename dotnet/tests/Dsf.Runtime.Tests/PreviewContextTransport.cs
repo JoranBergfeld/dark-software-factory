@@ -266,7 +266,8 @@ internal sealed partial class PreviewContextTransport : HttpMessageHandler
         Request = new(operation, Capability.ApprovalFingerprint, Guid.NewGuid());
     }
 
-    internal async Task<PreviewContextRunner> RunAsync(bool coordinator = false, string? caller = null, string? client = null, object? request = null)
+    internal async Task<PreviewContextRunner> RunAsync(bool coordinator = false, string? caller = null, string? client = null, object? request = null,
+        bool retention = false)
     {
         var requests = Requests.Count;
         var writes = Source.Writes.Count;
@@ -275,7 +276,7 @@ internal sealed partial class PreviewContextTransport : HttpMessageHandler
         {
             Caller = caller ?? (coordinator ? Source.Manifest.Identity.AzureActorId : Models.Bindings![0].PrincipalId!),
             Client = client ?? Models.Bindings![0].ClientId!, Request = request ?? Request,
-            Route = coordinator ? "/source-context" : "/council-context",
+            Route = retention ? "/retain-council-context" : coordinator ? "/source-context" : "/council-context",
         };
         using var http = new HttpClient(this, false);
         var environment = Source.Environment;
@@ -287,9 +288,11 @@ internal sealed partial class PreviewContextTransport : HttpMessageHandler
                 PreviewHttp = http, PreviewCredential = new IntentModelCredential(Source), PreviewClock = Source.Clock,
             }, CancellationToken.None);
         Assert.Equal(0, exit);
-        Assert.Equal(writes, Source.Writes.Count);
+        if (!retention) Assert.Equal(writes, Source.Writes.Count);
+        else Assert.All(Source.Writes.Skip(writes), key => Assert.EndsWith("/retention", key));
         Assert.Equal(inference, Intent.Models.Inference.Count);
-        Assert.DoesNotContain(Requests, r => r.Method is "PUT" or "PATCH" or "DELETE");
+        Assert.DoesNotContain(Requests.Skip(requests), r => r.Method is "PATCH" or "DELETE"
+            || r.Method == "PUT" && (!retention || !IsAnalysisRetention(r.Uri)));
         Assert.DoesNotContain(Requests.Skip(requests), r => r.Method == "POST" && r.Uri.AbsolutePath is not ("/council-context" or "/authority" or "/tokens/contents"));
         return runner;
     }
@@ -385,11 +388,16 @@ internal sealed partial class PreviewContextTransport : HttpMessageHandler
         if (uri.Host == new Uri(ContextEndpoint).Host)
         {
             Assert.Equal(Models.Bindings![0].PrincipalId, principal);
-            Assert.Equal("/council-context", uri.AbsolutePath);
-            ContextCalls++;
-            var payload = JsonSerializer.Deserialize<PreviewCapabilityRequest>(await request.Content!.ReadAsStringAsync(token), FactorySourceValidation.RecordJson)!;
-            var response = await RunAsync(request: payload);
-            return new(response.Status) { Content = new StringContent(ChangeContextResponse?.Invoke(response.Body) ?? response.Body, Encoding.UTF8, "application/json") };
+            Assert.Contains(uri.AbsolutePath, new[] { "/council-context", "/retain-council-context" });
+            var retention = uri.AbsolutePath == "/retain-council-context";
+            if (!retention) ContextCalls++;
+            var json = await request.Content!.ReadAsStringAsync(token);
+            object payload = retention
+                ? JsonSerializer.Deserialize<PreviewAnalysisRetentionRequest>(json, FactorySourceValidation.RecordJson)!
+                : JsonSerializer.Deserialize<PreviewCapabilityRequest>(json, FactorySourceValidation.RecordJson)!;
+            var response = await RunAsync(request: payload, retention: retention);
+            return new(response.Status) { Content = new StringContent(retention ? response.Body
+                : ChangeContextResponse?.Invoke(response.Body) ?? response.Body, Encoding.UTF8, "application/json") };
         }
         if (uri.Host == new Uri(Source.ProgressEndpoint).Host) Assert.Equal(Source.Code.PrincipalId, principal);
         if (uri.Host == "management.azure.com")
@@ -424,6 +432,7 @@ internal sealed partial class PreviewContextTransport : HttpMessageHandler
                         || scope.StartsWith((string)p.Value["properties"]!["scope"]! + "/", StringComparison.OrdinalIgnoreCase))).Select(p => p.Value).ToArray();
                 return SourceInventoryTransport.Json(new { value = roles });
             }
+
             if (path.EndsWith("/sqlroleassignments", StringComparison.OrdinalIgnoreCase))
                 return SourceInventoryTransport.Json(new { value = Native.Where(p => p.Key.StartsWith(Account + "/sqlroleassignments/", StringComparison.OrdinalIgnoreCase))
                     .Select(p => p.Value).ToArray() });
@@ -446,8 +455,14 @@ internal sealed partial class PreviewContextTransport : HttpMessageHandler
         return forwarded;
     }
 
+    private bool IsAnalysisRetention(Uri uri) =>
+        uri.Host == new Uri(Source.ProgressEndpoint).Host
+        && Uri.UnescapeDataString(uri.AbsolutePath).StartsWith("/kv/intent/", StringComparison.Ordinal)
+        && Uri.UnescapeDataString(uri.AbsolutePath).EndsWith("/retention", StringComparison.Ordinal);
+
     internal async Task<PreviewContextRunner> RunModelAsync(PreviewModelRequest request, string? caller = null, string? client = null)
     {
+        var requests = Requests.Count;
         var writes = Source.Writes.Count;
         var runner = new PreviewContextRunner(Source) { Route = "/evaluate", Request = request,
             Caller = caller ?? Models.Bindings![0].PrincipalId!, Client = client ?? Models.Bindings![0].ClientId! };
@@ -459,7 +474,7 @@ internal sealed partial class PreviewContextTransport : HttpMessageHandler
             RuntimeDependencies.Production() with { WebHostRunner = runner, ModelHttp = http,
                 ModelCredential = new IntentModelCredential(Source), ModelClock = Source.Clock }, CancellationToken.None));
         Assert.Equal(writes, Source.Writes.Count);
-        Assert.DoesNotContain(Requests, r => r.Method is "PUT" or "PATCH" or "DELETE");
+        Assert.DoesNotContain(Requests.Skip(requests), r => r.Method is "PUT" or "PATCH" or "DELETE");
         return runner;
     }
 

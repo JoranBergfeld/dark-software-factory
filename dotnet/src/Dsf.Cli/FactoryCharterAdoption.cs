@@ -126,6 +126,7 @@ internal sealed partial class FactoryCharterService
         var operation = new CharterAdoptionOperation(adoption, previous?.ETag.ToString(), CharterEffectState.Intended);
         OwnerReservationStore.CheckSize(AdoptionOperationKey, ProductConfigurationKeys.NoLabel, FactoryReservationRecords.Serialize(operation));
         await CheckAdoptionCurrentAsync();
+        await new FactoryAuditService(azure, http, clock).ProtectAnalysisAsync(admission, review, token);
         var operationRecord = await store.WriteAsync(AdoptionOperationKey, FactoryReservationRecords.Serialize(operation), held?.ETag, token);
         await store.WriteAsync(AdoptionReceiptKey(revision, "intent"), FactoryReservationRecords.Serialize(operation), null, token);
         for (var i = 0; i < parts.Length; i++)

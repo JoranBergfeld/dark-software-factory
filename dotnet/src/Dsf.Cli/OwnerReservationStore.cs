@@ -20,10 +20,12 @@ internal sealed class OwnerReservationStore : IFactoryCharterEvidenceReader
     public const string ContentType = "application/vnd.dsf.reservation+json;version=1";
     public const int RecordLimit = 10 * 1024;
     private readonly ConfigurationClient client;
+    private readonly Uri endpoint;
     private readonly Func<Guid?, ConfigurationClient> createClient;
 
     public OwnerReservationStore(string endpoint, string tenant, string subscription, IAzureCliRunner azure, HttpClient? http, string? expectedActor = null)
     {
+        this.endpoint = new(endpoint);
         createClient = correlation =>
         {
             var options = new ConfigurationClientOptions { Retry = { MaxRetries = 0 } };
@@ -81,27 +83,51 @@ internal sealed class OwnerReservationStore : IFactoryCharterEvidenceReader
         { throw new ReservationStoreException(FactoryReservationState.Unknown, "Charter namespace absence unconfirmed; no new operation."); }
     }
 
-    internal async Task<IReadOnlyDictionary<string, ConfigurationSetting>> ReadNamespaceAsync(string prefix, CancellationToken token)
+    internal Task<IReadOnlyDictionary<string, ConfigurationSetting>> ReadFactoryAuthorityAsync(CancellationToken token) =>
+        ReadNamespaceAsync("dsf/factory/", token, maximumPages: 1024, excludeAudit: true);
+
+    internal async Task<IReadOnlyDictionary<string, ConfigurationSetting>> ReadNamespaceAsync(string prefix, CancellationToken token,
+        int maximumRecords = 1024, long maximumBytes = 4 * 1024 * 1024, int maximumPages = 64, bool excludeAudit = false)
     {
         var records = new Dictionary<string, ConfigurationSetting>(StringComparer.Ordinal);
-        var bytes = 0;
+        var audit = new HashSet<string>(StringComparer.Ordinal);
+        long bytes = 0;
+        long authorityBytes = 0;
         var count = 0;
         try
         {
             var selector = new SettingSelector { KeyFilter = prefix + "*", LabelFilter = "*" };
             await foreach (var page in client.GetConfigurationSettingsAsync(selector, token).AsPages())
             {
-                if (++count > 64 || (bytes += page.GetRawResponse().Content.ToMemory().Length) > 4 * 1024 * 1024)
+                if (++count > maximumPages || page.GetRawResponse().Content.ToMemory().Length > 4 * 1024 * 1024
+                    || (bytes += page.GetRawResponse().Content.ToMemory().Length) > maximumBytes + (excludeAudit ? FactoryAudit.MaximumBytes : 0))
                     throw new JsonException();
                 using var native = JsonDocument.Parse(page.GetRawResponse().Content.ToMemory(),
                     new JsonDocumentOptions { AllowDuplicateProperties = false });
                 if (native.RootElement.GetProperty("items").GetArrayLength() != page.Values.Count) throw new JsonException();
+                if (page.GetRawResponse().Headers.TryGetValue("Link", out var link) && !string.IsNullOrEmpty(link)
+                    && string.IsNullOrEmpty(page.ContinuationToken)) throw new JsonException();
+                if (!string.IsNullOrEmpty(page.ContinuationToken))
+                {
+                    var next = new Uri(endpoint, page.ContinuationToken);
+                    var query = System.Web.HttpUtility.ParseQueryString(next.Query);
+                    if (count == maximumPages || next.Scheme != endpoint.Scheme || next.Authority != endpoint.Authority
+                        || next.UserInfo.Length != 0 || next.Fragment.Length != 0 || next.AbsolutePath != "/kv"
+                        || query["key"] != prefix + "*" || query["label"] != "*") throw new JsonException();
+                }
                 foreach (var record in page.Values)
                 {
                     VerifyRecord(record, record.Key);
-                    if (!record.Key.StartsWith(prefix, StringComparison.Ordinal) || !records.TryAdd(record.Key, record)
-                        || records.Count > 1024) throw new JsonException();
                     CheckSize(record.Key, ProductConfigurationKeys.NoLabel, record.Value, record.ContentType);
+                    if (!record.Key.StartsWith(prefix, StringComparison.Ordinal)) throw new JsonException();
+                    if (excludeAudit && record.Key.StartsWith(FactoryAudit.Namespace, StringComparison.Ordinal))
+                    {
+                        if (!audit.Add(record.Key) || audit.Count > FactoryAuditRetention.MaximumRecords + 32) throw new JsonException();
+                        continue;
+                    }
+                    authorityBytes += System.Text.Encoding.UTF8.GetByteCount(record.Key + record.Value + record.ContentType) + 512;
+                    if (!records.TryAdd(record.Key, record) || records.Count > maximumRecords
+                        || excludeAudit && authorityBytes > maximumBytes) throw new JsonException();
                 }
             }
             if (count == 0) throw new JsonException();
@@ -129,6 +155,7 @@ internal sealed class OwnerReservationStore : IFactoryCharterEvidenceReader
                 throw new ReservationStoreException(FactoryReservationState.Unknown, "Owner response did not confirm the exact conditional value; reconcile remote state.");
             return record;
         }
+
         catch (RequestFailedException e) when (e.Status is 409 or 412)
         { throw new ReservationStoreException(FactoryReservationState.Blocked, "Conditional owner key/label conflict; no overwrite or release."); }
         catch (RequestFailedException e) when (e.Status is 400 or 401 or 403 or 413)
@@ -138,6 +165,27 @@ internal sealed class OwnerReservationStore : IFactoryCharterEvidenceReader
         catch (Exception e) when (e is RequestFailedException or HttpRequestException or OperationCanceledException
             or JsonException or FormatException or InvalidOperationException)
         { throw new ReservationStoreException(FactoryReservationState.Unknown, "Conditional write response uncertain; inspect the same operation, never replace identity."); }
+    }
+
+    internal async Task DeleteAsync(ConfigurationSetting expected, CancellationToken token)
+    {
+        if (!expected.Key.StartsWith("intent/", StringComparison.Ordinal) || !expected.Key.Contains("/steps/", StringComparison.Ordinal)
+            || expected.Label is not null || expected.ETag.ToString().Length == 0)
+            throw new FactoryAuditException(FactoryAuditState.Blocked, "Only exact native analysis step records may expire.");
+        try
+        {
+            var response = await client.DeleteConfigurationSettingAsync(expected, onlyIfUnchanged: true, cancellationToken: token);
+            if (response.Status is not (200 or 204))
+                throw new FactoryAuditException(FactoryAuditState.Unknown, "Native response did not confirm conditional deletion.");
+            if (await ReadAsync(expected.Key, token) is not null)
+                throw new FactoryAuditException(FactoryAuditState.Unknown, "Conditional deletion not confirmed; retain original dispatched effect, never retry.");
+        }
+        catch (RequestFailedException e) when (e.Status is 401 or 403)
+        { throw new FactoryAuditException(FactoryAuditState.Blocked, "Operator requires App Configuration data-plane delete on the private analysis store; no runtime grant is broadened."); }
+        catch (RequestFailedException e) when (e.Status is 409 or 412)
+        { throw new FactoryAuditException(FactoryAuditState.Blocked, "Native analysis revision changed; deletion rejected, no forced retry."); }
+        catch (Exception e) when (e is RequestFailedException or HttpRequestException or OperationCanceledException)
+        { throw new FactoryAuditException(FactoryAuditState.Unknown, "Analysis deletion response unconfirmed; original dispatched effect retained, no replay."); }
     }
 
     private static void VerifyRecord(ConfigurationSetting record, string key)

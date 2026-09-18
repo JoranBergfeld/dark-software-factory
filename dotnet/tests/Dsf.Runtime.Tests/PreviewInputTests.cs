@@ -523,6 +523,7 @@ internal sealed partial class PreviewContextTransport
 {
     internal async Task<PreviewContextRunner> RunInputsAsync(string? caller = null)
     {
+        var requests = Requests.Count;
         var writes = Source.Writes.Count;
         var inference = Intent.Models.Inference.Count;
         var progress = Source.Progress.ToDictionary(p => p.Key, p => p.Value);
@@ -537,7 +538,7 @@ internal sealed partial class PreviewContextTransport
         Assert.Equal(writes, Source.Writes.Count);
         Assert.Equal(inference, Intent.Models.Inference.Count);
         Assert.Equal(progress, Source.Progress);
-        Assert.DoesNotContain(Requests, r => r.Method is "PUT" or "PATCH" or "DELETE");
+        Assert.DoesNotContain(Requests.Skip(requests), r => r.Method is "PUT" or "PATCH" or "DELETE");
         return runner;
     }
 }

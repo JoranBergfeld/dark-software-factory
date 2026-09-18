@@ -90,7 +90,7 @@ internal sealed partial class FactoryPreviewPreparationService
     {
         var store = Store(admission);
         var preparation = await ReadJournalAsync(admission, store, token) ?? throw Unknown("ConfirmedNativePreparationRequired");
-        var values = (await store.ReadNamespaceAsync("dsf/factory/", token)).ToDictionary(p => p.Key, p => p.Value.Value);
+        var values = (await store.ReadFactoryAuthorityAsync(token)).ToDictionary(p => p.Key, p => p.Value.Value);
         var manifest = Parse<FactoryManifest>(values[ProductConfigurationKeys.FactoryManifest]);
         var confirmed = FactoryPreviewPublication.ReadConfirmed(manifest, values, clock.GetUtcNow());
         var publication = Parse<PreviewPublicationJournal>(values[FactoryPreviewPublication.RootKey]);
@@ -166,7 +166,7 @@ internal sealed partial class FactoryPreviewPreparationService
         try
         {
             await RequirePublicationCurrentAsync(admission, preparation, store, token, configuredEvaluation: true);
-            var current = (await store.ReadNamespaceAsync("dsf/factory/", token)).ToDictionary(p => p.Key, p => p.Value.Value);
+            var current = (await store.ReadFactoryAuthorityAsync(token)).ToDictionary(p => p.Key, p => p.Value.Value);
             await VerifyPublicationAsync(store, confirmed, publication, current, token);
         }
         catch (Exception e) when (e is ReservationStoreException or PreviewCapabilityException or JsonException

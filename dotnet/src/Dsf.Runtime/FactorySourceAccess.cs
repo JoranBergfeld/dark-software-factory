@@ -114,9 +114,17 @@ internal sealed class FactorySourceAccess(FactoryHostSettings settings, TokenCre
     {
         var values = new Dictionary<string, string>(StringComparer.Ordinal);
         var audit = new HashSet<string>(StringComparer.Ordinal);
+        var retention = new HashSet<string>(StringComparer.Ordinal);
         await foreach (var (key, value) in new AzureConfigurationSettingsGateway(currentCredential, http)
             .ListAsync(settings.ProductEndpoint, ProductConfigurationKeys.NoLabel, token))
         {
+            if (key.StartsWith(FactoryAudit.Namespace, StringComparison.Ordinal))
+            {
+                if (!retention.Add(key) || retention.Count > FactoryAuditRetention.MaximumRecords + 32
+                    || System.Text.Encoding.UTF8.GetByteCount(key + value) + 1152 > 10 * 1024)
+                    throw new SourceAcquisitionException(SourceState.Partial, "RetentionAuditBudgetExceeded");
+                continue;
+            }
             if (key.StartsWith(FactoryCharterLimits.AuditPrefix, StringComparison.Ordinal))
             {
                 if (!audit.Add(key)) throw new JsonException();

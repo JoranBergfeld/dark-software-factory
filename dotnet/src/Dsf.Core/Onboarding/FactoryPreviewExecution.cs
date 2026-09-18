@@ -19,7 +19,7 @@ public sealed record PreviewReadinessProof(
 
 public static class FactoryPreviewExecution
 {
-    public static PreviewExecutionPolicy Policy { get; } = new("supervised-conveyor-v2", 5400, 62, 120);
+    public static PreviewExecutionPolicy Policy { get; } = new("supervised-conveyor-v3", 5400, 62, 120);
     public static string ConfigurationKey(Guid operation) => "dsf/factory/preview-execution-configuration/" + operation.ToString("D");
     public static string Id(Guid factory, Guid operation) => "preview-" + FactoryModelsValidation.Hash(new { FactoryId = factory, OperationId = operation });
 }

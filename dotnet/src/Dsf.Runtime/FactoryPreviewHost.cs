@@ -35,6 +35,8 @@ public static partial class RuntimeVerbs
         var app = builder.Build();
         Func<HttpContext, Task<IResult>> handler = context => HandleAsync(context);
         app.MapPost(kind == PreviewHostKind.SourceContext ? "/council-context" : "/source-context", handler);
+        if (kind == PreviewHostKind.SourceContext)
+            app.MapPost("/retain-council-context", (Func<HttpContext, Task<IResult>>)(context => HandleAsync(context, retainAnalysis: true)));
         if (kind == PreviewHostKind.Council)
         {
             Func<HttpContext, Task<IResult>> modelAuthority = context => HandleAsync(context, modelAuthority: true);
@@ -52,7 +54,7 @@ public static partial class RuntimeVerbs
 
         async Task<IResult> HandleAsync(HttpContext context, bool modelAuthority = false, bool telemetryEvidence = false,
             bool supplementalEvidence = false, bool supplementalAuthority = false, bool inputs = false, bool prepareEvaluation = false, bool evaluate = false,
-            bool evaluationStatus = false, bool preparationStatus = false)
+            bool evaluationStatus = false, bool preparationStatus = false, bool retainAnalysis = false)
         {
             context.Response.Headers.CacheControl = "no-store";
             var clock = kind == PreviewHostKind.SourceContext ? dependencies.SourceClock : dependencies.PreviewClock;
@@ -64,7 +66,10 @@ public static partial class RuntimeVerbs
                 var token = pending.Token;
                 var optional = supplementalAuthority ? await context.Request.ReadFromJsonAsync<PreviewSupplementalRequest>(FactorySourceValidation.RecordJson, token)
                     ?? throw new JsonException() : null;
-                var request = optional?.Preview ?? await context.Request.ReadFromJsonAsync<PreviewCapabilityRequest>(FactorySourceValidation.RecordJson, token) ?? throw new JsonException();
+                var retention = retainAnalysis ? await context.Request.ReadFromJsonAsync<PreviewAnalysisRetentionRequest>(FactorySourceValidation.RecordJson, token)
+                    ?? throw new JsonException() : null;
+                var request = retention?.Preview ?? optional?.Preview
+                    ?? await context.Request.ReadFromJsonAsync<PreviewCapabilityRequest>(FactorySourceValidation.RecordJson, token) ?? throw new JsonException();
                 var credential = (kind == PreviewHostKind.SourceContext ? dependencies.SourceCredential : dependencies.PreviewCredential)
                     ?? new ManagedIdentityCredential(ManagedIdentityId.FromUserAssignedClientId(settings.ManagedIdentityClientId));
                 var http = (kind == PreviewHostKind.SourceContext ? dependencies.SourceHttp : dependencies.PreviewHttp) ?? PreviewHttp;
@@ -80,6 +85,13 @@ public static partial class RuntimeVerbs
                 if (!NativeCaller(context, kind == PreviewHostKind.SourceContext ? capability.Council.PrincipalId! : capability.Manifest.Identity.AzureActorId,
                     capability.Manifest.Identity.TenantId, kind == PreviewHostKind.SourceContext ? capability.Council.ClientId : null))
                     throw new PreviewCapabilityException(FactoryCharterState.Blocked, "ApprovedPreviewCallerRequired");
+                if (retention is not null)
+                {
+                    var receipt = await RetainPreviewAnalysisAsync(settings, dependencies, capability, retention, http, token);
+                    if ((await authority.CheckAsync(request, token)).Revision != capability.Revision)
+                        throw new PreviewCapabilityException(FactoryCharterState.Blocked, "PreviewCapabilityChangedDuringRetention");
+                    return Results.Json(receipt, FactoryGitHubJson.Options);
+                }
                 if (prepareEvaluation)
                     return Results.Json(await PreparePreviewExecutionAsync(settings, dependencies, request, token), FactoryGitHubJson.Options);
                 if (preparationStatus)
@@ -153,6 +165,8 @@ public static partial class RuntimeVerbs
                 "NativePreviewState" + exception.Failure, 409);
             }
             catch (PreviewCapabilityException e) { return Error(e.State, e.Message, 403); }
+            catch (SourceAcquisitionException e)
+            { return Error(Enum.Parse<FactoryCharterState>(FactoryIntentWorkflow.Map(e.State).ToString()), e.Message, 409); }
             catch (SupplementalSourceException e) when (e.Reason == SupplementalReason.CapacityExceeded)
             { return Error(FactoryCharterState.Partial, "PreviewContextCapacityExceeded", 409); }
             catch (OperationCanceledException)

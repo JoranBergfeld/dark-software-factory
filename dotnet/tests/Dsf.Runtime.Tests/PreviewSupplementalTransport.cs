@@ -191,6 +191,7 @@ internal sealed partial class PreviewContextTransport
     internal async Task<PreviewContextRunner> RunSupplementalsAsync(string? kind = null, string? caller = null, string? client = null,
         object? request = null, string? route = null)
     {
+        var requests = Requests.Count;
         var writes = Source.Writes.Count;
         var runner = new PreviewContextRunner(Source) { Route = route ?? (kind is null ? "/supplemental-evidence" : "/evidence"),
             Caller = caller ?? (kind is null ? Source.Manifest.Identity.AzureActorId : Models.Bindings![0].PrincipalId!),
@@ -208,7 +209,7 @@ internal sealed partial class PreviewContextTransport
         Assert.Equal(0, await RuntimeCliApplication.InvokeAsync([host is null ? "serve-preview" : "serve-preview-supplemental"], env, new StringWriter(), new StringWriter(),
             RuntimeDependencies.Production() with { WebHostRunner = runner, PreviewHttp = http, PreviewCredential = new IntentModelCredential(Source),
                 PreviewClock = Source.Clock, SourceHttp = http, SourceCredential = host is null ? null : new PreviewSupplementalCredential(this, host), SourceClock = Source.Clock }, CancellationToken.None));
-        Assert.DoesNotContain(Requests, r => r.Method is "PUT" or "PATCH" or "DELETE");
+        Assert.DoesNotContain(Requests.Skip(requests), r => r.Method is "PUT" or "PATCH" or "DELETE");
         Assert.Equal(writes, Source.Writes.Count);
         return runner;
     }

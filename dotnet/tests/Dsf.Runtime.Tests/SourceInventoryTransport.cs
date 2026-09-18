@@ -19,6 +19,7 @@ internal sealed class SourceInventoryTransport : HttpMessageHandler
     internal const string InstallationToken = "source-installation-token-never-persist";
     internal Dictionary<string, string> Values;
     internal readonly Dictionary<string, (string Value, int Revision)> Progress = new(StringComparer.Ordinal);
+    internal readonly Dictionary<string, DateTimeOffset> ProgressModifiedAt = new(StringComparer.Ordinal);
     internal readonly Dictionary<string, JsonNode> Resources = new(StringComparer.OrdinalIgnoreCase);
     internal readonly Dictionary<string, JsonNode> Trees = new(StringComparer.Ordinal);
     internal readonly Dictionary<string, byte[]> Blobs = new(StringComparer.Ordinal);
@@ -48,6 +49,7 @@ internal sealed class SourceInventoryTransport : HttpMessageHandler
         var serialized = JsonSerializer.Serialize(source.Progress.ToDictionary(p => p.Key, p => new { p.Value.Value, p.Value.Revision }));
         var imported = JsonNode.Parse(serialized)!.AsObject();
         foreach (var (key, item) in imported) Progress[key] = ((string)item!["Value"]!, (int)item["Revision"]!);
+        foreach (var key in Progress.Keys) ProgressModifiedAt[key] = source.ProgressModifiedAt.GetValueOrDefault(key, source.Manifest.Identity.CreatedAt);
         revision = Progress.Values.Select(p => p.Revision).DefaultIfEmpty().Max();
     }
     private int revision;
@@ -281,6 +283,7 @@ internal sealed class SourceInventoryTransport : HttpMessageHandler
             Assert.Equal(HttpMethod.Put, request.Method);
             var content = JsonNode.Parse(await request.Content!.ReadAsStringAsync(token))!;
             var text = (string)content["value"]!;
+            if (BeforeProgressWrite is not null) await BeforeProgressWrite(key, text);
             Assert.True(Encoding.UTF8.GetByteCount(key + text) + 1024 < 10 * 1024);
             if (Progress.TryGetValue(key, out var existing))
             {
@@ -289,10 +292,12 @@ internal sealed class SourceInventoryTransport : HttpMessageHandler
             }
             else if (request.Headers.IfMatch.Count != 0) return Json(new { }, 412);
             Progress[key] = (text, ++revision);
+            ProgressModifiedAt[key] = Clock.Now;
             Writes.Add(key);
             AfterWrite?.Invoke(key, text);
             return Json(Setting(key, text, revision));
         }
+
         if (uri.Host == "management.azure.com")
         {
             Assert.Equal(HttpMethod.Get, request.Method);
@@ -336,11 +341,14 @@ internal sealed class SourceInventoryTransport : HttpMessageHandler
         }
         throw new InvalidOperationException("Unexpected source request: " + uri.PathAndQuery);
     }
-    private static object Setting(string key, string value, int etag) => new
+    private object Setting(string key, string value, int etag) => new
         { key, value, etag = etag.ToString(), label = (string?)null,
+            last_modified = ProgressModifiedAt.GetValueOrDefault(key, Manifest.Identity.CreatedAt),
             content_type = key.StartsWith(FactoryCharterLimits.AuditPrefix, StringComparison.Ordinal) ? FactoryCharterLimits.RecordContentType
                 : key.StartsWith("dsf/factory/preview", StringComparison.Ordinal) ? FactoryPreviewValidation.RecordContentType
                 : key.StartsWith("intent/", StringComparison.Ordinal) ? "application/vnd.dsf.intent+json;version=1" : "application/vnd.dsf.source+json;version=1", locked = false };
+    internal Func<string, string, Task>? BeforeProgressWrite { get; set; }
+
     internal static HttpResponseMessage Json(object value, int status = 200) => new((HttpStatusCode)status)
         { Content = JsonContent.Create(value) };
 }
