@@ -8,6 +8,7 @@ internal sealed partial class PreviewExecutionStore
     public async Task<PreviewModelResult> ExecuteAsync(PreviewModelRequest request,
         Func<PreviewModelRequest, CancellationToken, Task<PreviewModelResult>> dispatch, CancellationToken token)
     {
+        if (live is not null) await live.RequireCurrentAsync(token);
         var identity = FactoryModelsValidation.Hash(request with { Preview = request.Preview with { RequestId = Guid.Empty } });
         var existing = Document.Dispatches.SingleOrDefault(d => d.Identity == identity);
         if (existing is not null)
@@ -33,6 +34,7 @@ internal sealed partial class PreviewExecutionStore
         await SaveDispatchAsync(existing with { State = PreviewModelDispatchState.Dispatched }, token);
         try
         {
+            if (live is not null) await live.RequireCurrentAsync(token);
             var result = await dispatch(request, token);
             var confirmed = existing with { State = PreviewModelDispatchState.Confirmed, Result = result };
             ValidateDispatch(confirmed);

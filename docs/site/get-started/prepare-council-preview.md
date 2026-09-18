@@ -522,6 +522,89 @@ missing locators/operation, but approval is never inferred or prompted.
 Review/status use current read/query checks, not new model inference.
 Readiness remains point-in-time, not a lease or remote fence.
 
+## Separately review the native Decide host
+
+An `ApprovalOnly` receipt never authorizes a new runtime image implicitly.
+`live` reviews a distinct native rollout, pinned to that exact original
+operator approval and current complete readiness. It does not alter the
+original preview, approval, charter, manifest or profile.
+
+Provide a complete JSON selection with `operationId`, digest-pinned
+`runtimeImage`, `audienceClientId` and `metadataRoleDefinitionId`.
+The existing API registration/consent, private routing and exact COUNCIL
+metadata role remain administrator prerequisites.
+
+```bash
+dsf onboard decide live --selection "$(cat live-selection.json)" \
+  --owner-appconfig-endpoint https://OWNER.azconfig.io \
+  --product PRODUCT --tenant TENANT_GUID --subscription SUBSCRIPTION_GUID --json
+```
+
+Review the complete returned plan, then repeat with
+`--approve EXACT_LIVE_ROLLOUT_FINGERPRINT`. The command creates only the new
+`<factory-prefix>-decide` Container App and its native authentication
+configuration, plus read-only metadata assignments at that exact host and
+its exact deployment. The runtime rereads the original native creation
+operations/correlation and scoped grants; copied receipts alone are insufficient.
+It reuses the original private environment and COUNCIL managed identity:
+no new identity, secret, SQL grant, state container, model or telemetry backend
+permission, application change or target tag write.
+
+The new pinned image must implement `serve-decide`. Its native identity,
+image, command/environment, capacity, tenant, audiences and allowed callers
+are verified against original ARM creation/incarnation receipts.
+Protected `dsf/factory/audit/live/current`, immutable plan chunks and
+per-effect intent/acknowledgment/receipts retain the separate operator review.
+The audit graph links that rollout to the exact immutable activation approval
+and its existing source/analysis/preview provenance.
+
+`PreparedAwaitingPublication` means **native rollout only**:
+activation, onboarding completion and repository publication remain false.
+`live --status` verifies the original resources and grants without writes or
+inference. Unknown/lost/canceled native effects retain their original
+operation; this command never retries a deployment, adopts an existing name,
+replaces a host or treats lease expiry as fencing.
+
+### Exercise the new host explicitly
+
+Use a new explicit invocation GUID and the retained **live rollout**
+fingerprint. This intentionally runs models but cannot file:
+
+```bash
+dsf onboard decide live --exercise INVOCATION_GUID \
+  --approve EXACT_LIVE_ROLLOUT_FINGERPRINT \
+  --owner-appconfig-endpoint https://OWNER.azconfig.io \
+  --product PRODUCT --tenant TENANT_GUID --subscription SUBSCRIPTION_GUID --json
+```
+
+The operator authenticates only to the native host. The host uses its original
+managed identity for all source/model/telemetry/state access, never operator
+credentials. Authenticated `POST /exercise` admits a separately scoped native
+execution before HTTP 202; subsequent `POST /execution` requests observe the
+original bounded worker. The shared actual conveyor gathers current evidence,
+synthesizes, grounds, embeds, deliberates and runs all three native jury
+families. The original reviewed preview remains immutable.
+
+Use `--execution INVOCATION_GUID` instead of `--exercise` for inspection.
+Lost admission/worker responses, incompatible resumed scope and issued
+effects remain unknown without takeover. Pause/current-authority checks run
+at admission, after conditional admission, before worker execution and before
+model dispatch. Already-issued effects may drain or remain unknown; cancellation
+does not undo them.
+
+The result explicitly says `NativeNonpublishingExercise`, never active/live
+filing. Even unanimous GO is only retained evaluation here. Ordinary
+`run`, `sweep`, schedules, HTTP intake, resume and outcome paths remain
+closed by shared inactive onboarding admission, including supplied live-filing
+booleans. Final promotion still requires the separately reviewed create-once
+publication capability and an explicit new promotion approval.
+
+All locators and complete selection/invocation inputs are mandatory when
+redirected or using `--json`; no prompts or inferred approval.
+Rollout review, native status and successful exercise return exit 0.
+Blocked/failed/unknown results return 1; none imply rollback or successful
+activation. Do not rotate operation IDs to evade uncertain history.
+
 ## Deliberately pause council admission
 
 Pause is separate from temporary unreadiness. It requires the original

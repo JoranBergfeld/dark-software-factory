@@ -108,7 +108,7 @@ internal sealed class AzureFactoryPreviewCapability(
             var metadata = Metadata(setting);
             if (key.StartsWith(FactoryAudit.Namespace, StringComparison.Ordinal))
             {
-                if (!retention.Add(key) || retention.Count > FactoryAuditRetention.MaximumRecords + 32
+                if (!retention.Add(key) || retention.Count > FactoryAudit.GovernanceHistoryRecords
                     || Encoding.UTF8.GetByteCount(key + setting.Value + metadata.GetRawText()) + 512 > FactoryCharterLimits.RecordBytes
                     || string.IsNullOrEmpty(setting.ETag.ToString())) throw new JsonException();
                 continue;

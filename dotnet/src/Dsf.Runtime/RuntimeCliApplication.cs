@@ -167,6 +167,23 @@ public static class RuntimeCliApplication
             }
         });
         root.Subcommands.Add(previewTelemetry);
+        var live = new Command("serve-decide", "serve reviewed native Decide execution; rollout exercises never publish or activate");
+        live.SetAction(async (_, token) =>
+        {
+            try
+            {
+                var settings = FactoryHostSettings.Read(env, "Factory Decide");
+                await using var host = RuntimeVerbs.BuildLiveHost(settings, dependencies);
+                await dependencies.WebHostRunner.RunAsync(host, token);
+                return Success;
+            }
+            catch (RuntimeVerbException exception)
+            {
+                await stderr.WriteLineAsync(exception.Message);
+                return Failure;
+            }
+        });
+        root.Subcommands.Add(live);
         foreach (var kind in new[] { Dsf.Core.Onboarding.PreviewHostKind.Council, Dsf.Core.Onboarding.PreviewHostKind.SourceContext })
         {
             var preview = new Command(kind == Dsf.Core.Onboarding.PreviewHostKind.Council ? "serve-preview" : "serve-source-context",

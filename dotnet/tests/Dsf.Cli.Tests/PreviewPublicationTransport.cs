@@ -178,6 +178,14 @@ internal sealed partial class PreviewPreparationTransport
                 if (SeedDocuments.ContainsKey(path)) return new(HttpStatusCode.Conflict);
                 if (path.Contains("/council-preview/", StringComparison.Ordinal)) { BeforeSeed?.Invoke(); SeedCreates++; }
                 body["_rid"] = path.Contains("/council-preview/", StringComparison.Ordinal) ? SeedResourceId : RunResourceId;
+                if (((string)body["id"]!).StartsWith("live-", StringComparison.Ordinal))
+                {
+                    var rid = Convert.FromBase64String(((string)body["_rid"]!).Replace('-', '/'));
+                    var suffix = System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(path));
+                    suffix.AsSpan(0, 8).CopyTo(rid.AsSpan(8));
+                    rid[15] &= 0x0f;
+                    body["_rid"] = Convert.ToBase64String(rid).Replace('/', '-');
+                }
                 body["_etag"] = "\"" + Guid.NewGuid().ToString("D") + "\"";
                 SeedDocuments.Add(path, body.ToJsonString());
                 if (SeedFailure == "lost") throw new HttpRequestException("lost-private-native-seed-response");

@@ -321,12 +321,12 @@ public sealed class FactoryActivationAuthorityTests(ActivationAuthorityFixture f
         return review.Result;
     }
 
-    private sealed class ForbiddenComposer : IConveyorComposer
+    internal sealed class ForbiddenComposer : IConveyorComposer
     {
         public ConveyorServices ComposeFor(RuntimeSettings settings) => throw new InvalidOperationException("Forbidden conveyor composition.");
     }
 
-    private sealed class ReadOnlyCredential : Azure.Core.TokenCredential
+    internal sealed class ReadOnlyCredential : Azure.Core.TokenCredential
     {
         public override Azure.Core.AccessToken GetToken(Azure.Core.TokenRequestContext context, CancellationToken token) =>
             new("offline-runtime-reader", DateTimeOffset.UtcNow.AddHours(1));

@@ -18,7 +18,8 @@ internal sealed partial class PreviewPreparationTransport
     {
         token.ThrowIfCancellationRequested();
         var target = request.RequestUri!.AbsolutePath.ToLowerInvariant();
-        var serialized = Values().Where(p => p.Key.Contains("/preview-preparation/", StringComparison.Ordinal)
+        var serialized = Values().Where(p => (p.Key.Contains("/preview-preparation/", StringComparison.Ordinal)
+                || p.Key.Contains("/audit/live/", StringComparison.Ordinal))
             && p.Key.Contains("/effects/", StringComparison.Ordinal) && !p.Key.Contains("/receipts/", StringComparison.Ordinal))
             .Select(p => JsonNode.Parse(p.Value)!).Single(e => (string?)e["target"] == target);
         Assert.Equal("Dispatched", (string?)serialized["state"]);
@@ -52,32 +53,40 @@ internal sealed partial class PreviewPreparationTransport
             var telemetryIdentity = Authority.Configuration.SourceIdentity;
             var councilPrincipal = (string)council["properties"]!["principalId"]!;
             var councilClient = (string)council["properties"]!["clientId"]!;
-            var role = account + "/sqlroledefinitions/" + Value("stateRoleId");
+            var live = target.Contains("/deployments/live-", StringComparison.Ordinal);
+            var role = live ? "" : account + "/sqlroledefinitions/" + Value("stateRoleId");
             var created = new List<string>();
-            Add(account + "/sqldatabases/" + product + "/containers/council-preview", new JsonObject
+            if (!live)
             {
-                ["resource"] = new JsonObject { ["id"] = "council-preview", ["_rid"] = "PD5DALigD00=",
-                    ["partitionKey"] = new JsonObject { ["kind"] = "Hash", ["version"] = 2, ["paths"] = new JsonArray("/product") } },
-            });
-            Add(role, new JsonObject { ["roleName"] = "dsf-preview-state", ["type"] = "CustomRole",
-                ["assignableScopes"] = new JsonArray(account), ["permissions"] = new JsonArray(new JsonObject
-                { ["dataActions"] = JsonSerializer.SerializeToNode(FactoryPreviewValidation.StateDataActions) }) });
-            foreach (var (parameter, name) in new[] { ("runsAssignmentId", "runs"), ("previewAssignmentId", "council-preview") })
-                Add(account + "/sqlroleassignments/" + Value(parameter), new JsonObject
-                { ["principalId"] = councilPrincipal, ["roleDefinitionId"] = role, ["scope"] = account + "/dbs/" + product + "/colls/" + name });
-            var endpoint = "https://" + prefix + "-preview.private.azurecontainerapps.io";
-            var optionalSources = values["supplementalSources"]!["value"]!.AsArray();
+                Add(account + "/sqldatabases/" + product + "/containers/council-preview", new JsonObject
+                {
+                    ["resource"] = new JsonObject { ["id"] = "council-preview", ["_rid"] = "PD5DALigD00=",
+                        ["partitionKey"] = new JsonObject { ["kind"] = "Hash", ["version"] = 2, ["paths"] = new JsonArray("/product") } },
+                });
+                Add(role, new JsonObject { ["roleName"] = "dsf-preview-state", ["type"] = "CustomRole",
+                    ["assignableScopes"] = new JsonArray(account), ["permissions"] = new JsonArray(new JsonObject
+                    { ["dataActions"] = JsonSerializer.SerializeToNode(FactoryPreviewValidation.StateDataActions) }) });
+                foreach (var (parameter, name) in new[] { ("runsAssignmentId", "runs"), ("previewAssignmentId", "council-preview") })
+                    Add(account + "/sqlroleassignments/" + Value(parameter), new JsonObject
+                    { ["principalId"] = councilPrincipal, ["roleDefinitionId"] = role, ["scope"] = account + "/dbs/" + product + "/colls/" + name });
+            }
+            var endpoint = "https://" + prefix + (live ? "-decide" : "-preview") + ".private.azurecontainerapps.io";
+            var optionalSources = live ? new JsonArray() : values["supplementalSources"]!["value"]!.AsArray();
             JsonNode OptionalIdentity(JsonNode selected) => supplemental!.Resources.Values.Single(r =>
                 ((string?)r["id"])?.Contains("/userassignedidentities/", StringComparison.Ordinal) == true
                 && ((string)r["id"]!).EndsWith("/" + prefix + "-" + (string)selected["kind"]!, StringComparison.Ordinal));
-            foreach (var (suffix, verb, nativeIdentity, client, image, audience, callers) in new[]
+            foreach (var (suffix, verb, nativeIdentity, client, image, audience, callers) in (live ? new[]
+            {
+                ("decide", "serve-decide", (string)council["id"]!, councilClient, Value("runtimeImage"), Value("audienceClientId"),
+                    new[] { Value("operatorPrincipalId"), councilPrincipal }),
+            } : new[]
             {
                 ("preview", "serve-preview", (string)council["id"]!, councilClient, Value("runtimeImage"), Value("audienceClientId"),
                     new[] { Value("operatorPrincipalId") }.Concat(optionalSources.Select(s => (string)OptionalIdentity(s!)["properties"]!["principalId"]!)).ToArray()),
                 ("context", "serve-source-context", (string)code["id"]!, (string)code["properties"]!["clientId"]!, Value("runtimeImage"), Value("audienceClientId"), new[] { councilPrincipal }),
                 ("preview-models", "serve-preview-models", (string)council["id"]!, councilClient, Value("modelRuntimeImage"), Value("modelAudienceClientId"), new[] { councilPrincipal }),
                 ("preview-telemetry", "serve-preview-telemetry", telemetryIdentity.Target, telemetryIdentity.ClientId!, Value("telemetryRuntimeImage"), Value("telemetryAudienceClientId"), new[] { councilPrincipal }),
-            }.Concat(optionalSources.Select(s => ("preview-" + (string)s!["kind"]!, "serve-preview-supplemental",
+            }).Concat(optionalSources.Select(s => ("preview-" + (string)s!["kind"]!, "serve-preview-supplemental",
                 (string)OptionalIdentity(s!)["id"]!, (string)OptionalIdentity(s!)["properties"]!["clientId"]!,
                 (string)s!["runtimeImage"]!, (string)s!["audienceClientId"]!, new[] { councilPrincipal }))))
             {
@@ -105,7 +114,7 @@ internal sealed partial class PreviewPreparationTransport
                 });
                 Resources[host]["identity"] = new JsonObject { ["type"] = "UserAssigned", ["userAssignedIdentities"] = new JsonObject { [nativeIdentity] = new JsonObject() } };
                 var authorization = new JsonObject { ["allowedPrincipals"] = new JsonObject { ["identities"] = JsonSerializer.SerializeToNode(callers) } };
-                if (suffix != "preview") authorization["allowedApplications"] = new JsonArray(councilClient);
+                if (suffix is not ("preview" or "decide")) authorization["allowedApplications"] = new JsonArray(councilClient);
                 Add(host + "/authconfigs/current", new JsonObject
                 {
                     ["platform"] = new JsonObject { ["enabled"] = true },

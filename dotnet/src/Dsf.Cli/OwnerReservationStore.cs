@@ -122,7 +122,7 @@ internal sealed class OwnerReservationStore : IFactoryCharterEvidenceReader
                     if (!record.Key.StartsWith(prefix, StringComparison.Ordinal)) throw new JsonException();
                     if (excludeAudit && record.Key.StartsWith(FactoryAudit.Namespace, StringComparison.Ordinal))
                     {
-                        if (!audit.Add(record.Key) || audit.Count > FactoryAuditRetention.MaximumRecords + 32) throw new JsonException();
+                        if (!audit.Add(record.Key) || audit.Count > FactoryAudit.GovernanceHistoryRecords) throw new JsonException();
                         continue;
                     }
                     authorityBytes += System.Text.Encoding.UTF8.GetByteCount(record.Key + record.Value + record.ContentType) + 512;

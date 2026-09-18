@@ -9,23 +9,48 @@ using Dsf.FeatureCouncil.Conveyor;
 
 namespace Dsf.Runtime;
 
-internal sealed partial class PreviewExecutionStore(PreviewCapabilitySnapshot authority, TokenCredential credential, HttpClient http, TimeProvider clock)
+internal sealed partial class PreviewExecutionStore(PreviewCapabilitySnapshot authority, TokenCredential credential, HttpClient http, TimeProvider clock,
+    FactoryLiveExecution? live = null)
     : IRunStore, IPreviewModelDispatchJournal
 {
     private readonly AzureCosmosDocumentGateway gateway = new(
         new FactoryWorkloadCredential(credential, authority.Manifest.Identity.TenantId, authority.Council, clock), http);
     private readonly string product = authority.Manifest.Identity.ProductKey;
     private readonly string endpoint = "https://" + FactoryPreviewValidation.Prefix(authority.Manifest.Identity.FactoryId) + "-cosmos.documents.azure.com";
-    internal string Id { get; } = FactoryPreviewExecution.Id(authority.Manifest.Identity.FactoryId, authority.Capability.OperationId);
+    internal string Id { get; } = live is null ? FactoryPreviewExecution.Id(authority.Manifest.Identity.FactoryId, authority.Capability.OperationId)
+        : "live-" + FactoryModelsValidation.Hash(new { authority.Manifest.Identity.FactoryId, live.Scope.OperationId });
     private string? version;
     private bool poisoned;
     private Guid owner;
     private PreviewEvaluationDocument? document;
     private CosmosRunStore? runs;
+    private string? resourceId;
+    internal AuditRecordIdentity? NativeIdentity { get; private set; }
     internal PreviewEvaluationDocument Document => document ?? throw new InvalidOperationException("Preview state must be read first.");
     internal string Revision => version is not null ? FactoryModelsValidation.Hash(new { Id, version, Document.Checksum })
         : throw new InvalidOperationException("Confirmed native preview version required.");
     internal string RunId => Id + "-run";
+
+    internal async Task PrepareLiveAsync(CancellationToken token)
+    {
+        if (live is null) throw new InvalidOperationException();
+        await live.RequireCurrentAsync(token);
+        var prior = await gateway.ReadCheckpointAsync(endpoint, product, FactoryPreviewValidation.PreviewContainer, product, Id, token);
+        if (prior is not null)
+        {
+            using var body = JsonDocument.Parse(prior.Json);
+            _ = Parse(body.RootElement);
+            return;
+        }
+        if (await gateway.ReadCheckpointAsync(endpoint, product, "runs", product, RunId, token) is not null)
+            throw new PreviewCapabilityException(FactoryCharterState.Unknown, "LiveJournalMissingDespiteRetainedRunNoRecreation");
+        var initial = new PreviewEvaluationDocument(1, Id, product, authority.Manifest.Identity.FactoryId, authority.Capability.OperationId, clock.GetUtcNow())
+            { Kind = "council-live-exercise", LiveScope = live.Scope };
+        initial = initial with { Checksum = initial.CalculateChecksum() };
+        await live.RequireCurrentAsync(token);
+        _ = await gateway.WriteCheckpointAsync(endpoint, product, FactoryPreviewValidation.PreviewContainer, product, Id,
+            JsonSerializer.Serialize(initial, FactoryGitHubJson.Options), null, token);
+    }
 
     internal async Task<PreviewExecutionSeed> PrepareAsync(TimeProvider clock, CancellationToken token, bool readOnly = false)
     {
@@ -96,9 +121,13 @@ internal sealed partial class PreviewExecutionStore(PreviewCapabilitySnapshot au
             ?? throw new PreviewCapabilityException(FactoryCharterState.Unknown, "SeededPreviewStateMissingNoReinitialization");
         using var body = JsonDocument.Parse(native.Json, new JsonDocumentOptions { AllowDuplicateProperties = false });
         document = Parse(body.RootElement);
-        if (seed.Id != Id || seed.ResourceId != Resource(body.RootElement) || seed.Checksum != Document.Initial().CalculateChecksum()
-            || Document.Phase == PreviewExecutionPhase.Prepared && native.ETag != seed.ETag)
+        if (live is null && (seed.Id != Id || seed.ResourceId != Resource(body.RootElement) || seed.Checksum != Document.Initial().CalculateChecksum()
+            || Document.Phase == PreviewExecutionPhase.Prepared && native.ETag != seed.ETag))
             throw new PreviewCapabilityException(FactoryCharterState.Unknown, "PreviewSeedReceiptChanged");
+        resourceId = Resource(body.RootElement);
+        NativeIdentity = new(authority.Manifest.Identity.FactoryId, AuditStoreKind.Preview,
+            "dbs/" + Uri.EscapeDataString(product) + "/colls/" + FactoryPreviewValidation.PreviewContainer + "/docs/" + Uri.EscapeDataString(Id),
+            native.ETag, FactoryAudit.TextHash(native.Json)) { NativeResourceId = resourceId };
         version = native.ETag;
     }
 
@@ -183,7 +212,7 @@ internal sealed partial class PreviewExecutionStore(PreviewCapabilitySnapshot au
             var saved = await gateway.WriteCheckpointAsync(endpoint, product, FactoryPreviewValidation.PreviewContainer, product, Id,
                 payload, version, token);
             using var receipt = JsonDocument.Parse(saved.Json);
-            if (Resource(receipt.RootElement) != authority.Capability.Configuration.Execution!.Seed.ResourceId)
+            if (Resource(receipt.RootElement) != resourceId)
                 throw new PreviewCapabilityException(FactoryCharterState.Unknown, "PreviewWriteIncarnationUnconfirmed");
             version = saved.ETag;
             document = next;
@@ -205,7 +234,8 @@ internal sealed partial class PreviewExecutionStore(PreviewCapabilitySnapshot au
 
     private void Validate(PreviewEvaluationDocument document)
     {
-        if (document.Protocol != 1 || document.Kind != "council-preview-evaluation" || document.Profile != "OnboardingPreview"
+        if (document.Protocol != 1 || document.Kind != (live is null ? "council-preview-evaluation" : "council-live-exercise")
+            || document.LiveScope != live?.Scope || document.Profile != "OnboardingPreview"
             || document.Id != Id || document.Product != product
             || document.FactoryId != authority.Manifest.Identity.FactoryId || document.OperationId != authority.Capability.OperationId
             || document.CreatedAt == default || document.CreatedAt.Offset != TimeSpan.Zero || document.CreatedAt > clock.GetUtcNow()

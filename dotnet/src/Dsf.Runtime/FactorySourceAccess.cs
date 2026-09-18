@@ -120,7 +120,7 @@ internal sealed class FactorySourceAccess(FactoryHostSettings settings, TokenCre
         {
             if (key.StartsWith(FactoryAudit.Namespace, StringComparison.Ordinal))
             {
-                if (!retention.Add(key) || retention.Count > FactoryAuditRetention.MaximumRecords + 32
+                if (!retention.Add(key) || retention.Count > FactoryAudit.GovernanceHistoryRecords
                     || System.Text.Encoding.UTF8.GetByteCount(key + value) + 1152 > 10 * 1024)
                     throw new SourceAcquisitionException(SourceState.Partial, "RetentionAuditBudgetExceeded");
                 continue;

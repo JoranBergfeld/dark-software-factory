@@ -49,6 +49,7 @@ public static class FactoryAudit
     public const int MaximumRecords = 81920;
     public const int MaximumBytes = 96 * 1024 * 1024;
     public const int PageSize = 128;
+    public const int GovernanceHistoryRecords = FactoryAuditRetention.MaximumRecords + 32 + FactoryLive.MaximumRecords;
     public static TimeSpan UnusedAnalysisRetention => TimeSpan.FromDays(90);
 
     public static AuditGraph Build(Guid factory, IReadOnlyList<FactoryAuditRecord> input, DateTimeOffset now)
@@ -339,6 +340,45 @@ public static class FactoryAudit
                 Link(root, receipt);
                 Link(receipt, reviewed);
             }
+        }
+        var liveValues = values.Where(p => p.Key.StartsWith(FactoryLive.Prefix, StringComparison.Ordinal)).ToDictionary();
+        if (liveValues.Count != 0)
+        {
+            var root = Require(AuditStoreKind.Governance, FactoryLive.RootKey);
+            var coordinator = Parse<FactoryLiveCoordinator>(root);
+            var live = FactoryLive.ReadPlan(coordinator, liveValues);
+            var approval = Require(live.Approval.Store, live.Approval.Key);
+            if (approval.Identity != live.Approval) throw new JsonException("Original rollout approval receipt changed.");
+            Link(root, approval);
+            for (var i = 0; i < coordinator.PlanChunks; i++)
+            {
+                var chunk = Require(AuditStoreKind.Governance, FactoryLive.ChunkKey(coordinator.OperationId, i));
+                Link(root, chunk);
+                Link(chunk, approval);
+            }
+            var review = Require(AuditStoreKind.Governance, FactoryActivation.ReviewKey(live.Activation.OperationId));
+            if (Parse<FactoryActivationReview>(review).Fingerprint != live.Activation.Fingerprint) throw new JsonException();
+            Link(root, review);
+            foreach (var step in live.Deployment.Steps)
+            {
+                if (!records.TryGetValue((AuditStoreKind.Governance, FactoryLive.EffectKey(coordinator.OperationId, step.Index)), out var effectRecord))
+                {
+                    if (step.Index < coordinator.ConfirmedEffects) throw new JsonException();
+                    continue;
+                }
+                var effect = Parse<PreviewPreparationEffect>(effectRecord);
+                if (effect.PlanFingerprint != live.Fingerprint || effect.OperationId != coordinator.OperationId || effect.FactoryId != factory
+                    || effect.Index != step.Index || effect.Target != step.Target || effect.BodySha256 != step.BodySha256) throw new JsonException();
+                Link(root, effectRecord);
+                for (var i = 0; i < effect.ReceiptHashes.Count; i++)
+                {
+                    var receipt = Require(AuditStoreKind.Governance, FactoryLive.ReceiptKey(coordinator.OperationId, step.Index, i));
+                    if (FactoryModelsValidation.Hash(Parse<PreviewPreparationReceipt>(receipt)) != effect.ReceiptHashes[i]) throw new JsonException();
+                    Link(effectRecord, receipt);
+                }
+            }
+            if (coordinator.State == FactoryLiveState.PreparedAwaitingPublication)
+                _ = FactoryLive.ReadConfirmed(liveValues, now);
         }
         var protectedIds = new HashSet<AuditRecordIdentity>();
         var pending = new Queue<AuditRecordIdentity>(roots);

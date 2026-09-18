@@ -9,7 +9,8 @@ internal sealed partial class FactoryPreviewPreparationService
     private sealed record NativeCreation(IReadOnlyList<PreviewPreparationReceipt> Receipts, string? CouncilEndpoint, string? OutputsSha256);
 
     private async Task<NativeCreation> DispatchAsync(PreviewPreparationPlan plan, PreviewPreparationStep step,
-        PreviewPreparationEffect effect, FactoryPreparationArm arm, Func<PreviewPreparationAcknowledgment, Task> recordAcknowledgment, CancellationToken token)
+        PreviewPreparationEffect effect, FactoryPreparationArm arm, Func<PreviewPreparationAcknowledgment, Task> recordAcknowledgment, CancellationToken token,
+        Action<IReadOnlyDictionary<string, JsonElement>, string>? validateWorkloads = null)
     {
         var body = step.Action == PreviewPreparationAction.WorkloadDeployment ? plan.WorkloadBody : FactoryPreviewPreparation.GrantBody(step.Grant!);
         if (FactoryReservationRecords.Hash(body) != step.BodySha256) throw Unknown("ApprovedNativeRequestBodyChanged");
@@ -55,7 +56,8 @@ internal sealed partial class FactoryPreviewPreparationService
         var resources = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
         foreach (var target in step.ResourceTargets)
             resources.Add(target, await ReadNativeAsync(arm, target, TargetApi(target), token));
-        ValidateWorkloads(plan, resources, endpoint);
+        if (validateWorkloads is not null) validateWorkloads(resources, endpoint);
+        else ValidateWorkloads(plan, resources, endpoint);
         var operations = Complete(await ReadNativeAsync(arm, step.Target + "/operations", step.ApiVersion, token));
         ValidateOperationSet(step, operations);
         var receipts = new List<PreviewPreparationReceipt>();
@@ -82,7 +84,8 @@ internal sealed partial class FactoryPreviewPreparationService
         }
     }
 
-    private async Task VerifyConfirmedAsync(Journal journal, CancellationToken token)
+    private async Task VerifyConfirmedAsync(Journal journal, CancellationToken token,
+        Action<IReadOnlyDictionary<string, JsonElement>, string>? validateWorkloads = null)
     {
         var plan = journal.Plan;
         var arm = new FactoryPreparationArm(azure, http, plan.Manifest.Identity);
@@ -117,7 +120,8 @@ internal sealed partial class FactoryPreviewPreparationService
                 var observed = OperationReceipt(step, operation, resource, receipt.CorrelationId!, effect.IntendedAt);
                 if (observed != receipt with { Endpoint = null }) throw Failure("ConfirmedNativeResourceOrCreationReceiptChanged");
             }
-            ValidateWorkloads(plan, resources, effect.CouncilEndpoint!);
+            if (validateWorkloads is not null) validateWorkloads(resources, effect.CouncilEndpoint!);
+            else ValidateWorkloads(plan, resources, effect.CouncilEndpoint!);
         }
     }
 

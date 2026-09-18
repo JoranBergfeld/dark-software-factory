@@ -35,7 +35,8 @@ internal static partial class RuntimeWorkflow
     }
 
     internal static async Task<PreviewExecutionResult> ExecutePreviewAsync(FactoryHostSettings settings, RuntimeDependencies dependencies,
-        PreviewCapabilityRequest request, HttpClient http, CancellationToken cancellationToken, PreviewWorkAdmission? admission = null)
+        PreviewCapabilityRequest request, HttpClient http, CancellationToken cancellationToken, PreviewWorkAdmission? admission = null,
+        FactoryLiveExecution? live = null)
     {
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(FactoryPreviewExecution.Policy.RequestSeconds), dependencies.PreviewClock);
         using var pending = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline.Token);
@@ -44,12 +45,13 @@ internal static partial class RuntimeWorkflow
         var authority = await new AzureFactoryPreviewCapability(settings, PreviewHostKind.Council, credential, http, dependencies.PreviewClock).CheckAsync(request, token);
         if (authority.Capability.Configuration.Execution is null)
             throw new PreviewCapabilityException(FactoryCharterState.Blocked, "ApprovedPreviewExecutionSeedRequired");
-        var store = new PreviewExecutionStore(authority, credential, http, dependencies.PreviewClock);
+        if (live is not null) await live.RequireCurrentAsync(token);
+        var store = new PreviewExecutionStore(authority, credential, http, dependencies.PreviewClock, live);
         var run = await store.ReadAsync(token);
         if (store.Document.Admission is not null) store.RequireWorker(admission);
         if (run is not null && store.Document.PendingRun is null && (store.Document.Phase == PreviewExecutionPhase.Failed
             || store.Document.Phase == PreviewExecutionPhase.Evaluated && store.Document.Proof is not null))
-            return await InspectPreviewAsync(settings, dependencies, request, http, token, admission);
+            return await InspectPreviewAsync(settings, dependencies, request, http, token, admission, live);
         var acquired = await AcquirePreviewInputsAsync(settings, dependencies, store.Document.Inputs?.Request ?? request, http, token);
         if (acquired.Snapshot.CapabilityRevision != authority.Revision)
             throw new PreviewCapabilityException(FactoryCharterState.Blocked, "PreviewCapabilityChangedBeforeExecution");
@@ -90,20 +92,22 @@ internal static partial class RuntimeWorkflow
             var final = await AcquirePreviewInputsAsync(settings, dependencies, inputs.Request, http, token);
             ValidateCapturedInputs(inputs, final.Snapshot, dependencies.PreviewClock.GetUtcNow());
             await store.ProveAsync(final.Snapshot, candidates, token);
-            return await InspectPreviewAsync(settings, dependencies, request, http, token, admission);
+            return await InspectPreviewAsync(settings, dependencies, request, http, token, admission, live);
         }
         return Report(store, run) with { Reason = "EvaluationIncompleteOrFailed" };
     }
 
     internal static async Task<PreviewExecutionResult> InspectPreviewAsync(FactoryHostSettings settings, RuntimeDependencies dependencies,
-        PreviewCapabilityRequest request, HttpClient http, CancellationToken cancellationToken, PreviewWorkAdmission? admission = null)
+        PreviewCapabilityRequest request, HttpClient http, CancellationToken cancellationToken, PreviewWorkAdmission? admission = null,
+        FactoryLiveExecution? live = null)
     {
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(FactoryPreviewInputValidation.Policy.RequestSeconds), dependencies.PreviewClock);
         using var pending = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline.Token);
         var token = pending.Token;
         var credential = dependencies.PreviewCredential ?? new ManagedIdentityCredential(ManagedIdentityId.FromUserAssignedClientId(settings.ManagedIdentityClientId));
         var authority = await new AzureFactoryPreviewCapability(settings, PreviewHostKind.Council, credential, http, dependencies.PreviewClock).CheckAsync(request, token);
-        var store = new PreviewExecutionStore(authority, credential, http, dependencies.PreviewClock);
+        if (live is not null) await live.RequireCurrentAsync(token);
+        var store = new PreviewExecutionStore(authority, credential, http, dependencies.PreviewClock, live);
         var run = await store.ReadAsync(token) ?? throw new PreviewCapabilityException(FactoryCharterState.Blocked, "PreviewEvaluationNotStarted");
         var report = Report(store, run);
         if (admission is not null) store.RequireWorker(admission);
@@ -122,7 +126,7 @@ internal static partial class RuntimeWorkflow
             var candidates = OnboardingReadiness.ValidateComplete(run, PreviewServices(report.Inputs, run, current.Models, store), report.Dispatches);
             if (FactoryModelsValidation.Hash(candidates) != FactoryModelsValidation.Hash(proof.Candidates))
                 throw new PreviewCapabilityException(FactoryCharterState.Unknown, "DurableCandidateProofChanged");
-            var finalStore = new PreviewExecutionStore(authority, credential, http, dependencies.PreviewClock);
+            var finalStore = new PreviewExecutionStore(authority, credential, http, dependencies.PreviewClock, live);
             _ = await finalStore.ReadAsync(token);
             if (finalStore.Revision != store.Revision)
                 throw new PreviewCapabilityException(FactoryCharterState.Unknown, "DurablePreviewStateChangedDuringInspection");
@@ -133,6 +137,7 @@ internal static partial class RuntimeWorkflow
             foreach (var selected in current.Snapshot.Supplemental.Sources)
                 FactoryPreviewSupplementalValidation.ValidateEvidence(selected.Authority, selected.Evidence, now);
             token.ThrowIfCancellationRequested();
+            if (live is not null) await live.RequireCurrentAsync(token);
             return report with { Readiness = PreviewReadiness.ReadyAwaitingActivation };
         }
         catch (PreviewCapabilityException exception)

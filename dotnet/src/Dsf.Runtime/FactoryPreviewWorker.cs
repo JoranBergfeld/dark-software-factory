@@ -11,7 +11,8 @@ namespace Dsf.Runtime;
 internal sealed class FactoryPreviewWorker(FactoryHostSettings settings, RuntimeDependencies dependencies, HttpClient http,
     ILogger<FactoryPreviewWorker> logger) : BackgroundService
 {
-    private sealed record Work(PreviewCapabilitySnapshot Authority, PreviewCapabilityRequest Request, PreviewWorkAdmission? Admission, bool Inputs);
+    private sealed record Work(PreviewCapabilitySnapshot Authority, PreviewCapabilityRequest Request, PreviewWorkAdmission? Admission, bool Inputs,
+        FactoryLiveExecution? Live);
     private sealed record Completion(PreviewHttpObservation Observation, bool Inputs, string AuthorityRevision, string? ExecutionRevision, DateTimeOffset ExpiresAt);
     private readonly Guid workerId = Guid.NewGuid();
     private readonly SemaphoreSlim gate = new(1, 1);
@@ -24,7 +25,7 @@ internal sealed class FactoryPreviewWorker(FactoryHostSettings settings, Runtime
     private static readonly JsonSerializerOptions Json = new(FactoryGitHubJson.Options) { IgnoreReadOnlyProperties = false };
 
     internal async Task<PreviewHttpObservation> ObserveAsync(PreviewCapabilitySnapshot authority, PreviewCapabilityRequest request,
-        bool execute, bool inputs, CancellationToken token)
+        bool execute, bool inputs, CancellationToken token, FactoryLiveExecution? live = null)
     {
         if (!await gate.WaitAsync(0, token))
             return Observation(authority, request, PreviewReadiness.Checking, "BoundedPreviewAdmissionBusy");
@@ -35,7 +36,8 @@ internal sealed class FactoryPreviewWorker(FactoryHostSettings settings, Runtime
             var unconfirmedAdmission = false;
             if (!inputs)
             {
-                store = Store(authority);
+                store = Store(authority, live);
+                if (live is not null && execute) await store.PrepareLiveAsync(token);
                 await store.ReadDocumentAsync(token);
                 if (store.Document.Admission is { State: PreviewWorkState.Queued or PreviewWorkState.Running } admission)
                     return Observation(authority, request, active?.Admission?.Id == admission.Id && admission.WorkerId == workerId
@@ -60,6 +62,7 @@ internal sealed class FactoryPreviewWorker(FactoryHostSettings settings, Runtime
                 return Observation(authority, request, PreviewReadiness.Unknown, "PreviewGovernanceChangedDuringObservation");
             if (completed is { } cached && cached.Inputs == inputs && cached.AuthorityRevision == authority.Revision
                 && cached.Observation is { } previous
+                && (live is null || previous.RequestId == request.RequestId)
                 && previous.FactoryId == authority.Manifest.Identity.FactoryId && previous.OperationId == request.OperationId
                 && previous.ApprovalFingerprint == request.ApprovalFingerprint)
             {
@@ -79,11 +82,13 @@ internal sealed class FactoryPreviewWorker(FactoryHostSettings settings, Runtime
             if (execute && store is not null && store.Document.Proof is null
                 && store.Document.Phase != PreviewExecutionPhase.Failed)
             {
+                if (live is not null) await live.RequireCurrentAsync(token);
                 await RuntimeWorkflow.RequireCurrentPreviewAdmissionAsync(settings, authority, request, credential,
                     http, dependencies.PreviewClock, token);
                 var admission = await store.AdmitAsync(workerId, request, token);
                 try
                 {
+                    if (live is not null) await live.RequireCurrentAsync(token);
                     await RuntimeWorkflow.RequireCurrentPreviewAdmissionAsync(settings, authority, request, credential,
                         http, dependencies.PreviewClock, token);
                 }
@@ -94,11 +99,11 @@ internal sealed class FactoryPreviewWorker(FactoryHostSettings settings, Runtime
                     return Observation(authority, request, PreviewReadiness.Unknown, "PreviewAdmissionAuthorityUnconfirmedNoDispatch");
                 }
                 // The CAS and governance reads are not a cross-store transaction. Later stop requests may drain admitted work.
-                active = new(authority, admission.Request, admission, false);
+                active = new(authority, admission.Request, admission, false, live);
                 if (!queue.Writer.TryWrite(active)) throw new InvalidOperationException("Bounded preview worker unavailable.");
                 return Observation(authority, request, PreviewReadiness.Queued, "DurablyAdmittedAwaitingOriginalWorker");
             }
-            active = new(authority, request, null, inputs);
+            active = new(authority, request, null, inputs, live);
             if (!queue.Writer.TryWrite(active)) throw new InvalidOperationException("Bounded preview reader unavailable.");
             return Observation(authority, request, PreviewReadiness.Checking, "ReadOnlyCurrentInspectionPending");
         }
@@ -140,9 +145,10 @@ internal sealed class FactoryPreviewWorker(FactoryHostSettings settings, Runtime
         {
             if (work.Admission is not null)
             {
+                if (work.Live is not null) await work.Live.RequireCurrentAsync(token);
                 await RuntimeWorkflow.RequireCurrentPreviewAdmissionAsync(settings, work.Authority, work.Request, credential,
                     http, dependencies.PreviewClock, token);
-                var store = Store(work.Authority);
+                var store = Store(work.Authority, work.Live);
                 await store.ReadDocumentAsync(token);
                 await store.BeginWorkAsync(work.Admission, token);
                 began = true;
@@ -157,8 +163,8 @@ internal sealed class FactoryPreviewWorker(FactoryHostSettings settings, Runtime
             else
             {
                 var report = work.Admission is null
-                    ? await RuntimeWorkflow.InspectPreviewAsync(settings, dependencies, work.Request, http, token)
-                    : await RuntimeWorkflow.ExecutePreviewAsync(settings, dependencies, work.Request, http, token, work.Admission);
+                    ? await RuntimeWorkflow.InspectPreviewAsync(settings, dependencies, work.Request, http, token, live: work.Live)
+                    : await RuntimeWorkflow.ExecutePreviewAsync(settings, dependencies, work.Request, http, token, work.Admission, work.Live);
                 evidenceExpires = EvidenceExpires(report.Inputs);
                 executionRevision = report.ExecutionRevision;
                 outcome = Observation(work.Authority, work.Request, report.Readiness, report.Reason, JsonSerializer.SerializeToElement(report, Json));
@@ -186,7 +192,7 @@ internal sealed class FactoryPreviewWorker(FactoryHostSettings settings, Runtime
             using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(30), dependencies.PreviewClock);
             try
             {
-                var store = Store(work.Authority);
+                var store = Store(work.Authority, work.Live);
                 await store.ReadDocumentAsync(cleanup.Token);
                 var release = await store.EndWorkAsync(work.Admission, outcome.Readiness, outcome.Reason, executionRevision, began, token, cleanup.Token);
                 if (release.Readiness != outcome.Readiness || release.Reason != outcome.Reason)
@@ -195,19 +201,21 @@ internal sealed class FactoryPreviewWorker(FactoryHostSettings settings, Runtime
             }
             catch (Exception exception) when (Unconfirmed(exception) || exception is PreviewCapabilityException)
             {
-                logger.LogWarning("Original preview worker release could not be confirmed; operation {OperationId} must not be replayed.", work.Request.OperationId);
+                logger.LogWarning("Original council worker release could not be confirmed; operation {OperationId} must not be replayed.",
+                    work.Live?.Scope.OperationId ?? work.Request.OperationId);
                 outcome = Observation(work.Authority, work.Request, PreviewReadiness.Unknown, "PreviewWorkerReleaseUnconfirmedNoTakeover");
                 using var quarantine = new CancellationTokenSource(TimeSpan.FromSeconds(30), dependencies.PreviewClock);
                 try
                 {
-                    var current = Store(work.Authority);
+                    var current = Store(work.Authority, work.Live);
                     await current.ReadDocumentAsync(quarantine.Token);
                     await current.QuarantineWorkAsync(work.Admission, outcome.Reason!, quarantine.Token);
                     executionRevision = current.Revision;
                 }
                 catch (Exception failure) when (Unconfirmed(failure) || failure is PreviewCapabilityException)
                 {
-                    logger.LogWarning("Native preview quarantine could not be confirmed; operation {OperationId} requires its original authority.", work.Request.OperationId);
+                    logger.LogWarning("Native council quarantine could not be confirmed; operation {OperationId} requires its original authority.",
+                        work.Live?.Scope.OperationId ?? work.Request.OperationId);
                 }
             }
         }
@@ -216,7 +224,8 @@ internal sealed class FactoryPreviewWorker(FactoryHostSettings settings, Runtime
             evidenceExpires is { } until && outcome.Readiness == PreviewReadiness.ReadyAwaitingActivation && until < expires ? until : expires);
     }
 
-    private PreviewExecutionStore Store(PreviewCapabilitySnapshot authority) => new(authority, credential, http, dependencies.PreviewClock);
+    private PreviewExecutionStore Store(PreviewCapabilitySnapshot authority, FactoryLiveExecution? live = null) =>
+        new(authority, credential, http, dependencies.PreviewClock, live);
     private PreviewHttpObservation Observation(PreviewCapabilitySnapshot authority, PreviewCapabilityRequest request,
         PreviewReadiness readiness, string? reason, JsonElement? evaluation = null) =>
         new(2, authority.Manifest.Identity.FactoryId, request.OperationId, request.RequestId, request.ApprovalFingerprint,

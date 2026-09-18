@@ -74,6 +74,7 @@ internal sealed partial class PreviewPreparationTransport(CharterScenario scenar
         {
             var body = JsonNode.Parse(await request.Content!.ReadAsStringAsync(token))!;
             if (path.Contains("/deployments/preview-", StringComparison.Ordinal)
+                || path.Contains("/deployments/live-", StringComparison.Ordinal)
                 || (string?)body["properties"]?["roleDefinitionId"] is CouncilRole or TelemetryRole or WebRole or FoundryRole)
                 return await CreatePreviewAsync(request, body, token);
             if (supplementalNative is not null && (string?)body["properties"]?["roleDefinitionId"] is { } role
