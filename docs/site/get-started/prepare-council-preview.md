@@ -437,8 +437,90 @@ unknown, never silently truncated or successful.
 
 This command persists bounded preview/provenance and readonly intended
 publication. [Retention/export](retain-audit-evidence.md) is a separate
-operator command. Activation/live publication and uncertain-effect recovery
-remain unavailable; no command here grants their authority.
+operator command. Final activation/live publication and uncertain-effect
+recovery remain unavailable; the following command retains approval only.
+
+## Review operator activation authority
+
+This release supports **approval only**, not active onboarding or live filing.
+The operator must have the original governance authority, current predecessor
+access, private source-progress read access and native Cosmos point-read access
+to `council-preview` and `runs`. It does not grant permissions, borrow a runtime
+identity, redeploy hosts or use operator credentials to file issues.
+
+Choose one nonempty activation operation GUID, distinct from the preview
+operation. Obtain a complete read-only review:
+
+```bash
+dsf onboard decide activate --operation ACTIVATION_OPERATION_GUID \
+  --owner-appconfig-endpoint https://OWNER.azconfig.io \
+  --product PRODUCT --tenant TENANT_GUID --subscription SUBSCRIPTION_GUID --json
+```
+
+Review `review`, `approvalFingerprint` and the entire `evaluation`: charter,
+boundary, analysis/unknowns, source/query/freshness, models/judgment, complete
+native council result and intended proposal body. `evaluation.run` is the
+hash-verified native stored run, not an independently rendered runtime copy.
+The fingerprint pins native authority revisions, factory/repository, original
+preview/run identities and hashes, exact protected references, operation and
+effective Azure actor. Observation nonces, observation times and new telemetry
+rows do not silently replace the original evaluated inputs.
+
+All fully evaluated GO, SPLIT and NO-GO results can authorize approval.
+Incomplete, failed, unreadable or stale evaluations cannot. Only unanimous GO
+could qualify for later proposal publication.
+
+Repeat the exact command with `--approve APPROVAL_FINGERPRINT`. Approval:
+
+1. Rechecks current readiness through authenticated, read-only `/evaluation`,
+   existing native preparation checks and the complete retained audit graph.
+2. Protects the exact analysis before adding references.
+3. Creates `dsf/factory/audit/activation/current` with `If-None-Match: *`,
+   followed by immutable `{operation:N}/review` and `/approval` records.
+4. Rechecks current readiness and pause around writes, then conditionally
+   transitions the original coordinator with its native ETag.
+5. Rechecks native history and current authority before reporting any
+   currently valid approval.
+
+These are separate native conditional writes, **not** a cross-key or
+cross-store transaction. Approval receipts bind actor, approval time and the
+new readiness observation time. Runtime analysis cannot write these records.
+Duplicate contenders cannot overwrite the winner. Changed authority, stale
+fingerprints, deliberate pause and conflicting/native-unknown transitions
+withhold current approval. Lost acknowledgments, cancellation and missing
+history never authorize replay, takeover, reset or rollback.
+
+In this inactive profile the final result is `ApprovalOnly`, exit **1**:
+`approvalRetained` and `approvalCurrent` may be true, but `isActivated`,
+`historicallyCompleted` and `firstConfirmedFiling` remain false.
+`promotionBlockedBy` names the missing live onboarding workflow and create-once
+proposal-publication capability. No active manifest, new grant, issue or
+repository mutation is produced. A separately reviewed supported live rollout
+and actual promotion must precede activation; retained approval cannot enable
+a future capability silently.
+
+Read retained approval without writes:
+
+```bash
+dsf onboard decide activate --status \
+  --owner-appconfig-endpoint https://OWNER.azconfig.io \
+  --product PRODUCT --tenant TENANT_GUID --subscription SUBSCRIPTION_GUID --json
+```
+
+Successful review and valid `--status` inspection exit `0`. `Blocked`, `Failed`,
+`Partial` and `Unknown` exit `1`; known pre-dispatch cancellation exits `130`.
+Transient unreadiness withholds `currentReady`/`approvalCurrent` without
+erasing the retained receipt. Unchanged recovery can restore current readiness,
+not activation. Deliberate pause cannot be cleared by any activation request.
+Interrupted admission remains inspectable and is never automatically replayed.
+The original operation cannot be replaced by choosing another GUID.
+
+All four locators and an operation are explicit for review/approval.
+`--status` is mutually exclusive with `--operation` and `--approve`.
+Redirected input and `--json` never prompt. Interactive use may prompt for
+missing locators/operation, but approval is never inferred or prompted.
+Review/status use current read/query checks, not new model inference.
+Readiness remains point-in-time, not a lease or remote fence.
 
 ## Deliberately pause council admission
 

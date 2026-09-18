@@ -35,7 +35,13 @@ Use `--page N` with the same four locators for the next page indicated by
 The graph includes the reviewed application boundary, source inventory and
 exclusions, analysis and its model receipts, charter publication/adoption
 history, deliberate stop requests and their reviewed profile/plan references,
-and retained native preview/run records. A pause root without its audit copy
+operator activation reviews/approval receipts, and retained native preview/run
+records. Activation coordinators link to their immutable reviews/receipts;
+reviews link to exact native preview/run identities, profile, boundary chunks,
+adoption receipt and complete analysis steps, including source/model dependencies.
+These edges protect real references, not merely root record names. Approval-only
+history cannot certify current readiness, active onboarding or completion.
+A pause root without its audit copy
 is partial; surviving stop history without its coordinator cannot certify
 reference closure. Neither case reopens admission. Missing targets, changed
 checksums, incomplete acquisition, uncertain expiry, or unreadable native

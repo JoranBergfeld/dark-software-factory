@@ -240,7 +240,7 @@ public sealed class FactoryAuditTests
         Assert.Null(missing.Result["receipt"]);
     }
 
-    private sealed class PreviewAuditTransport(PreviewPreparationTransport transport) : HttpMessageHandler
+    internal sealed class PreviewAuditTransport(PreviewPreparationTransport transport) : HttpMessageHandler
     {
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
         {

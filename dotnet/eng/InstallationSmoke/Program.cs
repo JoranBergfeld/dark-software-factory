@@ -180,6 +180,20 @@ try
     }
     Require(File.ReadAllText(Path.Combine(scratch.FullName, "azure.log")).Length == 0, "Incomplete pause reached Azure.");
 
+    var activationHelp = await Run("onboard", "decide", "activate", "--help");
+    Require(activationHelp.ExitCode == 0 && new[] { "--operation", "--approve", "--status", "--owner-appconfig-endpoint" }
+        .All(option => activationHelp.Output.Contains(option, StringComparison.Ordinal)), "Installed operator activation review grammar is incomplete.");
+    foreach (var action in new[] { Array.Empty<string>(), new[] { "--status" },
+        new[] { "--operation", Guid.Empty.ToString() }, new[] { "--approve", "true" } })
+    {
+        var incompleteActivation = await Run(["onboard", "decide", "activate", .. action, "--json"]);
+        Require(incompleteActivation.ExitCode == 1 && incompleteActivation.Output.Contains("\"state\": \"Blocked\"", StringComparison.Ordinal)
+            && incompleteActivation.Output.Contains("\"isActivated\": false", StringComparison.Ordinal)
+            && incompleteActivation.Output.Contains("\"historicallyCompleted\": false", StringComparison.Ordinal),
+            "Installed activation accepted incomplete inputs or confused approval with completion.");
+    }
+    Require(File.ReadAllText(Path.Combine(scratch.FullName, "azure.log")).Length == 0, "Incomplete activation reached Azure.");
+
     var inferHelp = await Run("onboard", "decide", "infer", "--help");
     Require(inferHelp.ExitCode == 0 && inferHelp.Output.Contains("--new-analysis", StringComparison.Ordinal)
         && inferHelp.Output.Contains("--status-only", StringComparison.Ordinal), "Installed charter inference grammar is unavailable.");

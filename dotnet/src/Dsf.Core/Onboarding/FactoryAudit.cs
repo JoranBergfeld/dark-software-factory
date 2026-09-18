@@ -314,6 +314,32 @@ public static class FactoryAudit
                     && r.Identity.NativeRevision == run.GetProperty("eTag").GetString()));
             }
         }
+        var activationValues = values.Where(p => p.Key.StartsWith(FactoryActivation.Prefix, StringComparison.Ordinal)).ToDictionary();
+        if (activationValues.Count != 0)
+        {
+            var activation = FactoryActivation.Read(activationValues, factory, now);
+            var root = Require(AuditStoreKind.Governance, FactoryActivation.RootKey);
+            if (activation.Review is not { } review)
+                throw new FactoryAuditException(FactoryAuditState.Partial, "Approval admission has no confirmed review closure; retain original operation.");
+            var reviewed = Require(AuditStoreKind.Governance, FactoryActivation.ReviewKey(activation.Operation.OperationId));
+            Link(root, reviewed);
+            var targets = new List<FactoryAuditRecord>();
+            foreach (var reference in review.References)
+            {
+                var target = Require(reference.Store, reference.Key);
+                if (reference != target.Identity) throw new JsonException("Original activation evidence revision missing or changed.");
+                Link(reviewed, target);
+                targets.Add(target);
+            }
+            FactoryActivation.RequireEvidence(review, targets);
+            ProtectAnalysis(reviewed, review.AnalysisRevision);
+            if (activation.Approval is not null)
+            {
+                var receipt = Require(AuditStoreKind.Governance, FactoryActivation.ApprovalKey(activation.Operation.OperationId));
+                Link(root, receipt);
+                Link(receipt, reviewed);
+            }
+        }
         var protectedIds = new HashSet<AuditRecordIdentity>();
         var pending = new Queue<AuditRecordIdentity>(roots);
         while (pending.TryDequeue(out var id))

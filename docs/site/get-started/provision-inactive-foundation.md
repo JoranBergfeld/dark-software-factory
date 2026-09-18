@@ -177,6 +177,12 @@ record, configured pin or reserved endpoint hint forbids this legacy fallback;
 onboarding never seeds the legacy registration as an escape path. Existing
 registered greenfield factories retain their manual filing gates and behavior.
 
+The separate [operator activation review](prepare-council-preview.md#review-operator-activation-authority)
+can retain an exact, currently ready approval. This inactive release still
+rejects final promotion: approval does not change the manifest/profile,
+complete onboarding or enable runtime work. Deliberate pause remains closed.
+No new governance-write or repository-mutation grant is given to runtime.
+
 The source host rechecks admission on every gather; periodic ticks and resumed
 runs use the same gate. Legacy `dsf-runtime sweep pause|resume|interval|status` also require
 admission before accessing their control store. For inactive foundation status,
