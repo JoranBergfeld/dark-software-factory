@@ -8,6 +8,31 @@ namespace Dsf.Cli.Tests;
 
 public sealed class FactoryPromotionTests(PromotableFactoryFixture fixture) : IClassFixture<PromotableFactoryFixture>
 {
+    [Fact]
+    public async Task Aged_original_preview_cannot_authorize_first_final_promotion_despite_fresh_current_telemetry()
+    {
+        var transport = await RolloutAsync();
+        var now = transport.Scenario.Source.Source!.Clock.Now;
+        try
+        {
+            var original = transport.SeedDocuments.Single(p => p.Key.Contains("/council-preview/docs/preview-", StringComparison.Ordinal));
+            var evaluation = JsonNode.Parse(original.Value)!;
+            transport.Scenario.Source.Source.Clock.Now = ((DateTimeOffset)evaluation["inputs"]!["telemetry"]!["capture"]!["rows"]![0]!["reference"]!["recordTime"]!)
+                .AddSeconds((int)evaluation["inputs"]!["telemetryConfiguration"]!["freshnessSeconds"]!).AddMinutes(2);
+            Assert.True((DateTimeOffset)JsonNode.Parse(transport.Values()[Dsf.Core.Runtime.ProductConfigurationKeys.FactoryModels])!["verifiedUntil"]!
+                > transport.Scenario.Source.Source.Clock.Now);
+            var review = await transport.Scenario.Machine.InvokeAsync("activate", "--promote", "--operation", Guid.NewGuid().ToString());
+            Assert.Equal(1, review.Exit);
+            Assert.False((bool)review.Result["currentReady"]!);
+            Assert.False((bool)review.Result["isActivated"]!);
+            Assert.False((bool)review.Result["historicallyCompleted"]!);
+            Assert.False(transport.Values().ContainsKey(FactoryPromotion.RootKey));
+            Assert.Equal(original.Value, transport.SeedDocuments[original.Key]);
+            Assert.Equal(0, transport.IssuePosts);
+        }
+        finally { transport.Restart(now); }
+    }
+
     [Theory]
     [InlineData("intent")]
     [InlineData("pending")]
@@ -233,7 +258,7 @@ public sealed class PromotableFactoryFixture : IAsyncLifetime
     private readonly PublisherFixture publisher = new();
     public async Task InitializeAsync()
     {
-        await publisher.InitializeAsync();
+        await publisher.InitializeAsync(TimeSpan.FromHours(24) - TimeSpan.FromMinutes(5));
         var transport = publisher.Reset();
         var selection = FactoryPublisherTests.Selection().ToJsonString();
         var review = await transport.Scenario.Machine.InvokeAsync("live", "--publication", "--selection", selection);

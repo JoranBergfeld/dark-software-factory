@@ -12,6 +12,148 @@ namespace Dsf.Cli.Tests;
 
 public sealed class FactoryActiveWorkflowTests(ActivatedFactoryFixture fixture) : IClassFixture<ActivatedFactoryFixture>
 {
+    [Fact]
+    public async Task Fresh_current_telemetry_restores_promoted_admission_after_original_preview_ages_without_reapproval()
+    {
+        var transport = fixture.Reset();
+        var machine = transport.Scenario.Machine;
+        var originalAuthority = transport.Values();
+        var originalPreview = transport.SeedDocuments.Where(p => p.Key.Contains("/preview-", StringComparison.Ordinal)).ToDictionary();
+        var evaluation = JsonNode.Parse(originalPreview.Single(p => p.Key.Contains("/council-preview/", StringComparison.Ordinal)).Value)!;
+        var recordTime = (DateTimeOffset)evaluation["inputs"]!["telemetry"]!["capture"]!["rows"]![0]!["reference"]!["recordTime"]!;
+        var freshness = (int)evaluation["inputs"]!["telemetryConfiguration"]!["freshnessSeconds"]!;
+        transport.Scenario.Source.Source!.Clock.Now = recordTime.AddSeconds(freshness).AddMinutes(2);
+        Assert.True((DateTimeOffset)JsonNode.Parse(transport.Values()[ProductConfigurationKeys.FactoryModels])!["verifiedUntil"]!
+            > transport.Scenario.Source.Source.Clock.Now);
+        var inspected = await fixture.AdvanceUntilCompletedAsync(transport,
+            machine.InvokeAsync("preview", ["--evaluation", .. PreviewEvaluationTests.Pins(transport)]));
+        Assert.Equal("Blocked", (string?)inspected.Result["readiness"]);
+        Assert.Equal("CapturedApplicationEvidenceStale", (string?)inspected.Result["reason"]);
+
+        var recovered = await machine.InvokeAsync("activate", "--status");
+        Assert.True(recovered.Exit == 0, recovered.Terminal.Output + "\n" + string.Join("\n", transport.HostFailures));
+        Assert.True((bool)recovered.Result["currentReady"]!);
+        Assert.True((bool)recovered.Result["isActivated"]!);
+        Assert.True((bool)recovered.Result["historicallyCompleted"]!);
+        var request = new FactoryDecisionRequest(Guid.NewGuid(), true);
+        var decision = await fixture.DecideAsync(transport, request);
+        Assert.Equal("ReadyAwaitingActivation", (string?)decision["readiness"]);
+        Assert.True((DateTimeOffset)decision["evaluation"]!["inputs"]!["capturedAt"]! > recordTime.AddSeconds(freshness));
+
+        using var http = new HttpClient(transport, false) { Timeout = Timeout.InfiniteTimeSpan };
+        var calls = transport.EvaluationInference.Count;
+        var documents = transport.SeedDocuments.Count;
+        foreach (var failure in new[] { "missing", "stale", "denied" })
+        {
+            transport.ApplicationQueryStatus = failure == "denied" ? HttpStatusCode.Forbidden : HttpStatusCode.OK;
+            transport.AlterApplication = body =>
+            {
+                if (failure == "missing") body["tables"]![0]!["rows"] = new JsonArray();
+                if (failure == "stale") body["tables"]![0]!["rows"]![0]![0] = recordTime.ToString("O");
+                return body;
+            };
+            var unavailable = await machine.InvokeAsync("activate", "--status");
+            Assert.False((bool)unavailable.Result["currentReady"]!);
+            Assert.False((bool)unavailable.Result["isActivated"]!);
+            Assert.True((bool)unavailable.Result["historicallyCompleted"]!);
+            using var denied = await http.PostAsJsonAsync(fixture.LiveEndpoint(transport) + "/decide",
+                new FactoryDecisionRequest(Guid.NewGuid()), FactorySourceValidation.RecordJson);
+            Assert.Equal(HttpStatusCode.Forbidden, denied.StatusCode);
+            Assert.Equal(calls, transport.EvaluationInference.Count);
+            Assert.Equal(documents, transport.SeedDocuments.Count);
+            transport.ApplicationQueryStatus = HttpStatusCode.OK;
+            transport.AlterApplication = null;
+        }
+        recovered = await machine.InvokeAsync("activate", "--status");
+        Assert.True(recovered.Exit == 0, recovered.Terminal.Output);
+        Assert.True((bool)recovered.Result["isActivated"]!);
+        inspected = await fixture.AdvanceUntilCompletedAsync(transport,
+            machine.InvokeAsync("preview", ["--evaluation", .. PreviewEvaluationTests.Pins(transport)]));
+        Assert.Equal("Blocked", (string?)inspected.Result["readiness"]);
+        Assert.Equal("CapturedApplicationEvidenceStale", (string?)inspected.Result["reason"]);
+        Assert.Equal(originalAuthority, transport.Values());
+        foreach (var pair in originalPreview) Assert.Equal(pair.Value, transport.SeedDocuments[pair.Key]);
+
+        var pause = await machine.InvokeAsync("pause", "--request", "--operation", Guid.NewGuid().ToString());
+        Assert.Equal("DrainingUnknown", (string?)pause.Result["state"]);
+        var paused = await machine.InvokeAsync("activate", "--status");
+        Assert.False((bool)paused.Result["isActivated"]!);
+        Assert.True((bool)paused.Result["historicallyCompleted"]!);
+        using var closed = await http.PostAsJsonAsync(fixture.LiveEndpoint(transport) + "/decide",
+            new FactoryDecisionRequest(Guid.NewGuid()), FactorySourceValidation.RecordJson);
+        Assert.Equal(HttpStatusCode.Forbidden, closed.StatusCode);
+        Assert.Equal(calls, transport.EvaluationInference.Count);
+        Assert.Equal(0, transport.IssuePosts);
+    }
+
+    [Fact]
+    public async Task Expired_current_model_proof_still_blocks_promoted_admission_despite_fresh_telemetry()
+    {
+        var transport = fixture.Reset();
+        var models = JsonNode.Parse(transport.Values()[ProductConfigurationKeys.FactoryModels])!;
+        transport.Scenario.Source.Source!.Clock.Now = ((DateTimeOffset)models["verifiedUntil"]!).AddMinutes(2);
+        var current = await transport.Scenario.Machine.InvokeAsync("activate", "--status");
+        Assert.False((bool)current.Result["currentReady"]!);
+        Assert.False((bool)current.Result["isActivated"]!);
+        Assert.True((bool)current.Result["historicallyCompleted"]!);
+        using var http = new HttpClient(transport, false) { Timeout = Timeout.InfiniteTimeSpan };
+        var calls = transport.EvaluationInference.Count;
+        using var denied = await http.PostAsJsonAsync(fixture.LiveEndpoint(transport) + "/decide",
+            new FactoryDecisionRequest(Guid.NewGuid()), FactorySourceValidation.RecordJson);
+        Assert.Equal(HttpStatusCode.Forbidden, denied.StatusCode);
+        Assert.Equal(calls, transport.EvaluationInference.Count);
+        Assert.Equal(0, transport.IssuePosts);
+    }
+
+    [Fact]
+    public async Task Native_authority_denied_after_publication_claim_records_no_dispatch_and_retries_original_intent_once()
+    {
+        var transport = fixture.Reset();
+        var request = new FactoryDecisionRequest(Guid.NewGuid());
+        var denied = false;
+        var returned = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        transport.AfterEvaluationWrite = body =>
+        {
+            if ((string?)body["state"] != "Dispatched") return;
+            denied = true;
+            transport.DenyNativeReads = true;
+        };
+        transport.AfterIngressResponse = (path, _) =>
+        {
+            if (path == "/publish")
+            {
+                transport.DenyNativeReads = false;
+                returned.TrySetResult();
+            }
+            return Task.CompletedTask;
+        };
+        using var http = new HttpClient(transport, false) { Timeout = Timeout.InfiniteTimeSpan };
+        using var admitted = await http.PostAsJsonAsync(fixture.LiveEndpoint(transport) + "/decide", request, FactorySourceValidation.RecordJson);
+        Assert.Equal(HttpStatusCode.Accepted, admitted.StatusCode);
+        await returned.Task.WaitAsync(TimeSpan.FromMinutes(3));
+        Assert.True(denied);
+        Assert.Equal(0, transport.IssuePosts);
+        var path = Assert.Single(transport.SeedDocuments.Keys, k => k.Contains("/proposal-publications/docs/proposal-", StringComparison.Ordinal)
+            && !k.EndsWith("-origin", StringComparison.Ordinal));
+        var original = JsonNode.Parse(transport.SeedDocuments[path])!;
+        Assert.Equal("NotDispatched", (string?)original["state"]);
+        Assert.Equal("NotDispatched", (string?)original["attempts"]![0]!["state"]);
+        var calls = transport.EvaluationInference.Count;
+        transport.AfterEvaluationWrite = null;
+        transport.AfterIngressResponse = null;
+        transport.Restart();
+        FactoryActivationTests.ConnectAudit(transport);
+        var retried = await fixture.DecideAsync(transport, request);
+        Assert.Equal("Confirmed", (string?)retried["evaluation"]!["publications"]![0]!["state"]);
+        var confirmed = JsonNode.Parse(transport.SeedDocuments[path])!;
+        Assert.Equal((string?)original["_rid"], (string?)confirmed["_rid"]);
+        Assert.Equal(original["intent"]!.ToJsonString(), confirmed["intent"]!.ToJsonString());
+        Assert.Equal(2, confirmed["attempts"]!.AsArray().Count);
+        Assert.Equal("NotDispatched", (string?)confirmed["attempts"]![0]!["state"]);
+        Assert.Equal(calls, transport.EvaluationInference.Count);
+        Assert.Equal(1, transport.IssuePosts);
+    }
+
     [Theory]
     [InlineData("split", "ReadyAwaitingActivation", "Escalate", 16)]
     [InlineData("no-go", "ReadyAwaitingActivation", "Kill", 16)]
@@ -403,9 +545,10 @@ public sealed class FactoryActiveWorkflowTests(ActivatedFactoryFixture fixture) 
 public sealed class ActivatedFactoryFixture : IAsyncLifetime
 {
     private readonly PublisherFixture publisher = new();
+    private DateTimeOffset snapshotAt;
     public async Task InitializeAsync()
     {
-        await publisher.InitializeAsync();
+        await publisher.InitializeAsync(TimeSpan.FromHours(24) - TimeSpan.FromMinutes(5));
         var transport = publisher.Reset();
         var machine = transport.Scenario.Machine;
         var selection = FactoryPublisherTests.Selection().ToJsonString();
@@ -419,14 +562,20 @@ public sealed class ActivatedFactoryFixture : IAsyncLifetime
         var activated = await machine.InvokeAsync("activate", "--promote", "--operation", operation, "--approve", (string)review.Result["approvalFingerprint"]!);
         Assert.True(activated.Exit == 0, activated.Terminal.Output);
         publisher.CaptureCurrent();
+        snapshotAt = transport.Scenario.Source.Source!.Clock.Now;
     }
     internal PreviewPreparationTransport Reset()
     {
-        var transport = publisher.Reset();
+        var transport = publisher.Reset(snapshotAt);
         transport.AlterCompletion = null;
         transport.BeforeEvaluationResponse = null;
         transport.EvaluationModelDelay = null;
         transport.IngressLimit = null;
+        transport.DenyNativeReads = false;
+        transport.ApplicationQueryStatus = HttpStatusCode.OK;
+        transport.AlterApplication = null;
+        transport.AfterEvaluationWrite = null;
+        transport.AfterIngressResponse = null;
         return transport;
     }
     internal string LiveEndpoint(PreviewPreparationTransport transport) =>

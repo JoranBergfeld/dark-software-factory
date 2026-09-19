@@ -71,6 +71,6 @@ internal sealed class FactoryGitHubProposalPublisher(TokenCredential credential,
             { NativeIdentity = journal.NativeIdentity };
     }
 
-    private static bool Unconfirmed(Exception e) => e is InvalidOperationException or JsonException or HttpRequestException
+    private static bool Unconfirmed(Exception e) => e is PreviewCapabilityException or InvalidOperationException or JsonException or HttpRequestException
         or OperationCanceledException or IOException or ArgumentException or KeyNotFoundException or Azure.RequestFailedException;
 }

@@ -701,6 +701,10 @@ human issue edits never cause replacement. Losing a create response remains
 unknown without search, ownership inference or another POST. A returned
 401/403/404/422 rejection, or an acknowledged `NotDispatched` pre-create
 failure, can retry the original payload after fresh checks.
+If current authority becomes unavailable after the native dispatch claim but
+before any issue POST, the acknowledged original writer records
+`NotDispatched`. Failure to confirm that closeout remains unknown. Once a POST
+is issued, an exception or cancellation cannot establish absence of effect.
 Incomplete witness/journal history blocks recreation.
 
 The issue token stays inside the GitHub authentication module. Its requested
@@ -764,6 +768,16 @@ completion and the first original confirmed issue receipt remain separate
 facts. A transient dependency failure or deliberate pause blocks current work
 without converting old approval into current activation or erasing confirmed
 history. Unknown first-filing evidence is reported as unknown, not success.
+
+After completed promotion, the original preview is immutable historical proof,
+including its evidence freshness **when evaluated**. Current readiness and new
+decisions require fresh genuine telemetry from the same reviewed boundary and
+unchanged current source/model/configuration authority. New valid telemetry can
+restore admission after an outage or after the original preview's rows age,
+without rewriting approval or preview. Missing, stale or denied current evidence
+still blocks; telemetry recovery never clears deliberate pause. Initial preview,
+activation and publication-decision freshness checks remain strict, and inspecting
+an aged preview does not report that old evaluation as currently ready.
 
 ### Run the activated factory
 

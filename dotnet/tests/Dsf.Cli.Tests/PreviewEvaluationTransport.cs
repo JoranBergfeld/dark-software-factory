@@ -13,9 +13,11 @@ internal sealed partial class PreviewPreparationTransport
     internal Func<string, string, string>? AlterCompletion { get; set; }
     internal Action<JsonNode>? AfterEvaluationWrite { get; set; }
     internal Func<JsonNode, JsonNode>? AlterApplication { get; set; }
-    internal void Restart()
+    internal HttpStatusCode ApplicationQueryStatus { get; set; } = HttpStatusCode.OK;
+    internal void Restart(DateTimeOffset? now = null)
     {
         StopPreviewHosts();
+        if (now is not null) scenario.Source.Source!.Clock.Now = now.Value;
         var documents = JsonSerializer.Deserialize<Dictionary<string, string>>(JsonSerializer.Serialize(SeedDocuments))!;
         var resources = JsonSerializer.Deserialize<Dictionary<string, JsonNode>>(
             JsonSerializer.Serialize(scenario.Source.Source!.Resources))!;
@@ -33,6 +35,7 @@ internal sealed partial class PreviewPreparationTransport
         var query = JsonNode.Parse(await request.Content!.ReadAsStringAsync(token))!;
         var projected = ((string)query["query"]!).Contains(", Name", StringComparison.Ordinal);
         TelemetryQueries++;
+        if (ApplicationQueryStatus != HttpStatusCode.OK) return new(ApplicationQueryStatus);
         var columns = new List<object> { new { name = "TimeGenerated", type = "datetime" }, new { name = "_ResourceId", type = "string" },
             new { name = "_ItemId", type = "string" }, new { name = "TenantId", type = "string" }, new { name = "Type", type = "string" } };
         var row = new List<object> { scenario.Source.Source!.Clock.Now.AddMinutes(-1).ToString("O"),

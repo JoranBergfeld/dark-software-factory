@@ -99,9 +99,18 @@ internal static partial class RuntimeWorkflow
         return Report(store, run) with { Reason = "EvaluationIncompleteOrFailed" };
     }
 
-    internal static async Task<PreviewExecutionResult> InspectPreviewAsync(FactoryHostSettings settings, RuntimeDependencies dependencies,
+    internal static Task<PreviewExecutionResult> InspectPreviewAsync(FactoryHostSettings settings, RuntimeDependencies dependencies,
         PreviewCapabilityRequest request, HttpClient http, CancellationToken cancellationToken, PreviewWorkAdmission? admission = null,
-        FactoryLiveExecution? live = null)
+        FactoryLiveExecution? live = null) =>
+        InspectEvaluationAsync(settings, dependencies, request, http, cancellationToken, admission, live, null);
+
+    internal static Task<PreviewExecutionResult> InspectPromotedPreviewAsync(FactoryHostSettings settings, RuntimeDependencies dependencies,
+        PreviewCapabilityRequest request, HttpClient http, FactoryPromotionApproval promotion, CancellationToken token) =>
+        InspectEvaluationAsync(settings, dependencies, request, http, token, null, null, promotion);
+
+    private static async Task<PreviewExecutionResult> InspectEvaluationAsync(FactoryHostSettings settings, RuntimeDependencies dependencies,
+        PreviewCapabilityRequest request, HttpClient http, CancellationToken cancellationToken, PreviewWorkAdmission? admission,
+        FactoryLiveExecution? live, FactoryPromotionApproval? promotion)
     {
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(FactoryPreviewInputValidation.Policy.RequestSeconds), dependencies.PreviewClock);
         using var pending = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline.Token);
@@ -123,8 +132,12 @@ internal static partial class RuntimeWorkflow
         if (store.Document.Proof is not { } proof) return report with { Reason = "CompleteDurableReadinessProofRequired" };
         try
         {
+            if (promotion is not null && (promotion.Phase != FactoryPromotionPhase.Active
+                || promotion.FactoryId != authority.Manifest.Identity.FactoryId || promotion.NativeIndices is null
+                || promotion.ApprovedAt < proof.CompletedAt))
+                throw new PreviewCapabilityException(FactoryCharterState.Blocked, "OriginalCompletedPromotionRequired");
             var current = await AcquirePreviewInputsAsync(settings, dependencies, report.Inputs.Request, http, token);
-            ValidateCapturedInputs(report.Inputs, current.Snapshot, dependencies.PreviewClock.GetUtcNow());
+            ValidateInputs(dependencies.PreviewClock.GetUtcNow());
             var candidates = OnboardingReadiness.ValidateComplete(run, PreviewServices(report.Inputs, run, current.Models, store), report.Dispatches);
             if (FactoryModelsValidation.Hash(candidates) != FactoryModelsValidation.Hash(proof.Candidates))
                 throw new PreviewCapabilityException(FactoryCharterState.Unknown, "DurableCandidateProofChanged");
@@ -133,7 +146,7 @@ internal static partial class RuntimeWorkflow
             if (finalStore.Revision != store.Revision)
                 throw new PreviewCapabilityException(FactoryCharterState.Unknown, "DurablePreviewStateChangedDuringInspection");
             var now = dependencies.PreviewClock.GetUtcNow();
-            ValidateCapturedInputs(report.Inputs, current.Snapshot, now);
+            ValidateInputs(now);
             FactoryPreviewTelemetryValidation.ValidateCapture(authority.Telemetry!, current.Snapshot.TelemetrySelection,
                 current.Snapshot.Request.RequestId, current.Snapshot.Telemetry.Capture, now);
             foreach (var selected in current.Snapshot.Supplemental.Sources)
@@ -141,6 +154,15 @@ internal static partial class RuntimeWorkflow
             token.ThrowIfCancellationRequested();
             if (live is not null) await live.RequireCurrentAsync(token);
             return report with { Readiness = PreviewReadiness.ReadyAwaitingActivation };
+
+            void ValidateInputs(DateTimeOffset now)
+            {
+                // Completed promotion pins historical proof, not an endless freshness lease on its old rows.
+                // Acquisition and final capture validation still require genuinely fresh current evidence.
+                ValidateCapturedInputs(report.Inputs, current.Snapshot, promotion is null ? now : proof.CompletedAt);
+                if (promotion is not null)
+                    ValidateCapturedInputs(store.Document.FinalInputs ?? throw new System.Text.Json.JsonException(), current.Snapshot, proof.CompletedAt);
+            }
         }
         catch (PreviewCapabilityException exception)
         {

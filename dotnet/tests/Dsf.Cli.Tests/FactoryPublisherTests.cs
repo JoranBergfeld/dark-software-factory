@@ -175,9 +175,10 @@ public sealed class PublisherFixture : IAsyncLifetime
     private Dictionary<string, JsonNode> resources = [];
     private Dictionary<string, JsonNode[]> operations = [];
     private Dictionary<string, string> nativeDocuments = [];
-    public async Task InitializeAsync()
+    public Task InitializeAsync() => InitializeAsync(null);
+    internal async Task InitializeAsync(TimeSpan? applicationRecordAge)
     {
-        transport = await FactoryActivationTests.ReadyAsync(publisher: true);
+        transport = await FactoryActivationTests.ReadyAsync(publisher: true, applicationRecordAge: applicationRecordAge);
         var github = JsonNode.Parse(transport.Values()[ProductConfigurationKeys.FactoryGitHubAuthority])!;
         Assert.Equal("read", (string?)github["expectedAppPermissions"]!["repository_hooks"]);
         var operation = Guid.NewGuid().ToString();
@@ -201,9 +202,9 @@ public sealed class PublisherFixture : IAsyncLifetime
         operations = transport.DeploymentOperations.ToDictionary(p => p.Key, p => p.Value.Select(v => v.DeepClone()).ToArray());
         nativeDocuments = transport.SeedDocuments.ToDictionary();
     }
-    internal PreviewPreparationTransport Reset()
+    internal PreviewPreparationTransport Reset(DateTimeOffset? now = null)
     {
-        transport.Restart();
+        transport.Restart(now);
         transport.Scenario.Arm.Product = ReservationTestStore.Restore(product);
         transport.SeedDocuments.Clear();
         foreach (var pair in nativeDocuments) transport.SeedDocuments.Add(pair.Key, pair.Value);

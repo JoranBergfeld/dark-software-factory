@@ -77,7 +77,21 @@ internal sealed class FactoryLiveAuthority(FactoryHostSettings settings, Runtime
             if (readiness)
             {
                 phase = "current-readiness";
-                var current = await RuntimeWorkflow.InspectPreviewAsync(settings, dependencies, previewRequest, http, token);
+                FactoryPromotionApproval? promotion = null;
+                if (values.TryGetValue(FactoryPromotion.RootKey, out var promoted))
+                {
+                    var retained = JsonSerializer.Deserialize<FactoryPromotionApproval>(promoted, FactorySourceValidation.RecordJson) ?? throw new JsonException();
+                    if (values.ContainsKey(FactoryPromotion.CompletionKey(retained.OperationId)))
+                    {
+                        var publisher = FactoryPublisher.ReadConfirmed(values.Where(p => p.Key.StartsWith(FactoryPublisher.Prefix, StringComparison.Ordinal))
+                            .ToDictionary(), Clock.GetUtcNow());
+                        promotion = FactoryPromotion.RequireApproved(values, records.ToDictionary(p => p.Key, p => Identity(p.Value, identity.FactoryId)),
+                            publisher.Plan, Clock.GetUtcNow());
+                    }
+                }
+                var current = promotion is null
+                    ? await RuntimeWorkflow.InspectPreviewAsync(settings, dependencies, previewRequest, http, token)
+                    : await RuntimeWorkflow.InspectPromotedPreviewAsync(settings, dependencies, previewRequest, http, promotion, token);
                 if (current.Readiness != PreviewReadiness.ReadyAwaitingActivation)
                     throw Denied("CurrentCompleteReadinessRequired");
             }

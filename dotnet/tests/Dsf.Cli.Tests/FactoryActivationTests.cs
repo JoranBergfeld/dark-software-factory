@@ -113,9 +113,16 @@ public sealed class FactoryActivationTests
         Assert.Empty(terminal.Error);
     }
 
-    internal static async Task<PreviewPreparationTransport> ReadyAsync(string votes = "GO,GO,GO", bool publisher = false)
+    internal static async Task<PreviewPreparationTransport> ReadyAsync(string votes = "GO,GO,GO", bool publisher = false,
+        TimeSpan? applicationRecordAge = null)
     {
         var transport = await PreviewEvaluationTests.ConfiguredAsync(publisher: publisher);
+        if (applicationRecordAge is not null)
+            transport.AlterApplication = body =>
+            {
+                body["tables"]![0]!["rows"]![0]![0] = (transport.Scenario.Source.Source!.Clock.Now - applicationRecordAge.Value).ToString("O");
+                return body;
+            };
         var jury = votes.Split(',');
         transport.AlterCompletion = (prompt, text) =>
         {
@@ -126,6 +133,7 @@ public sealed class FactoryActivationTests
         };
         var evaluated = await transport.Scenario.Machine.InvokeAsync("preview", ["--evaluate", .. PreviewEvaluationTests.Pins(transport)]);
         Assert.True(evaluated.Exit == 0, evaluated.Terminal.Output + evaluated.Terminal.Error);
+        transport.AlterApplication = null;
         ConnectAudit(transport);
         return transport;
     }
