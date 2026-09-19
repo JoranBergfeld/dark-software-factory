@@ -13,6 +13,15 @@ internal sealed class FactoryFoundationAssets(FactoryReservationIdentity identit
     public string HostingEnvironment => Group + "/providers/microsoft.app/managedenvironments/" + Prefix + "-hosting";
 
     public string Deployment(Guid operationId) => Group + "/providers/microsoft.resources/deployments/df-" + operationId.ToString("N");
+    public string Configuration => Group + "/providers/microsoft.appconfiguration/configurationstores/dsfo-" + identity.FactoryId.ToString("N");
+    public string ProductEndpoint => "https://dsfo-" + identity.FactoryId.ToString("N") + ".azconfig.io";
+    public string GroupRequest() => JsonSerializer.Serialize(new { location = selection.FactoryLocation });
+    public string ConfigurationRequest() => JsonSerializer.Serialize(new
+    {
+        location = selection.FactoryLocation,
+        sku = new { name = "standard" },
+        properties = new { disableLocalAuth = true, softDeleteRetentionInDays = 7, enablePurgeProtection = true, publicNetworkAccess = "Enabled" },
+    });
 
     public string Request()
     {

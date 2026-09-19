@@ -352,8 +352,13 @@ public sealed class FactoryFoundationTests
         Assert.DoesNotContain("secret-provider-detail", terminal.Output);
         Assert.Equal(lost ? 1 : 0, JsonNode.Parse(product.ListJson())!.AsArray().Count);
         var before = machine.Store.Export();
-        await machine.InvokeAsync("resume");
-        Assert.Equal(before, machine.Store.Export());
+        var resumed = await machine.InvokeAsync("resume");
+        if (lost) Assert.Equal(before, machine.Store.Export());
+        else
+        {
+            Assert.Equal("Failed", (string?)resumed.Result["foundation"]?["state"]);
+            Assert.Single(resumed.Result["foundation"]!["operations"]!.AsArray().Last()!["previousAttempts"]!.AsArray());
+        }
         Assert.Equal(2, arm.Writes.Count);
     }
 
@@ -632,13 +637,18 @@ public sealed class FactoryFoundationTests
         if (failure == "cancel")
             Assert.Equal("Unknown", (string?)Assert.Single(result["foundation"]!["operations"]!.AsArray())!["state"]);
         var observer = new ReservationMachine(ReservationTestStore.Restore(machine.Store.Export()));
-        var remote = new FoundationTransport(observer.Store);
+        var remote = new FoundationTransport(observer.Store) { ExistingTarget = failure == "existing", RejectPut = failure == "forbidden" };
         observer.Boundary.Repository.ReservationHttp = new HttpClient(remote);
         var (statusExit, status, _) = await observer.InvokeAsync("resume");
         Assert.Equal(1, statusExit);
         Assert.Equal(failure == "cancel" ? "Unknown" : expected, (string?)status["foundation"]?["state"]);
-        Assert.Empty(remote.Writes);
-        Assert.Empty(observer.Store.Writes);
+        if (failure == "forbidden")
+        {
+            Assert.Single(remote.Writes);
+            Assert.Single(status["foundation"]!["operations"]![0]!["previousAttempts"]!.AsArray());
+        }
+        else Assert.Empty(remote.Writes);
+        if (failure == "cancel") Assert.Empty(observer.Store.Writes);
         machine.Boundary.AssertReadOnly();
     }
 
@@ -806,6 +816,8 @@ public sealed class FactoryFoundationTests
         public bool ExistingTarget { get; init; }
         public bool RejectPut { get; init; }
         public bool AsyncConfiguration { get; init; }
+        public bool AsyncDeployment { get; init; }
+        public bool IncludeCreationResponses { get; init; }
         public int ConfigurationPolls { get; private set; }
         public string? ResourceDamage { get; init; }
         public bool EnforceCorrelation { get; init; }
@@ -817,12 +829,19 @@ public sealed class FactoryFoundationTests
         public string? CosmosRidTarget { get; init; }
         public string? CosmosRidValue { get; init; }
         public bool DeploymentFails { get; init; }
+        public bool DeploymentCanceled { get; init; }
         public string? InsightsDamage { get; init; }
         public string? GuidField { get; init; }
         public JsonNode? GuidValue { get; init; }
         private readonly Dictionary<string, JsonNode> created = new(StringComparer.OrdinalIgnoreCase);
         public IReadOnlyDictionary<string, JsonNode> CreatedResources => created;
         public List<string> Writes { get; } = [];
+        public string ExportNative() => System.Text.Json.JsonSerializer.Serialize(created);
+        public void RestoreNative(string serialized)
+        {
+            foreach (var pair in JsonNode.Parse(serialized)!.AsObject())
+                created.Add(pair.Key, pair.Value!.DeepClone());
+        }
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
         {
@@ -857,27 +876,9 @@ public sealed class FactoryFoundationTests
                 if (ExistingTarget) return JsonReply(HttpStatusCode.OK, new JsonObject { ["tags"] = new JsonObject { ["dsf"] = "matching-does-not-prove-ownership" } });
                 if (request.RequestUri.AbsolutePath.EndsWith("/operations", StringComparison.Ordinal))
                 {
-                    var operationRecords = JsonNode.Parse(owner.ListJson())!.AsArray()
-                        .Select(r => JsonNode.Parse((string)r!["value"]!)!)
-                        .Where(r => (string?)r["kind"] == "decide-foundation-operation"
-                            && (string?)r["deploymentTarget"] is not null && r["managedBy"] is null).ToArray();
-                    return JsonReply(HttpStatusCode.OK, new JsonObject
-                    {
-                        ["value"] = new JsonArray(operationRecords.Select((record, index) => (JsonNode)new JsonObject
-                        {
-                            ["operationId"] = index.ToString(),
-                            ["properties"] = new JsonObject
-                            {
-                                ["provisioningOperation"] = "Create",
-                                ["provisioningState"] = DeploymentFails && ((string)record["target"]!).Contains("/components/", StringComparison.Ordinal) ? "Failed" : "Succeeded",
-                                ["statusCode"] = ((string)record["target"]!).Contains("/microsoft.insights/components/", StringComparison.Ordinal)
-                                    ? "OK" : ResourceStatusCode,
-                                ["trackingId"] = ProviderGuidValue("trackingId",
-                                    ResourceDamage == "invalid-tracking-id" ? "secret-provider-detail" : Guid.NewGuid().ToString()),
-                                ["targetResource"] = new JsonObject { ["id"] = (string)record["target"]! },
-                            },
-                        }).ToArray()),
-                    });
+                    if (created.TryGetValue(request.RequestUri.AbsolutePath, out var saved))
+                        return JsonReply(HttpStatusCode.OK, saved);
+                    return JsonReply(HttpStatusCode.NotFound, new JsonObject());
                 }
                 return created.TryGetValue(request.RequestUri.AbsolutePath, out var current)
                     ? JsonReply(HttpStatusCode.OK, current)
@@ -921,9 +922,18 @@ public sealed class FactoryFoundationTests
                             ["tenantId"] = BoundaryPlanFixture.Tenant,
                         },
                     };
-                    if (ResourceDamage == "old-incarnation") created[target]["systemData"]!["createdAt"] = "2000-01-01T00:00:00Z";
-                    if (ResourceDamage == "human-modified") created[target]["systemData"]!["lastModifiedAt"] = DateTimeOffset.UtcNow.AddSeconds(1);
-                    if (ResourceDamage == "duplicate-principal") created[target]["properties"]!["principalId"] = BoundaryPlanFixture.Principal;
+                    if (intent["managedBy"] is not null)
+                    {
+                        created[target].AsObject().Remove("systemData");
+                        created[target].AsObject().Remove("etag");
+                        created[target]["properties"] = new JsonObject { ["provisioningState"] = "Succeeded" };
+                    }
+                    if (ResourceDamage == "old-incarnation" && intent["managedBy"] is null) created[target]["systemData"]!["createdAt"] = "2000-01-01T00:00:00Z";
+                    if (ResourceDamage == "human-modified" && intent["managedBy"] is null) created[target]["systemData"]!["lastModifiedAt"] = DateTimeOffset.UtcNow.AddSeconds(1);
+                    if (ResourceDamage == "duplicate-principal" && intent["logicalIdentity"] is not null)
+                        created[target]["properties"]!["principalId"] = BoundaryPlanFixture.Principal;
+                    if (IncludeCreationResponses && target.Contains("/microsoft.network/", StringComparison.Ordinal))
+                        created[target].AsObject().Remove("systemData");
                     if (target.EndsWith("-cosmos", StringComparison.Ordinal))
                     {
                         var properties = created[target]["properties"]!;
@@ -933,7 +943,7 @@ public sealed class FactoryFoundationTests
                     }
                     if (target.Contains("/sqldatabases/", StringComparison.Ordinal))
                         created[target]["properties"]!["resource"] = new JsonObject { ["id"] = target.Split('/').Last() };
-                    if (CosmosNativeReceipts && target.Contains("/sqldatabases/", StringComparison.Ordinal))
+                    if ((CosmosNativeReceipts || IncludeCreationResponses) && target.Contains("/sqldatabases/", StringComparison.Ordinal))
                     {
                         created[target].AsObject().Remove("systemData");
                         created[target].AsObject().Remove("etag");
@@ -996,15 +1006,19 @@ public sealed class FactoryFoundationTests
                         if (InsightsDamage == "public-ingestion") native["publicNetworkAccessForIngestion"] = "Enabled";
                     }
                 }
-                return JsonReply(HttpStatusCode.Created, new JsonObject
+                var nativeDeployment = new JsonObject
                 {
                     ["id"] = request.RequestUri.AbsolutePath,
                     ["properties"] = new JsonObject
                     {
-                        ["provisioningState"] = DeploymentFails ? "Failed" : "Succeeded",
+                        ["provisioningState"] = DeploymentFails ? "Failed" : DeploymentCanceled ? "Canceled" : "Succeeded",
                         ["correlationId"] = ProviderGuidValue("correlationId", Guid.NewGuid().ToString()),
                     },
-                });
+                };
+                created[request.RequestUri.AbsolutePath] = nativeDeployment.DeepClone();
+                created[request.RequestUri.AbsolutePath + "/operations"] = NativeOperations();
+                if (AsyncDeployment) nativeDeployment["properties"]!["provisioningState"] = "Running";
+                return JsonReply(HttpStatusCode.Created, nativeDeployment);
             }
             if (CompleteCreates)
             {
@@ -1028,8 +1042,11 @@ public sealed class FactoryFoundationTests
                 nativeConfiguration["id"] = request.RequestUri.AbsolutePath;
                 nativeConfiguration["properties"] ??= new JsonObject();
                 nativeConfiguration["properties"]!["provisioningState"] = "Succeeded";
-                nativeConfiguration["properties"]!["creationDate"] = DateTimeOffset.UtcNow;
-                nativeConfiguration["properties"]!["endpoint"] = "https://" + request.RequestUri.Segments.Last() + ".azconfig.io";
+                if (request.RequestUri.AbsolutePath.Contains("/configurationstores/", StringComparison.Ordinal))
+                {
+                    nativeConfiguration["properties"]!["creationDate"] = DateTimeOffset.UtcNow;
+                    nativeConfiguration["properties"]!["endpoint"] = "https://" + request.RequestUri.Segments.Last() + ".azconfig.io";
+                }
                 created[request.RequestUri.AbsolutePath] = nativeConfiguration.DeepClone();
                 var response = new HttpResponseMessage(HttpStatusCode.Created)
                 { Content = new StringContent(nativeConfiguration.ToJsonString(), Encoding.UTF8, "application/json") };
@@ -1056,6 +1073,35 @@ public sealed class FactoryFoundationTests
 
         private JsonNode? ProviderGuidValue(string field, string value) =>
             GuidField == field ? GuidValue?.DeepClone() : JsonValue.Create(value);
+
+        private JsonObject NativeOperations()
+        {
+            var intents = JsonNode.Parse(owner.ListJson())!.AsArray()
+                .Select(r => JsonNode.Parse((string)r!["value"]!)!)
+                .Where(r => (string?)r["kind"] == "decide-foundation-operation"
+                    && (string?)r["deploymentTarget"] is not null && r["managedBy"] is null).ToArray();
+            return new JsonObject
+            {
+                ["value"] = new JsonArray(intents.Select((record, index) => (JsonNode)new JsonObject
+                {
+                    ["operationId"] = index.ToString(),
+                    ["properties"] = new JsonObject
+                    {
+                        ["provisioningOperation"] = "Create",
+                        ["provisioningState"] = ((string)record["target"]!).Contains("/components/", StringComparison.Ordinal)
+                            ? DeploymentFails ? "Failed" : DeploymentCanceled ? "Canceled" : "Succeeded" : "Succeeded",
+                        ["statusCode"] = ((string)record["target"]!).Contains("/microsoft.insights/components/", StringComparison.Ordinal)
+                            ? "OK" : ResourceStatusCode,
+                        ["timestamp"] = DateTimeOffset.UtcNow,
+                        [IncludeCreationResponses ? "serviceRequestId" : "trackingId"] = ProviderGuidValue("trackingId",
+                            ResourceDamage == "invalid-tracking-id" ? "secret-provider-detail" : Guid.NewGuid().ToString()),
+                        ["targetResource"] = new JsonObject { ["id"] = (string)record["target"]! },
+                        ["response"] = IncludeCreationResponses
+                            ? new JsonObject { ["content"] = created[(string)record["target"]!].DeepClone() } : null,
+                    },
+                }).ToArray()),
+            };
+        }
 
         private static HttpResponseMessage JsonReply(HttpStatusCode status, JsonNode body)
         {

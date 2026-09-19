@@ -62,11 +62,18 @@ current workload readiness.
 
 After [inactive foundation provisioning](provision-inactive-foundation.md), inspect
 the separate `foundation` result. Status verifies product manifest authority, not
-an owner-archive substitute. `resume` then inspects only; it never repeats ARM
-dispatch or repairs a foundation. The reservation flags remain false by design.
+an owner-archive substitute. `resume` now
+[reconciles interrupted foundation provisioning](provision-inactive-foundation.md#recover-an-interrupted-operation)
+and continues verified safe boundaries under the original identity. Uncertain
+dispatch is never reissued; unsupported incarnation proof remains blocked.
+The reservation flags remain false by design.
 
-`resume` loads that same immutable remote operation, verifies every present
-record, and revalidates the exact plan against current operator authority and
+Interactive status/resume can prompt for missing nonsecret locator fields and
+print the equivalent explicit command. Redirected or JSON invocations require
+all four locator arguments and never prompt for credentials.
+
+Reservation-only and pre-ARM `resume` load that same immutable remote operation, verify every present
+record, and revalidate the exact plan against current operator authority and
 decision inputs before dispatch. Same-operation records are excluded from fresh
 admission inspection only after matching verified remote values **and ETags**.
 There is no user-controlled ignore-conflicts flag. Changed operator identities

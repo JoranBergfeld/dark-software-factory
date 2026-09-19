@@ -60,6 +60,8 @@ internal sealed class FactoryReservationService(
         var anchor = ReadAnchor(root, endpoint, tenant, subscription, product);
         try
         {
+            if (anchor.Foundation is null)
+                await FactoryFoundationService.RequireNoOrphanedHistoryAsync(store, anchor.Identity.FactoryId, token);
             var proof = new ReservationAdmissionProof();
             proof.Add(root);
             using var content = new MemoryStream();
@@ -133,10 +135,15 @@ internal sealed class FactoryReservationService(
                 && (anchor.CompletedSteps != steps.Count || anchor.Intent is not null || confirmedClaims != anchor.ClaimCount))
                 throw new JsonException();
             if (anchor.Foundation is not null)
-                return await new FactoryFoundationService(azure, http, clock).InspectAsync(
-                    Result(anchor, root, anchor.State, "Foundation has started.") with
-                    { Plan = plan, ConfirmedClaims = confirmedClaims, ConfirmedPlanChunks = anchor.PlanChunks },
-                    anchor.Foundation, token);
+            {
+                var foundation = new FactoryFoundationService(azure, http, clock);
+                var admission = Result(anchor, root, anchor.State, "Foundation has started.") with
+                { Plan = plan, ConfirmedClaims = confirmedClaims, ConfirmedPlanChunks = anchor.PlanChunks };
+                if (!resume) return await foundation.InspectAsync(admission, anchor.Foundation, token);
+                return await foundation.ResumeAsync(admission, anchor.Foundation,
+                    () => new ApplicationBoundaryPlanner(reviewer, new AzureBoundaryReader(azure))
+                        .PlanAsync(plan.Selection, token, anchor.Identity.PlanFingerprint, proof), token);
+            }
             if (!resume)
                 return Result(anchor, root, anchor.Intent is not null && anchor.State == FactoryReservationState.Partial ? FactoryReservationState.Unknown : anchor.State,
                     "Verified owner reservation only; not provisioned. Approval is not App consent, access, readiness or activation.")

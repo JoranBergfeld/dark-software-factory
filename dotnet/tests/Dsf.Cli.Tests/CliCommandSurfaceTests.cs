@@ -306,7 +306,7 @@ command <root> desc="Dark Software Factory — factory CLI (create product insta
         option --tenant type=String arity=1..1 desc="explicit owner reservation tenant ID"
         option --subscription type=String arity=1..1 desc="explicit owner reservation subscription ID"
         option --json type=Boolean arity=0..1 default=False choices=[False, True] desc="print nonsecret typed reservation/foundation state without prompts"
-      command resume desc="resume the reservation or inspect a dispatched foundation; never reissue ARM"
+      command resume desc="recover the original reservation/foundation at verified safe boundaries; uncertain effects stay held"
         option --owner-appconfig-endpoint type=String arity=1..1 desc="trusted prepared owner App Configuration endpoint"
         option --product type=String arity=1..1 desc="owner-scoped product key"
         option --tenant type=String arity=1..1 desc="explicit owner reservation tenant ID"

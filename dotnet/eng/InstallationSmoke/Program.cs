@@ -70,6 +70,9 @@ try
     foreach (var action in new[] { "plan", "reserve", "provision", "github", "status", "resume" })
     {
         var help = await Run("onboard", "decide", action, "--help");
+        if (action == "resume")
+            Require(help.Output.Contains("verified safe boundaries", StringComparison.Ordinal),
+                "Installed resume does not expose verified foundation recovery.");
         var required = action is "plan" or "reserve" ? "--reviewed-fingerprint" : "--owner-appconfig-endpoint";
         Require(help.ExitCode == 0 && help.Output.Contains(required, StringComparison.Ordinal),
             $"Installed onboarding command is unavailable: {help.Output}");
@@ -238,6 +241,12 @@ try
         Require(missingFoundation.ExitCode == 1 && missingFoundation.Output.Contains("onboard-foundation.json", StringComparison.Ordinal)
             && missingFoundation.Output.Contains("\"state\": \"Failed\"", StringComparison.Ordinal),
             "Installed foundation asset preflight did not fail explicitly before provider access.");
+        var missingRecovery = await Run("onboard", "decide", "resume", "--owner-appconfig-endpoint", "https://owner.azconfig.io",
+            "--product", "packaging-smoke", "--tenant", "11111111-1111-1111-1111-111111111111",
+            "--subscription", "22222222-2222-2222-2222-222222222222", "--json");
+        Require(missingRecovery.ExitCode == 1 && missingRecovery.Output.Contains("onboard-foundation.json", StringComparison.Ordinal)
+            && missingRecovery.Output.Contains("\"state\": \"Failed\"", StringComparison.Ordinal),
+            "Installed recovery must fail closed without its real packaged request asset.");
         Require(File.ReadAllText(Path.Combine(scratch.FullName, "azure.log")).Length == 0,
             "Foundation asset failure reached Azure authentication.");
     }

@@ -100,11 +100,94 @@ There is no cross-store transaction: interrupted handoffs remain visible and
 inactive, including when a product write committed but its response was lost.
 No legacy live runtime-index keys are published.
 
-## Receipts, cancellation and inspection
+## Recover an interrupted operation
 
-Use the same `status` or `resume` locator as reservation. After foundation dispatch
-**both are inspection-only**; they do not repeat ARM requests, complete a partial
-deployment, roll back resources, release claims or infer a completed factory.
+On another machine, install the CLI and authenticate the effective `az`/`gh`
+operator identities normally. No original directory, local report or operator
+credential export is needed. Use the original trusted owner locator:
+
+```bash
+dsf onboard decide status \
+  --owner-appconfig-endpoint https://owner.azconfig.io --product widget \
+  --tenant 11111111-1111-1111-1111-111111111111 \
+  --subscription 22222222-2222-2222-2222-222222222222 --json
+
+dsf onboard decide resume \
+  --owner-appconfig-endpoint https://owner.azconfig.io --product widget \
+  --tenant 11111111-1111-1111-1111-111111111111 \
+  --subscription 22222222-2222-2222-2222-222222222222 --json
+```
+
+Interactive `status`/`resume` prompt for missing **nonsecret locator** arguments
+and print an equivalent explicit command. Redirected terminals and `--json`
+never prompt: supply all four arguments. An authorized different reader can
+inspect; mutation credentials must still bind the reviewed Azure principal.
+Tokens are acquired for this invocation, never stored in recovery records.
+`--input` remains exact reservation-plan repair data, not foundation authority.
+There is no force, lease-expiry, new-ID, rollback or cleanup switch.
+Missing governing pointers with surviving owner foundation history are
+`Unknown`, not pristine reservations. The bounded history read must be complete;
+unreadable, oversized or unrecognized history cannot authorize a new operation.
+
+`status` reads the original durable journal and protected product authority;
+an inactive foundation is historical provisioning evidence, not current
+activation or workload readiness. `resume` reconciles that same immutable
+Factory ID and foundation operation, then continues only proven eligible work:
+
+| Durable boundary | Recovery behavior |
+| --- | --- |
+| Approved root, no dispatched step or surviving operation history | Recheck the current full review and pinned packaged request, win the owner ETag CAS, then continue original provisioning |
+| Initial ARM 400/401/403 with durable `Failed` / `NoEffect` | Recheck review and target absence; retry the same step conditionally, retaining the rejected attempt and a distinct request correlation |
+| Completed group, but product store not yet created | `Blocked`: no supported current resource-group incarnation; no new child ARM request |
+| Original product store incarnation, confirmed publication prefix | Verify original request, native policy, exact key values and original ETags; conditionally create remaining profile/plan/manifest keys |
+| Definite no-effect product-key rejection | Retry only the same absent key and original value; retain prior rejection |
+| Completed product handoff, base deployment not dispatched | Retain `Blocked` administrator handoff rather than guessing resource-group ownership |
+| Acknowledged native deployment, now terminal | Match original request/correlation, protected product revisions and every target's original/current creation evidence; reconcile receipts without another deployment |
+| Missing intent, unresolved dispatch, lost publication ETag, changed/recreated resource, newer authority, unavailable original request bytes | Remain `Unknown` or `Blocked`; preserve claims, identity and receipts for administrator reconciliation |
+
+Retries of **proven no-effect** attempts are bounded to eight retained prior
+attempts. They do not apply to native deployment `Failed`/`Canceled` outcomes:
+accepted work can leave resources. A previously completed step is not rewritten
+to adopt changed ownership. Newer CLI assets whose request hash differs from
+the admitted request block continuation; a local template cannot approve itself.
+Retry admission names the next client request in the owner root before replacing
+the step intent. If interrupted between these conditional writes, the old
+`NoEffect` receipt does **not** prove the new attempt never dispatched.
+The visible pending retry stays unknown, not eligible for another takeover.
+
+The [Resource Groups GET contract](https://learn.microsoft.com/en-us/rest/api/resources/resource-groups/get?view=rest-resources-2021-04-01)
+does not guarantee `createdAt`, `systemData`, a resource GUID or generation ETag.
+The original HTTP 201/request/date is historical, not proof that today's group
+was never deleted/recreated. Recovery therefore cannot automatically resume
+new ARM work inside that group. Verified product-key handoff and reconciliation
+of already-issued deployment effects do not require pretending otherwise.
+
+Native [deployment operation responses](https://learn.microsoft.com/en-us/rest/api/resources/deployment-operations/list?view=rest-resources-2025-04-01)
+may retain original per-target response content. Where an original target
+incarnation receipt was lost, recovery requires this native creation evidence
+and compares its incarnation/identity with current provider state. A terminal
+deployment plus current resource names is insufficient. Missing optional response
+content remains `Unknown`. DSF neither enables ARM debug-response capture nor
+stores whole provider responses, which can contain secrets.
+
+Before a safe continuation, a fresh owner-root ETag CAS prevents the previous
+DSF coordinator from admitting its **next** dispatch. This works only at a
+verified no-dispatch or acknowledged-effect boundary: every following dispatch
+must first win that CAS. Takeover writes a fresh nonsecret coordinator ID;
+it does not assume re-PUTting identical bytes advances the provider's ETag.
+A process paused after admission but before sending
+can still send; its missing/intent/unknown receipt blocks takeover. Heartbeat
+age does not fence a process, ARM or an administrator.
+
+For blocked recovery, retain the trusted locator, Factory ID, operation ID,
+stage, root revision and per-step receipts. Give these to the owner-registry
+and resource administrators to establish original requests, current incarnations
+and any still-running work. Do not delete records, free claims, rename the
+factory or invoke a fresh reservation to evade uncertainty. The CLI offers no
+administrator declaration that converts missing proof into successful recovery.
+Trusted partial records remain available for separately reviewed future cleanup.
+
+## Receipts and cancellation
 
 The owner recovery journal stores bounded records at
 `dsf/foundation/<operation-guid>/operations/<0000-index>`. Every direct resource
@@ -114,7 +197,8 @@ Deployment resources share their parent request correlation and subsequently
 receive provider operation/correlation IDs. Product publication uses conditional
 SDK writes with the recorded client request ID.
 
-Receipts distinguish actual creation, rejection and unproven outcomes. Fresh
+Receipts distinguish actual creation, definite no-effect rejection, native
+failure/cancellation and unproven outcomes. Fresh
 provider incarnation metadata, creation receipts, principal IDs and Cosmos
 resource IDs are used where available; tags and matching names never suffice.
 Cosmos native RIDs use `-` in place of `/`, not Base64URL's replacement for `+`.
@@ -129,8 +213,9 @@ evidence remains unknown; native HTTP 200 is not general adoption permission.
 No instrumentation keys or connection strings enter these ownership receipts.
 Unsupported or incomplete evidence remains `Unknown`. Initial ARM responses
 accepted asynchronously are recorded before read-only polling; no PUT is retried.
-Incomplete/paginated deployment evidence stays held for richer recovery rather
-than being guessed complete.
+Incomplete/paginated deployment evidence stays held rather than being guessed
+complete. Original receipt fields and prior no-effect attempts remain in the
+bounded journal across client reconstruction and lost acknowledgments.
 
 Cancellation closes new local dispatch. An accepted ARM operation may continue
 remotely. Lost or malformed responses retain in-flight/unknown receipts and the

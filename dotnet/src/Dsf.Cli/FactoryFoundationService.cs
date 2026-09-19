@@ -18,46 +18,65 @@ internal sealed partial class FactoryFoundationService(IAzureCliRunner azure, Ht
     private bool registryDispatchStarted;
     private readonly Dictionary<int, FoundationOperation> confirmedOperations = [];
 
-    public async Task<FactoryReservationResult> ProvisionAsync(FactoryReservationResult admission, CancellationToken token)
+    public Task<FactoryReservationResult> ProvisionAsync(FactoryReservationResult admission, CancellationToken token) =>
+        ProvisionAsync(admission, false, token);
+
+    private async Task<FactoryReservationResult> ProvisionAsync(FactoryReservationResult admission, bool recovering, CancellationToken token,
+        FoundationOperation? retry = null)
     {
         if (admission.State != FactoryReservationState.Reserved || admission.Identity is null || admission.Plan is null)
             return admission;
         var identity = admission.Identity;
-        _ = new FactoryFoundationAssets(identity, admission.Plan.Selection).Request();
+        var assets = new FactoryFoundationAssets(identity, admission.Plan.Selection);
+        var requestHash = FactoryReservationRecords.Hash(assets.Request());
         var store = Store(identity);
         var root = await store.ReadAsync(ProductConfigurationKeys.OwnerProductClaim(identity.ProductKey), token)
             ?? throw new ReservationStoreException(FactoryReservationState.Unknown, "Admission disappeared; no dispatch.");
         var anchor = FactoryReservationRecords.Parse<FactoryReservationAnchor>(root.Value);
         if (root.ETag.ToString() != admission.Revision || anchor.Identity != identity)
-            return admission with { State = FactoryReservationState.Blocked, Detail = "Admission changed before foundation dispatch." };
-        if (anchor.Foundation is not null) return await InspectAsync(admission, anchor.Foundation, token);
-        anchor = anchor with { Foundation = new(Guid.NewGuid(), FactoryFoundationState.Partial, 0, "resource-group") };
+            return RecoveryFailure(admission, FactoryReservationState.Blocked, "Admission changed before foundation dispatch.");
+        if (anchor.Foundation is not null && !recovering) return await InspectAsync(admission, anchor.Foundation, token);
+        if (recovering && (anchor.Foundation?.Stage != "resource-group"
+                || anchor.Foundation.OperationCount != (retry is null ? 0 : 1)
+                || retry is null && (anchor.Foundation.ProductEndpoint is not null || anchor.Foundation.ProfilePin is not null
+                    || anchor.Foundation.RetryAdmission is not null)
+                || anchor.Foundation.RequestSha256 != requestHash))
+            return RecoveryFailure(admission, FactoryReservationState.Blocked, "Original approved request revision unavailable or changed; no dispatch.");
+        anchor = anchor with
+        {
+            Foundation = anchor.Foundation ?? new(Guid.NewGuid(), FactoryFoundationState.Partial, 0, "resource-group")
+            { RequestSha256 = requestHash, CoordinatorId = Guid.NewGuid() },
+        };
         try
         {
-            root = await SaveRootAsync(store, root, anchor, token);
-            var group = $"/subscriptions/{identity.SubscriptionId}/resourcegroups/{admission.Plan.Selection.FactoryResourceGroup.ToLowerInvariant()}";
-            var body = JsonSerializer.Serialize(new { location = admission.Plan.Selection.FactoryLocation });
-            var response = await DispatchAsync(store, root, anchor, group, "2021-04-01", body, token);
+            if (recovering)
+            {
+                var history = await store.ReadNamespaceAsync($"dsf/foundation/{anchor.Foundation.OperationId:D}/", token);
+                if (history.Count != (retry is null ? 0 : 1))
+                    throw new ReservationStoreException(FactoryReservationState.Unknown, "Pointer and surviving original operation history disagree; no pristine-state assumption or retry.");
+                if (retry is not null)
+                {
+                    if (!history.TryGetValue(ProductConfigurationKeys.FoundationOperation(retry.OperationId, retry.Index), out var rejected)
+                        || rejected.Value != FactoryReservationRecords.Serialize(retry))
+                        throw new ReservationStoreException(FactoryReservationState.Blocked, "Original rejected attempt changed; no coordinator takeover or retry.");
+                    confirmedOperations[retry.Index] = retry;
+                }
+            }
+            if (recovering) (root, anchor) = await TakeRecoveryCoordinatorAsync(store, root, anchor, token);
+            else root = await SaveRootAsync(store, root, anchor, token);
+            var response = await DispatchAsync(store, root, anchor, assets.Group, "2021-04-01", assets.GroupRequest(), token, retry: retry);
             root = response.Root;
             anchor = response.Anchor;
             if (response.Operation.State != FoundationOperationState.Completed)
                 return await InspectAsync(admission, anchor.Foundation!, token);
             anchor = anchor with { Foundation = anchor.Foundation! with { Stage = "product-configuration" } };
             root = await SaveRootAsync(store, root, anchor, token);
-            var configName = "dsfo-" + identity.FactoryId.ToString("N");
-            var configTarget = group + "/providers/microsoft.appconfiguration/configurationstores/" + configName;
-            var configBody = JsonSerializer.Serialize(new
-            {
-                location = admission.Plan.Selection.FactoryLocation,
-                sku = new { name = "standard" },
-                properties = new { disableLocalAuth = true, softDeleteRetentionInDays = 7, enablePurgeProtection = true, publicNetworkAccess = "Enabled" },
-            });
-            response = await DispatchAsync(store, root, anchor, configTarget, "2024-06-01", configBody, token);
+            response = await DispatchAsync(store, root, anchor, assets.Configuration, "2024-06-01", assets.ConfigurationRequest(), token);
             root = response.Root;
             anchor = response.Anchor;
             if (response.Operation.State != FoundationOperationState.Completed)
                 return await InspectAsync(admission, anchor.Foundation!, token);
-            var endpoint = "https://" + configName + ".azconfig.io";
+            var endpoint = assets.ProductEndpoint;
             if (response.Operation.Endpoint?.TrimEnd('/') != endpoint)
                 throw new ReservationStoreException(FactoryReservationState.Unknown, "Provider did not confirm the exact product endpoint; no product writes.");
             var profile = new FactoryOnboardingProfile(1, "onboard-decide-inactive-v1", identity.FactoryId, identity.PlanFingerprint, []);
@@ -110,7 +129,7 @@ internal sealed partial class FactoryFoundationService(IAzureCliRunner azure, Ht
 
     private async Task<(ConfigurationSetting Root, FactoryReservationAnchor Anchor, FoundationOperation Operation)> DispatchAsync(
         OwnerReservationStore store, ConfigurationSetting root, FactoryReservationAnchor anchor,
-        string target, string apiVersion, string body, CancellationToken token, Guid? clientRequestId = null)
+        string target, string apiVersion, string body, CancellationToken token, Guid? clientRequestId = null, FoundationOperation? retry = null)
     {
         var pointer = anchor.Foundation!;
         var credential = new OwnerReservationStore.OperatorCredential(azure, anchor.Identity.TenantId,
@@ -125,13 +144,19 @@ internal sealed partial class FactoryFoundationService(IAzureCliRunner azure, Ht
                 throw new ReservationStoreException(FactoryReservationState.Blocked,
                     "Target absence is not established. Existing names/tags never authorize adoption; no dispatch.");
         }
-        var operation = new FoundationOperation(1, OperationKind, anchor.Identity.FactoryId, pointer.OperationId,
+        var operation = retry is not null ? RetryOperation(retry) : new FoundationOperation(1, OperationKind, anchor.Identity.FactoryId, pointer.OperationId,
             pointer.OperationCount, target, apiVersion, FactoryReservationRecords.Hash(body), clientRequestId ?? Guid.NewGuid(), clock.GetUtcNow(),
             FoundationOperationState.Intent, FoundationResourceDisposition.CreateRequested);
-        anchor = anchor with { Foundation = pointer with { OperationCount = pointer.OperationCount + 1 } };
-        root = await SaveRootAsync(store, root, anchor, token);
         var key = ProductConfigurationKeys.FoundationOperation(pointer.OperationId, operation.Index);
-        var record = await store.WriteAsync(key, FactoryReservationRecords.Serialize(operation), null, token);
+        var previous = retry is null ? null : await store.ReadAsync(key, token);
+        if (retry is not null && (previous is null || previous.Value != FactoryReservationRecords.Serialize(retry)
+            || retry.Target != target || retry.ApiVersion != apiVersion || retry.RequestSha256 != FactoryReservationRecords.Hash(body)))
+            throw new ReservationStoreException(FactoryReservationState.Blocked, "Original rejected attempt/input revision changed; no retry.");
+        anchor = anchor with { Foundation = pointer with
+            { OperationCount = pointer.OperationCount + (retry is null ? 1 : 0), State = FactoryFoundationState.Partial, RecoveryDetail = null,
+                RetryAdmission = retry is null ? pointer.RetryAdmission : new(operation.Index, operation.ClientRequestId) } };
+        root = await SaveRootAsync(store, root, anchor, token);
+        var record = await store.WriteAsync(key, FactoryReservationRecords.Serialize(operation), previous?.ETag, token);
         confirmedOperations[operation.Index] = operation;
         try
         {
@@ -155,7 +180,7 @@ internal sealed partial class FactoryFoundationService(IAzureCliRunner azure, Ht
             record = await store.WriteAsync(key, FactoryReservationRecords.Serialize(operation), record.ETag, token);
             confirmedOperations[operation.Index] = operation;
             if (receipt.StatusCode is HttpStatusCode.BadRequest or HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
-                operation = operation with { State = FoundationOperationState.Failed };
+                operation = operation with { State = FoundationOperationState.Failed, Disposition = FoundationResourceDisposition.NoEffect };
             else
             {
                 using var document = JsonDocument.Parse(await receipt.Content.ReadAsStringAsync(token));
@@ -189,23 +214,30 @@ internal sealed partial class FactoryFoundationService(IAzureCliRunner azure, Ht
 
     private async Task<(ConfigurationSetting Root, FactoryReservationAnchor Anchor)> PublishAsync(
         OwnerReservationStore owner, OwnerReservationStore product, ConfigurationSetting root, FactoryReservationAnchor anchor,
-        string key, string value, CancellationToken token)
+        string key, string value, CancellationToken token, FoundationOperation? retry = null)
     {
         var pointer = anchor.Foundation!;
-        var operation = new FoundationOperation(1, OperationKind, anchor.Identity.FactoryId, pointer.OperationId,
+        var operation = retry is not null ? RetryOperation(retry) : new FoundationOperation(1, OperationKind, anchor.Identity.FactoryId, pointer.OperationId,
             pointer.OperationCount, pointer.ProductEndpoint + "/kv/" + Uri.EscapeDataString(key), "1.0",
             FactoryReservationRecords.Hash(value), Guid.NewGuid(), DateTimeOffset.UtcNow,
             FoundationOperationState.Intent, FoundationResourceDisposition.CreateRequested);
-        anchor = anchor with { Foundation = pointer with { OperationCount = pointer.OperationCount + 1 } };
-        root = await SaveRootAsync(owner, root, anchor, token);
         var operationKey = ProductConfigurationKeys.FoundationOperation(pointer.OperationId, operation.Index);
-        var intent = await owner.WriteAsync(operationKey, FactoryReservationRecords.Serialize(operation), null, token);
+        var previous = retry is null ? null : await owner.ReadAsync(operationKey, token);
+        if (retry is not null && (previous is null || previous.Value != FactoryReservationRecords.Serialize(retry)
+            || retry.Target != pointer.ProductEndpoint + "/kv/" + Uri.EscapeDataString(key)
+            || retry.ApiVersion != "1.0" || retry.RequestSha256 != FactoryReservationRecords.Hash(value)))
+            throw new ReservationStoreException(FactoryReservationState.Blocked, "Rejected publication revision/inputs changed; no retry.");
+        anchor = anchor with { Foundation = pointer with
+            { OperationCount = pointer.OperationCount + (retry is null ? 1 : 0),
+                RetryAdmission = retry is null ? pointer.RetryAdmission : new(operation.Index, operation.ClientRequestId) } };
+        root = await SaveRootAsync(owner, root, anchor, token);
+        var intent = await owner.WriteAsync(operationKey, FactoryReservationRecords.Serialize(operation), previous?.ETag, token);
         confirmedOperations[operation.Index] = operation;
         ConfigurationSetting receipt;
         try { receipt = await product.WriteAsync(key, value, null, token, operation.ClientRequestId); }
         catch (ReservationStoreException e) when (e.State == FactoryReservationState.Failed && !token.IsCancellationRequested)
         {
-            operation = operation with { State = FoundationOperationState.Failed };
+            operation = operation with { State = FoundationOperationState.Failed, Disposition = FoundationResourceDisposition.NoEffect };
             await owner.WriteAsync(operationKey, FactoryReservationRecords.Serialize(operation), intent.ETag, token);
             confirmedOperations[operation.Index] = operation;
             throw new ReservationStoreException(e.State,
@@ -246,7 +278,8 @@ internal sealed partial class FactoryFoundationService(IAzureCliRunner azure, Ht
                 ? null : new(Enum.Parse<FactoryFoundationState>(state.ToString()), anchor.Foundation!.Stage, detail,
                 anchor.Foundation.OperationId, confirmedOperations.OrderBy(p => p.Key).Select(p => p.Value.State is FoundationOperationState.Intent or FoundationOperationState.InFlight
                     ? p.Value with { State = FoundationOperationState.Unknown } : p.Value).ToArray())
-                { ProductEndpoint = anchor.Foundation.ProductEndpoint, ProfilePin = anchor.Foundation.ProfilePin },
+                { ProductEndpoint = anchor.Foundation.ProductEndpoint, ProfilePin = anchor.Foundation.ProfilePin,
+                    CoordinatorId = anchor.Foundation.CoordinatorId, RetryAdmission = anchor.Foundation.RetryAdmission },
         };
 
     public async Task<FactoryReservationResult> InspectAsync(
@@ -254,11 +287,15 @@ internal sealed partial class FactoryFoundationService(IAzureCliRunner azure, Ht
     {
         var operations = new List<FoundationOperation>();
         var state = pointer.State;
-        var detail = "Inactive foundation progress only; no workload readiness or activation. "
-            + "Uncertain dispatch stays held. Resume inspects receipts only; never reissues or rolls back.";
+        var detail = pointer.RecoveryDetail ?? "Original inactive foundation progress only; not current activation or workload readiness. "
+            + "Resume reconciles exact receipts and continues only proven safe work; uncertain dispatch stays held. No rollback or cleanup.";
         try
         {
             if (pointer.OperationId == Guid.Empty || pointer.OperationCount is < 0 or > 1024)
+                throw new JsonException();
+            if (pointer.CoordinatorId == Guid.Empty) throw new JsonException();
+            if (pointer.RetryAdmission is { } retryAdmission
+                && (retryAdmission.Index < 0 || retryAdmission.Index >= pointer.OperationCount || retryAdmission.ClientRequestId == Guid.Empty))
                 throw new JsonException();
             if (!Enum.IsDefined(pointer.State) || pointer.Stage is not ("resource-group" or "product-configuration"
                     or "product-authority-pending" or "product-authoritative" or "base-deployment" or "inactive-foundation")
@@ -276,6 +313,9 @@ internal sealed partial class FactoryFoundationService(IAzureCliRunner azure, Ht
                     || operation.OperationId != pointer.OperationId || operation.Index != i || !Enum.IsDefined(operation.State)
                     || !Enum.IsDefined(operation.Disposition) || operation.ClientRequestId == Guid.Empty || operation.StartedAt == default
                     || operation.RequestSha256.Length != 64 || operation.RequestSha256.Any(c => !char.IsAsciiHexDigit(c))
+                    || operation.PreviousAttempts is { Count: > 8 }
+                    || operation.PreviousAttempts?.Any(a => a.ClientRequestId == Guid.Empty || a.StartedAt == default
+                        || a.State != FoundationOperationState.Failed || a.Disposition != FoundationResourceDisposition.NoEffect) == true
                     || !(operation.Target == group || operation.Target.StartsWith(group + "/providers/", StringComparison.Ordinal)
                         || operation.Target == assets.HostingPlatformGroup && operation.ManagedBy == assets.HostingEnvironment
                         || pointer.ProductEndpoint is not null && operation.Target.StartsWith(pointer.ProductEndpoint + "/kv/dsf%2Ffactory%2F", StringComparison.Ordinal))
@@ -286,7 +326,14 @@ internal sealed partial class FactoryFoundationService(IAzureCliRunner azure, Ht
                     ? operation with { State = FoundationOperationState.Unknown } : operation);
             }
             if (operations.Any(o => o.State == FoundationOperationState.Unknown)) state = FactoryFoundationState.Unknown;
+            else if (operations.Any(o => o.State == FoundationOperationState.Canceled)) state = FactoryFoundationState.Canceled;
             else if (state != FactoryFoundationState.Unknown && operations.Any(o => o.State == FoundationOperationState.Failed)) state = FactoryFoundationState.Failed;
+            if (pointer.RetryAdmission is { } pending
+                && (operations.Count <= pending.Index || operations[pending.Index].ClientRequestId != pending.ClientRequestId))
+            {
+                state = FactoryFoundationState.Unknown;
+                detail = "A retry was admitted but its new attempt receipt is missing. The previous rejection cannot authorize takeover; a delayed actor may still dispatch.";
+            }
             if (pointer.State == FactoryFoundationState.Inactive)
             {
                 var planBytes = Encoding.UTF8.GetByteCount(BoundaryPlanFingerprint.Canonical(JsonSerializer.SerializeToElement(admission.Plan, FactoryReservationRecords.Json)));
@@ -323,7 +370,8 @@ internal sealed partial class FactoryFoundationService(IAzureCliRunner azure, Ht
             HasRegistryEffects = registryDispatchStarted,
             Revision = confirmedRoot?.ETag.ToString() ?? admission.Revision,
             Foundation = new(state, pointer.Stage, detail, pointer.OperationId, operations)
-            { ProductEndpoint = pointer.ProductEndpoint, ProfilePin = pointer.ProfilePin },
+            { ProductEndpoint = pointer.ProductEndpoint, ProfilePin = pointer.ProfilePin,
+                CoordinatorId = pointer.CoordinatorId, RetryAdmission = pointer.RetryAdmission },
         };
         if (result.Foundation.State != FactoryFoundationState.Inactive) return result;
         try
@@ -355,10 +403,11 @@ internal sealed partial class FactoryFoundationService(IAzureCliRunner azure, Ht
             {
                 "Succeeded" => FoundationOperationState.Completed,
                 "Creating" or "Running" or "Accepted" or "Updating" => FoundationOperationState.InFlight,
-                "Failed" or "Canceled" => FoundationOperationState.Failed,
+                "Failed" => FoundationOperationState.Failed,
+                "Canceled" => FoundationOperationState.Canceled,
                 _ => FoundationOperationState.Unknown,
             },
-            Disposition = FoundationResourceDisposition.Created,
+            Disposition = state is "Failed" or "Canceled" ? FoundationResourceDisposition.Unproven : FoundationResourceDisposition.Created,
             ResourceId = operation.Target,
         };
         if (operation.Target.Contains("/configurationstores/", StringComparison.Ordinal))

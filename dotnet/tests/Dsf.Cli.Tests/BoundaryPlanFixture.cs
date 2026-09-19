@@ -102,7 +102,14 @@ internal sealed class BoundaryPlanFixture : IAzureCliRunner
         var operation = string.Join(' ', args.Take(2));
         var key = operation == "rest --method" ? args[args.IndexOf("--url") + 1] : operation;
         if (operation == "appconfig kv" && OwnerEntries is not null)
-            return Task.FromResult(new AzureCliInvocationResult(0, OwnerEntries(), ""));
+        {
+            var filter = args.Contains("--key") ? args[args.IndexOf("--key") + 1] : "*";
+            var records = JsonNode.Parse(OwnerEntries())!.AsArray()
+                .Where(record => filter.EndsWith('*') ? ((string)record!["key"]!).StartsWith(filter[..^1], StringComparison.Ordinal)
+                    : (string?)record!["key"] == filter)
+                .Select(record => record!.DeepClone()).ToArray();
+            return Task.FromResult(new AzureCliInvocationResult(0, new JsonArray(records).ToJsonString(), ""));
+        }
         if (Overrides.TryGetValue(key, out var response))
         {
             return Task.FromResult(response);

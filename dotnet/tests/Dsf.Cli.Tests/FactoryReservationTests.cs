@@ -1118,11 +1118,14 @@ internal sealed class ReservationTestStore
             valueSnapshot = null;
         }
     }
-    public static ReservationTestStore Restore(string persisted) => new()
+    public static ReservationTestStore Restore(string persisted)
     {
-        records = JsonSerializer.Deserialize<Dictionary<string, string>>(persisted)!,
-        revision = 1000,
-    };
+        var records = JsonSerializer.Deserialize<Dictionary<string, string>>(persisted)!;
+        var maximum = records.Values.Select(value => (string?)JsonNode.Parse(value)?["etag"])
+            .Select(etag => etag?.StartsWith("revision-", StringComparison.Ordinal) == true
+                && int.TryParse(etag["revision-".Length..], out var number) ? number : 0).DefaultIfEmpty().Max();
+        return new() { records = records, revision = Math.Max(1000, maximum) };
+    }
     public string ListJson()
     {
         lock (gate)

@@ -20,7 +20,7 @@ public static partial class CliApplication
         var json = BoolOption("--json", "print nonsecret typed reservation/foundation state without prompts");
         var command = new Command(action, action == "reserve"
             ? "reserve durable factory identity and owner-scoped claims; never provision"
-            : action == "resume" ? "resume the reservation or inspect a dispatched foundation; never reissue ARM"
+            : action == "resume" ? "recover the original reservation/foundation at verified safe boundaries; uncertain effects stay held"
             : "inspect trusted reservation and product foundation authority; read-only");
         if (action == "reserve") AddOptions(command, input, fingerprint, json);
         else AddOptions(command, endpoint, product, tenant, subscription, json);
@@ -43,17 +43,37 @@ public static partial class CliApplication
                 }
                 else
                 {
-                    var owner = parse.GetValue(endpoint)?.Trim();
+                    var prompted = false;
+                    string? Locator(string? value, string prompt)
+                    {
+                        if (!string.IsNullOrWhiteSpace(value) || !terminal.Capabilities.IsInteractive || parse.GetValue(json))
+                            return value?.Trim();
+                        prompted = true;
+                        return terminal.Prompt(prompt)?.Trim();
+                    }
+                    var owner = Locator(parse.GetValue(endpoint), "Trusted owner App Configuration endpoint: ");
+                    var productKey = Locator(parse.GetValue(product), "Reserved product key: ");
+                    var tenantValue = Locator(parse.GetValue(tenant), "Owner reservation tenant ID: ");
+                    var subscriptionValue = Locator(parse.GetValue(subscription), "Owner reservation subscription ID: ");
                     try { new RepositoryAttachmentReviewRequest("owner/repository", owner, null).Validate(); }
                     catch (InvalidOperationException e) { throw new BoundaryInputException(e.Message); }
-                    if (string.IsNullOrEmpty(owner) || !Guid.TryParse(parse.GetValue(tenant), out var tenantId) || tenantId == Guid.Empty
-                        || !Guid.TryParse(parse.GetValue(subscription), out var subscriptionId) || subscriptionId == Guid.Empty
-                        || parse.GetValue(product) is not { } key || !Regex.IsMatch(key, "^[a-z0-9][a-z0-9_-]{0,89}$"))
+                    if (string.IsNullOrEmpty(owner) || !Guid.TryParse(tenantValue, out var tenantId) || tenantId == Guid.Empty
+                        || !Guid.TryParse(subscriptionValue, out var subscriptionId) || subscriptionId == Guid.Empty
+                        || productKey is not { } key || !Regex.IsMatch(key, "^[a-z0-9][a-z0-9_-]{0,89}$"))
                         throw new BoundaryInputException("--owner-appconfig-endpoint, --product, --tenant and --subscription are required; local files are not authority.");
                     var ownerEndpoint = new Uri(owner).GetLeftPart(UriPartial.Authority).ToLowerInvariant();
+                    if (prompted)
+                        terminal.WriteLine(CliPresentation.EquivalentCommand(terminal.Capabilities,
+                            $"dsf onboard decide {action} --owner-appconfig-endpoint {ownerEndpoint} --product {key} --tenant {tenantId:D} --subscription {subscriptionId:D}"));
                     var repairInput = parse.GetValue(input) is { } repairPath
                         ? JsonSerializer.Deserialize<ApplicationBoundarySelection>(await File.ReadAllTextAsync(repairPath, token), BoundaryInputJson) ?? throw new JsonException()
                         : null;
+                    if (action == "resume")
+                    {
+                        try { _ = new ProvisioningAssets().Resolve("onboard-foundation.json"); }
+                        catch (InvalidOperationException)
+                        { throw new BoundaryInputException("Packaged onboard-foundation.json is missing, unreadable or invalid; reinstall the CLI. No provider access attempted."); }
+                    }
                     result = action == "resume"
                         ? await service.ResumeAsync(ownerEndpoint, tenantId.ToString(), subscriptionId.ToString(), key, repairInput, token)
                         : await service.StatusAsync(ownerEndpoint, tenantId.ToString(), subscriptionId.ToString(), key, token);

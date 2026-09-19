@@ -50,7 +50,8 @@ public sealed record FactoryReservationResult(
     public FactorySupplemental? Supplemental { get; init; }
     public IReadOnlyList<FoundationOperation> GitHubOperations { get; init; } = [];
     public string NextAction => Foundation is not null
-        ? "Inspect foundation receipts and product authority. Resume is inspection-only after foundation dispatch; never reissue an uncertain ARM operation. Access, readiness and activation remain unmet."
+        ? "Use resume with the same trusted owner locator to reconcile receipts and continue only verified safe work. "
+            + "Unknown effects and unsupported incarnations require administrator handoff; no force, new identity or rollback. Foundation history is not current readiness or activation."
         : "Inspect trusted owner status; resume only this pre-provisioning operation. "
         + "Do not release claims, replace identity or infer consent, workload access, readiness or activation.";
 }

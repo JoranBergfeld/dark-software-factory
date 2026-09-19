@@ -46,9 +46,19 @@ internal sealed partial class FactoryFoundationService
         var dispatched = await DispatchAsync(store, root, anchor, deployment, "2025-04-01", body, token, clientRequestId);
         root = dispatched.Root;
         anchor = dispatched.Anchor;
-        if (dispatched.Operation.State is not (FoundationOperationState.Completed or FoundationOperationState.Failed)) return (root, anchor);
+        if (dispatched.Operation.State is not (FoundationOperationState.Completed or FoundationOperationState.Failed or FoundationOperationState.Canceled)) return (root, anchor);
 
-        using var operationsResponse = await ReadArmAsync(deployment + "/operations", "2025-04-01", access.Token, token);
+        return await ReconcileDeploymentAsync(store, root, anchor, assets, dispatched.Operation, receipts, access.Token, token);
+    }
+
+    private async Task<(ConfigurationSetting Root, FactoryReservationAnchor Anchor)> ReconcileDeploymentAsync(
+        OwnerReservationStore store, ConfigurationSetting root, FactoryReservationAnchor anchor, FactoryFoundationAssets assets,
+        FoundationOperation dispatched, IReadOnlyList<(FoundationOperation Operation, ConfigurationSetting Record)> receipts,
+        string access, CancellationToken token, bool verifyOnly = false)
+    {
+        var deployment = dispatched.Target;
+        var targets = assets.Targets();
+        using var operationsResponse = await ReadArmAsync(deployment + "/operations", "2025-04-01", access, token);
         if (!operationsResponse.IsSuccessStatusCode)
             throw new ReservationStoreException(FactoryReservationState.Unknown, "Deployment operation receipts unavailable; resource ownership is unproven.");
         using var operationsJson = JsonDocument.Parse(await operationsResponse.Content.ReadAsStringAsync(token));
@@ -67,7 +77,7 @@ internal sealed partial class FactoryFoundationService
             {
                 var parent = confirmedOperations.Values.Single(o => o.Target == intent.ManagedBy);
                 if (parent.State != FoundationOperationState.Completed) continue;
-                using var groupResponse = await ReadArmAsync(intent.Target, intent.ApiVersion, access.Token, token);
+                using var groupResponse = await ReadArmAsync(intent.Target, intent.ApiVersion, access, token);
                 if (!groupResponse.IsSuccessStatusCode) throw new JsonException();
                 using var groupJson = JsonDocument.Parse(await groupResponse.Content.ReadAsStringAsync(token));
                 if (!string.Equals(groupJson.RootElement.GetProperty("id").GetString(), intent.Target, StringComparison.OrdinalIgnoreCase)
@@ -82,7 +92,8 @@ internal sealed partial class FactoryFoundationService
                     Incarnation = "provider-managed-by:" + parent.ResourceId + ";creation:" + parent.Incarnation,
                     ProviderOperationId = parent.ProviderOperationId,
                 };
-                await store.WriteAsync(record.Key, FactoryReservationRecords.Serialize(owned), record.ETag, token);
+                if (!verifyOnly) await SaveReconciledReceiptAsync(store, record, intent, owned, token);
+                else RequireUnchangedReceipt(intent, owned);
                 confirmedOperations[owned.Index] = owned;
                 continue;
             }
@@ -93,15 +104,17 @@ internal sealed partial class FactoryFoundationService
             var properties = receipt.GetProperty("properties");
             var statusCode = properties.GetProperty("statusCode").GetString();
             if (properties.GetProperty("provisioningOperation").GetString() == "Create"
-                && properties.GetProperty("provisioningState").GetString() == "Failed")
+                && properties.GetProperty("provisioningState").GetString() is "Failed" or "Canceled")
             {
                 var failed = intent with
                 {
-                    State = FoundationOperationState.Failed,
+                    State = properties.GetProperty("provisioningState").GetString() == "Canceled"
+                        ? FoundationOperationState.Canceled : FoundationOperationState.Failed,
                     Disposition = FoundationResourceDisposition.Unproven,
-                    ProviderCorrelationId = dispatched.Operation.ProviderCorrelationId,
+                    ProviderCorrelationId = dispatched.ProviderCorrelationId,
                 };
-                await store.WriteAsync(record.Key, FactoryReservationRecords.Serialize(failed), record.ETag, token);
+                if (!verifyOnly) await SaveReconciledReceiptAsync(store, record, intent, failed, token);
+                else RequireUnchangedReceipt(intent, failed);
                 confirmedOperations[failed.Index] = failed;
                 continue;
             }
@@ -109,12 +122,16 @@ internal sealed partial class FactoryFoundationService
                 || properties.GetProperty("provisioningState").GetString() != "Succeeded"
                 || statusCode is not ("Created" or "201" or "OK" or "200"))
                 throw new ReservationStoreException(FactoryReservationState.Unknown, "Resource receipt does not prove creation; no name/tag adoption.");
-            using var resourceResponse = await ReadArmAsync(intent.Target, intent.ApiVersion, access.Token, token);
+            using var resourceResponse = await ReadArmAsync(intent.Target, intent.ApiVersion, access, token);
             if (!resourceResponse.IsSuccessStatusCode) throw new JsonException();
             using var resourceJson = JsonDocument.Parse(await resourceResponse.Content.ReadAsStringAsync(token));
             var resource = resourceJson.RootElement;
             if (!string.Equals(resource.GetProperty("id").GetString(), intent.Target, StringComparison.OrdinalIgnoreCase))
                 throw new JsonException();
+            if (verifyOnly && resource.GetProperty("properties").TryGetProperty("provisioningState", out var currentState)
+                && currentState.GetString() != "Succeeded")
+                throw new ReservationStoreException(FactoryReservationState.Blocked,
+                    "Current native resource is not in its completed provisioning state; recovery cannot adopt or overwrite changed provider work.");
             string? incarnation = null;
             if (intent.ApiVersion == "2020-02-02"
                 && intent.Target.Contains("/providers/microsoft.insights/components/", StringComparison.Ordinal))
@@ -163,7 +180,7 @@ internal sealed partial class FactoryFoundationService
                 incarnation = "cosmos-rid-sha256:" + FactoryReservationRecords.Hash(rid);
             }
             if (string.IsNullOrWhiteSpace(incarnation)) throw new JsonException();
-            var trackingId = ProviderGuid(properties, "trackingId");
+            var trackingId = ProviderGuid(properties, properties.TryGetProperty("serviceRequestId", out _) ? "serviceRequestId" : "trackingId");
             var operationId = receipt.GetProperty("operationId").GetString() ?? throw new JsonException();
             if (operationId.Length is < 1 or > 128
                 || operationId.Any(c => !char.IsAsciiHexDigit(c) && c != '-'))
@@ -177,7 +194,7 @@ internal sealed partial class FactoryFoundationService
                 HttpStatus = statusCode is "Created" or "201" ? 201 : 200,
                 ProviderOperationId = operationId,
                 ProviderRequestId = trackingId.ToString(),
-                ProviderCorrelationId = dispatched.Operation.ProviderCorrelationId,
+                ProviderCorrelationId = dispatched.ProviderCorrelationId,
             };
             if (intent.LogicalIdentity is not null)
             {
@@ -188,21 +205,88 @@ internal sealed partial class FactoryFoundationService
                     throw new JsonException();
                 completed = completed with { PrincipalId = principal, ClientId = client };
             }
-            await store.WriteAsync(record.Key, FactoryReservationRecords.Serialize(completed), record.ETag, token);
+            if (verifyOnly && intent.State != FoundationOperationState.Completed)
+                RequireProviderCreationIdentity(properties, resource, completed);
+            if (!verifyOnly) await SaveReconciledReceiptAsync(store, record, intent, completed, token);
+            else RequireUnchangedReceipt(intent, completed);
             confirmedOperations[completed.Index] = completed;
         }
+        return verifyOnly ? (root, anchor) : await CompleteDeploymentAsync(store, root, anchor, token);
+    }
+
+    private async Task<(ConfigurationSetting Root, FactoryReservationAnchor Anchor)> CompleteDeploymentAsync(
+        OwnerReservationStore store, ConfigurationSetting root, FactoryReservationAnchor anchor, CancellationToken token)
+    {
         var complete = confirmedOperations.Values.All(o => o.State == FoundationOperationState.Completed);
         var unknown = confirmedOperations.Values.Any(o => o.State is FoundationOperationState.Intent or FoundationOperationState.InFlight or FoundationOperationState.Unknown);
+        var canceled = confirmedOperations.Values.Any(o => o.State == FoundationOperationState.Canceled);
         anchor = anchor with
         {
             Foundation = anchor.Foundation! with
             {
-                State = complete ? FactoryFoundationState.Inactive : unknown ? FactoryFoundationState.Unknown : FactoryFoundationState.Failed,
+                State = complete ? FactoryFoundationState.Inactive : unknown ? FactoryFoundationState.Unknown
+                    : canceled ? FactoryFoundationState.Canceled : FactoryFoundationState.Failed,
                 Stage = complete ? "inactive-foundation" : "base-deployment",
             }
         };
         root = await SaveRootAsync(store, root, anchor, token);
         return (root, anchor);
+    }
+
+    private static async Task SaveReconciledReceiptAsync(OwnerReservationStore store, ConfigurationSetting record,
+        FoundationOperation original, FoundationOperation current, CancellationToken token)
+    {
+        RequireUnchangedReceipt(original, current);
+        if (original.State == FoundationOperationState.Completed)
+            return;
+        if (original != current)
+            await store.WriteAsync(record.Key, FactoryReservationRecords.Serialize(current), record.ETag, token);
+    }
+
+    private static void RequireUnchangedReceipt(FoundationOperation original, FoundationOperation current)
+    {
+        if (original.State is FoundationOperationState.Failed or FoundationOperationState.Canceled
+            && original.Disposition != FoundationResourceDisposition.NoEffect && current.State != original.State)
+            throw new ReservationStoreException(FactoryReservationState.Blocked,
+                "Current native result contradicts an original terminal failure/cancellation; that receipt is retained, not rewritten into success. Administrator reconciliation required.");
+        if (original.State == FoundationOperationState.Completed
+            && FactoryReservationRecords.Serialize(original) != FactoryReservationRecords.Serialize(current))
+            throw new ReservationStoreException(FactoryReservationState.Blocked,
+                "Current native incarnation/ownership differs from the original receipt; retained evidence is not rewritten. Administrator reconciliation required.");
+    }
+
+    private static void RequireProviderCreationIdentity(JsonElement operation, JsonElement current, FoundationOperation receipt)
+    {
+        // Optional native response content is used only in memory. Never enable ARM debug capture or
+        // retain whole responses: they can contain instrumentation keys and other provider secrets.
+        if (!operation.TryGetProperty("response", out var response) || response.ValueKind != JsonValueKind.Object
+            || !response.TryGetProperty("content", out var original) || original.ValueKind != JsonValueKind.Object)
+            throw new ReservationStoreException(FactoryReservationState.Unknown,
+                "Original native per-target creation response is unavailable; current names/IDs and a terminal deployment cannot recover lost incarnation receipts. Administrator reconciliation required.");
+        if (!string.Equals(original.GetProperty("id").GetString(), receipt.Target, StringComparison.OrdinalIgnoreCase))
+            throw new JsonException();
+        var matches = receipt.Incarnation switch
+        {
+            { } value when value.StartsWith("appinsights-app-id:", StringComparison.Ordinal) =>
+                Same("properties", "AppId") && Same("properties", "CreationDate"),
+            { } value when value.StartsWith("cosmos-rid-sha256:", StringComparison.Ordinal) =>
+                Same("properties", "resource", "_rid"),
+            { } value when value.StartsWith("etag-sha256:", StringComparison.Ordinal) => Same("etag"),
+            _ => Same("systemData", "createdAt"),
+        };
+        if (receipt.LogicalIdentity is not null)
+            matches &= Same("properties", "principalId") && Same("properties", "clientId") && Same("properties", "tenantId");
+        if (!matches)
+            throw new ReservationStoreException(FactoryReservationState.Blocked,
+                "Native creation response and current resource incarnation differ; a recreated resource ID cannot be adopted. Original ownership evidence remains held.");
+
+        bool Same(params string[] path)
+        {
+            var left = original;
+            var right = current;
+            foreach (var part in path) { left = left.GetProperty(part); right = right.GetProperty(part); }
+            return JsonElement.DeepEquals(left, right);
+        }
     }
 
     private async Task<HttpResponseMessage> ReadArmAsync(string target, string version, string access, CancellationToken token)

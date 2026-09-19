@@ -3,12 +3,24 @@ using System.Text.Json.Serialization;
 namespace Dsf.Core.Onboarding;
 
 public enum FactoryFoundationState { Inactive, Partial, Blocked, Failed, Canceled, Unknown }
-public enum FoundationOperationState { Intent, InFlight, Completed, Failed, Unknown }
-public enum FoundationResourceDisposition { CreateRequested, Created, Reused, Unproven }
+public enum FoundationOperationState { Intent, InFlight, Completed, Failed, Unknown, Canceled }
+public enum FoundationResourceDisposition { CreateRequested, Created, Reused, Unproven, NoEffect }
 
 public sealed record FactoryFoundationPointer(
     Guid OperationId, FactoryFoundationState State, int OperationCount, string Stage,
-    string? ProductEndpoint = null, string? ProfilePin = null);
+    string? ProductEndpoint = null, string? ProfilePin = null)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? RequestSha256 { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? RecoveryDetail { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? CoordinatorId { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public FoundationRetryAdmission? RetryAdmission { get; init; }
+}
+
+public sealed record FoundationRetryAdmission(int Index, Guid ClientRequestId);
 
 public sealed record FoundationOperation(
     int SchemaVersion, string Kind, Guid FactoryId, Guid OperationId, int Index,
@@ -35,7 +47,13 @@ public sealed record FoundationOperation(
     public string? ConditionVersion { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? NativeRevision { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<FoundationAttemptReceipt>? PreviousAttempts { get; init; }
 }
+
+public sealed record FoundationAttemptReceipt(
+    Guid ClientRequestId, DateTimeOffset StartedAt, FoundationOperationState State,
+    FoundationResourceDisposition Disposition, int? HttpStatus, string? ProviderRequestId, DateTimeOffset? ResponseDate);
 
 public sealed record FactoryOnboardingProfile(
     int SchemaVersion, string Profile, Guid FactoryId, string PlanFingerprint,
@@ -72,6 +90,10 @@ public sealed record FactoryFoundationResult(
     public bool IsActivated => false;
     public string? ProductEndpoint { get; init; }
     public string? ProfilePin { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? CoordinatorId { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public FoundationRetryAdmission? RetryAdmission { get; init; }
     public IReadOnlyList<string> PendingStages { get; init; } =
         ["workload grants", "GitHub authentication", "evidence access and connectivity",
             "factory telemetry connectivity", "models", "code inventory and analysis",
