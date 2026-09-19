@@ -30,6 +30,7 @@ internal sealed partial class PreviewPreparationTransport
     internal Func<string, string>? AlterIngressBody { get; set; }
     internal TimeProvider? PreviewClock { get; set; }
     internal Action<JsonNode>? AfterEvaluationRead { get; set; }
+    internal Func<string, JsonNode, Task>? AfterNativeReadResponse { get; set; }
     internal Action<JsonNode>? BeforeEvaluationWrite { get; set; }
     internal readonly System.Collections.Concurrent.ConcurrentQueue<(string Path, TimeSpan Elapsed, TimeSpan WallElapsed)> IngressResponses = new();
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, Lazy<Task<PreviewRunner>>> previewHosts = new();

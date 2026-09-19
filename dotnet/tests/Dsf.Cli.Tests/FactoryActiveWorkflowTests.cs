@@ -12,6 +12,145 @@ namespace Dsf.Cli.Tests;
 
 public sealed class FactoryActiveWorkflowTests(ActivatedFactoryFixture fixture) : IClassFixture<ActivatedFactoryFixture>
 {
+    [Fact]
+    public async Task Original_worker_release_during_inspection_does_not_turn_completed_work_into_unknown()
+    {
+        var transport = fixture.Reset();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        transport.BeforeEvaluationResponse = async (_, token) =>
+        {
+            transport.BeforeEvaluationResponse = null;
+            entered.TrySetResult();
+            await release.Task.WaitAsync(token);
+        };
+        var request = new FactoryDecisionRequest(Guid.NewGuid(), true);
+        var id = FactoryPromotion.DecisionId(transport.Manifest.Identity.FactoryId, request.InvocationId);
+        var documentPath = "/dbs/widget/colls/council-preview/docs/" + id;
+        var calls = transport.EvaluationInference.Count;
+        using var http = new HttpClient(transport, false) { Timeout = Timeout.InfiniteTimeSpan };
+        using var admitted = await http.PostAsJsonAsync(fixture.LiveEndpoint(transport) + "/decide", request, FactorySourceValidation.RecordJson);
+        Assert.Equal(HttpStatusCode.Accepted, admitted.StatusCode);
+        await entered.Task.WaitAsync(TimeSpan.FromMinutes(3));
+        var crossedRelease = false;
+        transport.AfterNativeReadResponse = async (path, captured) =>
+        {
+            if (path != documentPath || (string?)captured["admission"]?["state"] != "Running") return;
+            transport.AfterNativeReadResponse = null;
+            release.TrySetResult();
+            var complete = await fixture.DecideAsync(transport, request);
+            Assert.Equal("ReadyAwaitingActivation", (string?)complete["readiness"]);
+            crossedRelease = true;
+        };
+        JsonNode observed;
+        try
+        {
+            using var status = await http.PostAsJsonAsync(fixture.LiveEndpoint(transport) + "/decision", request, FactorySourceValidation.RecordJson);
+            Assert.Equal(HttpStatusCode.OK, status.StatusCode);
+            observed = JsonNode.Parse(await status.Content.ReadAsStringAsync())!;
+        }
+        finally { release.TrySetResult(); transport.AfterNativeReadResponse = null; }
+        Assert.True(crossedRelease);
+        Assert.Equal("ReadyAwaitingActivation", (string?)observed["readiness"]);
+        Assert.Equal(id, (string?)observed["evaluation"]!["proof"]!["previewId"]);
+        Assert.Equal(calls + 16, transport.EvaluationInference.Count);
+        Assert.Equal(0, transport.IssuePosts);
+    }
+
+    [Fact]
+    public async Task Original_running_invocation_remains_inspectable_across_clients_and_pause_without_readmission()
+    {
+        var transport = fixture.Reset();
+        var machine = transport.Scenario.Machine;
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        transport.BeforeEvaluationResponse = async (_, token) =>
+        {
+            transport.BeforeEvaluationResponse = null;
+            entered.TrySetResult();
+            await release.Task.WaitAsync(token);
+        };
+        var invocation = new FactoryDecisionRequest(Guid.NewGuid(), true);
+        var fingerprint = FactoryLive.ReadConfirmed(transport.Values().Where(p => p.Key.StartsWith(FactoryLive.Prefix, StringComparison.Ordinal)).ToDictionary(),
+            transport.Scenario.Source.Source!.Clock.Now).Plan.Fingerprint;
+        var id = FactoryPromotion.DecisionId(transport.Manifest.Identity.FactoryId, invocation.InvocationId);
+        var path = "/dbs/widget/colls/council-preview/docs/" + id;
+        var models = transport.EvaluationInference.Count;
+        using var http = new HttpClient(transport, false) { Timeout = Timeout.InfiniteTimeSpan };
+        using var admitted = await http.PostAsJsonAsync(fixture.LiveEndpoint(transport) + "/decide", invocation, FactorySourceValidation.RecordJson);
+        Assert.Equal(HttpStatusCode.Accepted, admitted.StatusCode);
+        await entered.Task.WaitAsync(TimeSpan.FromMinutes(3));
+        try
+        {
+            var original = transport.SeedDocuments[path];
+            var native = JsonNode.Parse(original)!;
+            Assert.Equal("Running", (string?)native["admission"]!["state"]);
+            Assert.Single(native["dispatches"]!.AsArray());
+            for (var client = 0; client < 2; client++)
+            {
+                transport.Scenario.Arm.Product = ReservationTestStore.Restore(transport.Scenario.Arm.Product.Export());
+                FactoryActivationTests.ConnectAudit(transport);
+                var before = transport.Requests.Count;
+                var status = await fixture.AdvanceUntilCompletedAsync(transport, machine.InvokeAsync("live", "--execution",
+                    invocation.InvocationId.ToString(), "--approve", fingerprint));
+                Assert.Equal("Running", (string?)status.Result["readiness"]);
+                Assert.Equal(invocation.InvocationId, (Guid)status.Result["invocationId"]!);
+                Assert.False((bool)status.Result["isActivated"]!);
+                Assert.Contains(transport.Requests.Skip(before), r => r.Uri.AbsolutePath == "/execution");
+                Assert.Equal(original, transport.SeedDocuments[path]);
+                Assert.Equal(models + 1, transport.EvaluationInference.Count);
+            }
+            using var duplicate = await http.PostAsJsonAsync(fixture.LiveEndpoint(transport) + "/decide", invocation, FactorySourceValidation.RecordJson);
+            Assert.Equal(HttpStatusCode.Accepted, duplicate.StatusCode);
+            Assert.Equal("Running", (string?)JsonNode.Parse(await duplicate.Content.ReadAsStringAsync())!["readiness"]);
+            foreach (var incompatible in new[] { new FactoryDecisionRequest(Guid.NewGuid(), true), invocation with { DryRun = false } })
+            {
+                foreach (var route in new[] { "/decide", "/decision" })
+                {
+                    using var denied = await http.PostAsJsonAsync(fixture.LiveEndpoint(transport) + route, incompatible, FactorySourceValidation.RecordJson);
+                    Assert.Equal(HttpStatusCode.Forbidden, denied.StatusCode);
+                }
+            }
+            var resumeReached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            transport.AfterIngressResponse = (route, status) =>
+            {
+                if (route == "/exercise" && status == HttpStatusCode.Accepted) resumeReached.TrySetResult();
+                return Task.CompletedTask;
+            };
+            var resumed = machine.InvokeAsync("live", "--exercise", invocation.InvocationId.ToString(), "--approve", fingerprint);
+            await resumeReached.Task.WaitAsync(TimeSpan.FromMinutes(3));
+            Assert.Equal(original, transport.SeedDocuments[path]);
+            Assert.Equal(models + 1, transport.EvaluationInference.Count);
+            var pause = await machine.InvokeAsync("pause", "--request", "--operation", Guid.NewGuid().ToString());
+            Assert.Equal("DrainingUnknown", (string?)pause.Result["state"]);
+            var beforePauseInspection = transport.Requests.Count;
+            var draining = await fixture.AdvanceUntilCompletedAsync(transport, machine.InvokeAsync("live", "--execution",
+                invocation.InvocationId.ToString(), "--approve", fingerprint));
+            Assert.Equal("Unknown", (string?)draining.Result["readiness"]);
+            Assert.Equal(invocation.InvocationId, (Guid)draining.Result["invocationId"]!);
+            Assert.Contains("draining", (string?)draining.Result["reason"]);
+            Assert.Contains(transport.Requests.Skip(beforePauseInspection), r => r.Uri.AbsolutePath == "/execution");
+            Assert.Equal(original, transport.SeedDocuments[path]);
+            using var observed = await http.PostAsJsonAsync(fixture.LiveEndpoint(transport) + "/decision", invocation, FactorySourceValidation.RecordJson);
+            Assert.Equal(HttpStatusCode.OK, observed.StatusCode);
+            Assert.Equal("Unknown", (string?)JsonNode.Parse(await observed.Content.ReadAsStringAsync())!["readiness"]);
+            using var pausedDispatch = await http.PostAsJsonAsync(fixture.LiveEndpoint(transport) + "/decide", invocation, FactorySourceValidation.RecordJson);
+            Assert.Equal(HttpStatusCode.Forbidden, pausedDispatch.StatusCode);
+            var resumeObservation = await fixture.AdvanceUntilCompletedAsync(transport, resumed);
+            Assert.Equal("Unknown", (string?)resumeObservation.Result["readiness"]);
+            Assert.Equal(models + 1, transport.EvaluationInference.Count);
+        }
+        finally { release.TrySetResult(); }
+        for (var i = 0; i < 2000 && (string?)JsonNode.Parse(transport.SeedDocuments[path])!["admission"]?["state"] != "Unknown"; i++)
+            await Task.Delay(100);
+        Assert.Equal("Unknown", (string?)JsonNode.Parse(transport.SeedDocuments[path])!["admission"]!["state"]);
+        var quarantined = await fixture.AdvanceUntilCompletedAsync(transport, machine.InvokeAsync("live", "--execution",
+            invocation.InvocationId.ToString(), "--approve", fingerprint));
+        Assert.Equal("Unknown", (string?)quarantined.Result["readiness"]);
+        Assert.Equal(models + 1, transport.EvaluationInference.Count);
+        Assert.Equal(0, transport.IssuePosts);
+    }
+
     [Theory]
     [InlineData("exercise")]
     [InlineData("execution")]
@@ -687,6 +826,7 @@ public sealed class ActivatedFactoryFixture : IAsyncLifetime
         transport.AlterApplication = null;
         transport.AfterEvaluationWrite = null;
         transport.AfterIngressResponse = null;
+        transport.AfterNativeReadResponse = null;
         return transport;
     }
     internal string LiveEndpoint(PreviewPreparationTransport transport) =>

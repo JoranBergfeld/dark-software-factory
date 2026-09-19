@@ -19,7 +19,7 @@ internal sealed record PublisherAuthoritySnapshot(FactoryPublisherCapability Cap
 }
 
 internal sealed class FactoryPublisherAuthority(FactoryHostSettings settings, bool contextHost,
-    TokenCredential credential, HttpClient http, TimeProvider clock)
+    TokenCredential credential, HttpClient http, TimeProvider clock, FactoryInspectionAuthority? inspection = null)
 {
     internal async Task<PublisherAuthoritySnapshot> CheckAsync(CancellationToken token)
     {
@@ -143,6 +143,7 @@ internal sealed class FactoryPublisherAuthority(FactoryHostSettings settings, bo
     }
     internal async Task RequireSameAsync(PublisherAuthoritySnapshot snapshot, CancellationToken token)
     {
+        if (inspection is not null) throw Denied("OriginalInvocationInspectionCannotAdmitWork");
         if ((await CheckAsync(token)).Revision != snapshot.Revision) throw Denied("PublicationAdmissionAuthorityChanged");
     }
     private async Task<Dictionary<string, ConfigurationSetting>> ReadAsync(CancellationToken token)
@@ -150,10 +151,12 @@ internal sealed class FactoryPublisherAuthority(FactoryHostSettings settings, bo
         var gateway = new AzureConfigurationSettingsGateway(credential, http);
         foreach (var prefix in new[] { FactoryPause.Key, FactoryPause.HistoryPrefix })
             await foreach (var record in gateway.ListRecordsAsync(settings.ProductEndpoint, "*", token, prefix + "*"))
-                FactoryPause.RequireAdmissionOpen([record.Key]);
+                if (inspection is not null) _ = inspection.Include(record.Key);
+                else FactoryPause.RequireAdmissionOpen([record.Key]);
         var result = new Dictionary<string, ConfigurationSetting>();
         await foreach (var record in gateway.ListRecordsAsync(settings.ProductEndpoint, ProductConfigurationKeys.NoLabel, token))
         {
+            if (inspection is not null && !inspection.Include(record.Key)) continue;
             FactoryPause.RequireAdmissionOpen([record.Key]);
             if (result.Count >= FactoryPreviewPublication.Policy.MaximumRecords + FactoryAudit.GovernanceHistoryRecords
                 || System.Text.Encoding.UTF8.GetByteCount(record.Key + record.Value) + 512 > FactoryCharterLimits.RecordBytes

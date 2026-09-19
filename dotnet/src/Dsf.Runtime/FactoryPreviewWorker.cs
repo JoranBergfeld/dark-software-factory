@@ -24,6 +24,40 @@ internal sealed class FactoryPreviewWorker(FactoryHostSettings settings, Runtime
         ?? new ManagedIdentityCredential(ManagedIdentityId.FromUserAssignedClientId(settings.ManagedIdentityClientId));
     private static readonly JsonSerializerOptions Json = new(FactoryGitHubJson.Options) { IgnoreReadOnlyProperties = false };
 
+    internal async Task<PreviewHttpObservation?> InspectIssuedAsync(FactoryDecisionInspection inspection, CancellationToken token)
+    {
+        await gate.WaitAsync(token);
+        try
+        {
+            var original = inspection.Store.NativeIdentity;
+            var admissionId = inspection.Store.Document.Admission?.Id;
+            await inspection.Store.ReadDocumentAsync(token);
+            if (inspection.Store.NativeIdentity?.NativeResourceId != original?.NativeResourceId
+                || admissionId is not null && inspection.Store.Document.Admission?.Id != admissionId)
+                throw new PreviewCapabilityException(FactoryCharterState.Unknown, "OriginalInvocationChangedDuringInspection");
+            var document = inspection.Store.Document;
+            var current = inspection.Live.Authority;
+            if (inspection.Access.AdmissionClosed)
+                return Observation(current.Preview, current.Request, PreviewReadiness.Unknown,
+                    $"Admission closed; original recorded work {document.Admission?.State.ToString() ?? document.Phase.ToString()}, issued effects remain draining or unknown.");
+            if (document.Admission is { State: PreviewWorkState.Queued or PreviewWorkState.Running } admission)
+            {
+                var owned = active?.Admission?.Id == admission.Id && admission.WorkerId == workerId && !stopping;
+                return Observation(current.Preview, current.Request, !owned ? PreviewReadiness.Unknown
+                    : admission.State == PreviewWorkState.Queued ? PreviewReadiness.Queued : PreviewReadiness.Running,
+                    owned ? "OriginalPreviewWorkContinues" : "OriginalPreviewWorkerUnconfirmedNoTakeover");
+            }
+            if (document.PendingRun is not null || document.Admission?.State == PreviewWorkState.Unknown
+                || document.Dispatches.Any(d => d.State is PreviewModelDispatchState.Dispatched or PreviewModelDispatchState.Unknown))
+                return Observation(current.Preview, current.Request, PreviewReadiness.Unknown,
+                    document.Admission?.Reason ?? "OriginalIssuedWorkOrCheckpointUnconfirmedNoReplay");
+            if (document.Run is null)
+                return Observation(current.Preview, current.Request, PreviewReadiness.NotReady, "OriginalInvocationNotEvaluatedNoDispatch");
+            return null;
+        }
+        finally { gate.Release(); }
+    }
+
     internal async Task<PreviewHttpObservation> ObserveAsync(PreviewCapabilitySnapshot authority, PreviewCapabilityRequest request,
         bool execute, bool inputs, CancellationToken token, FactoryLiveExecution? live = null)
     {

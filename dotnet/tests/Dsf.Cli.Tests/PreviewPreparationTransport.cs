@@ -71,7 +71,12 @@ internal sealed partial class PreviewPreparationTransport(CharterScenario scenar
         if (uri.Host.EndsWith("-cosmos.documents.azure.com", StringComparison.Ordinal)
             && (path.Contains("/colls/council-preview/", StringComparison.Ordinal) || path.Contains("/colls/runs/", StringComparison.Ordinal)
                 || path.Contains("/colls/proposal-publications/", StringComparison.Ordinal)))
-            return await SeedAsync(request, token);
+        {
+            var response = await SeedAsync(request, token);
+            if (request.Method == HttpMethod.Get && response.StatusCode == HttpStatusCode.OK && AfterNativeReadResponse is not null)
+                await AfterNativeReadResponse(path, JsonNode.Parse(await response.Content.ReadAsStringAsync(token))!);
+            return response;
+        }
         if (uri.Host == "management.azure.com" && request.Method == HttpMethod.Put)
         {
             var body = JsonNode.Parse(await request.Content!.ReadAsStringAsync(token))!;

@@ -47,8 +47,11 @@ public static class FactoryPause
     public static void RequireAdmissionOpen(IEnumerable<string> keys)
     {
         // A corrupt root or surviving history can only remove permission, never recreate unpaused authority.
-        if (keys.Any(key => key.StartsWith(Key, StringComparison.Ordinal) || key.StartsWith(HistoryPrefix, StringComparison.Ordinal)))
+        if (keys.Any(IsStopRecord))
             throw new PreviewCapabilityException(FactoryCharterState.Blocked,
                 "DeliberatePauseOrUnconfirmedStop: admission closed; issued effects remain draining or unknown.");
     }
+
+    public static bool IsStopRecord(string key) =>
+        key.StartsWith(Key, StringComparison.Ordinal) || key.StartsWith(HistoryPrefix, StringComparison.Ordinal);
 }

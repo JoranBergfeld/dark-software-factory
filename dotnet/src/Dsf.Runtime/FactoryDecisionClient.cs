@@ -21,7 +21,7 @@ internal sealed class FactoryDecisionClient(RuntimeSettings settings, RuntimeDep
         var values = new Dictionary<string, string>();
         await foreach (var (key, value) in dependencies.ConfigurationSettingsGateway.ListAsync(settings.AppConfigEndpoint, ProductConfigurationKeys.NoLabel, token))
         {
-            FactoryPause.RequireAdmissionOpen([key]);
+            if (execute) FactoryPause.RequireAdmissionOpen([key]);
             if (values.Count >= FactoryAudit.MaximumRecords || !values.TryAdd(key, value)) throw new JsonException();
         }
         var live = FactoryLive.ReadConfirmed(values.Where(p => p.Key.StartsWith(FactoryLive.Prefix, StringComparison.Ordinal)).ToDictionary(), Clock.GetUtcNow());

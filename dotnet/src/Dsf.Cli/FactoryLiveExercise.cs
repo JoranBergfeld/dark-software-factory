@@ -11,7 +11,7 @@ internal sealed partial class FactoryPreviewPreparationService
     internal async Task<FactoryLiveObservation> ExerciseLiveAsync(FactoryReservationResult admission, FactoryLiveRequest input,
         bool readOnly, CancellationToken token)
     {
-        var prepared = await LiveAsync(admission, null, null, token);
+        var prepared = await LiveAsync(admission, null, null, token, input);
         if (prepared.State != FactoryLiveState.PreparedAwaitingPublication || prepared.Plan is not { } plan || plan.Fingerprint != input.RolloutFingerprint)
             return new(1, admission.Identity?.FactoryId ?? Guid.Empty, input.OperationId, input.RolloutFingerprint, clock.GetUtcNow(),
                 PreviewReadiness.Blocked, "CurrentOriginalNativeLiveRolloutRequired", null);

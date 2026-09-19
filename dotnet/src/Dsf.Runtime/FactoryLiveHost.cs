@@ -42,7 +42,19 @@ public static partial class RuntimeVerbs
                 var request = await context.Request.ReadFromJsonAsync<FactoryDecisionRequest>(FactorySourceValidation.RecordJson, pending.Token) ?? throw new JsonException();
                 var credential = dependencies.PreviewCredential
                     ?? new ManagedIdentityCredential(ManagedIdentityId.FromUserAssignedClientId(settings.ManagedIdentityClientId));
-                var decision = await FactoryDecisionExecution.AdmitAuthorityAsync(settings, dependencies, request, credential, http, pending.Token, execute);
+                if (!execute)
+                {
+                    var inspection = await FactoryDecisionInspection.OpenAsync(settings, dependencies, request, credential, http, pending.Token);
+                    var original = inspection.Live.Authority.Preview;
+                    if (!NativeCaller(context, original.Manifest.Identity.AzureActorId, original.Manifest.Identity.TenantId, null)
+                        && !NativeCaller(context, original.Council.PrincipalId!, original.Manifest.Identity.TenantId, original.Council.ClientId))
+                        throw new PreviewCapabilityException(FactoryCharterState.Blocked, "OriginalGovernanceOperatorOrCouncilCallerRequired");
+                    var issued = await app.Services.GetRequiredService<FactoryPreviewWorker>().InspectIssuedAsync(inspection, pending.Token);
+                    if (issued is not null)
+                        return Results.Json(issued, OutputJson,
+                            statusCode: issued.Readiness is PreviewReadiness.Queued or PreviewReadiness.Running ? 202 : 200);
+                }
+                var decision = await FactoryDecisionExecution.AdmitAuthorityAsync(settings, dependencies, request, credential, http, pending.Token);
                 var live = await decision.LiveAsync(settings, dependencies, credential, pending.Token);
                 var factory = live.Authority.Preview.Manifest.Identity;
                 if (!NativeCaller(context, factory.AzureActorId, factory.TenantId, null)
@@ -75,6 +87,19 @@ public static partial class RuntimeVerbs
                     ?? throw new JsonException();
                 var credential = dependencies.PreviewCredential
                     ?? new ManagedIdentityCredential(ManagedIdentityId.FromUserAssignedClientId(settings.ManagedIdentityClientId));
+                if (context.Request.Path == "/execution")
+                {
+                    var inspection = await FactoryDecisionInspection.OpenAsync(settings, dependencies, new(request.OperationId, true),
+                        credential, http, pending.Token, request.RolloutFingerprint);
+                    var original = inspection.Live.Authority;
+                    if (!NativeCaller(context, original.Preview.Manifest.Identity.AzureActorId, original.Preview.Manifest.Identity.TenantId, null))
+                        throw new PreviewCapabilityException(FactoryCharterState.Blocked, "ExplicitGovernanceOperatorExerciseRequired");
+                    var issued = await app.Services.GetRequiredService<FactoryPreviewWorker>().InspectIssuedAsync(inspection, pending.Token);
+                    if (issued is not null)
+                        return Results.Json(new FactoryLiveObservation(1, issued.FactoryId, request.OperationId, original.Live.Plan.Fingerprint,
+                            issued.ObservedAt, issued.Readiness, issued.Reason, issued.Evaluation), OutputJson,
+                            statusCode: issued.Readiness is PreviewReadiness.Queued or PreviewReadiness.Running ? 202 : 200);
+                }
                 var authority = new FactoryLiveAuthority(settings, dependencies, credential, http);
                 var current = await authority.CheckAsync(request, execute, pending.Token);
                 var capability = context.Request.Path == "/activation-capability";
@@ -94,7 +119,7 @@ public static partial class RuntimeVerbs
                 if (indexed)
                 {
                     var decision = await FactoryDecisionExecution.AdmitAuthorityAsync(settings, dependencies, new(request.OperationId, true),
-                        credential, http, pending.Token, execute);
+                        credential, http, pending.Token);
                     live = await decision.LiveAsync(settings, dependencies, credential, pending.Token);
                 }
                 else live = new FactoryLiveExecution(current, request, authority);

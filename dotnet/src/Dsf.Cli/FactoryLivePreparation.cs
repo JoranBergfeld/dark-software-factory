@@ -9,7 +9,7 @@ namespace Dsf.Cli;
 internal sealed partial class FactoryPreviewPreparationService
 {
     internal async Task<FactoryLiveResult> LiveAsync(FactoryReservationResult admission, FactoryLiveSelection? selection,
-        string? approval, CancellationToken token)
+        string? approval, CancellationToken token, FactoryLiveRequest? invocation = null)
     {
         FactoryLivePlan? plan = null;
         FactoryLiveCoordinator? coordinator = null;
@@ -196,7 +196,8 @@ internal sealed partial class FactoryPreviewPreparationService
 
             async Task RequireLiveCurrentAsync(bool allowPromotion = false)
             {
-                await RequireCurrentReviewedActivationAsync(admission, store, plan!.Activation, allowPromotion, token);
+                await RequireCurrentReviewedActivationAsync(admission, store, plan!.Activation, allowPromotion, token,
+                    invocation: invocation is not null);
                 var record = await store.ReadAsync(plan.Approval.Key, token);
                 if (record is null || record.ETag.ToString() != plan.Approval.NativeRevision || FactoryAudit.TextHash(record.Value) != plan.Approval.Sha256)
                     throw Unknown("OriginalActivationReceiptChanged");

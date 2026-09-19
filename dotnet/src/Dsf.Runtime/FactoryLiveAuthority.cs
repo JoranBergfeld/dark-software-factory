@@ -12,15 +12,18 @@ internal sealed record LiveAuthoritySnapshot(FactoryLiveCapability Live, Preview
     PreviewCapabilityRequest Request, string Revision);
 
 /// <summary>Read-only governance and native authority. A rollout authorizes a nonpublishing exercise, never promotion.</summary>
-internal sealed class FactoryLiveAuthority(FactoryHostSettings settings, RuntimeDependencies dependencies, TokenCredential credential, HttpClient http)
+internal sealed class FactoryLiveAuthority(FactoryHostSettings settings, RuntimeDependencies dependencies, TokenCredential credential, HttpClient http,
+    FactoryInspectionAuthority? inspection = null)
 {
     private TimeProvider Clock => dependencies.PreviewClock;
+    internal bool IsInspection => inspection is not null;
 
     internal async Task<LiveAuthoritySnapshot> CheckAsync(FactoryLiveRequest request, bool readiness, CancellationToken token)
     {
         var phase = "governance";
         try
         {
+            if (readiness && inspection is not null) throw Denied("OriginalInvocationInspectionCannotEstablishReadiness");
             if (request.OperationId == Guid.Empty || !FactorySourceValidation.Hash(request.RolloutFingerprint)) throw new JsonException();
             var records = await ReadAsync(token);
             var values = records.ToDictionary(p => p.Key, p => p.Value.Value);
@@ -43,7 +46,7 @@ internal sealed class FactoryLiveAuthority(FactoryHostSettings settings, Runtime
             var previewRequest = new PreviewCapabilityRequest(manifest.PreviewOperationId ?? throw new JsonException(),
                 manifest.PreviewApprovalFingerprint ?? throw new JsonException(), request.OperationId);
             phase = "original-native-capability";
-            var preview = await new AzureFactoryPreviewCapability(settings, PreviewHostKind.Council, credential, http, Clock).CheckAsync(previewRequest, token);
+            var preview = await new AzureFactoryPreviewCapability(settings, PreviewHostKind.Council, credential, http, Clock, inspection).CheckAsync(previewRequest, token);
             var workload = new FactoryWorkloadCredential(credential, identity.TenantId, preview.Council, Clock);
             var native = new Dictionary<string, JsonElement>();
             foreach (var receipt in live.Receipts)
@@ -116,9 +119,11 @@ internal sealed class FactoryLiveAuthority(FactoryHostSettings settings, Runtime
         var gateway = new AzureConfigurationSettingsGateway(credential, http);
         foreach (var prefix in new[] { FactoryPause.Key, FactoryPause.HistoryPrefix })
             await foreach (var record in gateway.ListRecordsAsync(settings.ProductEndpoint, "*", token, prefix + "*"))
-                RuntimeWorkflow.EnsureCouncilAdmissionOpen([record.Key]);
+                if (inspection is not null) _ = inspection.Include(record.Key);
+                else RuntimeWorkflow.EnsureCouncilAdmissionOpen([record.Key]);
         await foreach (var record in gateway.ListRecordsAsync(settings.ProductEndpoint, ProductConfigurationKeys.NoLabel, token))
         {
+            if (inspection is not null && !inspection.Include(record.Key)) continue;
             RuntimeWorkflow.EnsureCouncilAdmissionOpen([record.Key]);
             if (result.Count >= FactoryPreviewPublication.Policy.MaximumRecords + FactoryAudit.GovernanceHistoryRecords
                 || System.Text.Encoding.UTF8.GetByteCount(record.Key + record.Value) + 512 > FactoryCharterLimits.RecordBytes

@@ -590,6 +590,15 @@ synthesizes, grounds, embeds, deliberates and runs all three native jury
 families. The original reviewed preview remains immutable.
 
 Use `--execution INVOCATION_GUID` instead of `--exercise` for inspection.
+Original-invocation inspection validates the protected promotion, current native
+identity/grants and original indexed scope without requiring factory-wide
+quiescence. It can report `Queued` or `Running` while the original worker is
+confirmed alive; a missing/restarted worker is `Unknown`, never taken over.
+Pause does not hide previously issued work: read-only inspection reports
+`Unknown` with a draining/unconfirmed reason, without reopening admission,
+dispatching another model request or declaring stop completed. These observations
+are not current readiness or activation approval. Conflicting/new work remains
+closed while original work is in flight or uncertain.
 Lost admission/worker responses, incompatible resumed scope and issued
 effects remain unknown without takeover. Pause/current-authority checks run
 at admission, after conditional admission, before worker execution and before
@@ -778,9 +787,11 @@ without rewriting approval or preview. Missing, stale or denied current evidence
 still blocks; telemetry recovery never clears deliberate pause. Initial preview,
 activation and publication-decision freshness checks remain strict, and inspecting
 an aged preview does not report that old evaluation as currently ready.
-The documented `live --exercise`, `live --execution`, `live --status` and
-`live --publication --status` commands use this same completed-promotion/current
-readiness gate. An incomplete, changed or missing promotion closeout never falls
+The documented live commands validate the same completed promotion.
+`live --status` and `live --publication --status` use factory-wide current
+readiness. `live --exercise` and `live --execution` defer invocation-aware
+admission/observation to the original native host; inspecting issued work is not
+new admission. An incomplete, changed or missing promotion closeout never falls
 back to the initial approval. Before completed promotion, original approval and
 native preparation still require the current complete preview.
 

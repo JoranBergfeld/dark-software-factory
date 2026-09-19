@@ -30,7 +30,7 @@ internal sealed class FactoryDecisionExecution
     }
 
     internal static async Task<FactoryDecisionExecution> AdmitAuthorityAsync(FactoryHostSettings settings, RuntimeDependencies dependencies,
-        FactoryDecisionRequest request, TokenCredential credential, HttpClient http, CancellationToken token, bool execute = false)
+        FactoryDecisionRequest request, TokenCredential credential, HttpClient http, CancellationToken token)
     {
         if (request.InvocationId == Guid.Empty) throw new JsonException("Original explicit decision invocation required.");
         var authority = new FactoryPublisherAuthority(settings, true, credential, http, dependencies.PreviewClock);
@@ -43,7 +43,7 @@ internal sealed class FactoryDecisionExecution
         _ = await execution.Decisions.ReadAsync(token);
         await execution.Decisions.RequireSettledAsync(FactoryPromotion.DecisionId(publisher.Manifest.Identity.FactoryId, request.InvocationId), token);
         await execution.Publications().RequireSettledAsync(request.InvocationId.ToString("N"), token);
-        if (execute) await execution.RequireNativeProviderAsync(token);
+        await execution.RequireNativeProviderAsync(token);
         return execution;
     }
 

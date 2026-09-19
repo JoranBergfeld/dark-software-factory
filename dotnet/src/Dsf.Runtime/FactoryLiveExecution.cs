@@ -10,6 +10,8 @@ internal sealed class FactoryLiveExecution(LiveAuthoritySnapshot expected, Facto
     internal FactoryLiveExecutionScope Scope { get; } = new(request.OperationId, expected.Live.Plan.Fingerprint, expected.Revision);
     internal async Task RequireCurrentAsync(CancellationToken token)
     {
+        if (authority.IsInspection)
+            throw new PreviewCapabilityException(FactoryCharterState.Blocked, "OriginalInvocationInspectionCannotAdmitWork");
         if (decision is not null) await decision.RequireCurrentAsync(token);
         if ((await authority.CheckAsync(request, false, token)).Revision != expected.Revision)
             throw new PreviewCapabilityException(FactoryCharterState.Blocked, "LiveAdmissionAuthorityChanged");
