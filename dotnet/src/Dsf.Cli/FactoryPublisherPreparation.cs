@@ -37,7 +37,7 @@ internal sealed partial class FactoryPreviewPreparationService
                         "Original native publication rollout incomplete or uncertain; retain original requests, no replay or replacement.");
                 var capability = FactoryPublisher.ReadConfirmed(Values(records), clock.GetUtcNow());
                 receipts.AddRange(capability.Receipts);
-                await CurrentAsync(readiness: true);
+                await CurrentAsync(readiness: true, allowPromotion: true);
                 await VerifyConfirmedAsync(Journal(capability.Effects, capability.Effects.Select(e =>
                     records[FactoryPublisher.EffectKey(coordinator.OperationId, e.Index)]).ToArray()), token, Validate);
                 if ((await store.ReadAsync(FactoryPublisher.RootKey, token))?.ETag != root.ETag) throw Unknown("PublicationCoordinatorChanged");
@@ -46,7 +46,7 @@ internal sealed partial class FactoryPreviewPreparationService
                     throw Unknown("OriginalPublisherProviderProofMissingOrChangedNoRecreation");
                 observation = await ObservePublisherAsync(capability, token);
                 return Result(FactoryPublisherState.PublicationPreparedAwaitingPromotion,
-                    "Original isolated publisher, context, journal container and exact grants confirmed. Separate final promotion required.");
+                    "Original isolated publisher, context, journal container and exact grants confirmed. Rollout status alone does not establish activation or authorize publication.");
             }
             if (selection is null) throw Failure("ExplicitPublicationRolloutSelectionRequired");
             FactoryLive.Validate(selection);
@@ -192,7 +192,7 @@ internal sealed partial class FactoryPreviewPreparationService
             AuditRecordIdentity Identity(ConfigurationSetting record) => new(manifest.Identity.FactoryId, AuditStoreKind.Governance,
                 record.Key, record.ETag.ToString(), FactoryAudit.TextHash(record.Value));
             void Validate(IReadOnlyDictionary<string, JsonElement> resources, string endpoint) => FactoryPublisher.ValidateResources(plan!, resources, endpoint);
-            async Task CurrentAsync(bool readiness = false)
+            async Task CurrentAsync(bool readiness = false, bool allowPromotion = false)
             {
                 FactoryPause.RequireAdmissionOpen((await store.ReadNamespaceAsync(FactoryPause.Key, token)).Keys);
                 FactoryPause.RequireAdmissionOpen((await store.ReadNamespaceAsync(FactoryPause.HistoryPrefix, token, maximumRecords: 128)).Keys);
@@ -202,11 +202,7 @@ internal sealed partial class FactoryPreviewPreparationService
                         r.Key, r.ETag.ToString(), FactoryAudit.TextHash(r.Value))).ToArray());
                 if (revision != plan!.Activation.AuthorityRevision) throw Failure("ReviewedPublicationConfigurationChanged");
                 if (readiness)
-                {
-                    var current = await new FactoryActivationService(reviewer, azure, http, clock).ExecuteAsync(admission, null, null, token);
-                    if (!current.ApprovalCurrent || current.Review?.Fingerprint != plan.Activation.Fingerprint)
-                        throw Failure("CurrentReviewedActivationOrPauseChanged");
-                }
+                    await RequireCurrentReviewedActivationAsync(admission, store, plan.Activation, allowPromotion, token);
                 foreach (var reference in new[] { plan.Approval, plan.Live, plan.GitHub })
                 {
                     var record = await store.ReadAsync(reference.Key, token);

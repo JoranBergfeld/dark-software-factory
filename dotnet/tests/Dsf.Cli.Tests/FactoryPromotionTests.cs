@@ -27,6 +27,8 @@ public sealed class FactoryPromotionTests(PromotableFactoryFixture fixture) : IC
             Assert.False((bool)review.Result["isActivated"]!);
             Assert.False((bool)review.Result["historicallyCompleted"]!);
             Assert.False(transport.Values().ContainsKey(FactoryPromotion.RootKey));
+            foreach (var arguments in new[] { new[] { "--status" }, new[] { "--publication", "--status" } })
+                Assert.Equal(1, (await transport.Scenario.Machine.InvokeAsync("live", arguments)).Exit);
             Assert.Equal(original.Value, transport.SeedDocuments[original.Key]);
             Assert.Equal(0, transport.IssuePosts);
         }

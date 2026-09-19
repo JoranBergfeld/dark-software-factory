@@ -778,6 +778,11 @@ without rewriting approval or preview. Missing, stale or denied current evidence
 still blocks; telemetry recovery never clears deliberate pause. Initial preview,
 activation and publication-decision freshness checks remain strict, and inspecting
 an aged preview does not report that old evaluation as currently ready.
+The documented `live --exercise`, `live --execution`, `live --status` and
+`live --publication --status` commands use this same completed-promotion/current
+readiness gate. An incomplete, changed or missing promotion closeout never falls
+back to the initial approval. Before completed promotion, original approval and
+native preparation still require the current complete preview.
 
 ### Run the activated factory
 

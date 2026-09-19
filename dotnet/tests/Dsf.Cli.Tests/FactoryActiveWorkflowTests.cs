@@ -12,6 +12,72 @@ namespace Dsf.Cli.Tests;
 
 public sealed class FactoryActiveWorkflowTests(ActivatedFactoryFixture fixture) : IClassFixture<ActivatedFactoryFixture>
 {
+    [Theory]
+    [InlineData("exercise")]
+    [InlineData("execution")]
+    [InlineData("live-status")]
+    [InlineData("publication-status")]
+    public async Task Promoted_operator_live_surfaces_accept_fresh_inputs_after_original_preview_ages(string surface)
+    {
+        var transport = fixture.Reset();
+        var machine = transport.Scenario.Machine;
+        var originalAuthority = transport.Values();
+        var originalPreview = transport.SeedDocuments.Where(p => p.Key.Contains("/preview-", StringComparison.Ordinal)).ToDictionary();
+        var evaluation = JsonNode.Parse(originalPreview.Single(p => p.Key.Contains("/council-preview/", StringComparison.Ordinal)).Value)!;
+        var inputs = evaluation["inputs"]!;
+        transport.Scenario.Source.Source!.Clock.Now =
+            ((DateTimeOffset)inputs["telemetry"]!["capture"]!["rows"]![0]!["reference"]!["recordTime"]!)
+            .AddSeconds((int)inputs["telemetryConfiguration"]!["freshnessSeconds"]!).AddMinutes(2);
+        var live = FactoryLive.ReadConfirmed(transport.Values().Where(p => p.Key.StartsWith(FactoryLive.Prefix, StringComparison.Ordinal)).ToDictionary(),
+            transport.Scenario.Source.Source.Clock.Now);
+        var invocation = Guid.NewGuid();
+        if (surface == "execution")
+            Assert.Equal("ReadyAwaitingActivation", (string?)(
+                await fixture.DecideAsync(transport, new(invocation, true)))["readiness"]);
+        string[] arguments = surface switch
+        {
+            "live-status" => ["--status"],
+            "publication-status" => ["--publication", "--status"],
+            _ => ["--" + surface, invocation.ToString(), "--approve", live.Plan.Fingerprint]
+        };
+        var result = await fixture.AdvanceUntilCompletedAsync(transport, machine.InvokeAsync("live", arguments));
+        Assert.True(result.Exit == 0, result.Terminal.Output);
+        if (surface is "exercise" or "execution")
+            Assert.Equal("ReadyAwaitingActivation", (string?)result.Result["readiness"]);
+        Assert.Equal(originalAuthority, transport.Values());
+        foreach (var pair in originalPreview) Assert.Equal(pair.Value, transport.SeedDocuments[pair.Key]);
+        var calls = transport.EvaluationInference.Count;
+        var documents = transport.SeedDocuments.ToDictionary();
+        var head = transport.Scenario.Source.Source.Head;
+        foreach (var failure in new[] { "telemetry", "source", "permissions" })
+        {
+            transport.AlterApplication = body =>
+            {
+                if (failure == "telemetry") body["tables"]![0]!["rows"] = new JsonArray();
+                return body;
+            };
+            transport.Scenario.Source.Source.Head = failure == "source" ? new string('f', 40) : head;
+            transport.PublisherPermissionDrift = failure == "permissions";
+            var blocked = await fixture.AdvanceUntilCompletedAsync(transport, machine.InvokeAsync("live", arguments));
+            Assert.True(blocked.Exit == 1, failure + ": " + blocked.Terminal.Output);
+            Assert.Equal(calls, transport.EvaluationInference.Count);
+            Assert.Equal(documents, transport.SeedDocuments);
+            Assert.Equal(originalAuthority, transport.Values());
+            transport.AlterApplication = null;
+            transport.Scenario.Source.Source.Head = head;
+            transport.PublisherPermissionDrift = false;
+        }
+        var recovered = await fixture.AdvanceUntilCompletedAsync(transport, machine.InvokeAsync("live", arguments));
+        Assert.True(recovered.Exit == 0, recovered.Terminal.Output);
+        Assert.Equal(calls, transport.EvaluationInference.Count);
+        Assert.Equal(originalAuthority, transport.Values());
+        Assert.Equal("DrainingUnknown", (string?)(await machine.InvokeAsync("pause", "--request", "--operation", Guid.NewGuid().ToString())).Result["state"]);
+        var paused = await fixture.AdvanceUntilCompletedAsync(transport, machine.InvokeAsync("live", arguments));
+        Assert.Equal(1, paused.Exit);
+        Assert.Equal(calls, transport.EvaluationInference.Count);
+        Assert.Equal(0, transport.IssuePosts);
+    }
+
     [Fact]
     public async Task Fresh_current_telemetry_restores_promoted_admission_after_original_preview_ages_without_reapproval()
     {
@@ -83,6 +149,51 @@ public sealed class FactoryActiveWorkflowTests(ActivatedFactoryFixture fixture) 
             new FactoryDecisionRequest(Guid.NewGuid()), FactorySourceValidation.RecordJson);
         Assert.Equal(HttpStatusCode.Forbidden, closed.StatusCode);
         Assert.Equal(calls, transport.EvaluationInference.Count);
+        Assert.Equal(0, transport.IssuePosts);
+    }
+
+    [Theory]
+    [InlineData("expired-model")]
+    [InlineData("missing-root")]
+    [InlineData("missing-completion")]
+    [InlineData("changed-completion")]
+    public async Task Promoted_operator_live_surfaces_never_fall_back_from_invalid_current_authority_or_promotion(string damage)
+    {
+        var transport = fixture.Reset();
+        var machine = transport.Scenario.Machine;
+        var promotion = JsonNode.Parse(transport.Values()[FactoryPromotion.RootKey])!;
+        var completion = FactoryPromotion.CompletionKey((Guid)promotion["operationId"]!);
+        if (damage == "expired-model")
+            transport.Scenario.Source.Source!.Clock.Now = ((DateTimeOffset)JsonNode.Parse(
+                transport.Values()[ProductConfigurationKeys.FactoryModels])!["verifiedUntil"]!).AddMinutes(2);
+        if (damage == "missing-root") transport.Scenario.Arm.Product.Remove(FactoryPromotion.RootKey);
+        if (damage == "missing-completion") transport.Scenario.Arm.Product.Remove(completion);
+        if (damage == "changed-completion")
+            transport.Scenario.Arm.Product.Change(completion, raw =>
+            {
+                var record = JsonNode.Parse(raw)!;
+                record["approvedBy"] = "99999999-9999-9999-9999-999999999999";
+                return record.ToJsonString();
+            });
+        var live = FactoryLive.ReadConfirmed(transport.Values().Where(p => p.Key.StartsWith(FactoryLive.Prefix, StringComparison.Ordinal)).ToDictionary(),
+            transport.Scenario.Source.Source!.Clock.Now);
+        var invocation = Guid.NewGuid().ToString();
+        var calls = transport.EvaluationInference.Count;
+        var originalAuthority = transport.Values();
+        var originalNative = transport.SeedDocuments.ToDictionary();
+        string[][] commands = [
+            ["--status"], ["--publication", "--status"],
+            ["--exercise", invocation, "--approve", live.Plan.Fingerprint],
+            ["--execution", invocation, "--approve", live.Plan.Fingerprint]
+        ];
+        foreach (var arguments in commands)
+        {
+            var rejected = await fixture.AdvanceUntilCompletedAsync(transport, machine.InvokeAsync("live", arguments));
+            Assert.True(rejected.Exit == 1, damage + ": " + rejected.Terminal.Output);
+        }
+        Assert.Equal(calls, transport.EvaluationInference.Count);
+        Assert.Equal(originalAuthority, transport.Values());
+        Assert.Equal(originalNative, transport.SeedDocuments);
         Assert.Equal(0, transport.IssuePosts);
     }
 

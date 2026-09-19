@@ -66,10 +66,10 @@ internal sealed partial class FactoryPreviewPreparationService
                     }
                 }
                 if (!expectedKeys.SetEquals(records.Keys) || coordinator.ConfirmedEffects != plan.Deployment.Steps.Count) throw new JsonException();
-                await RequireLiveCurrentAsync();
+                await RequireLiveCurrentAsync(allowPromotion: true);
                 await VerifyConfirmedAsync(NativeJournal(effects, effectRecords), token, (resources, endpoint) => ValidateLiveHost(plan, resources, endpoint));
                 if ((await store.ReadAsync(FactoryLive.RootKey, token))?.ETag != root.ETag) throw Unknown("LiveCoordinatorChanged");
-                return Result(FactoryLiveState.PreparedAwaitingPublication, "Original native live host and exact grants confirmed. No publication capability or activation.");
+                return Result(FactoryLiveState.PreparedAwaitingPublication, "Original native live host and exact grants confirmed. Rollout status alone does not establish activation or authorize publication.");
             }
             if (selection is null) throw Failure("ExplicitLiveSelectionRequired");
             FactoryLive.Validate(selection);
@@ -194,11 +194,9 @@ internal sealed partial class FactoryPreviewPreparationService
             await RequireLiveCurrentAsync();
             return Result(FactoryLiveState.PreparedAwaitingPublication, "Native live host and exact host/deployment read-only metadata grants provisioned. Final promotion requires create-once publication and separate approval.");
 
-            async Task RequireLiveCurrentAsync()
+            async Task RequireLiveCurrentAsync(bool allowPromotion = false)
             {
-                var current = await new FactoryActivationService(reviewer, azure, http, clock).ExecuteAsync(admission, null, null, token);
-                if (!current.ApprovalCurrent || current.Review?.Fingerprint != plan!.Activation.Fingerprint)
-                    throw Failure("CurrentReviewedActivationOrPauseChanged");
+                await RequireCurrentReviewedActivationAsync(admission, store, plan!.Activation, allowPromotion, token);
                 var record = await store.ReadAsync(plan.Approval.Key, token);
                 if (record is null || record.ETag.ToString() != plan.Approval.NativeRevision || FactoryAudit.TextHash(record.Value) != plan.Approval.Sha256)
                     throw Unknown("OriginalActivationReceiptChanged");
