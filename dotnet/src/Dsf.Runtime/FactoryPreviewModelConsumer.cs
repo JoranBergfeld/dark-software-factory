@@ -134,6 +134,7 @@ internal sealed class FactoryPreviewModelConsumer(IFactoryPreviewCapability vali
             if (result.RequestId != input.Preview.RequestId || result.InputSha256 != FactoryModelsValidation.Hash(input)
                 || result.CapabilityRevision != snapshot.Revision) throw new JsonException();
             FactoryModelsValidation.ValidateNativeAuthority(snapshot.Models!, input.Preview.RequestId, result.Authority);
+            FactoryRuntimeModels.RequireProtocol(snapshot.Models!, result.Authority, clock.GetUtcNow());
             if (route == "authority")
             {
                 if (result.Completion is not null || result.Deduplication is not null) throw new JsonException();

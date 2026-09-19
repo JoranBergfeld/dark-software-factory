@@ -164,14 +164,15 @@ internal static partial class RuntimeWorkflow
         { throw new PreviewCapabilityException(FactoryCharterState.Unknown, "PreviewInputCollectionUnconfirmed"); }
     }
 
-    private static string ModelRevision(ModelAuthorityResult authority) => FactoryModelsValidation.Hash(authority with { CheckId = Guid.Empty });
+    private static string ModelRevision(ModelAuthorityResult authority) =>
+        FactoryModelsValidation.Hash(authority with { CheckId = Guid.Empty, ContinuationProtocol = null });
     private static string SourceRevision(PreviewSourceContext source)
     {
         var current = source.Context.Current!;
         return FactoryModelsValidation.Hash(source.Context with { Current = current with {
             // Current reads have new observation times/nonces, not new repository or model revisions.
             Source = current.Source with { Snapshot = current.Source.Snapshot with { ObservedAt = DateTimeOffset.UnixEpoch } },
-            Analysis = current.Analysis with { ModelAuthority = current.Analysis.ModelAuthority! with { CheckId = Guid.Empty } } } });
+            Analysis = current.Analysis with { ModelAuthority = current.Analysis.ModelAuthority! with { CheckId = Guid.Empty, ContinuationProtocol = null } } } });
     }
     private static IReadOnlyDictionary<string, string> SupplementalRevisions(PreviewSupplementalEvidence evidence) =>
         evidence.Sources.ToDictionary(s => s.Evidence.Proof.Kind, s => FactoryModelsValidation.Hash(new {

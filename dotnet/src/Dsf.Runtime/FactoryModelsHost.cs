@@ -123,7 +123,8 @@ public static partial class RuntimeVerbs
                     completion = await context.Request.ReadFromJsonAsync<ModelWorkloadRequest>(FactoryGitHubJson.Options, context.RequestAborted) ?? throw new JsonException();
                     reference = completion.Capability;
                 }
-                authority = FactoryModelsValidation.ReadVerified(manifest, values, reference, dependencies.ModelClock.GetUtcNow());
+                authority = await FactoryRuntimeModels.ReadAsync(manifest, values, reference, dependencies.ModelClock.GetUtcNow(),
+                    credential, dependencies.ModelHttp ?? ModelHttp, context.RequestAborted);
                 var workloads = new FactoryModelWorkloads(manifest, authority, credential, dependencies.ModelHttp ?? ModelHttp, dependencies.ModelClock);
                 object result;
                 if (native is not null)
@@ -134,7 +135,8 @@ public static partial class RuntimeVerbs
                     : route == "synthesis" ? await workloads.SynthesizeAsync(completion!.Input, context.RequestAborted)
                     : await workloads.JudgeAsync(route, completion!.Input, context.RequestAborted);
                 var (latestManifest, _, latestValues) = await ReadAsync(configuration, context.RequestAborted);
-                var latest = FactoryModelsValidation.ReadVerified(latestManifest, latestValues, reference, dependencies.ModelClock.GetUtcNow());
+                var latest = await FactoryRuntimeModels.ReadAsync(latestManifest, latestValues, reference, dependencies.ModelClock.GetUtcNow(),
+                    credential, dependencies.ModelHttp ?? ModelHttp, context.RequestAborted);
                 if (FactoryModelsValidation.Hash(latestManifest) != FactoryModelsValidation.Hash(manifest)
                     || FactoryModelsValidation.Hash(latest) != FactoryModelsValidation.Hash(authority)) throw new JsonException();
                 context.Response.Headers.CacheControl = "no-store";
@@ -142,6 +144,8 @@ public static partial class RuntimeVerbs
             }
             catch (ModelCapabilityException e)
             { return Results.Json(new { state = "Blocked", route = e.Route, reason = e.Reason.ToString(), detail = e.Message }, statusCode: 409); }
+            catch (PreviewCapabilityException e)
+            { return Results.Json(new { state = e.State.ToString(), reason = e.Message }, statusCode: 409); }
             catch (OperationCanceledException)
             { return Results.Json(new { state = "Canceled", detail = "Model workload canceled; no result released." }, statusCode: 409); }
             catch (Exception e) when (e is JsonException or InvalidOperationException or ArgumentException or KeyNotFoundException

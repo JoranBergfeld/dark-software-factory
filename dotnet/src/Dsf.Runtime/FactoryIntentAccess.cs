@@ -27,6 +27,7 @@ internal sealed class FactoryIntentAccess(FactorySourceAccess source, HttpClient
             var request = new ModelAuthorityRequest(Capability, Guid.NewGuid());
             var result = await RequestAsync<ModelAuthorityResult>("/authority", request, token);
             FactoryModelsValidation.ValidateNativeAuthority(Models, request.CheckId, result);
+            FactoryRuntimeModels.RequireProtocol(Models, result, clock.GetUtcNow());
             await CheckHostAsync(token);
             CurrentAuthority = result;
         }
@@ -40,7 +41,8 @@ internal sealed class FactoryIntentAccess(FactorySourceAccess source, HttpClient
         var models = FactoryModelsValidation.ReadPreparation(source.Manifest, source.Values);
         var reference = new ModelCapabilityReference(models.OperationId, models.ApprovalFingerprint,
             models.LastProofReference ?? "", models.LastProofSha256 ?? "");
-        models = FactoryModelsValidation.ReadVerified(source.Manifest, source.Values, reference, clock.GetUtcNow());
+        models = await FactoryRuntimeModels.ReadAsync(source.Manifest, source.Values, reference, clock.GetUtcNow(),
+            source.Credential, http, token);
         if (models.Bindings![1] != source.Code || models.HostEndpoint is null)
             throw new IntentException(IntentState.Blocked, "CurrentCodeModelBindingRequired");
         var target = FactoryModelsValidation.HostTarget(models);

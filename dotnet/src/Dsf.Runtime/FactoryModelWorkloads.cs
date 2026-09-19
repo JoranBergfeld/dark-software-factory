@@ -17,7 +17,8 @@ internal sealed class FactoryModelWorkloads(
             authority.LastProofReference!, authority.LastProofSha256!);
         var observations = new List<ModelRouteAuthority>();
         foreach (var route in authority.Routes!) observations.Add(await CheckRouteAsync(route, token));
-        var result = new ModelAuthorityResult(checkId, reference, authority.Bindings![0].PrincipalId!, observations);
+        var result = new ModelAuthorityResult(checkId, reference, authority.Bindings![0].PrincipalId!, observations)
+        { ContinuationProtocol = FactoryRuntimeModels.ContinuationProtocol };
         FactoryModelsValidation.ValidateNativeAuthority(authority, checkId, result);
         return result;
     }

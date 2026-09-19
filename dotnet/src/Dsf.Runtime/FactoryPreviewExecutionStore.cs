@@ -32,6 +32,7 @@ internal sealed partial class PreviewExecutionStore(PreviewCapabilitySnapshot au
     internal string Revision => version is not null ? FactoryModelsValidation.Hash(new { Id, version, Document.Checksum })
         : throw new InvalidOperationException("Confirmed native preview version required.");
     internal string RunId => Id + "-run";
+    internal DateTimeOffset ModelEvidenceExpiresAt => Document.CreatedAt.AddSeconds(authority.Models!.Configuration.ValidForSeconds);
 
     internal async Task PrepareLiveAsync(CancellationToken token)
     {

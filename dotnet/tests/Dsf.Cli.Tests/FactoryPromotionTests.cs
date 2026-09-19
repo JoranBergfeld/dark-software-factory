@@ -9,6 +9,29 @@ namespace Dsf.Cli.Tests;
 public sealed class FactoryPromotionTests(PromotableFactoryFixture fixture) : IClassFixture<PromotableFactoryFixture>
 {
     [Fact]
+    public async Task Expired_model_observation_cannot_authorize_first_final_promotion()
+    {
+        var transport = fixture.Reset();
+        var now = transport.Scenario.Source.Source!.Clock.Now;
+        var original = transport.Scenario.Arm.Product.Export();
+        try
+        {
+            transport.Restart(((DateTimeOffset)JsonNode.Parse(
+                transport.Values()[Dsf.Core.Runtime.ProductConfigurationKeys.FactoryModels])!["verifiedUntil"]!).AddMinutes(2));
+            FactoryActivationTests.ConnectAudit(transport);
+            var review = await transport.Scenario.Machine.InvokeAsync("activate", "--promote", "--operation", Guid.NewGuid().ToString());
+            Assert.Equal(1, review.Exit);
+            Assert.False((bool)review.Result["currentReady"]!);
+            Assert.False((bool)review.Result["isActivated"]!);
+            Assert.False((bool)review.Result["historicallyCompleted"]!);
+            Assert.False(transport.Values().ContainsKey(FactoryPromotion.RootKey));
+            Assert.Equal(original, transport.Scenario.Arm.Product.Export());
+            Assert.Equal(0, transport.IssuePosts);
+        }
+        finally { transport.Restart(now); }
+    }
+
+    [Fact]
     public async Task Aged_original_preview_cannot_authorize_first_final_promotion_despite_fresh_current_telemetry()
     {
         var transport = await RolloutAsync();

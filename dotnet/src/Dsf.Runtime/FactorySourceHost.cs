@@ -58,6 +58,7 @@ public static partial class RuntimeVerbs
                 return Results.Json(result, FactoryGitHubJson.Options, statusCode: result.State == IntentState.DraftReady ? 200 : 409);
             }
             catch (IntentException e) { return Error(e.State, e.Message); }
+            catch (PreviewCapabilityException e) { return Error(Enum.Parse<IntentState>(e.State.ToString()), e.Message); }
             catch (SourceAcquisitionException e) { return Error(FactoryIntentWorkflow.Map(e.State), e.Message); }
             catch (OperationCanceledException)
             { return Error(context.RequestAborted.IsCancellationRequested ? IntentState.Canceled : IntentState.Partial,

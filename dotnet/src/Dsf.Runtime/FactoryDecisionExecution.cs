@@ -71,7 +71,9 @@ internal sealed class FactoryDecisionExecution
     {
         var authority = new FactoryLiveAuthority(settings, dependencies, credential, http);
         var request = new FactoryLiveRequest(Scope.InvocationId, promotion.LiveFingerprint);
-        var current = await authority.CheckAsync(request, true, token);
+        // The admitted worker acquires all current inputs before dispatch and proves every model route
+        // before release/publication. Historical promotion authorizes that attempt, not a health claim.
+        var current = await authority.CheckAsync(request, true, token, modelEvaluationAdmission: true);
         await RequireCurrentAsync(token);
         return new(current, request, authority, this);
     }

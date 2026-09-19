@@ -14,6 +14,7 @@ public sealed record PreviewExecutionResult(PreviewExecutionPhase State, Preview
     public PreviewReadinessProof? Proof { get; init; }
     public string? Reason { get; init; }
     internal string? ExecutionRevision { get; init; }
+    internal DateTimeOffset? ModelEvidenceExpiresAt { get; init; }
 }
 
 public static partial class RuntimeVerbs
@@ -105,12 +106,13 @@ internal static partial class RuntimeWorkflow
         InspectEvaluationAsync(settings, dependencies, request, http, cancellationToken, admission, live, null);
 
     internal static Task<PreviewExecutionResult> InspectPromotedPreviewAsync(FactoryHostSettings settings, RuntimeDependencies dependencies,
-        PreviewCapabilityRequest request, HttpClient http, FactoryPromotionApproval promotion, CancellationToken token) =>
-        InspectEvaluationAsync(settings, dependencies, request, http, token, null, null, promotion);
+        PreviewCapabilityRequest request, HttpClient http, FactoryPromotionApproval promotion, CancellationToken token,
+        bool modelEvaluationAdmission = false) =>
+        InspectEvaluationAsync(settings, dependencies, request, http, token, null, null, promotion, modelEvaluationAdmission);
 
     private static async Task<PreviewExecutionResult> InspectEvaluationAsync(FactoryHostSettings settings, RuntimeDependencies dependencies,
         PreviewCapabilityRequest request, HttpClient http, CancellationToken cancellationToken, PreviewWorkAdmission? admission,
-        FactoryLiveExecution? live, FactoryPromotionApproval? promotion)
+        FactoryLiveExecution? live, FactoryPromotionApproval? promotion, bool modelEvaluationAdmission = false)
     {
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(FactoryPreviewInputValidation.Policy.RequestSeconds), dependencies.PreviewClock);
         using var pending = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline.Token);
@@ -151,6 +153,10 @@ internal static partial class RuntimeWorkflow
                 current.Snapshot.Request.RequestId, current.Snapshot.Telemetry.Capture, now);
             foreach (var selected in current.Snapshot.Supplemental.Sources)
                 FactoryPreviewSupplementalValidation.ValidateEvidence(selected.Authority, selected.Evidence, now);
+            if (promotion is not null && !modelEvaluationAdmission && authority.Models!.Proof!.ExpiresAt <= now)
+                await RequireCurrentPromotedModelEvidenceAsync(settings, dependencies, promotion, current, credential, http, token);
+            else if (live is not null)
+                RequireRecentModelEvaluation(store.Document, authority.Models!, now);
             token.ThrowIfCancellationRequested();
             if (live is not null) await live.RequireCurrentAsync(token);
             return report with { Readiness = PreviewReadiness.ReadyAwaitingActivation };
@@ -188,6 +194,7 @@ internal static partial class RuntimeWorkflow
             run, store.Document.Run ?? throw new InvalidOperationException("Confirmed native run required."), store.Document.Dispatches)
         {
             ExecutionRevision = store.Revision,
+            ModelEvidenceExpiresAt = store.ModelEvidenceExpiresAt,
             Proof = store.Document.Proof,
             Readiness = store.Document.PendingRun is not null
             || store.Document.Dispatches.Any(d => d.State is PreviewModelDispatchState.Dispatched or PreviewModelDispatchState.Unknown)

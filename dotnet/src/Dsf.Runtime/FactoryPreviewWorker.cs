@@ -201,6 +201,8 @@ internal sealed class FactoryPreviewWorker(FactoryHostSettings settings, Runtime
                     ? await RuntimeWorkflow.InspectPreviewAsync(settings, dependencies, work.Request, http, token, live: work.Live)
                     : await RuntimeWorkflow.ExecutePreviewAsync(settings, dependencies, work.Request, http, token, work.Admission, work.Live);
                 evidenceExpires = EvidenceExpires(report.Inputs);
+                if (report.ModelEvidenceExpiresAt is { } modelExpiry && modelExpiry < evidenceExpires)
+                    evidenceExpires = modelExpiry;
                 decisionReport = report;
                 executionRevision = report.ExecutionRevision;
                 outcome = Observation(work.Authority, work.Request, report.Readiness, report.Reason, JsonSerializer.SerializeToElement(report, Json));

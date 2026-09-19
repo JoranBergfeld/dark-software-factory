@@ -101,7 +101,7 @@ public static partial class RuntimeVerbs
                             statusCode: issued.Readiness is PreviewReadiness.Queued or PreviewReadiness.Running ? 202 : 200);
                 }
                 var authority = new FactoryLiveAuthority(settings, dependencies, credential, http);
-                var current = await authority.CheckAsync(request, execute, pending.Token);
+                var current = await authority.CheckAsync(request, false, pending.Token);
                 var capability = context.Request.Path == "/activation-capability";
                 if (!NativeCaller(context, current.Preview.Manifest.Identity.AzureActorId, current.Preview.Manifest.Identity.TenantId, null)
                     && !(capability && NativeCaller(context, current.Preview.Council.PrincipalId!, current.Preview.Manifest.Identity.TenantId, current.Preview.Council.ClientId)))

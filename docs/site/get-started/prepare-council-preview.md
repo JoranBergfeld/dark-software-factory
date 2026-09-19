@@ -798,6 +798,32 @@ new admission. An incomplete, changed or missing promotion closeout never falls
 back to the initial approval. Before completed promotion, original approval and
 native preparation still require the current complete preview.
 
+Expired initial model observations are historical, not present health.
+After completed promotion, the next ordinary decision may evaluate the exact
+unchanged configuration without rewriting protected governance or requesting
+another approval. Admission still checks current model topology/permissions,
+source access and adopted charter, fresh telemetry, every selected source, and
+deliberate stop state. Evaluation runs in the existing durably admitted native
+worker, not synchronously behind ingress.
+
+Read-only `activate --status` / `live --status` cannot renew a model observation.
+Until a complete actual evaluation exists, they report not-current-ready
+(`CurrentModelEvaluationRequired`) while retaining historical completion.
+After the worker confirms all five model routes and its native release, status
+can use the latest indexed evaluation within the reviewed model validity window,
+measured conservatively from evaluation creation. It rereads the original native
+run/dispatch receipts and current dependencies; it never substitutes stale
+telemetry. Ordinary native failures block, and lost model responses remain
+Unknown even when provider health recovers. Pausing remains deliberate.
+An older model host lacking `promoted-model-observation-v1` support is an
+explicit compatibility blocker, not an automatic image upgrade.
+
+This model-observation recovery does **not** make changed source automatically
+compatible: the current source workflow still requires complete reacquisition,
+analysis and reconciliation with the adopted charter before changed-code
+publication can proceed. A cached report or matching charter bytes alone never
+authorize it.
+
 ### Run the activated factory
 
 Use the original operator identity with product governance read access and the

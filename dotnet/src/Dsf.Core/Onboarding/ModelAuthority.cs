@@ -9,6 +9,8 @@ public sealed record ModelAuthorityResult(Guid CheckId, ModelCapabilityReference
 {
     [System.Text.Json.Serialization.JsonRequired]
     public int Protocol { get; init; } = 1;
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? ContinuationProtocol { get; init; }
 }
 
 public static partial class FactoryModelsValidation

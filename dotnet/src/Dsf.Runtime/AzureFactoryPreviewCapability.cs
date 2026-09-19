@@ -29,8 +29,9 @@ internal sealed class AzureFactoryPreviewCapability(
             FactoryGitHubAuthorityValidation.ValidateVerified(github);
             var (source, sourceEffects) = FactorySourceValidation.Read(manifest, github, values);
             var models = FactoryModelsValidation.ReadPreparation(manifest, values);
-            models = FactoryModelsValidation.ReadVerified(manifest, values,
-                new(models.OperationId, models.ApprovalFingerprint, models.LastProofReference ?? "", models.LastProofSha256 ?? ""), clock.GetUtcNow());
+            models = FactoryRuntimeModels.Read(manifest, values,
+                new(models.OperationId, models.ApprovalFingerprint, models.LastProofReference ?? "", models.LastProofSha256 ?? ""),
+                clock.GetUtcNow(), records.PublicationGovernance);
             var (capability, bindings, effects) = FactoryPreviewValidation.Read(manifest, models, github, source, sourceEffects, values, request, clock.GetUtcNow());
             if (capability.Configuration.PreparationRevision is not null)
             {
@@ -162,7 +163,7 @@ internal sealed class AzureFactoryPreviewCapability(
         }
         if (!previews.SetEquals(values.Keys.Where(k => k.StartsWith("dsf/factory/preview", StringComparison.Ordinal))))
             throw new PreviewCapabilityException(FactoryCharterState.Unknown, "PreviewNamespaceUnconfirmed");
-        foreach (var prefix in new[] { FactoryPublisher.Prefix, FactoryActivation.Prefix, FactoryLive.Prefix })
+        foreach (var prefix in new[] { FactoryPublisher.Prefix, FactoryActivation.Prefix, FactoryLive.Prefix, FactoryPromotion.Prefix })
         {
             var seen = new HashSet<string>();
             await foreach (var setting in new AzureConfigurationSettingsGateway(currentCredential, http)

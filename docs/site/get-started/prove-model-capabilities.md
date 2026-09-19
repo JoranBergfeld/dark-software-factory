@@ -227,6 +227,13 @@ quality or semantic grounding of real application evidence.
 Consumers supply `ModelCapabilityReference`: operation ID, configuration revision,
 immutable proof reference and proof hash. `FactoryModelsValidation.ReadVerified`
 checks current inactive governance, complete receipts, hashes and proof expiry.
+Before final promotion, expiry still requires explicit operator verification.
+After an original, fully completed promotion, runtime can retain that exact
+proof as **historical approval evidence** while checking the unchanged native
+model bindings again. It verifies the original protected promotion, completion,
+native seed receipts and every governing revision; a missing record, changed
+configuration or deliberate pause cannot be repaired by a health check.
+No runtime route writes `dsf/factory/models`, a new protected proof, or approval.
 The host rechecks authority before returning results. Both proof and consumer
 routes use the same asynchronous `IFactoryModelWorkloads` implementation.
 Text inputs are bounded to 32,768 characters; completions remain bounded to 8192
@@ -246,12 +253,24 @@ Charter draft release requires this route even when an old proof is unexpired.
 Both deployed images must implement the compatible protocol; older images fail
 closed, without in-place repair or an inherited-permission substitute.
 
-These are the implemented model/embedding interfaces for subsequent source
-analysis and readiness-preview slices. The existing greenfield lexical clusterer
-and persistent Cosmos problem identity resolver are deliberately unchanged; this
-slice does not claim a persistent semantic-index migration or a complete council
-preview. Later consumers must retain these verified references, not silently
-substitute legacy model settings, lexical grouping or a single-model council.
+For historical-proof continuation, both model hosts advertise
+`continuationProtocol: "promoted-model-observation-v1"` in their native authority
+response. Consumers reject missing support with
+`CurrentModelObservationProtocolRequired`; deploy a reviewed compatible image
+through an explicit operator change, never silently upgrade a pinned host.
+This advertisement is **not** renewed capability proof.
+
+An admitted native council worker must actually exercise synthesis, embeddings
+and all three distinct-family jurors. Only a complete, released, indexed
+evaluation establishes new model readiness; original unknown dispatches are never
+replayed. Read-only status uses the latest complete native evaluation, including
+its original run/dispatch receipts, within the approved model validity window.
+The window starts at evaluation creation, not at a later status read.
+Without one, status reports `CurrentModelEvaluationRequired`; the next normal
+`run`/`sweep` may attempt the unchanged configuration after all current admission
+checks pass. Native topology alone never turns that status green.
+All current source, charter, telemetry and selected-source checks still apply.
+See [activated factory execution](prepare-council-preview.md#run-the-activated-factory).
 
 ## Durable proof, blockers and recovery
 

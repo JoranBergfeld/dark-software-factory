@@ -58,6 +58,15 @@ public static partial class FactoryModelsValidation
     public static FactoryModels ReadVerified(FactoryManifest manifest, IReadOnlyDictionary<string, string> values,
         ModelCapabilityReference reference, DateTimeOffset now)
     {
+        var authority = ReadRetained(manifest, values, reference, now);
+        if (authority.Proof!.ExpiresAt <= now) throw new JsonException("Current model observation required.");
+        return authority;
+    }
+
+    /// <summary>Integrity-checked historical observation only; does not authorize work or establish present capability.</summary>
+    public static FactoryModels ReadRetained(FactoryManifest manifest, IReadOnlyDictionary<string, string> values,
+        ModelCapabilityReference reference, DateTimeOffset now)
+    {
         var authority = ReadPreparation(manifest, values);
         if (authority.State != ModelCapabilityState.Verified || authority.Stage != "observed"
             || authority.OperationId != reference.OperationId || authority.ApprovalFingerprint != reference.ConfigurationRevision
@@ -66,7 +75,7 @@ public static partial class FactoryModelsValidation
             throw new JsonException("Current verified model capability reference required.");
         var proof = JsonSerializer.Deserialize<ModelCapabilityProof>(values[reference.ProofReference], FactoryGitHubJson.Options) ?? throw new JsonException();
         if (Hash(proof) != reference.ProofSha256 || proof.State != ModelCapabilityState.Verified
-            || authority.VerifiedUntil != proof.ExpiresAt || proof.ExpiresAt <= now) throw new JsonException();
+            || authority.VerifiedUntil != proof.ExpiresAt) throw new JsonException();
         ValidateProof(authority, proof, now, requireCurrent: false);
         return authority with { Proof = proof };
     }

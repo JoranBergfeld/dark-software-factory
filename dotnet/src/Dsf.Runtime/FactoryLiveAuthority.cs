@@ -18,7 +18,8 @@ internal sealed class FactoryLiveAuthority(FactoryHostSettings settings, Runtime
     private TimeProvider Clock => dependencies.PreviewClock;
     internal bool IsInspection => inspection is not null;
 
-    internal async Task<LiveAuthoritySnapshot> CheckAsync(FactoryLiveRequest request, bool readiness, CancellationToken token)
+    internal async Task<LiveAuthoritySnapshot> CheckAsync(FactoryLiveRequest request, bool readiness, CancellationToken token,
+        bool modelEvaluationAdmission = false)
     {
         var phase = "governance";
         try
@@ -94,9 +95,9 @@ internal sealed class FactoryLiveAuthority(FactoryHostSettings settings, Runtime
                 }
                 var current = promotion is null
                     ? await RuntimeWorkflow.InspectPreviewAsync(settings, dependencies, previewRequest, http, token)
-                    : await RuntimeWorkflow.InspectPromotedPreviewAsync(settings, dependencies, previewRequest, http, promotion, token);
+                    : await RuntimeWorkflow.InspectPromotedPreviewAsync(settings, dependencies, previewRequest, http, promotion, token, modelEvaluationAdmission);
                 if (current.Readiness != PreviewReadiness.ReadyAwaitingActivation)
-                    throw Denied("CurrentCompleteReadinessRequired");
+                    throw Denied("CurrentCompleteReadinessRequired:" + current.Reason);
             }
             phase = "revision-recheck";
             var currentRecords = await ReadAsync(token);

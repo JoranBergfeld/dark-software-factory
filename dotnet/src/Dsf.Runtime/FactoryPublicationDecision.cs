@@ -99,6 +99,7 @@ internal static partial class RuntimeWorkflow
             || NativeIdentity(latestRun, "runs", id + "-run") != runIdentity) throw Denied("NativeDecisionChangedDuringQualification");
         var references = new[] { identities[FactoryPromotion.RootKey], identities[FactoryPublisher.RootKey], evaluationIdentity, runIdentity }
             .Concat(promotion.References).Distinct().ToArray();
+        RequireRecentModelEvaluation(evaluation, live.Preview.Models!, dependencies.PreviewClock.GetUtcNow());
         var intent = new FactoryPublicationIntent(1, factory.FactoryId, factory.ProductKey, factory.RepositoryId, candidate.IntentKey,
             request.InvocationId, payload.Title, payload.Body ?? throw new JsonException(), inputs.Revision, references)
             { AutomationReview = publisher.Capability.Plan.Automation };

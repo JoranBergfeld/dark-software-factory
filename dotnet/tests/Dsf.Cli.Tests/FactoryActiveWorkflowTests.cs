@@ -292,7 +292,7 @@ public sealed class FactoryActiveWorkflowTests(ActivatedFactoryFixture fixture) 
     }
 
     [Theory]
-    [InlineData("expired-model")]
+    [InlineData("invalid-model")]
     [InlineData("missing-root")]
     [InlineData("missing-completion")]
     [InlineData("changed-completion")]
@@ -302,9 +302,18 @@ public sealed class FactoryActiveWorkflowTests(ActivatedFactoryFixture fixture) 
         var machine = transport.Scenario.Machine;
         var promotion = JsonNode.Parse(transport.Values()[FactoryPromotion.RootKey])!;
         var completion = FactoryPromotion.CompletionKey((Guid)promotion["operationId"]!);
-        if (damage == "expired-model")
+        if (damage == "invalid-model")
+        {
             transport.Scenario.Source.Source!.Clock.Now = ((DateTimeOffset)JsonNode.Parse(
                 transport.Values()[ProductConfigurationKeys.FactoryModels])!["verifiedUntil"]!).AddMinutes(2);
+            var models = FactoryModelsValidation.ReadPreparation(transport.Manifest, transport.Values());
+            transport.Scenario.Arm.Product.Change(models.LastProofReference!, raw =>
+            {
+                var proof = JsonNode.Parse(raw)!;
+                proof["observations"]![0]!["outputSha256"] = new string('a', 64);
+                return proof.ToJsonString();
+            });
+        }
         if (damage == "missing-root") transport.Scenario.Arm.Product.Remove(FactoryPromotion.RootKey);
         if (damage == "missing-completion") transport.Scenario.Arm.Product.Remove(completion);
         if (damage == "changed-completion")
@@ -337,11 +346,18 @@ public sealed class FactoryActiveWorkflowTests(ActivatedFactoryFixture fixture) 
     }
 
     [Fact]
-    public async Task Expired_current_model_proof_still_blocks_promoted_admission_despite_fresh_telemetry()
+    public async Task Expired_model_history_requires_current_host_protocol_despite_fresh_telemetry()
     {
         var transport = fixture.Reset();
         var models = JsonNode.Parse(transport.Values()[ProductConfigurationKeys.FactoryModels])!;
         transport.Scenario.Source.Source!.Clock.Now = ((DateTimeOffset)models["verifiedUntil"]!).AddMinutes(2);
+        transport.AlterIngressBody = raw =>
+        {
+            var body = JsonNode.Parse(raw)!.AsObject();
+            body.Remove("continuationProtocol");
+            if (body["authority"] is JsonObject authority) authority.Remove("continuationProtocol");
+            return body.ToJsonString();
+        };
         var current = await transport.Scenario.Machine.InvokeAsync("activate", "--status");
         Assert.False((bool)current.Result["currentReady"]!);
         Assert.False((bool)current.Result["isActivated"]!);
@@ -353,6 +369,7 @@ public sealed class FactoryActiveWorkflowTests(ActivatedFactoryFixture fixture) 
         Assert.Equal(HttpStatusCode.Forbidden, denied.StatusCode);
         Assert.Equal(calls, transport.EvaluationInference.Count);
         Assert.Equal(0, transport.IssuePosts);
+        transport.AlterIngressBody = null;
     }
 
     [Fact]
