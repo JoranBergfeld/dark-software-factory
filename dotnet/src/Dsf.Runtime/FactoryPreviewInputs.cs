@@ -133,24 +133,9 @@ internal static partial class RuntimeWorkflow
                 return result;
             }
             void RequireTelemetry(PreviewTelemetryEvidence evidence)
-            {
-                if (evidence.GovernanceRevision != authority.GovernanceRevision || telemetryConfiguration.ApplicationEnvironment != authority.Manifest.Identity.ApplicationEnvironment)
-                    throw new JsonException("Inconsistent telemetry authority.");
-                if (evidence.Capture.Proof.State != TelemetryState.Ready)
-                    throw new PreviewCapabilityException(evidence.Capture.Proof.State switch {
-                        TelemetryState.Unknown => FactoryCharterState.Unknown, TelemetryState.Canceled => FactoryCharterState.Canceled,
-                        TelemetryState.Failed => FactoryCharterState.Failed, TelemetryState.Partial => FactoryCharterState.Partial, _ => FactoryCharterState.Blocked },
-                        "RequiredApplicationTelemetryUnavailable:" + evidence.Capture.Proof.Reason);
-            }
+                => RequireCurrentTelemetry(authority, evidence);
             void RequireSupplemental(PreviewSupplementalEvidence evidence)
-            {
-                if (evidence.GovernanceRevision != authority.GovernanceRevision) throw new JsonException("Inconsistent selected-source authority.");
-                if (evidence.State is not (SupplementalState.ReadySupplemental or SupplementalState.NotSelected))
-                    throw new PreviewCapabilityException(evidence.State switch {
-                        SupplementalState.Unknown => FactoryCharterState.Unknown, SupplementalState.Canceled => FactoryCharterState.Canceled,
-                        SupplementalState.Partial => FactoryCharterState.Partial, SupplementalState.Failed => FactoryCharterState.Failed, _ => FactoryCharterState.Blocked },
-                        "SelectedSupplementalUnavailable");
-            }
+                => RequireCurrentSupplemental(authority, evidence);
         }
         catch (PreviewCapabilityException) when (deadline.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         { throw new PreviewCapabilityException(FactoryCharterState.Unknown, "PreviewInputCollectionDeadlineExceeded"); }
@@ -162,6 +147,59 @@ internal static partial class RuntimeWorkflow
         catch (Exception e) when (e is JsonException or InvalidOperationException or ArgumentException or FormatException or KeyNotFoundException
             or HttpRequestException or IOException or Azure.RequestFailedException or AuthenticationFailedException or ModelCapabilityException)
         { throw new PreviewCapabilityException(FactoryCharterState.Unknown, "PreviewInputCollectionUnconfirmed"); }
+    }
+
+    internal static async Task RequireSourceRefreshDependenciesAsync(FactoryHostSettings settings, RuntimeDependencies dependencies,
+        PreviewCapabilityRequest request, PreviewCapabilitySnapshot expected, HttpClient http, CancellationToken token)
+    {
+        // This permits only descriptive source work. It cannot create a captured council input or qualify publication.
+        var credential = dependencies.PreviewCredential ?? new ManagedIdentityCredential(ManagedIdentityId.FromUserAssignedClientId(settings.ManagedIdentityClientId));
+        var validator = new AzureFactoryPreviewCapability(settings, PreviewHostKind.Council, credential, http, dependencies.PreviewClock);
+        var authority = await validator.CheckAsync(request, token);
+        if (authority.Revision != expected.Revision)
+            throw new PreviewCapabilityException(FactoryCharterState.Blocked, "SourceRefreshCapabilityChanged");
+        var models = await OpenPreviewModelsAsync(settings, dependencies, request, http, token);
+        var supplemental = await ReadPreviewSupplementalAsync(settings, dependencies, request, http, token);
+        RequireCurrentSupplemental(authority, supplemental);
+        var telemetry = await ReadPreviewTelemetryAsync(settings, dependencies, request, http, token);
+        RequireCurrentTelemetry(authority, telemetry);
+        var currentSupplemental = await ReadPreviewSupplementalAsync(settings, dependencies, request, http, token);
+        RequireCurrentSupplemental(authority, currentSupplemental);
+        var currentTelemetry = await ReadPreviewTelemetryAsync(settings, dependencies, request, http, token);
+        RequireCurrentTelemetry(authority, currentTelemetry);
+        await models.ReadAuthorityAsync(token);
+        if (telemetry.SourceAuthorityRevision != currentTelemetry.SourceAuthorityRevision
+            || !SupplementalRevisions(supplemental).OrderBy(p => p.Key).SequenceEqual(SupplementalRevisions(currentSupplemental).OrderBy(p => p.Key))
+            || ModelRevision(models.Observations[0].Authority) != ModelRevision(models.Observations[^1].Authority)
+            || models.Observations.Any(o => o.CapabilityRevision != authority.Revision || o.Output is not null)
+            || (await validator.CheckAsync(request, token)).Revision != authority.Revision)
+            throw new PreviewCapabilityException(FactoryCharterState.Blocked, "CurrentRefreshDependenciesChanged");
+        FactoryPreviewTelemetryValidation.ValidateCapture(authority.Telemetry!, authority.Capability.Configuration.Telemetry!,
+            request.RequestId, currentTelemetry.Capture, dependencies.PreviewClock.GetUtcNow());
+        foreach (var item in currentSupplemental.Sources)
+            FactoryPreviewSupplementalValidation.ValidateEvidence(item.Authority, item.Evidence, dependencies.PreviewClock.GetUtcNow());
+    }
+
+    private static void RequireCurrentTelemetry(PreviewCapabilitySnapshot authority, PreviewTelemetryEvidence evidence)
+    {
+        if (evidence.GovernanceRevision != authority.GovernanceRevision
+            || authority.Telemetry!.Configuration.ApplicationEnvironment != authority.Manifest.Identity.ApplicationEnvironment)
+            throw new JsonException("Inconsistent telemetry authority.");
+        if (evidence.Capture.Proof.State != TelemetryState.Ready)
+            throw new PreviewCapabilityException(evidence.Capture.Proof.State switch {
+                TelemetryState.Unknown => FactoryCharterState.Unknown, TelemetryState.Canceled => FactoryCharterState.Canceled,
+                TelemetryState.Failed => FactoryCharterState.Failed, TelemetryState.Partial => FactoryCharterState.Partial, _ => FactoryCharterState.Blocked },
+                "RequiredApplicationTelemetryUnavailable:" + evidence.Capture.Proof.Reason);
+    }
+
+    private static void RequireCurrentSupplemental(PreviewCapabilitySnapshot authority, PreviewSupplementalEvidence evidence)
+    {
+        if (evidence.GovernanceRevision != authority.GovernanceRevision) throw new JsonException("Inconsistent selected-source authority.");
+        if (evidence.State is not (SupplementalState.ReadySupplemental or SupplementalState.NotSelected))
+            throw new PreviewCapabilityException(evidence.State switch {
+                SupplementalState.Unknown => FactoryCharterState.Unknown, SupplementalState.Canceled => FactoryCharterState.Canceled,
+                SupplementalState.Partial => FactoryCharterState.Partial, SupplementalState.Failed => FactoryCharterState.Failed, _ => FactoryCharterState.Blocked },
+                "SelectedSupplementalUnavailable");
     }
 
     private static string ModelRevision(ModelAuthorityResult authority) =>

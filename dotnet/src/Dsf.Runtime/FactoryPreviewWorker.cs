@@ -48,11 +48,14 @@ internal sealed class FactoryPreviewWorker(FactoryHostSettings settings, Runtime
                     owned ? "OriginalPreviewWorkContinues" : "OriginalPreviewWorkerUnconfirmedNoTakeover");
             }
             if (document.PendingRun is not null || document.Admission?.State == PreviewWorkState.Unknown
+                || PreviewExecutionStore.HasUnconfirmedSourceWork(document)
                 || document.Dispatches.Any(d => d.State is PreviewModelDispatchState.Dispatched or PreviewModelDispatchState.Unknown))
                 return Observation(current.Preview, current.Request, PreviewReadiness.Unknown,
                     document.Admission?.Reason ?? "OriginalIssuedWorkOrCheckpointUnconfirmedNoReplay");
             if (document.Run is null)
-                return Observation(current.Preview, current.Request, PreviewReadiness.NotReady, "OriginalInvocationNotEvaluatedNoDispatch");
+                return document.SourceRefresh is null
+                    ? Observation(current.Preview, current.Request, PreviewReadiness.NotReady, "OriginalInvocationNotEvaluatedNoDispatch")
+                    : Observation(current.Preview, current.Request, document.Admission!.Readiness, document.Admission.Reason);
             return null;
         }
         finally { gate.Release(); }
@@ -165,6 +168,27 @@ internal sealed class FactoryPreviewWorker(FactoryHostSettings settings, Runtime
         }
     }
 
+    private async Task RefreshSourceAsync(Work work, SourceRefreshBinding binding, CancellationToken token)
+    {
+        var workload = new FactoryWorkloadCredential(credential, work.Authority.Manifest.Identity.TenantId, work.Authority.Council, dependencies.PreviewClock);
+        for (var i = 0; i < FactorySourceRefresh.AdvancesPerWorker; i++)
+        {
+            await work.Live!.RequireCurrentAsync(token);
+            await RuntimeWorkflow.RequireSourceRefreshDependenciesAsync(settings, dependencies, work.Request, work.Authority, http, token);
+            var store = Store(work.Authority, work.Live);
+            await store.ReadDocumentAsync(token);
+            var receipt = await store.AdvanceSourceAsync(work.Admission!, binding,
+                (request, cancellation) => FactorySourceRefreshClient.AdvanceAsync(work.Authority, request, workload, http, dependencies.PreviewClock, cancellation), token);
+            if (receipt.State == SourceRefreshState.Pending) continue;
+            throw new PreviewCapabilityException(receipt.State switch
+            {
+                SourceRefreshState.Unknown => FactoryCharterState.Unknown, SourceRefreshState.Partial => FactoryCharterState.Partial,
+                SourceRefreshState.Failed => FactoryCharterState.Failed, _ => FactoryCharterState.Blocked
+            }, receipt.Reason);
+        }
+        throw new PreviewCapabilityException(FactoryCharterState.Partial, "SourceRefreshWorkerBudgetReached; next scheduled invocation continues confirmed progress.");
+    }
+
     private async Task<Completion> RunAsync(Work work, CancellationToken token)
     {
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(work.Admission is null
@@ -187,7 +211,10 @@ internal sealed class FactoryPreviewWorker(FactoryHostSettings settings, Runtime
                 await store.ReadDocumentAsync(token);
                 await store.BeginWorkAsync(work.Admission, token);
                 began = true;
+                if (work.Live?.Refresh is { } refresh)
+                    await RefreshSourceAsync(work, refresh, token);
             }
+
             if (work.Inputs)
             {
                 var inputs = await RuntimeWorkflow.AcquirePreviewInputsAsync(settings, dependencies, work.Request, http, token);

@@ -56,6 +56,8 @@ internal sealed class FactoryActivityStore(FactoryManifest manifest, FactoryProm
         return (FactoryActivityIndex.Read(native.Json, manifest.Identity.FactoryId, Product, promotion.OperationId, publication, clock.GetUtcNow()), identity);
     }
 
+    internal bool HasSourceWork { get; private set; }
+
     internal async Task RequireSettledAsync(string? inspecting, CancellationToken token)
     {
         var current = await ReadAsync(token);
@@ -86,9 +88,11 @@ internal sealed class FactoryActivityStore(FactoryManifest manifest, FactoryProm
                 if (decision.Kind != FactoryPromotion.DecisionKind || decision.Checksum != decision.CalculateChecksum()
                     || decision.DecisionScope is null || entry.IntentSha256 != FactoryModelsValidation.Hash(decision.DecisionScope))
                     throw new JsonException("Original indexed decision required.");
+                HasSourceWork |= decision.SourceRefresh is { Count: > 0 };
                 if (entry.Id != inspecting && (decision.PendingRun is not null
                     || decision.Admission is { State: PreviewWorkState.Queued or PreviewWorkState.Running or PreviewWorkState.Unknown }
-                    || decision.Dispatches.Any(d => d.State is PreviewModelDispatchState.Dispatched or PreviewModelDispatchState.Unknown)))
+                    || decision.Dispatches.Any(d => d.State is PreviewModelDispatchState.Dispatched or PreviewModelDispatchState.Unknown)
+                    || PreviewExecutionStore.HasUnconfirmedSourceWork(decision)))
                     throw new PreviewCapabilityException(FactoryCharterState.Unknown, "OriginalDecisionAdmissionInFlightOrUnconfirmedNoNewWork");
             }
         }

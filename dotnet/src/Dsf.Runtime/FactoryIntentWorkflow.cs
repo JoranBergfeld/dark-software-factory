@@ -44,6 +44,18 @@ internal sealed class FactoryIntentWorkflow(FactorySourceAccess source, HttpClie
     internal Task<CharterSource> ReadReviewedCharterAsync(CancellationToken token) =>
         inventory.ReadCharterAsync(new(progress.Snapshot, progress.SourceIntegritySha256), token);
 
+    internal async Task<(SourceChunkReference Source, string Content, IReadOnlyList<SourceChunkReference> Dependencies)>
+        ReadReviewedChunkAsync(int index, CancellationToken token)
+    {
+        if (progress.State != IntentState.DraftReady || index < 0 || index >= chunks.Length)
+            throw new IntentException(IntentState.Blocked, "CompleteCheckedAnalysisRequiredForCompatibility");
+        var (path, chunk) = chunks[index];
+        using var materialized = await inventory.MaterializeAsync(Reference(chunk), token);
+        var (content, dependencies) = await ReadContentAsync(path, chunk, materialized, token);
+        await FenceAsync(token);
+        return (Reference(chunk), content, dependencies);
+    }
+
     internal async Task<IntentResult> RunAsync(IntentRequest request, bool status, CancellationToken token)
     {
         if (request.Page is < 0 or >= FactoryIntentLimits.MaximumPage

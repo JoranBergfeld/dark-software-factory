@@ -267,6 +267,7 @@ internal sealed partial class PreviewExecutionStore(PreviewCapabilitySnapshot au
             throw new PreviewCapabilityException(FactoryCharterState.Unknown, "PreviewExecutionStateUnconfirmed");
         foreach (var dispatch in document.Dispatches) ValidateDispatch(dispatch);
         ValidateAdmission(document);
+        ValidateSourceWork(document);
         if (document.FinalInputs is { } final && final.Revision != final.CalculateRevision())
             throw new PreviewCapabilityException(FactoryCharterState.Unknown, "PreviewFinalInputsUnconfirmed");
         if (document.Proof is { } proof && (document.Phase != PreviewExecutionPhase.Evaluated || document.PendingRun is not null

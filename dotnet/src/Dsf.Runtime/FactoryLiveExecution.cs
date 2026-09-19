@@ -5,6 +5,8 @@ namespace Dsf.Runtime;
 internal sealed class FactoryLiveExecution(LiveAuthoritySnapshot expected, FactoryLiveRequest request, FactoryLiveAuthority authority,
     FactoryDecisionExecution? decision = null)
 {
+    internal SourceRefreshBinding? Refresh { get; init; }
+    internal bool RefreshHistoryRequired { get; init; }
     internal FactoryDecisionExecution? Decision => decision;
     internal LiveAuthoritySnapshot Authority => expected;
     internal FactoryLiveExecutionScope Scope { get; } = new(request.OperationId, expected.Live.Plan.Fingerprint, expected.Revision);

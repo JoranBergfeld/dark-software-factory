@@ -12,6 +12,7 @@ internal sealed partial class PreviewExecutionStore
         if (Document.Admission is { State: not PreviewWorkState.Released }
             || Document.Admission is null && Document.Phase != PreviewExecutionPhase.Prepared
             || Document.PendingRun is not null
+            || HasUnconfirmedSourceWork(Document)
             || Document.Dispatches.Any(d => d.State is PreviewModelDispatchState.Dispatched or PreviewModelDispatchState.Unknown))
             throw new PreviewCapabilityException(FactoryCharterState.Unknown, "OriginalPreviewWorkerOrEffectUnconfirmedNoTakeover");
         if (JsonSerializer.SerializeToUtf8Bytes(Document, FactoryGitHubJson.Options).Length + AdmissionLifecycleBytes
@@ -48,6 +49,7 @@ internal sealed partial class PreviewExecutionStore
         owner = admission.WorkerId;
         var confirmedRun = Document.PendingRun is not null && run is not null ? await RunReceiptAsync(run, token) : null;
         var released = began && !executionToken.IsCancellationRequested
+            && !HasUnconfirmedSourceWork(Document)
             && !Document.Dispatches.Any(d => d.State is PreviewModelDispatchState.Unknown or PreviewModelDispatchState.Dispatched);
         var next = Document with
         {

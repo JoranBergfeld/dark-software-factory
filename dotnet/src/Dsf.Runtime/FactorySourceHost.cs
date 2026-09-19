@@ -47,6 +47,11 @@ public static partial class RuntimeVerbs
                 await access.CheckAsync(pending.Token);
                 if (!NativeCaller(context, access.Manifest.Identity.AzureActorId, access.Manifest.Identity.TenantId, null))
                     throw new JsonException();
+                if (!status)
+                {
+                    access.BeforeWork = access.RequireOperatorWorkAsync;
+                    await access.BeforeWork(pending.Token);
+                }
                 var request = await context.Request.ReadFromJsonAsync<IntentRequest>(FactorySourceValidation.RecordJson, pending.Token) ?? throw new JsonException();
                 if (charter)
                 {
@@ -89,6 +94,11 @@ public static partial class RuntimeVerbs
                 if (!NativeCaller(context, materialize ? access.Code.PrincipalId! : access.Manifest.Identity.AzureActorId,
                     access.Manifest.Identity.TenantId, materialize ? access.Code.ClientId : null))
                     throw new JsonException();
+                if (!status && !materialize)
+                {
+                    access.BeforeWork = access.RequireOperatorWorkAsync;
+                    await access.BeforeWork(pending.Token);
+                }
                 var inventory = new FactorySourceInventory(access, http, dependencies.SourceClock);
                 if (materialize)
                 {

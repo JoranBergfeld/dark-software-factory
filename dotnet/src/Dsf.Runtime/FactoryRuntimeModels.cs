@@ -18,9 +18,19 @@ internal static class FactoryRuntimeModels
         FactoryPause.RequireAdmissionOpen(values.Keys);
         var retained = FactoryModelsValidation.ReadRetained(manifest, values, reference, now);
         if (retained.Proof!.ExpiresAt > now) return retained;
+        var records = await ReadPromotionRecordsAsync(retained.Configuration.ProductEndpoint, credential, http, token);
+        var current = Read(manifest, records.ToDictionary(p => p.Key, p => p.Value.Value), reference, now, records);
+        if (FactoryModelsValidation.Hash(current) != FactoryModelsValidation.Hash(retained))
+            throw new PreviewCapabilityException(FactoryCharterState.Blocked, "ModelGovernanceChangedDuringObservation");
+        return current;
+    }
+
+    internal static async Task<Dictionary<string, ConfigurationSetting>> ReadPromotionRecordsAsync(string endpoint,
+        TokenCredential credential, HttpClient http, CancellationToken token)
+    {
         var gateway = new AzureConfigurationSettingsGateway(credential, http);
         var records = new Dictionary<string, ConfigurationSetting>(StringComparer.Ordinal);
-        await foreach (var record in gateway.ListRecordsAsync(retained.Configuration.ProductEndpoint, ProductConfigurationKeys.NoLabel, token))
+        await foreach (var record in gateway.ListRecordsAsync(endpoint, ProductConfigurationKeys.NoLabel, token))
         {
             FactoryPause.RequireAdmissionOpen([record.Key]);
             if (records.Count >= FactoryPreviewPublication.Policy.MaximumRecords + FactoryAudit.GovernanceHistoryRecords
@@ -31,7 +41,7 @@ internal static class FactoryRuntimeModels
         foreach (var prefix in new[] { FactoryPause.Key, FactoryPause.HistoryPrefix, FactoryPromotion.Prefix })
         {
             var seen = new HashSet<string>(StringComparer.Ordinal);
-            await foreach (var record in gateway.ListRecordsAsync(retained.Configuration.ProductEndpoint, "*", token, prefix + "*"))
+            await foreach (var record in gateway.ListRecordsAsync(endpoint, "*", token, prefix + "*"))
             {
                 FactoryPause.RequireAdmissionOpen([record.Key]);
                 if (record.Label is not null || !seen.Add(record.Key) || !records.TryGetValue(record.Key, out var captured)
@@ -41,10 +51,7 @@ internal static class FactoryRuntimeModels
             if (!seen.SetEquals(records.Keys.Where(k => k.StartsWith(prefix, StringComparison.Ordinal))))
                 throw new JsonException("Complete promotion namespace required.");
         }
-        var current = Read(manifest, records.ToDictionary(p => p.Key, p => p.Value.Value), reference, now, records);
-        if (FactoryModelsValidation.Hash(current) != FactoryModelsValidation.Hash(retained))
-            throw new PreviewCapabilityException(FactoryCharterState.Blocked, "ModelGovernanceChangedDuringObservation");
-        return current;
+        return records;
     }
 
     internal static FactoryModels Read(FactoryManifest manifest, IReadOnlyDictionary<string, string> values,
@@ -55,23 +62,9 @@ internal static class FactoryRuntimeModels
         if (retained.Proof!.ExpiresAt > now) return retained;
         try
         {
-            var nativeValues = records.ToDictionary(p => p.Key, p => p.Value.Value);
-            var publisher = FactoryPublisher.ReadConfirmed(nativeValues.Where(p => p.Key.StartsWith(FactoryPublisher.Prefix, StringComparison.Ordinal))
-                .ToDictionary(), now);
-            var identities = records.ToDictionary(p => p.Key, p => new AuditRecordIdentity(manifest.Identity.FactoryId,
-                AuditStoreKind.Governance, p.Key, p.Value.ETag.ToString(), FactoryAudit.TextHash(p.Value.Value)));
-            var promotion = FactoryPromotion.RequireApproved(nativeValues, identities, publisher.Plan, now);
-            var currentManifest = FactoryGovernance.ReadInactiveManifest(nativeValues[ProductConfigurationKeys.FactoryManifest],
-                nativeValues[ProductConfigurationKeys.FactoryProfile], manifest.Identity.ProductKey, retained.Configuration.ProductEndpoint, manifest.ProfilePin);
-            var authorityRevision = FactoryModelsValidation.Hash(records.Values.Where(r => !r.Key.StartsWith(FactoryAudit.Namespace, StringComparison.Ordinal))
-                .OrderBy(r => r.Key, StringComparer.Ordinal).Select(r => identities[r.Key]).ToArray());
-            if (FactoryModelsValidation.Hash(currentManifest) != FactoryModelsValidation.Hash(manifest)
-                || publisher.Plan.Deployment.Manifest.Identity != manifest.Identity
-                || publisher.Plan.Deployment.Manifest.ProfilePin != manifest.ProfilePin
-                || authorityRevision != publisher.Plan.Activation.AuthorityRevision)
-                throw new JsonException("Promoted model governance changed.");
+            var promotion = RequirePromotion(manifest, retained.Configuration.ProductEndpoint, records, now);
             // First promotion must itself have used a then-current, complete native capability proof.
-            var originallyVerified = FactoryModelsValidation.ReadVerified(manifest, nativeValues, reference, promotion.ApprovedAt);
+            var originallyVerified = FactoryModelsValidation.ReadVerified(manifest, records.ToDictionary(p => p.Key, p => p.Value.Value), reference, promotion.ApprovedAt);
             if (FactoryModelsValidation.Hash(originallyVerified) != FactoryModelsValidation.Hash(retained))
                 throw new JsonException("Original model observation changed.");
             return retained;
@@ -83,6 +76,26 @@ internal static class FactoryRuntimeModels
         }
     }
 
+    internal static FactoryPromotionApproval RequirePromotion(FactoryManifest manifest, string endpoint,
+        IReadOnlyDictionary<string, ConfigurationSetting> records, DateTimeOffset now)
+    {
+        FactoryPause.RequireAdmissionOpen(records.Keys);
+        var values = records.ToDictionary(p => p.Key, p => p.Value.Value);
+        var publisher = FactoryPublisher.ReadConfirmed(values.Where(p => p.Key.StartsWith(FactoryPublisher.Prefix, StringComparison.Ordinal)).ToDictionary(), now);
+        var identities = records.ToDictionary(p => p.Key, p => new AuditRecordIdentity(manifest.Identity.FactoryId,
+            AuditStoreKind.Governance, p.Key, p.Value.ETag.ToString(), FactoryAudit.TextHash(p.Value.Value)));
+        var promotion = FactoryPromotion.RequireApproved(values, identities, publisher.Plan, now);
+        var current = FactoryGovernance.ReadInactiveManifest(values[ProductConfigurationKeys.FactoryManifest],
+            values[ProductConfigurationKeys.FactoryProfile], manifest.Identity.ProductKey, endpoint, manifest.ProfilePin);
+        var revision = FactoryModelsValidation.Hash(records.Values.Where(r => !r.Key.StartsWith(FactoryAudit.Namespace, StringComparison.Ordinal))
+            .OrderBy(r => r.Key, StringComparer.Ordinal).Select(r => identities[r.Key]).ToArray());
+        if (FactoryModelsValidation.Hash(current) != FactoryModelsValidation.Hash(manifest)
+            || publisher.Plan.Deployment.Manifest.Identity != manifest.Identity
+            || publisher.Plan.Deployment.Manifest.ProfilePin != manifest.ProfilePin
+            || revision != publisher.Plan.Activation.AuthorityRevision)
+            throw new PreviewCapabilityException(FactoryCharterState.Blocked, "PromotedGoverningConfigurationChanged");
+        return promotion;
+    }
     internal static void RequireProtocol(FactoryModels models, ModelAuthorityResult result, DateTimeOffset now)
     {
         if (models.Proof!.ExpiresAt <= now && result.ContinuationProtocol != ContinuationProtocol)

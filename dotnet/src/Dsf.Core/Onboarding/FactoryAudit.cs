@@ -261,6 +261,7 @@ public static class FactoryAudit
             if (evidence.Identity.Key != FactoryAuditRetention.EvidenceKey(claim.Revision) || !revisions.ContainsKey(claim.Revision))
                 throw new JsonException("Orphaned analysis retention interlock.");
         }
+        FactorySourceRefreshAudit.Link(factory, input, Require, Link, ProtectAnalysis);
         foreach (var record in input.Where(r => r.Identity.Store == AuditStoreKind.Governance))
         {
             var key = record.Identity.Key;

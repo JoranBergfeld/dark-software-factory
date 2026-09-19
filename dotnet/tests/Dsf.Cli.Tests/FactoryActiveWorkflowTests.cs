@@ -813,6 +813,11 @@ public sealed class ActivatedFactoryFixture : IAsyncLifetime
 {
     private readonly PublisherFixture publisher = new();
     private DateTimeOffset snapshotAt;
+    private Dictionary<string, (string Value, int Revision)> sourceProgress = [];
+    private Dictionary<string, DateTimeOffset> sourceModifiedAt = [];
+    private string sourceTree = "";
+    private string sourceHead = "";
+    private string sourceBranch = "";
     public async Task InitializeAsync()
     {
         await publisher.InitializeAsync(TimeSpan.FromHours(24) - TimeSpan.FromMinutes(5));
@@ -830,10 +835,24 @@ public sealed class ActivatedFactoryFixture : IAsyncLifetime
         Assert.True(activated.Exit == 0, activated.Terminal.Output);
         publisher.CaptureCurrent();
         snapshotAt = transport.Scenario.Source.Source!.Clock.Now;
+        sourceProgress = transport.Scenario.Source.Source.Progress.ToDictionary();
+        sourceModifiedAt = transport.Scenario.Source.Source.ProgressModifiedAt.ToDictionary();
+        sourceTree = transport.Scenario.Source.Source.RootTree;
+        sourceHead = transport.Scenario.Source.Source.Head;
+        sourceBranch = transport.Scenario.Source.Source.Branch;
     }
     internal PreviewPreparationTransport Reset()
     {
         var transport = publisher.Reset(snapshotAt);
+        var source = transport.Scenario.Source.Source!;
+        source.Progress.Clear();
+        foreach (var pair in sourceProgress) source.Progress.Add(pair.Key, pair.Value);
+        source.ProgressModifiedAt.Clear();
+        foreach (var pair in sourceModifiedAt) source.ProgressModifiedAt.Add(pair.Key, pair.Value);
+        source.RootTree = sourceTree;
+        source.Head = sourceHead;
+        source.Branch = sourceBranch;
+        transport.SourceInferenceInputs.Clear();
         transport.AlterCompletion = null;
         transport.BeforeEvaluationResponse = null;
         transport.EvaluationModelDelay = null;

@@ -71,11 +71,19 @@ internal sealed class FactoryDecisionExecution
     {
         var authority = new FactoryLiveAuthority(settings, dependencies, credential, http);
         var request = new FactoryLiveRequest(Scope.InvocationId, promotion.LiveFingerprint);
-        // The admitted worker acquires all current inputs before dispatch and proves every model route
-        // before release/publication. Historical promotion authorizes that attempt, not a health claim.
-        var current = await authority.CheckAsync(request, true, token, modelEvaluationAdmission: true);
+        var current = await authority.CheckAsync(request, false, token);
+        var refresh = await FactorySourceRefreshClient.InspectAsync(current.Preview, current.Request, publisher.Credential, http, clock, token);
+        if (refresh.Progress is null && Decisions.HasSourceWork)
+            throw new PreviewCapabilityException(FactoryCharterState.Unknown, "OriginalSourceRefreshRootMissingDespiteNativeReferences");
+        if (refresh.State == SourceRefreshState.Pending)
+            await RuntimeWorkflow.RequireSourceRefreshDependenciesAsync(settings, dependencies, current.Request, current.Preview, http, token);
+        else if (refresh.State == SourceRefreshState.Current)
+            current = await authority.CheckAsync(request, true, token, modelEvaluationAdmission: true);
+        else throw new PreviewCapabilityException(refresh.State == SourceRefreshState.Unknown ? FactoryCharterState.Unknown
+            : refresh.State == SourceRefreshState.Partial ? FactoryCharterState.Partial : FactoryCharterState.Blocked, refresh.Reason);
         await RequireCurrentAsync(token);
-        return new(current, request, authority, this);
+        return new(current, request, authority, this) { Refresh = refresh.State == SourceRefreshState.Pending ? refresh.Binding : null,
+            RefreshHistoryRequired = refresh.Progress is not null };
     }
 
     internal Task RequireCurrentAsync(CancellationToken token) => authority.RequireSameAsync(publisher, token);

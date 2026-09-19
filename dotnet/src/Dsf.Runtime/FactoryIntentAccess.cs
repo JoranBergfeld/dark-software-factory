@@ -70,6 +70,9 @@ internal sealed class FactoryIntentAccess(FactorySourceAccess source, HttpClient
     internal async Task<ModelTextResult> CompleteAsync(string input, CancellationToken token)
     {
         try { return await RequestCompletionAsync(input, token); }
+        catch (Exception e) when (source.IsRefreshWork && !source.ModelRequestIssued
+            && (e is IntentException or HttpRequestException or IOException || e is OperationCanceledException && !token.IsCancellationRequested))
+        { throw new IntentException(IntentState.Blocked, "KnownNoModelDispatch; original process failed before the model POST."); }
         catch (Exception e) when (e is HttpRequestException or IOException || e is OperationCanceledException && !token.IsCancellationRequested)
         { throw new IntentException(IntentState.Unknown, "ModelDispatchUnconfirmed; provider details withheld, no automatic retry."); }
     }
@@ -94,6 +97,8 @@ internal sealed class FactoryIntentAccess(FactorySourceAccess source, HttpClient
         };
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", access.Token);
         await CheckHostAsync(token);
+        token.ThrowIfCancellationRequested();
+        if (path == "/synthesis") source.MarkModelRequestIssued();
         using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token);
         if (path == "/authority" && response.StatusCode == HttpStatusCode.NotFound)
             throw new IntentException(IntentState.Blocked, "NativeModelAuthorityUnavailable; compatible model-host image required.");

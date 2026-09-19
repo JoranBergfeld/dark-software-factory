@@ -818,11 +818,59 @@ Unknown even when provider health recovers. Pausing remains deliberate.
 An older model host lacking `promoted-model-observation-v1` support is an
 explicit compatibility blocker, not an automatic image upgrade.
 
-This model-observation recovery does **not** make changed source automatically
-compatible: the current source workflow still requires complete reacquisition,
-analysis and reconciliation with the adopted charter before changed-code
-publication can proceed. A cached report or matching charter bytes alone never
-authorize it.
+### Automatic descriptive source refresh
+
+Promoted decision admission detects the actual default branch changing. Ordinary
+decisions, including scheduled invocations, now drive CODE's existing complete
+tree acquisition and full inference/checking without a human `source` or `infer`
+command for each commit. Status and current-context routes remain read-only.
+Direct operator `source --new-snapshot` / `infer --new-analysis` cannot create
+unindexed work once promotion history exists, or while deliberately paused;
+they return `PromotedSourceWorkRequiresIndexedDecision` or the stop blocker.
+Initial, unpaused onboarding still uses the existing operator source commands.
+The trusted COUNCIL caller explicitly admits each bounded CODE advance under the
+original indexed native worker; CODE uses its existing evidence-store grant,
+not operator credentials or new governance-write access.
+
+After acquisition and every-claim checking, a separate real model pass compares
+**every current chunk**, current/dependent claims and original approved claims
+against the exact unchanged human-adopted charter. Excluded metadata, necessary
+unknowns and removed capabilities remain part of that comparison. Matching
+charter bytes, a cached draft, a bounded diff or percentage coverage alone never
+establish compatibility. Source remains distinct from observed deployed behavior.
+
+The existing worker returns `202` while working. Each CODE advance has a
+120-second work budget and 150-second client budget; the native host retains its
+180-second ingress deadline. At most 48 source advances run per worker, within
+the existing overall worker deadline and dispatch ceiling. Confirmed partial
+progress can continue on a subsequent scheduled invocation; the existing
+eight-snapshot/eight-analysis and complete-inventory limits still apply.
+Unknown original requests or model responses never resume by lease expiry,
+process restart or forced retry.
+
+| Observation | Meaning |
+| --- | --- |
+| `Pending` | Full current acquisition, analysis or compatibility checking is still underway; no publication. |
+| `ReviewRequired` | Material conflict, necessary unread content, unbounded semantic impact or a changed charter/snapshot requires deliberate review. |
+| `KnownNoModelDispatch` | The original process confirmed failure before the model POST; a new invocation may continue only after fresh dependency checks. |
+| `Unknown` | Original issued CODE/model outcome remains unconfirmed; retain its native identity, never replay. |
+| `CompatibleSourceRefreshAwaitingQualification` | Complete descriptive compatibility retained, **but live publication remains blocked** by the current original-revision qualification gate. |
+
+Current GitHub access, model authority, application telemetry, every selected
+source and protected stop/configuration state are checked before work, not
+substituted with history. Pause closes new admission and model/evidence work;
+already issued requests remain draining or unknown. Native decision journals,
+immutable CODE checkpoints and audit references expose that work. Analysis is
+retained before capture through the existing native retention interlock.
+Audit requires the original receipts, checkpoints and compatibility steps;
+surviving native work references prevent recreating an erased refresh namespace.
+Temporary raw source is disposed rather than archived.
+
+This is descriptive refresh, not runtime approval: manifest, adoption, approval
+and original preview are never rewritten. Compatible-revision publication
+qualification is not yet enabled; no CLI flag bypasses that remaining gate.
+An older CODE context host without `complete-source-refresh-v1` is an explicit
+upgrade/review blocker, not an assumed protocol or automatic image replacement.
 
 ### Run the activated factory
 

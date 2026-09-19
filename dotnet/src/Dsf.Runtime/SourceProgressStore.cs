@@ -17,11 +17,13 @@ internal sealed class SourceProgressStore
     private readonly ConfigurationClient client;
     private readonly Uri endpoint;
     private readonly string purpose;
+    private readonly FactorySourceAccess access;
     private string RecordContentType => purpose == "source" ? ContentType : "application/vnd.dsf.intent+json;version=1";
     internal SourceProgressStore(FactorySourceAccess access, HttpClient http, string purpose = "source")
     {
         if (purpose is not ("source" or "intent")) throw new ArgumentException("Unsupported progress namespace.", nameof(purpose));
         this.purpose = purpose;
+        this.access = access;
         var options = new ConfigurationClientOptions { Retry = { MaxRetries = 0 }, Transport = new HttpClientTransport(http) };
         endpoint = new(FactorySourceValidation.ProgressEndpoint(access.Manifest.Identity.FactoryId));
         client = new(endpoint, access.Credential, options);
@@ -111,6 +113,7 @@ internal sealed class SourceProgressStore
 
     internal async Task<ConfigurationSetting> WriteAsync<T>(string key, T value, ETag? etag, CancellationToken token)
     {
+        if (access.BeforeWork is not null) await access.BeforeWork(token);
         var json = JsonSerializer.Serialize(value, FactoryGitHubJson.Options);
         if (RecordSize(key, json) > FactorySourceValidation.RecordBytes)
             throw new SourceAcquisitionException(SourceState.Partial, "MetadataRecordLimit");

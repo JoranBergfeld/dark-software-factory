@@ -21,9 +21,27 @@ internal sealed class FactorySourceAccess(FactoryHostSettings settings, TokenCre
     internal TokenCredential Credential { get; private set; } = null!;
     internal IReadOnlyDictionary<string, string> Values { get; private set; } = null!;
     private string? pinned;
+    internal Func<CancellationToken, Task>? BeforeWork { get; set; }
+    internal bool IsRefreshWork { get; set; }
+    internal bool ModelRequestIssued { get; private set; }
+    internal void MarkModelRequestIssued() => ModelRequestIssued = true;
+
+    internal async Task RequireOperatorWorkAsync(CancellationToken token)
+    {
+        var gateway = new AzureConfigurationSettingsGateway(Credential, http);
+        foreach (var prefix in new[] { FactoryPause.Key, FactoryPause.HistoryPrefix, FactoryPromotion.Prefix })
+            await foreach (var record in gateway.ListRecordsAsync(settings.ProductEndpoint, "*", token, prefix + "*"))
+            {
+                if (!record.Key.StartsWith(prefix, StringComparison.Ordinal)) throw new JsonException();
+                throw new SourceAcquisitionException(SourceState.Blocked, prefix == FactoryPromotion.Prefix
+                    ? "PromotedSourceWorkRequiresIndexedDecision; use the admitted run/sweep workflow, not unindexed acquire/infer."
+                    : "DeliberateSourceAdmissionClosed; retained evidence is read-only, not work authorization.");
+            }
+    }
 
     internal async Task CheckAsync(CancellationToken token)
     {
+        if (BeforeWork is not null) await BeforeWork(token);
         var values = await ReadGovernanceAsync(pinned is null ? credential : Credential, token);
         var manifest = FactoryGovernance.ReadInactiveManifest(values.GetValueOrDefault(ProductConfigurationKeys.FactoryManifest),
             values.GetValueOrDefault(ProductConfigurationKeys.FactoryProfile), settings.Product, settings.ProductEndpoint, settings.ProfilePin);

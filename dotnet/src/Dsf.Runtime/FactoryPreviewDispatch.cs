@@ -22,7 +22,7 @@ internal sealed partial class PreviewExecutionStore
         }
         else
         {
-            if (Document.Dispatches.Count >= FactoryPreviewExecution.Policy.MaximumDispatches)
+            if (Document.Dispatches.Count + (Document.SourceRefresh?.Count ?? 0) >= FactoryPreviewExecution.Policy.MaximumDispatches)
                 throw new PreviewCapabilityException(FactoryCharterState.Partial, "PreviewDispatchCapacityExceeded");
             existing = new(identity, request, PreviewModelDispatchState.Intended, null, null);
             var intended = Document with { Dispatches = [.. Document.Dispatches, existing] };

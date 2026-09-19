@@ -35,6 +35,8 @@ public sealed record PreviewEvaluationDocument(
     public FactoryLiveExecutionScope? LiveScope { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public FactoryPublicationDecisionScope? DecisionScope { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<SourceRefreshDispatch>? SourceRefresh { get; init; }
     public string CalculateChecksum() => FactoryModelsValidation.Hash(this with { Checksum = "" });
     public PreviewEvaluationDocument Initial() => new(Protocol, Id, Product, FactoryId, OperationId, CreatedAt)
         { LiveScope = LiveScope, DecisionScope = DecisionScope, Kind = Kind };

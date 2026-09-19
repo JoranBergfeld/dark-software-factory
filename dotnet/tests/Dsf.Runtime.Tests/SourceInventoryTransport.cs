@@ -247,7 +247,10 @@ internal sealed class SourceInventoryTransport : HttpMessageHandler
             if (selected.ToString().Length > 1 && selected.ToString().EndsWith('*'))
                 return Json(new { items = Values.Where(p => p.Key.StartsWith(selected.ToString()[..^1], StringComparison.Ordinal))
                     .Select(p => Setting(p.Key, p.Value, 1)).ToArray() });
-            return Json(new { items = Values.Select(p => Setting(p.Key, p.Value, 1)).ToArray() });
+            var keyFilter = selected.ToString();
+            return Json(new { items = Values.Where(p => keyFilter.Length == 0 || keyFilter == "*"
+                || p.Key == keyFilter)
+                .Select(p => Setting(p.Key, p.Value, 1)).ToArray() });
         }
         if (uri.Host == new Uri(ProgressEndpoint).Host)
         {

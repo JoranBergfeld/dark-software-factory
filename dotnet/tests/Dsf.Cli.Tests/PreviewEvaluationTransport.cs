@@ -10,6 +10,7 @@ namespace Dsf.Cli.Tests;
 internal sealed partial class PreviewPreparationTransport
 {
     internal List<string> EvaluationInference = [];
+    internal List<string> SourceInferenceInputs = [];
     internal Func<string, string, string>? AlterCompletion { get; set; }
     internal Action<JsonNode>? AfterEvaluationWrite { get; set; }
     internal Func<JsonNode, JsonNode>? AlterApplication { get; set; }
@@ -63,6 +64,10 @@ internal sealed partial class PreviewPreparationTransport
         }
         else
         {
+            if (prompt!.Contains("INFER_INTENT", StringComparison.Ordinal)
+                || prompt.Contains("CHECK_EVERY_CLAIM", StringComparison.Ordinal)
+                || prompt.StartsWith("CHECK_UNCHANGED_GOVERNING_INTENT", StringComparison.Ordinal))
+                SourceInferenceInputs.Add(prompt);
             var text = Completion(prompt ?? throw new JsonException());
             text = AlterCompletion?.Invoke(prompt!, text) ?? text;
             response = Reply(new { model = route.Model, choices = new[] { new { finish_reason = "stop", message = new { content = text } } } });
@@ -73,6 +78,26 @@ internal sealed partial class PreviewPreparationTransport
 
     private static string Completion(string prompt)
     {
+        if (prompt.Contains("UNTRUSTED_JSON_DATA:", StringComparison.Ordinal))
+        {
+            var input = JsonNode.Parse(prompt[(prompt.IndexOf("UNTRUSTED_JSON_DATA:", StringComparison.Ordinal) + 20)..])!;
+            var content = (string)input["source"]!;
+            if (prompt.StartsWith("CHECK_UNCHANGED_GOVERNING_INTENT", StringComparison.Ordinal))
+                return JsonSerializer.Serialize(new SourceCompatibilityResult(true, input["targets"]!.AsArray()
+                    .Select(t => new SourceCompatibilityJudgment((string)t!, SourceCompatibilityVerdict.Compatible,
+                        "The scoped scheduling evidence remains consistent with the unchanged human charter.", content[..Math.Min(64, content.Length)])).ToArray()),
+                    FactoryGitHubJson.Options);
+            if (prompt.Contains("CHECK_EVERY_CLAIM", StringComparison.Ordinal))
+                return JsonSerializer.Serialize(new IntentVerification(true, input["previous"]!["claims"]!.AsArray().Select((c, i) =>
+                {
+                    var excerpt = (string)c!["evidence"]![0]!["excerpt"]!;
+                    return content.Contains(excerpt, StringComparison.Ordinal)
+                        ? new IntentClaimCheck(i, IntentSupportVerdict.Supports, "The original source expressly supports this scheduling claim.", excerpt)
+                        : new IntentClaimCheck(i, IntentSupportVerdict.Neutral, "This separate original chunk does not substantively address this claim.", "");
+                }).ToArray(), []), FactoryGitHubJson.Options);
+            if (input["previous"] is { } previous) return previous.ToJsonString();
+            return Dsf.Runtime.Tests.IntentModelFixture.Complete(prompt).Replace("\"pathIndex\":1", "\"pathIndex\":" + (int)input["pathIndex"]!, StringComparison.Ordinal);
+        }
         if (prompt.StartsWith("PROPOSAL_SYNTHESIS", StringComparison.Ordinal))
         {
             var evidence = JsonNode.Parse(prompt[(prompt.LastIndexOf(" Evidence: ", StringComparison.Ordinal) + 11)..])!;

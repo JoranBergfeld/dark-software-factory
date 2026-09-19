@@ -36,7 +36,11 @@ public static partial class RuntimeVerbs
         Func<HttpContext, Task<IResult>> handler = context => HandleAsync(context);
         app.MapPost(kind == PreviewHostKind.SourceContext ? "/council-context" : "/source-context", handler);
         if (kind == PreviewHostKind.SourceContext)
+        {
             app.MapPost("/retain-council-context", (Func<HttpContext, Task<IResult>>)(context => HandleAsync(context, retainAnalysis: true)));
+            app.MapPost("/source-refresh-status", (Func<HttpContext, Task<IResult>>)(context => HandleAsync(context, refreshStatus: true)));
+            app.MapPost("/source-refresh-advance", (Func<HttpContext, Task<IResult>>)(context => HandleAsync(context, refreshAdvance: true)));
+        }
         if (kind == PreviewHostKind.Council)
         {
             Func<HttpContext, Task<IResult>> modelAuthority = context => HandleAsync(context, modelAuthority: true);
@@ -54,7 +58,8 @@ public static partial class RuntimeVerbs
 
         async Task<IResult> HandleAsync(HttpContext context, bool modelAuthority = false, bool telemetryEvidence = false,
             bool supplementalEvidence = false, bool supplementalAuthority = false, bool inputs = false, bool prepareEvaluation = false, bool evaluate = false,
-            bool evaluationStatus = false, bool preparationStatus = false, bool retainAnalysis = false)
+            bool evaluationStatus = false, bool preparationStatus = false, bool retainAnalysis = false,
+            bool refreshStatus = false, bool refreshAdvance = false)
         {
             context.Response.Headers.CacheControl = "no-store";
             var clock = kind == PreviewHostKind.SourceContext ? dependencies.SourceClock : dependencies.PreviewClock;
@@ -68,7 +73,9 @@ public static partial class RuntimeVerbs
                     ?? throw new JsonException() : null;
                 var retention = retainAnalysis ? await context.Request.ReadFromJsonAsync<PreviewAnalysisRetentionRequest>(FactorySourceValidation.RecordJson, token)
                     ?? throw new JsonException() : null;
-                var request = retention?.Preview ?? optional?.Preview
+                var refresh = refreshAdvance ? await context.Request.ReadFromJsonAsync<SourceRefreshRequest>(FactorySourceValidation.RecordJson, token)
+                    ?? throw new JsonException() : null;
+                var request = refresh?.Preview ?? retention?.Preview ?? optional?.Preview
                     ?? await context.Request.ReadFromJsonAsync<PreviewCapabilityRequest>(FactorySourceValidation.RecordJson, token) ?? throw new JsonException();
                 var credential = (kind == PreviewHostKind.SourceContext ? dependencies.SourceCredential : dependencies.PreviewCredential)
                     ?? new ManagedIdentityCredential(ManagedIdentityId.FromUserAssignedClientId(settings.ManagedIdentityClientId));
@@ -85,6 +92,17 @@ public static partial class RuntimeVerbs
                 if (!NativeCaller(context, kind == PreviewHostKind.SourceContext ? capability.Council.PrincipalId! : capability.Manifest.Identity.AzureActorId,
                     capability.Manifest.Identity.TenantId, kind == PreviewHostKind.SourceContext ? capability.Council.ClientId : null))
                     throw new PreviewCapabilityException(FactoryCharterState.Blocked, "ApprovedPreviewCallerRequired");
+                if (refreshStatus || refresh is not null)
+                {
+                    var source = new FactorySourceAccess(settings, credential, http, clock);
+                    await source.CheckAsync(token);
+                    var workflow = new FactorySourceRefreshWorkflow(settings, source, http, clock);
+                    using var workBudget = new CancellationTokenSource(FactoryIntentLimits.AdvanceBudget, clock);
+                    using var work = CancellationTokenSource.CreateLinkedTokenSource(token, workBudget.Token);
+                    return refresh is null
+                        ? Results.Json(await workflow.InspectAsync(request.RequestId, work.Token), FactoryGitHubJson.Options)
+                        : Results.Json(await workflow.AdvanceAsync(refresh, work.Token), FactoryGitHubJson.Options);
+                }
                 if (retention is not null)
                 {
                     var receipt = await RetainPreviewAnalysisAsync(settings, dependencies, capability, retention, http, token);
