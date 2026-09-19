@@ -1148,10 +1148,10 @@ internal sealed class CharterScenario : IDisposable
         Pull["merged_by"] = new JsonObject { ["id"] = 56, ["login"] = "human-maintainer", ["type"] = "User" };
     }
 
-    internal static async Task<CharterScenario> ReadyAsync(string? existing = null, bool telemetry = false)
+    internal static async Task<CharterScenario> ReadyAsync(string? existing = null, bool telemetry = false, bool publisher = false)
     {
         var s = new CharterScenario();
-        (s.Machine, s.Arm, s.Previous) = await FactorySourceWorkflowTests.ReadyAsync(telemetry);
+        (s.Machine, s.Arm, s.Previous) = await FactorySourceWorkflowTests.ReadyAsync(telemetry, publisher);
         s.Source = new(s.Arm, s.Previous);
         s.Models = new(s.Arm);
         s.Machine.Boundary.Repository.ReservationHttp = new HttpClient(s.Source);

@@ -947,6 +947,7 @@ internal sealed class RepositoryReviewFixture : HttpMessageHandler, IGhCliRunner
     public static readonly string[] ClearAutomationArguments =
         ["--issue-automation", "clear", "--pr-automation", "clear", "--label-automation", "clear", "--automation-owner", "acme/platform"];
     private static readonly string PrivateKey = CreatePrivateKey();
+    internal static string OriginalAppPrivateKey => PrivateKey;
     public OwnerGitHubIdentity? OwnerIdentity { get; set; } = new(
         "7", "42", "selected", "https://owner.vault.azure.net/", "https://owner.azconfig.io");
     public Dictionary<string, (HttpStatusCode Status, string Json)> AppResponses { get; } = new()

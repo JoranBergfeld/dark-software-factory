@@ -19,7 +19,7 @@ internal sealed partial class PreviewPreparationTransport
         token.ThrowIfCancellationRequested();
         var target = request.RequestUri!.AbsolutePath.ToLowerInvariant();
         var serialized = Values().Where(p => (p.Key.Contains("/preview-preparation/", StringComparison.Ordinal)
-                || p.Key.Contains("/audit/live/", StringComparison.Ordinal))
+                || p.Key.Contains("/audit/live/", StringComparison.Ordinal) || p.Key.StartsWith(FactoryPublisher.Prefix, StringComparison.Ordinal))
             && p.Key.Contains("/effects/", StringComparison.Ordinal) && !p.Key.Contains("/receipts/", StringComparison.Ordinal))
             .Select(p => JsonNode.Parse(p.Value)!).Single(e => (string?)e["target"] == target);
         Assert.Equal("Dispatched", (string?)serialized["state"]);
@@ -54,9 +54,29 @@ internal sealed partial class PreviewPreparationTransport
             var councilPrincipal = (string)council["properties"]!["principalId"]!;
             var councilClient = (string)council["properties"]!["clientId"]!;
             var live = target.Contains("/deployments/live-", StringComparison.Ordinal);
-            var role = live ? "" : account + "/sqlroledefinitions/" + Value("stateRoleId");
+            var publisher = target.Contains("/deployments/publisher-", StringComparison.Ordinal);
+            var role = live || publisher ? "" : account + "/sqlroledefinitions/" + Value("stateRoleId");
             var created = new List<string>();
-            if (!live)
+            var auth = scenario.Arm.CreatedResources[group + "/providers/microsoft.managedidentity/userassignedidentities/" + prefix + "-github"];
+            if (publisher)
+            {
+                Add(account + "/sqldatabases/" + product + "/containers/proposal-publications", new JsonObject
+                {
+                    ["resource"] = new JsonObject { ["id"] = "proposal-publications", ["_rid"] = "PD5DALigE10=",
+                        ["partitionKey"] = new JsonObject { ["kind"] = "Hash", ["version"] = 2, ["paths"] = new JsonArray("/product") } },
+                });
+                foreach (var writer in new[] { true, false })
+                {
+                    var permissionRole = account + "/sqlroledefinitions/" + Value(writer ? "writerRoleId" : "readerRoleId");
+                    Add(permissionRole, new JsonObject { ["roleName"] = "dsf-publication-" + (writer ? "writer" : "reader"), ["type"] = "CustomRole",
+                        ["assignableScopes"] = new JsonArray(account), ["permissions"] = new JsonArray(new JsonObject
+                        { ["dataActions"] = JsonSerializer.SerializeToNode(writer ? FactoryPublisher.WriteDataActions : FactoryPublisher.ReadDataActions) }) });
+                    Add(account + "/sqlroleassignments/" + Value(writer ? "writerAssignmentId" : "readerAssignmentId"), new JsonObject
+                    { ["principalId"] = writer ? (string)auth["properties"]!["principalId"]! : councilPrincipal,
+                        ["roleDefinitionId"] = permissionRole, ["scope"] = account + "/dbs/" + product + "/colls/proposal-publications" });
+                }
+            }
+            else if (!live)
             {
                 Add(account + "/sqldatabases/" + product + "/containers/council-preview", new JsonObject
                 {
@@ -70,12 +90,18 @@ internal sealed partial class PreviewPreparationTransport
                     Add(account + "/sqlroleassignments/" + Value(parameter), new JsonObject
                     { ["principalId"] = councilPrincipal, ["roleDefinitionId"] = role, ["scope"] = account + "/dbs/" + product + "/colls/" + name });
             }
-            var endpoint = "https://" + prefix + (live ? "-decide" : "-preview") + ".private.azurecontainerapps.io";
-            var optionalSources = live ? new JsonArray() : values["supplementalSources"]!["value"]!.AsArray();
+            var endpoint = "https://" + prefix + (publisher ? "-pub-context" : live ? "-decide" : "-preview") + ".private.azurecontainerapps.io";
+            var optionalSources = live || publisher ? new JsonArray() : values["supplementalSources"]!["value"]!.AsArray();
             JsonNode OptionalIdentity(JsonNode selected) => supplemental!.Resources.Values.Single(r =>
                 ((string?)r["id"])?.Contains("/userassignedidentities/", StringComparison.Ordinal) == true
                 && ((string)r["id"]!).EndsWith("/" + prefix + "-" + (string)selected["kind"]!, StringComparison.Ordinal));
-            foreach (var (suffix, verb, nativeIdentity, client, image, audience, callers) in (live ? new[]
+            foreach (var (suffix, verb, nativeIdentity, client, image, audience, callers) in (publisher ? new[]
+            {
+                ("publisher", "serve-publisher", (string)auth["id"]!, (string)auth["properties"]!["clientId"]!,
+                    Value("runtimeImage"), Value("audienceClientId"), new[] { councilPrincipal }),
+                ("pub-context", "serve-publication-context", (string)council["id"]!, councilClient,
+                    Value("runtimeImage"), Value("audienceClientId"), new[] { (string)auth["properties"]!["principalId"]!, Value("operatorPrincipalId") }),
+            } : live ? new[]
             {
                 ("decide", "serve-decide", (string)council["id"]!, councilClient, Value("runtimeImage"), Value("audienceClientId"),
                     new[] { Value("operatorPrincipalId"), councilPrincipal }),
@@ -91,6 +117,7 @@ internal sealed partial class PreviewPreparationTransport
                 (string)s!["runtimeImage"]!, (string)s!["audienceClientId"]!, new[] { councilPrincipal }))))
             {
                 var host = group + "/providers/microsoft.app/containerapps/" + prefix + "-" + suffix;
+                if (publisher) Assert.InRange(host.Split('/')[^1].Length, 2, 32);
                 var env = new JsonArray();
                 foreach (var pair in new[] { ("DSF_PRODUCT", product), ("AZURE_APPCONFIG_ENDPOINT", Value("productEndpoint")),
                     ("DSF_FACTORY_PROFILE_PIN", Value("profilePin")), ("AZURE_CLIENT_ID", client) })
@@ -114,7 +141,8 @@ internal sealed partial class PreviewPreparationTransport
                 });
                 Resources[host]["identity"] = new JsonObject { ["type"] = "UserAssigned", ["userAssignedIdentities"] = new JsonObject { [nativeIdentity] = new JsonObject() } };
                 var authorization = new JsonObject { ["allowedPrincipals"] = new JsonObject { ["identities"] = JsonSerializer.SerializeToNode(callers) } };
-                if (suffix is not ("preview" or "decide")) authorization["allowedApplications"] = new JsonArray(councilClient);
+                if (suffix == "pub-context") authorization["allowedApplications"] = new JsonArray();
+                else if (suffix is not ("preview" or "decide")) authorization["allowedApplications"] = new JsonArray(councilClient);
                 Add(host + "/authconfigs/current", new JsonObject
                 {
                     ["platform"] = new JsonObject { ["enabled"] = true },

@@ -6,13 +6,13 @@ namespace Dsf.Runtime.GitHubApp;
 
 internal sealed class FactoryGitHubProposalPublisher(TokenCredential credential, HttpClient http, TimeProvider clock)
 {
-    // This data-plane module is not an activation authority and is deliberately not exposed by a host.
     internal async Task<FactoryPublicationResult> CreateAsync(FactoryPublicationIntent intent, FactoryGitHubAuthority authority,
-        CancellationToken token)
+        CancellationToken token, Func<CancellationToken, Task>? requireAdmission = null)
     {
         FactoryPublication.Validate(intent);
         if (intent.FactoryId != authority.FactoryId || intent.RepositoryId != authority.RepositoryId)
             throw new InvalidOperationException("Exact factory and durable repository required.");
+        if (requireAdmission is not null) await requireAdmission(token);
         var journal = new FactoryPublicationJournal(intent, credential, http, clock);
         var original = await journal.OpenAsync(token);
         if (original.State == FactoryPublicationState.Confirmed) return Result(original.State);
@@ -20,12 +20,14 @@ internal sealed class FactoryGitHubProposalPublisher(TokenCredential credential,
             return Result(FactoryPublicationState.Unknown, "Original issued request unconfirmed; no second create.");
         var access = await new FactoryGitHubVerifier(http, credential, clock).AcquireProposalAccessAsync(authority, token);
         var review = await access.ReviewAsync(original.Intent.AutomationReview, token);
+        if (requireAdmission is not null) await requireAdmission(token);
         await journal.DispatchAsync(token, review);
         var createIssued = false;
         try
         {
             if (await access.ReviewAsync(original.Intent.AutomationReview, token) != review)
                 throw new InvalidOperationException("Current mutation review changed after native dispatch claim.");
+            if (requireAdmission is not null) await requireAdmission(token);
             createIssued = true;
             var receipt = await access.CreateAsync(journal.Document.Intent, token);
             await journal.ConfirmAsync(receipt, token);

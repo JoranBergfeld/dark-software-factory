@@ -33,8 +33,11 @@ public sealed record PreviewEvaluationDocument(
     public PreviewWorkAdmission? Admission { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public FactoryLiveExecutionScope? LiveScope { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public FactoryPublicationDecisionScope? DecisionScope { get; init; }
     public string CalculateChecksum() => FactoryModelsValidation.Hash(this with { Checksum = "" });
-    public PreviewEvaluationDocument Initial() => new(Protocol, Id, Product, FactoryId, OperationId, CreatedAt) { LiveScope = LiveScope, Kind = Kind };
+    public PreviewEvaluationDocument Initial() => new(Protocol, Id, Product, FactoryId, OperationId, CreatedAt)
+        { LiveScope = LiveScope, DecisionScope = DecisionScope, Kind = Kind };
     public static PreviewEvaluationDocument ReadNative(JsonElement body)
     {
         var payload = JsonNode.Parse(body.GetRawText())!.AsObject();

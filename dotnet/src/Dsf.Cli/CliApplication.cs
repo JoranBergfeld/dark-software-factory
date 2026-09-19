@@ -237,6 +237,8 @@ public static partial class CliApplication
         {
             ("serve-preview", "serve protected supervised council evaluation; never publish or activate (runtime)"),
             ("serve-decide", "serve separately reviewed native Decide execution (runtime)"),
+            ("serve-publisher", "serve isolated native create-once publication (runtime)"),
+            ("serve-publication-context", "serve original council publication admission (runtime)"),
             ("serve-source-context", "serve protected council-only adopted source context (runtime)"),
             ("serve-preview-models", "serve protected council-only native model evaluation (runtime)"),
             ("serve-preview-telemetry", "serve protected council-only application telemetry evidence (runtime)"),

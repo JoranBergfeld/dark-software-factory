@@ -16,9 +16,7 @@ internal sealed class FactoryIssueRejectedException(int status, string requestId
 /// <summary>Ephemeral token stays inside the key-isolated module; its only mutation is a single issue POST.</summary>
 internal sealed class FactoryGitHubProposalAccess(HttpClient http, TimeProvider clock, string access, GitHubAuthorityProof proof)
 {
-    internal static readonly IReadOnlyDictionary<string, string> Permissions = new System.Collections.ObjectModel.ReadOnlyDictionary<string, string>(
-        new Dictionary<string, string> { ["metadata"] = "read", ["contents"] = "read", ["issues"] = "write",
-            ["actions"] = "read", ["repository_hooks"] = "read" });
+    internal static IReadOnlyDictionary<string, string> Permissions => FactoryPublication.GitHubPermissions;
     private bool issued;
     internal GitHubAuthorityProof Proof => proof;
 

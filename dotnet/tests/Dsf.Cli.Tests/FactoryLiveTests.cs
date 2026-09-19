@@ -30,6 +30,11 @@ public sealed class FactoryLiveTests(ActivationAuthorityFixture fixture) : IClas
         Assert.Equal(2, deployed.Result["receipts"]!.AsArray().Count(r => !((string)r!["target"]!).Contains("/roleassignments/", StringComparison.Ordinal)));
         foreach (var pair in original) Assert.Equal(pair.Value, transport.Values()[pair.Key]);
         Assert.DoesNotContain(transport.NativeWrites, target => target.Contains("/sql", StringComparison.Ordinal));
+        var nativeBeforePublication = transport.NativeWrites.ToArray();
+        var unsupported = await transport.Scenario.Machine.InvokeAsync("live", "--publication", "--selection", Selection().ToJsonString());
+        Assert.Equal(1, unsupported.Exit);
+        Assert.Contains("GitHubAppAdministratorPrerequisiteBeforeInitialAuthorityApproval", unsupported.Terminal.Output, StringComparison.Ordinal);
+        Assert.Equal(nativeBeforePublication, transport.NativeWrites);
         var live = FactoryLive.ReadConfirmed(transport.Values().Where(p => p.Key.StartsWith(FactoryLive.Prefix, StringComparison.Ordinal)).ToDictionary(),
             transport.Scenario.Source.Source!.Clock.GetUtcNow());
         var invocation = new FactoryLiveRequest(Guid.NewGuid(), live.Plan.Fingerprint);

@@ -17,10 +17,11 @@ public static partial class CliApplication
         var selection = StringOption("--selection", "complete native live rollout JSON");
         var approve = StringOption("--approve", "exact live rollout fingerprint");
         var status = BoolOption("--status", "verify original native rollout without writes");
+        var publication = BoolOption("--publication", "separately review/provision the isolated native publication capability; never activate");
         var exercise = StringOption("--exercise", "explicit GUID for a separately scoped, nonpublishing native council exercise");
         var execution = StringOption("--execution", "inspect original exercise GUID; never dispatch another evaluation");
         var json = BoolOption("--json", "structured nonsecret native state; never prompt");
-        AddOptions(command, endpoint, product, tenant, subscription, selection, approve, status, exercise, execution, json);
+        AddOptions(command, endpoint, product, tenant, subscription, selection, approve, status, publication, exercise, execution, json);
         command.SetAction(async (parse, token) =>
         {
             FactoryLiveResult result;
@@ -33,14 +34,14 @@ public static partial class CliApplication
                 var inspect = parse.GetValue(status);
                 var invocation = parse.GetValue(exercise) ?? parse.GetValue(execution);
                 if (parse.GetValue(exercise) is not null && parse.GetValue(execution) is not null
-                    || invocation is not null && (inspect || parse.GetValue(selection) is not null)
+                    || invocation is not null && (inspect || parse.GetValue(selection) is not null || parse.GetValue(publication))
                     || inspect && (parse.GetValue(selection) is not null || parse.GetValue(approve) is not null)) throw new ArgumentException();
                 var request = invocation is null ? null : new FactoryLiveRequest(Guid.Parse(Identifier(invocation)), Input(approve));
                 var selected = inspect || request is not null ? null : JsonSerializer.Deserialize<FactoryLiveSelection>(Input(selection), FactorySourceValidation.RecordJson)
                     ?? throw new JsonException();
                 if (selected is not null) FactoryLive.Validate(selected);
                 if (parse.GetValue(approve) is { } pin && !FactorySourceValidation.Hash(pin)) throw new ArgumentException();
-                _ = new ProvisioningAssets().Resolve("onboard-live.json");
+                _ = new ProvisioningAssets().Resolve(parse.GetValue(publication) ? "onboard-publisher.json" : "onboard-live.json");
                 var runner = azure ?? new SystemAzureCliRunner();
                 var time = clock ?? TimeProvider.System;
                 var reviews = reviewer ?? RepositoryAttachmentReviewer.Create(runner);
@@ -50,6 +51,13 @@ public static partial class CliApplication
                 var transport = http ?? PreviewPreparationHttp;
                 var admission = await new FactoryReservationService(reviews, runner, transport, time).StatusAsync(owner, tenantId, subscriptionId, name, pending.Token);
                 var service = new FactoryPreviewPreparationService(reviews, runner, transport, time);
+                if (parse.GetValue(publication))
+                {
+                    var published = await service.PublisherAsync(admission, selected, parse.GetValue(approve), pending.Token);
+                    terminal.WriteLine(JsonSerializer.Serialize(published, ReviewJson));
+                    return published.State is FactoryPublisherState.Reviewed or FactoryPublisherState.PublicationPreparedAwaitingPromotion ? Success
+                        : published.State == FactoryPublisherState.Canceled ? CanceledExitCode : Failure;
+                }
                 if (request is not null)
                 {
                     var observation = await service.ExerciseLiveAsync(admission, request, parse.GetValue(execution) is not null, pending.Token);

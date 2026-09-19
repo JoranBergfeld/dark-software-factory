@@ -184,6 +184,27 @@ public static class RuntimeCliApplication
             }
         });
         root.Subcommands.Add(live);
+        foreach (var context in new[] { false, true })
+        {
+            var publisher = new Command(context ? Dsf.Core.Onboarding.FactoryPublisher.ContextVerb : Dsf.Core.Onboarding.FactoryPublisher.Verb,
+                "serve isolated native publication authority; explicit final promotion and qualified current decision required");
+            publisher.SetAction(async (_, token) =>
+            {
+                try
+                {
+                    var settings = FactoryHostSettings.Read(env, "Factory publication");
+                    await using var host = RuntimeVerbs.BuildPublisherHost(settings, dependencies, context);
+                    await dependencies.WebHostRunner.RunAsync(host, token);
+                    return Success;
+                }
+                catch (RuntimeVerbException exception)
+                {
+                    await stderr.WriteLineAsync(exception.Message);
+                    return Failure;
+                }
+            });
+            root.Subcommands.Add(publisher);
+        }
         foreach (var kind in new[] { Dsf.Core.Onboarding.PreviewHostKind.Council, Dsf.Core.Onboarding.PreviewHostKind.SourceContext })
         {
             var preview = new Command(kind == Dsf.Core.Onboarding.PreviewHostKind.Council ? "serve-preview" : "serve-source-context",

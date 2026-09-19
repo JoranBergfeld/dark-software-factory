@@ -6,7 +6,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <DsfTemplate Include="owner-keyvault;owner-secrets;main;sre-agent;copy-owner-secret;onboard-foundation;product-github-private-key;onboard-github-auth;onboard-telemetry;onboard-models;onboard-source;onboard-supplemental;onboard-preview-workloads;onboard-live" />
+    <DsfTemplate Include="owner-keyvault;owner-secrets;main;sre-agent;copy-owner-secret;onboard-foundation;product-github-private-key;onboard-github-auth;onboard-telemetry;onboard-models;onboard-source;onboard-supplemental;onboard-preview-workloads;onboard-live;onboard-publisher" />
     <DsfTemplateSource Include="$(DsfInfrastructureRoot)**/*.bicep" />
     <Content Include="@(DsfTemplate->'$(DsfAssetOutput)%(Identity).json')"
              Link="assets/infra/%(Filename)%(Extension)"

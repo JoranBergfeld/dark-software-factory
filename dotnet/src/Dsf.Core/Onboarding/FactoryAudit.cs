@@ -49,7 +49,7 @@ public static class FactoryAudit
     public const int MaximumRecords = 81920;
     public const int MaximumBytes = 96 * 1024 * 1024;
     public const int PageSize = 128;
-    public const int GovernanceHistoryRecords = FactoryAuditRetention.MaximumRecords + 32 + FactoryLive.MaximumRecords;
+    public const int GovernanceHistoryRecords = FactoryAuditRetention.MaximumRecords + 32 + FactoryLive.MaximumRecords + FactoryPublisher.MaximumRecords;
     public static TimeSpan UnusedAnalysisRetention => TimeSpan.FromDays(90);
 
     public static AuditGraph Build(Guid factory, IReadOnlyList<FactoryAuditRecord> input, DateTimeOffset now)
@@ -408,6 +408,66 @@ public static class FactoryAudit
             }
             if (coordinator.State == FactoryLiveState.PreparedAwaitingPublication)
                 _ = FactoryLive.ReadConfirmed(liveValues, now);
+        }
+        var publisherValues = values.Where(p => p.Key.StartsWith(FactoryPublisher.Prefix, StringComparison.Ordinal)).ToDictionary();
+        if (publisherValues.Count != 0)
+        {
+            var root = Require(AuditStoreKind.Governance, FactoryPublisher.RootKey);
+            var coordinator = Parse<FactoryPublisherCoordinator>(root);
+            var publisher = FactoryPublisher.ReadPlan(coordinator, publisherValues);
+            var publisherFingerprint = publisher.Fingerprint;
+            var references = new[] { publisher.Approval, publisher.Live, publisher.GitHub }.Select(reference =>
+            {
+                var record = Require(reference.Store, reference.Key);
+                if (record.Identity != reference) throw new JsonException("Original publication rollout authority reference changed.");
+                Link(root, record);
+                return record;
+            }).ToArray();
+            var review = Require(AuditStoreKind.Governance, FactoryActivation.ReviewKey(publisher.Activation.OperationId));
+            if (Parse<FactoryActivationReview>(review).Fingerprint != publisher.Activation.Fingerprint) throw new JsonException();
+            Link(root, review);
+            for (var i = 0; i < coordinator.PlanChunks; i++)
+            {
+                var chunk = Require(AuditStoreKind.Governance, FactoryPublisher.ChunkKey(coordinator.OperationId, i));
+                Link(root, chunk);
+                foreach (var reference in references) Link(chunk, reference);
+            }
+            foreach (var step in publisher.Deployment.Steps)
+            {
+                if (!records.TryGetValue((AuditStoreKind.Governance, FactoryPublisher.EffectKey(coordinator.OperationId, step.Index)), out var effectRecord))
+                {
+                    if (step.Index < coordinator.ConfirmedEffects) throw new JsonException();
+                    continue;
+                }
+                var effect = Parse<PreviewPreparationEffect>(effectRecord);
+                if (effect.PlanFingerprint != publisherFingerprint || effect.OperationId != coordinator.OperationId || effect.FactoryId != factory
+                    || effect.Index != step.Index || effect.Target != step.Target || effect.BodySha256 != step.BodySha256) throw new JsonException();
+                Link(root, effectRecord);
+                for (var i = 0; i < effect.ReceiptHashes.Count; i++)
+                {
+                    var receipt = Require(AuditStoreKind.Governance, FactoryPublisher.ReceiptKey(coordinator.OperationId, step.Index, i));
+                    if (FactoryModelsValidation.Hash(Parse<PreviewPreparationReceipt>(receipt)) != effect.ReceiptHashes[i]) throw new JsonException();
+                    Link(effectRecord, receipt);
+                }
+            }
+            if (coordinator.State == FactoryPublisherState.PublicationPreparedAwaitingPromotion)
+                _ = FactoryPublisher.ReadConfirmed(publisherValues, now);
+            if (records.TryGetValue((AuditStoreKind.Governance, FactoryPublisher.ObservationKey(coordinator.OperationId)), out var observed))
+            {
+                FactoryPublisher.ValidateObservation(Parse<FactoryPublisherObservation>(observed), publisher, coordinator.ApprovedAt, now);
+                if (coordinator.NativeProviderProof is { } proof && proof != observed.Identity)
+                    throw new JsonException("Original native publisher proof revision changed.");
+                Link(root, observed);
+                foreach (var reference in references) Link(observed, reference);
+            }
+        }
+        if (values.Keys.Any(k => k.StartsWith(FactoryPromotion.Prefix, StringComparison.Ordinal)))
+        {
+            var publisher = FactoryPublisher.ReadConfirmed(publisherValues, now);
+            var identities = input.Where(r => r.Identity.Store == AuditStoreKind.Governance).ToDictionary(r => r.Identity.Key, r => r.Identity);
+            var promotion = FactoryPromotion.RequireApproved(values, identities, publisher.Plan, now);
+            var root = Require(AuditStoreKind.Governance, FactoryPromotion.RootKey);
+            foreach (var reference in promotion.References) Link(root, Require(reference.Store, reference.Key));
         }
         var protectedIds = new HashSet<AuditRecordIdentity>();
         var pending = new Queue<AuditRecordIdentity>(roots);

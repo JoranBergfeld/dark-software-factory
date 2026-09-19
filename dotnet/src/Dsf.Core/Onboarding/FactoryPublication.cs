@@ -44,6 +44,9 @@ public static class FactoryPublication
 {
     public const string Container = "proposal-publications";
     public const int MaximumAttempts = 64;
+    public static IReadOnlyDictionary<string, string> GitHubPermissions { get; } =
+        new System.Collections.ObjectModel.ReadOnlyDictionary<string, string>(new Dictionary<string, string>
+        { ["metadata"] = "read", ["contents"] = "read", ["issues"] = "write", ["actions"] = "read", ["repository_hooks"] = "read" });
     public static string Id(FactoryPublicationIntent intent) => "proposal-" + FactoryModelsValidation.Hash(
         new { intent.FactoryId, intent.RepositoryId, intent.LogicalIntent });
     public static string OriginId(FactoryPublicationIntent intent) => Id(intent) + "-origin";

@@ -12,38 +12,46 @@ internal sealed partial class FactoryPreviewPreparationService
     private static string Serialize<T>(T value) => JsonSerializer.Serialize(value, RecordJson);
     private static T Parse<T>(string value) => JsonSerializer.Deserialize<T>(value, RecordJson) ?? throw new JsonException();
 
-    private static void CheckCapacity(PreviewPreparationPlan plan, FactoryLivePlan? live = null)
+    private static void CheckCapacity(PreviewPreparationPlan plan, FactoryLivePlan? live = null, FactoryPublisherPlan? publisher = null)
     {
-        var bytes = Encoding.UTF8.GetBytes(live is null ? Serialize(plan) : Serialize(live));
+        var bytes = Encoding.UTF8.GetBytes(publisher is not null ? Serialize(publisher) : live is null ? Serialize(plan) : Serialize(live));
         var policy = FactoryPreviewPreparation.Policy;
         if (bytes.Length > policy.PlanBytes || plan.Steps.Count is < 1 || plan.Steps.Count > policy.MaximumEffects)
             throw Failure("CompletePreviewPreparationLifecycleCapacityExceeded");
         var chunks = (bytes.Length + policy.ChunkBytes - 1) / policy.ChunkBytes;
         if (chunks > policy.MaximumChunks) throw Failure("CompletePreviewPreparationPlanCapacityExceeded");
-        var operation = live?.Selection.OperationId ?? plan.Selection.OperationId;
+        var operation = publisher?.Selection.OperationId ?? live?.Selection.OperationId ?? plan.Selection.OperationId;
         var id = plan.Manifest.Identity.FactoryId;
         var hash = new string('f', 64);
-        Check(live is null ? FactoryPreviewPreparation.RootKey : FactoryLive.RootKey, new PreviewPreparationCoordinator(1, FactoryPreviewPreparation.Kind, id, operation,
+        Check(publisher is not null ? FactoryPublisher.RootKey : live is null ? FactoryPreviewPreparation.RootKey : FactoryLive.RootKey, new PreviewPreparationCoordinator(1, FactoryPreviewPreparation.Kind, id, operation,
             hash, hash, bytes.Length, chunks, plan.Manifest.Identity.AzureActorId, DateTimeOffset.MaxValue, Guid.Empty,
             PreviewPreparationState.Unknown, plan.Steps.Count, new string('x', 1024)));
         for (var i = 0; i < chunks; i++)
-            Check(live is null ? FactoryPreviewPreparation.ChunkKey(operation, i) : FactoryLive.ChunkKey(operation, i),
+            Check(publisher is not null ? FactoryPublisher.ChunkKey(operation, i) : live is null ? FactoryPreviewPreparation.ChunkKey(operation, i) : FactoryLive.ChunkKey(operation, i),
                 Convert.ToBase64String(bytes.AsSpan(i * policy.ChunkBytes, Math.Min(policy.ChunkBytes, bytes.Length - i * policy.ChunkBytes))));
         foreach (var step in plan.Steps)
         {
-            Check(live is null ? FactoryPreviewPreparation.EffectKey(operation, step.Index) : FactoryLive.EffectKey(operation, step.Index),
+            Check(publisher is not null ? FactoryPublisher.EffectKey(operation, step.Index) : live is null ? FactoryPreviewPreparation.EffectKey(operation, step.Index) : FactoryLive.EffectKey(operation, step.Index),
                 new PreviewPreparationEffect(1, id, operation, hash, step.Index, step.Target, hash, Guid.Empty,
                     DateTimeOffset.MaxValue, PreviewPreparationEffectState.Unknown,
                     Enumerable.Repeat(hash, step.ResourceTargets.Count).ToArray(), new string('x', 1024))
                 { CouncilEndpoint = "https://" + new string('a', 253), DeploymentOutputsSha256 = hash,
                     Acknowledgment = new(599, Guid.Empty.ToString(), Guid.Empty.ToString(), DateTimeOffset.MaxValue, hash, Guid.Empty.ToString(), "Succeeded") });
             for (var i = 0; i < step.ResourceTargets.Count; i++)
-                Check(live is null ? FactoryPreviewPreparation.ReceiptKey(operation, step.Index, i) : FactoryLive.ReceiptKey(operation, step.Index, i),
+                Check(publisher is not null ? FactoryPublisher.ReceiptKey(operation, step.Index, i) : live is null ? FactoryPreviewPreparation.ReceiptKey(operation, step.Index, i) : FactoryLive.ReceiptKey(operation, step.Index, i),
                     new PreviewPreparationReceipt(step.ResourceTargets[i], TargetApi(step.ResourceTargets[i]), new string('x', 256),
                         hash, 201, new string('f', 128), new string('f', 128),
                         step.Action == PreviewPreparationAction.WorkloadDeployment ? step.Target : null,
                         step.Action == PreviewPreparationAction.WorkloadDeployment ? new string('f', 128) : null)
                     { Endpoint = "https://" + new string('a', 253) });
+        }
+        if (publisher is not null)
+        {
+            var proof = publisher.GitHubAuthority.Proof ?? throw Failure("OriginalVerifiedGitHubProofRequired");
+            Check(FactoryPublisher.ObservationKey(operation), new FactoryPublisherObservation(1, id, hash, hash,
+                proof with { ObservedAt = DateTimeOffset.MaxValue, TokenExpiresAt = DateTimeOffset.MaxValue,
+                    Repository = new string('r', 140), DefaultBranch = new string('b', 1024),
+                    Detail = new string('d', 512), EffectivePermissions = FactoryPublication.GitHubPermissions }, hash));
         }
         static void Check<T>(string key, T value) => OwnerReservationStore.CheckSize(key, "", Serialize(value), ContentType);
     }

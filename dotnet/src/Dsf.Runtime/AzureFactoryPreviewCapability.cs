@@ -58,12 +58,15 @@ internal sealed class AzureFactoryPreviewCapability(
             var nativeCredential = new FactoryWorkloadCredential(credential, manifest.Identity.TenantId, own, clock);
             _ = await nativeCredential.GetTokenAsync(new TokenRequestContext(["https://appconfig.azure.com/.default"]), token);
             var native = new NativePreviewBindings(manifest, models, github, source, sourceEffects, capability, bindings, effects,
-                telemetry, telemetryEffects, supplemental, supplementalEffects, nativeCredential, http, clock);
+                telemetry, telemetryEffects, supplemental, supplementalEffects, nativeCredential, http, clock)
+            { PublicationGovernance = records.PublicationGovernance };
             var endpoints = kind == PreviewHostKind.TelemetryEvidence
                 ? (Council: (string?)null, Source: (string?)null, Models: (string?)null, Telemetry: await native.CheckTelemetryAsync(true, token))
                 : await native.CheckAsync(token);
             var current = await ReadAsync(nativeCredential, token);
-            if (FactoryModelsValidation.Hash(records) != FactoryModelsValidation.Hash(current)) throw Denied("PreviewGovernanceChanged");
+            if (FactoryModelsValidation.Hash(records) != FactoryModelsValidation.Hash(current)
+                || PublicationRevision(records.PublicationGovernance) != PublicationRevision(current.PublicationGovernance))
+                throw Denied("PreviewGovernanceChanged");
             var revision = FactoryModelsValidation.Hash(new { Records = records, Native = native.Revisions });
             var preparation = capability.Configuration.PreparationRevision is null ? null : FactoryPreviewPublication.ReadConfirmed(manifest, values, clock.GetUtcNow());
             return new(manifest, capability, bindings["council"], bindings["code"], endpoints.Council, endpoints.Source, revision)
@@ -86,6 +89,8 @@ internal sealed class AzureFactoryPreviewCapability(
     private sealed record ProtectedRecords(SortedDictionary<string, string> Values, SortedDictionary<string, string> Versions)
     {
         [JsonIgnore] public IReadOnlyDictionary<string, string> NativeVersions { get; init; } = new Dictionary<string, string>();
+        [JsonIgnore] public IReadOnlyDictionary<string, Azure.Data.AppConfiguration.ConfigurationSetting> PublicationGovernance { get; init; }
+            = new Dictionary<string, Azure.Data.AppConfiguration.ConfigurationSetting>();
     }
 
     private async Task<ProtectedRecords> ReadAsync(TokenCredential currentCredential, CancellationToken token)
@@ -100,12 +105,14 @@ internal sealed class AzureFactoryPreviewCapability(
         var audit = new HashSet<string>(StringComparer.Ordinal);
         var retention = new HashSet<string>(StringComparer.Ordinal);
         var bytes = 0;
+        var publicationGovernance = new Dictionary<string, Azure.Data.AppConfiguration.ConfigurationSetting>();
         await foreach (var setting in new AzureConfigurationSettingsGateway(currentCredential, http)
             .ListRecordsAsync(settings.ProductEndpoint, ProductConfigurationKeys.NoLabel, token))
         {
             var key = setting.Key;
             RuntimeWorkflow.EnsureCouncilAdmissionOpen([key]);
             var metadata = Metadata(setting);
+            publicationGovernance.Add(key, setting);
             if (key.StartsWith(FactoryAudit.Namespace, StringComparison.Ordinal))
             {
                 if (!retention.Add(key) || retention.Count > FactoryAudit.GovernanceHistoryRecords
@@ -152,7 +159,17 @@ internal sealed class AzureFactoryPreviewCapability(
         }
         if (!previews.SetEquals(values.Keys.Where(k => k.StartsWith("dsf/factory/preview", StringComparison.Ordinal))))
             throw new PreviewCapabilityException(FactoryCharterState.Unknown, "PreviewNamespaceUnconfirmed");
-        return new(values, versions) { NativeVersions = nativeVersions };
+        foreach (var prefix in new[] { FactoryPublisher.Prefix, FactoryActivation.Prefix, FactoryLive.Prefix })
+        {
+            var seen = new HashSet<string>();
+            await foreach (var setting in new AzureConfigurationSettingsGateway(currentCredential, http)
+                .ListRecordsAsync(settings.ProductEndpoint, "*", token, prefix + "*"))
+                if (setting.Label is not null || !seen.Add(setting.Key) || !publicationGovernance.TryGetValue(setting.Key, out var original)
+                    || original.Value != setting.Value || original.ETag != setting.ETag) throw Denied("PublicationGovernanceNamespaceUnconfirmed");
+            if (!seen.SetEquals(publicationGovernance.Keys.Where(k => k.StartsWith(prefix, StringComparison.Ordinal))))
+                throw Denied("PublicationGovernanceNamespaceUnconfirmed");
+        }
+        return new(values, versions) { NativeVersions = nativeVersions, PublicationGovernance = publicationGovernance };
 
         static JsonElement Metadata(Azure.Data.AppConfiguration.ConfigurationSetting setting) => JsonSerializer.SerializeToElement(new
         { ETag = setting.ETag.ToString(), setting.Label, setting.ContentType,
@@ -160,6 +177,10 @@ internal sealed class AzureFactoryPreviewCapability(
     }
 
     private static PreviewCapabilityException Denied(string reason) => new(FactoryCharterState.Blocked, reason);
+    private static string PublicationRevision(IReadOnlyDictionary<string, Azure.Data.AppConfiguration.ConfigurationSetting> records) =>
+        FactoryModelsValidation.Hash(records.Where(p => p.Key.StartsWith(FactoryPublisher.Prefix, StringComparison.Ordinal)
+                || p.Key.StartsWith(FactoryActivation.Prefix, StringComparison.Ordinal) || p.Key.StartsWith(FactoryLive.Prefix, StringComparison.Ordinal))
+            .OrderBy(p => p.Key, StringComparer.Ordinal).Select(p => new { p.Key, p.Value.Value, ETag = p.Value.ETag.ToString() }));
 }
 
 internal sealed partial class NativePreviewBindings(
@@ -172,6 +193,8 @@ internal sealed partial class NativePreviewBindings(
 {
     internal SortedDictionary<string, string> Revisions { get; } = new(StringComparer.Ordinal);
     internal Dictionary<string, string> SupplementalEndpoints { get; } = new(StringComparer.Ordinal);
+    internal IReadOnlyDictionary<string, Azure.Data.AppConfiguration.ConfigurationSetting> PublicationGovernance { get; init; }
+        = new Dictionary<string, Azure.Data.AppConfiguration.ConfigurationSetting>();
     private string Group => FactoryPreviewValidation.Group(models);
     private string Account => bindings["account"].Target;
 
@@ -264,6 +287,7 @@ internal sealed partial class NativePreviewBindings(
                     index == 0 ? "runs" : FactoryPreviewValidation.PreviewContainer))) throw Changed("PreviewStateGrantChanged");
         }
         var sqlAssignments = await GetAsync(Account + "/sqlroleassignments", "2024-11-15", token);
+        sqlAssignments = await OriginalPreviewSqlInventoryAsync(sqlAssignments, token);
         var assigned = Complete(sqlAssignments).Where(a => a.GetProperty("properties").GetProperty("principalId").GetString() == bindings["council"].PrincipalId).ToArray();
         if (!assigned.Select(a => a.GetProperty("id").GetString()!).Order(StringComparer.OrdinalIgnoreCase)
             .SequenceEqual(effects.Skip(2).Take(2).Select(e => e.Target).Order(StringComparer.OrdinalIgnoreCase), StringComparer.OrdinalIgnoreCase))

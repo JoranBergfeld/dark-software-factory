@@ -21,6 +21,7 @@ internal sealed class ProvisioningAssets
         "onboard-supplemental.json",
         "onboard-preview-workloads.json",
         "onboard-live.json",
+        "onboard-publisher.json",
     };
 
     private readonly string directory;

@@ -170,7 +170,7 @@ internal static partial class RuntimeWorkflow
                 ? PreviewReadiness.Unknown : store.Document.Phase == PreviewExecutionPhase.Failed ? PreviewReadiness.Failed : PreviewReadiness.NotReady
         };
 
-    private static ConveyorServices PreviewServices(PreviewInputSnapshot inputs, ConveyorRun run, IFactoryPreviewModelWorkloads models, PreviewExecutionStore store)
+    private static ConveyorServices PreviewServices(PreviewInputSnapshot inputs, ConveyorRun run, IFactoryPreviewModelWorkloads models, IRunStore store)
     {
         var context = new PreviewConveyorContext(inputs, run, models);
         var lenses = inputs.Context.Judgment.Lenses.Select(l => l.Name switch

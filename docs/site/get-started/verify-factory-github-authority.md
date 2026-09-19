@@ -20,6 +20,15 @@ The deploying operator needs the existing source
 creation and exact role-assignment rights, and product configuration data access.
 The owner key and installation are not rotated, replaced or modified.
 
+For subsequent proposal publication, the existing App **and installation must
+already have** `metadata:read`, `contents:read`, `actions:read`,
+`repository_hooks:read` and `issues:write` **before this initial authority
+review/approval**. Ask the GitHub App/installation administrator to establish
+these prerequisites outside DSF before onboarding. The exact original
+dictionaries are pinned; adding permissions afterward is a detected authority
+change, not an upgrade DSF can perform or silently approve.
+An existing narrower pinned factory needs separate reviewed reconfiguration.
+
 Supply an accessible, digest-pinned image built from the DSF runtime containing
 `serve-github-auth`. The existing runtime Dockerfile and image workflow include
 the implementation; an arbitrary placeholder image is not verification.
@@ -43,7 +52,10 @@ credentials when the deployed path is unavailable.
 including access beyond the normally requested repository and permissions.
 Downscoping is normal discipline, **not signing-key containment**. GitHub's
 issue-write permission is coarser than DSF's allowed publication behavior.
-No publication caller is eligible while inactive; no issue-write token is issued.
+This original auth host never issues an issue-write token. A later,
+separately reviewed [publication capability](prepare-council-preview.md#prepare-the-isolated-native-publication-capability)
+can mint a token inside another isolated AUTH host to verify provider readiness,
+without authorizing an issue create or changing CODE's token.
 This slice does not introduce an owner broker or stronger-isolation project.
 
 ## Preview and approve

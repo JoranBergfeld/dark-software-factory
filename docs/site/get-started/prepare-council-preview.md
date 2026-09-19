@@ -605,14 +605,88 @@ Rollout review, native status and successful exercise return exit 0.
 Blocked/failed/unknown results return 1; none imply rollback or successful
 activation. Do not rotate operation IDs to evade uncertain history.
 
-### Create-once dispatch implementation boundary
+### Prepare the isolated native publication capability
 
-The runtime now contains an internal native Cosmos/GitHub create-once dispatch
-module. **It is not a deployed publication capability or an activation
-command.** No CLI/HTTP route calls it; existing approval-only and
-`PreparedAwaitingPublication` receipts remain insufficient. Do not deploy it
-by changing configuration, mint an issue token manually, or reuse an exercise
-as publication authorization.
+After the original approved native live rollout, explicitly review a **new**
+publication rollout. Existing `ApprovalOnly` and `PreparedAwaitingPublication`
+receipts stay immutable and do not authorize publication.
+
+The App/installation must have the [publication permissions before its initial
+authority approval](verify-factory-github-authority.md). Missing pinned
+permissions produce a named administrator prerequisite; DSF never changes the
+App or rewrites old approvals to accommodate a permission delta.
+
+Use a new operation GUID and a digest-pinned runtime image containing both
+`serve-publisher` and `serve-publication-context`. The selection has the same
+four explicit fields as the live rollout: `operationId`, `runtimeImage`,
+`audienceClientId`, `metadataRoleDefinitionId`. The existing API registration
+must permit the operator, original AUTH and original COUNCIL callers as required
+by the reviewed routes. DSF creates no directory registration or consent.
+
+```bash
+dsf onboard decide live --publication \
+  --selection "$(cat publication-selection.json)" \
+  --owner-appconfig-endpoint https://OWNER.azconfig.io \
+  --product PRODUCT --tenant TENANT_GUID --subscription SUBSCRIPTION_GUID --json
+```
+
+Inspect the complete returned native plan, then repeat with
+`--approve <approvalFingerprint>`. Review writes nothing; redirected input and
+`--json` never prompt or infer approval. `--publication --status` inspects the
+original native operation and performs authenticated current provider checks,
+without provisioning or replay.
+
+The separate protected namespace is `dsf/factory/audit/publisher/`: its
+conditional coordinator references chunked approved inputs, exact effects,
+original HTTP 201 deployment acknowledgement, complete native Create operations,
+resource incarnations and the authenticated native provider proof. Its audit
+edges include the original operator approval, live rollout, GitHub authority,
+plan chunks and creation receipts—not only the root record.
+
+Native effects:
+
+* A non-expiring `proposal-publications` container in the original factory
+  Cosmos account/database.
+* AUTH gets `readMetadata` and item read/create/replace **only at that
+  container**. COUNCIL gets `readMetadata` and item read there, not write.
+  Neither role grants query, delete, upsert, global keys or governance writes.
+* New private, digest-pinned publisher and context hosts reuse the original
+  AUTH and COUNCIL identities and original hosting environment. Original
+  hosts, key version and CODE token are unchanged.
+* The publisher's native Entra policy allows only the original COUNCIL
+  principal/client. The context host admits AUTH and the original operator;
+  route checks separate AUTH publication qualification from operator
+  readiness inspection.
+* Exact scoped read-only native metadata grants let these hosts verify their
+  original resources, identities, role definitions, assignments and creation
+  receipts. No application resource or backend tag is written.
+
+After native provisioning, the operator calls the new COUNCIL context's
+`/readiness`; COUNCIL calls the AUTH publisher's `/capability` with its own
+managed identity. AUTH reads the original versioned key and verifies the actual
+App, installation, restricted repository reach, effective token permissions,
+proposal label and current mutation-class automation. Operator credentials are
+never borrowed by either runtime workload. The authenticated proof is retained.
+Missing/denied/unreadable provider evidence is not successful capability
+preparation.
+
+`PublicationPreparedAwaitingPromotion` means native publication infrastructure
+is prepared; the result still reports `isActivated: false` and
+`historicallyCompleted: false`. The first original native provider proof is
+historical evidence; status and dispatch check current authority again.
+Pause and exact protected revisions are checked before each native effect.
+Lost or partial native creation stays unknown with its original operation;
+there is no replay, adoption, replacement or completed-stop claim.
+
+### Guarded create-once dispatch
+
+The authenticated publisher's `/publish` route accepts only original invocation
+and candidate identifiers—not payload, credentials, authority objects or a
+live-filing boolean. It requires separate current protected final promotion,
+the complete original capability and an exact new retained live-decision
+scope. AUTH asks the original COUNCIL context to qualify the actual native run,
+full model receipts, current source/model/telemetry inputs and unanimous GO.
+Historical previews and nonpublishing exercises are incompatible.
 
 Its stable native identity hashes the factory GUID, durable repository ID and
 logical proposal intent, not the invocation GUID. The `proposal-publications`
@@ -632,19 +706,21 @@ repository-only permissions are `metadata:read`, `contents:read`,
 contents token is unchanged. GitHub cannot confine `issues:write` to
 create-only, and the App-key-holder residual remains. Current label semantics
 and complete workflow/webhook inventories are checked before and after the
-dispatch claim using the attachment review's shared mutation-class policy.
-Unrelated push, pull-request and check automation does not itself block issue-only
-creation. Applicable issue/opened, opaque dispatch consumers and uninspectable
-hooks remain blocked/unknown; declarations do not override missing evidence.
+dispatch claim, using the attachment review's shared per-mutation policy.
+Unrelated push, pull-request and check automation does not by itself block
+issue-only creation. Applicable issue/opened or opaque dispatch consumers remain
+blocked/unknown; an owner's declaration cannot clear uninspectable automation.
+The current inventory hash and original explicit owner review are retained.
+No issue PATCH, comment, closure, assignment, milestone/project change, outcome
+relabel or delivery-trigger label is available.
 
-Operator-reviewed native rollout/grants, exact current activation and pause
-checks at the dispatch boundary, actual unanimous-GO live-execution routing,
-and protected discovery/retention of publication-linked native execution
-remain required before this module may be exposed. Merely shipping the module
-does not install these grants, upgrade the existing App, complete onboarding
-or confirm a first filing. The audit graph can validate supplied native
-publication records and exact reference closure; operator audit discovery is
-not yet wired to discover those records.
+Final promotion and the stable live-problem producer/all-entry routing are not
+yet exposed in this release. Therefore `/publish` rejects the existing
+approval-only factory, rather than treating native rollout as activation.
+Automatic discovery/retention of publication-linked live execution also remains
+to be wired. The native module and guarded route are installed, but no onboarding
+completion or first confirmed filing is claimed until those remaining gates and
+actual orchestration are completed.
 
 ## Deliberately pause council admission
 

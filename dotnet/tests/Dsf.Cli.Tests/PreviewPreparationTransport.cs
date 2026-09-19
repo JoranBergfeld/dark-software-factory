@@ -32,9 +32,9 @@ internal sealed partial class PreviewPreparationTransport(CharterScenario scenar
     private readonly HttpMessageInvoker models = new(scenario.Models, false);
     private HttpMessageInvoker? telemetry;
 
-    internal static async Task<PreviewPreparationTransport> CreateAsync()
+    internal static async Task<PreviewPreparationTransport> CreateAsync(bool publisher = false)
     {
-        var scenario = await CharterScenario.ReadyAsync(CharterScenario.ExistingCharter, telemetry: true);
+        var scenario = await CharterScenario.ReadyAsync(CharterScenario.ExistingCharter, telemetry: true, publisher: publisher);
         var adopted = await scenario.Machine.InvokeAsync("charter", "--adopt", "--existing");
         Assert.Equal(0, (await scenario.Machine.InvokeAsync("charter", "--adopt", "--existing",
             "--approve", (string)adopted.Result["revision"]!)).Exit);
@@ -66,6 +66,7 @@ internal sealed partial class PreviewPreparationTransport(CharterScenario scenar
         if (HostedResources.Any(r => (string?)r["properties"]?["configuration"]?["ingress"]?["fqdn"] == uri.Host))
             return await PreviewHostAsync(request, token);
         if (uri.Host == "models.private.azurecontainerapps.io") return await PreviewHostAsync(request, token, modelProof: true);
+        if (await PublisherGitHubAsync(request, token) is { } github) return github;
         if (uri.Host == "shared-models.services.ai.azure.com") return await ModelProbeAsync(request, token);
         if (uri.Host.EndsWith("-cosmos.documents.azure.com", StringComparison.Ordinal)
             && (path.Contains("/colls/council-preview/", StringComparison.Ordinal) || path.Contains("/colls/runs/", StringComparison.Ordinal)))
@@ -75,6 +76,7 @@ internal sealed partial class PreviewPreparationTransport(CharterScenario scenar
             var body = JsonNode.Parse(await request.Content!.ReadAsStringAsync(token))!;
             if (path.Contains("/deployments/preview-", StringComparison.Ordinal)
                 || path.Contains("/deployments/live-", StringComparison.Ordinal)
+                || path.Contains("/deployments/publisher-", StringComparison.Ordinal)
                 || (string?)body["properties"]?["roleDefinitionId"] is CouncilRole or TelemetryRole or WebRole or FoundryRole)
                 return await CreatePreviewAsync(request, body, token);
             if (supplementalNative is not null && (string?)body["properties"]?["roleDefinitionId"] is { } role

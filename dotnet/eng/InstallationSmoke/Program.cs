@@ -47,6 +47,7 @@ try
         ["onboard-supplemental"] = 0,
         ["onboard-preview-workloads"] = 0,
         ["onboard-live"] = 0,
+        ["onboard-publisher"] = 0,
     };
     foreach (var (name, minimumNestedDeployments) in templates)
     {
@@ -134,7 +135,7 @@ try
 
     File.WriteAllText(Path.Combine(scratch.FullName, "azure.log"), "");
     foreach (var verb in new[] { "serve-preview", "serve-source-context", "serve-preview-models",
-        "serve-preview-telemetry", "serve-preview-supplemental", "serve-decide" })
+        "serve-preview-telemetry", "serve-preview-supplemental", "serve-decide", "serve-publisher", "serve-publication-context" })
     {
         var previewHost = await Run(verb);
         Require(previewHost.ExitCode == 1 && new[] { "DSF_FACTORY_PROFILE_PIN", "AZURE_CLIENT_ID",
@@ -182,7 +183,7 @@ try
     Require(File.ReadAllText(Path.Combine(scratch.FullName, "azure.log")).Length == 0, "Incomplete pause reached Azure.");
 
     var liveHelp = await Run("onboard", "decide", "live", "--help");
-    Require(liveHelp.ExitCode == 0 && new[] { "--selection", "--approve", "--status", "--exercise", "--execution" }
+    Require(liveHelp.ExitCode == 0 && new[] { "--selection", "--approve", "--status", "--publication", "--exercise", "--execution" }
         .All(option => liveHelp.Output.Contains(option, StringComparison.Ordinal)), "Installed native live-rollout grammar missing.");
     var liveIncomplete = await Run("onboard", "decide", "live", "--json");
     Require(liveIncomplete.ExitCode == 1 && liveIncomplete.Output.Contains("\"state\": \"Blocked\"", StringComparison.Ordinal),

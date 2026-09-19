@@ -10,14 +10,15 @@ using Dsf.FeatureCouncil.Conveyor;
 namespace Dsf.Runtime;
 
 internal sealed partial class PreviewExecutionStore(PreviewCapabilitySnapshot authority, TokenCredential credential, HttpClient http, TimeProvider clock,
-    FactoryLiveExecution? live = null)
+    FactoryLiveExecution? live = null, FactoryPublicationDecisionScope? decision = null)
     : IRunStore, IPreviewModelDispatchJournal
 {
     private readonly AzureCosmosDocumentGateway gateway = new(
         new FactoryWorkloadCredential(credential, authority.Manifest.Identity.TenantId, authority.Council, clock), http);
     private readonly string product = authority.Manifest.Identity.ProductKey;
     private readonly string endpoint = "https://" + FactoryPreviewValidation.Prefix(authority.Manifest.Identity.FactoryId) + "-cosmos.documents.azure.com";
-    internal string Id { get; } = live is null ? FactoryPreviewExecution.Id(authority.Manifest.Identity.FactoryId, authority.Capability.OperationId)
+    internal string Id { get; } = decision is not null ? FactoryPromotion.DecisionId(authority.Manifest.Identity.FactoryId, decision.InvocationId)
+        : live is null ? FactoryPreviewExecution.Id(authority.Manifest.Identity.FactoryId, authority.Capability.OperationId)
         : "live-" + FactoryModelsValidation.Hash(new { authority.Manifest.Identity.FactoryId, live.Scope.OperationId });
     private string? version;
     private bool poisoned;
@@ -33,7 +34,7 @@ internal sealed partial class PreviewExecutionStore(PreviewCapabilitySnapshot au
 
     internal async Task PrepareLiveAsync(CancellationToken token)
     {
-        if (live is null) throw new InvalidOperationException();
+        if (live is null || decision is not null) throw new InvalidOperationException("Publication decision inspection is read-only.");
         await live.RequireCurrentAsync(token);
         var prior = await gateway.ReadCheckpointAsync(endpoint, product, FactoryPreviewValidation.PreviewContainer, product, Id, token);
         if (prior is not null)
@@ -54,6 +55,7 @@ internal sealed partial class PreviewExecutionStore(PreviewCapabilitySnapshot au
 
     internal async Task<PreviewExecutionSeed> PrepareAsync(TimeProvider clock, CancellationToken token, bool readOnly = false)
     {
+        if (decision is not null) throw new InvalidOperationException("Publication decision inspection cannot initialize native state.");
         var native = await gateway.ReadCheckpointAsync(endpoint, product, FactoryPreviewValidation.PreviewContainer, product, Id, token);
         if (native is null)
         {
@@ -200,7 +202,7 @@ internal sealed partial class PreviewExecutionStore(PreviewCapabilitySnapshot au
 
     private async Task WriteAsync(PreviewEvaluationDocument next, CancellationToken token)
     {
-        if (poisoned || version is null || owner == Guid.Empty || next.Owner != owner)
+        if (decision is not null || poisoned || version is null || owner == Guid.Empty || next.Owner != owner)
             throw new PreviewCapabilityException(FactoryCharterState.Unknown, "PreviewWriterUnconfirmedNoRetry");
         next = next with { Checksum = next.CalculateChecksum() };
         var payload = JsonSerializer.Serialize(next, FactoryGitHubJson.Options);
@@ -234,8 +236,8 @@ internal sealed partial class PreviewExecutionStore(PreviewCapabilitySnapshot au
 
     private void Validate(PreviewEvaluationDocument document)
     {
-        if (document.Protocol != 1 || document.Kind != (live is null ? "council-preview-evaluation" : "council-live-exercise")
-            || document.LiveScope != live?.Scope || document.Profile != "OnboardingPreview"
+        if (document.Protocol != 1 || document.Kind != (decision is not null ? FactoryPromotion.DecisionKind : live is null ? "council-preview-evaluation" : "council-live-exercise")
+            || document.LiveScope != live?.Scope || document.DecisionScope != decision || document.Profile != "OnboardingPreview"
             || document.Id != Id || document.Product != product
             || document.FactoryId != authority.Manifest.Identity.FactoryId || document.OperationId != authority.Capability.OperationId
             || document.CreatedAt == default || document.CreatedAt.Offset != TimeSpan.Zero || document.CreatedAt > clock.GetUtcNow()

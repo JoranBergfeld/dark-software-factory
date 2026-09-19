@@ -45,6 +45,23 @@ internal sealed partial class PreviewPreparationTransport
         return JsonNode.Parse(await response.Content.ReadAsStringAsync())!;
     }
 
+    internal async Task<(HttpStatusCode Status, string Body)> InvokePublisherAsync(JsonNode rollout, string route, object input, string caller = "council")
+    {
+        var host = rollout["receipts"]!.AsArray().Single(r => ((string?)r!["target"])?.EndsWith("-publisher", StringComparison.Ordinal) == true)!;
+        using var request = new HttpRequestMessage(HttpMethod.Post, (string)host["endpoint"]! + route)
+        { Content = JsonContent.Create(input, options: FactorySourceValidation.RecordJson) };
+        if (caller != "operator")
+        {
+            var binding = scenario.Arm.CreatedResources.Values.Single(r =>
+                ((string?)r["id"])?.EndsWith("-" + caller, StringComparison.Ordinal) == true);
+            var token = await new PreviewCredential(this, binding).GetTokenAsync(new Azure.Core.TokenRequestContext(
+                ["api://" + (string)rollout["plan"]!["selection"]!["audienceClientId"]! + "/.default"]), CancellationToken.None);
+            request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token.Token);
+        }
+        using var response = await PreviewHostAsync(request, CancellationToken.None);
+        return (response.StatusCode, await response.Content.ReadAsStringAsync());
+    }
+
     private async Task<HttpResponseMessage> PreviewHostAsync(HttpRequestMessage request, CancellationToken token, bool modelProof = false)
     {
         var hostname = request.RequestUri!.Host;

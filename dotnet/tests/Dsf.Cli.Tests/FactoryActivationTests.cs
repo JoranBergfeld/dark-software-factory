@@ -111,9 +111,9 @@ public sealed class FactoryActivationTests
         Assert.Empty(terminal.Error);
     }
 
-    internal static async Task<PreviewPreparationTransport> ReadyAsync(string votes = "GO,GO,GO")
+    internal static async Task<PreviewPreparationTransport> ReadyAsync(string votes = "GO,GO,GO", bool publisher = false)
     {
-        var transport = await PreviewEvaluationTests.ConfiguredAsync();
+        var transport = await PreviewEvaluationTests.ConfiguredAsync(publisher: publisher);
         var jury = votes.Split(',');
         transport.AlterCompletion = (prompt, text) =>
         {
