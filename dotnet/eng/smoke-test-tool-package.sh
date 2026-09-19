@@ -27,5 +27,7 @@ if [[ -f "$cli.exe" ]]; then cli="$cli.exe"; fi
 assembly="$(find "$scratch/tool/.store" -type f -name dsf.dll -print -quit)"
 test -n "$assembly"
 test "$(cat "$(dirname "$assembly")/dsf-bundle.version")" = "$version"
-dotnet run --project "$eng/InstallationSmoke" -- \
+smoke_options=(--configuration "${DSF_SMOKE_CONFIGURATION:-Debug}")
+if [[ "${DSF_SMOKE_NO_RESTORE:-0}" == "1" ]]; then smoke_options+=(--no-restore); fi
+dotnet run --project "$eng/InstallationSmoke" "${smoke_options[@]}" -- \
   --cli "$cli" --payload "$(dirname "$assembly")"

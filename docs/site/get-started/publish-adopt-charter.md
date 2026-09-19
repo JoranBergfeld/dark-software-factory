@@ -168,7 +168,8 @@ Each key+label/value/content-type/metadata record is checked against 10 KiB befo
 effects. Each complete review payload is at most 512 records of 3000 serialized
 characters; nothing is truncated. At most eight publication operations and eight
 adoption revisions are admitted, including partial stages. Private charter audit
-has a separate 8220-record/10-KiB-per-record ceiling; these records never supply
+has a separate 8244-record/10-KiB-per-record ceiling, including at most three
+immutable native-response records per publication; these records never supply
 source authority or consume its existing 512-key governance allowance. Original
 source and intent budgets are unchanged. Native source scans retain their existing bounded
 time/node/page budgets; review host/client deadlines are 120/150 seconds.
@@ -194,8 +195,22 @@ Use its `publication.operation` and exact native `revision` with `--reconcile
 This is an outcome-only conditional write, **not another GitHub request**. It can
 resolve an original response retained by the acknowledged dispatcher before
 closeout failed. The response is bound to factory, repository, immutable review,
-operation and attempt; it is retained inside the existing bounded, auditable
-publication record. Operator output withholds raw provider response and source
+operation and attempt. Each original successful response, at most 2048 UTF-8 bytes,
+is retained losslessly as base64url in its own create-only record under the
+publication's operation/attempt namespace. The original dispatcher then conditionally
+pins that record's acknowledged native revision hash and exact content hash in the
+publication coordinator before confirmation. No response bytes or reference can be
+supplied by the reconciliation caller. A lost response-record acknowledgement
+without that original coordinator pin remains `Unknown`, even if matching bytes
+are discoverable. Audit automatically includes these records and validates pinned
+references; existing inline response witnesses remain supported.
+
+Before **each** new mutation or eligible retry, capacity checks reserve the entire
+issued step's serialized closeout/reconciliation lifecycle, retaining prior attempts
+and legacy witnesses, plus the complete response record and native metadata.
+Capacity exhaustion returns `Partial` before another GitHub write; it does not
+discard proof or roll back earlier confirmed effects.
+Operator output withholds raw provider response and source
 evidence, exposing original reviewed charter and native identities instead.
 Reconciliation records the original revision, actor and time. A stale or racing
 operator cannot overwrite a newer outcome.

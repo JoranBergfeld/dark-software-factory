@@ -2,12 +2,95 @@ using System.Text.Json.Nodes;
 using System.Net;
 using System.Net.Http.Json;
 using Dsf.Core.Onboarding;
+using Dsf.Core.Runtime;
+using Dsf.Runtime;
 using Xunit;
 
 namespace Dsf.Cli.Tests;
 
-public sealed class FactoryPublicationReconciliationTests(ActivatedFactoryFixture fixture) : IClassFixture<ActivatedFactoryFixture>
+public sealed class FactoryPublicationReconciliationTests(ActivatedFactoryFixture fixture, Xunit.Abstractions.ITestOutputHelper output) : IClassFixture<ActivatedFactoryFixture>
 {
+    [Fact]
+    public async Task Large_unicode_original_issue_retries_through_operator_context_and_AUTH_wire_envelopes()
+    {
+        var transport = fixture.Reset();
+        transport.PublicationFailure = "rejected";
+        transport.AlterCompletion = (prompt, answer) =>
+        {
+            if (prompt.Contains("As juror '", StringComparison.Ordinal)) return answer + new string('é', 8000);
+            if (!prompt.StartsWith("PROPOSAL_SYNTHESIS", StringComparison.Ordinal)) return answer;
+            var synthesis = JsonNode.Parse(answer)!;
+            synthesis["Candidate"]!["Body"] = new string('x', 3900);
+            return synthesis.ToJsonString();
+        };
+        var wires = new System.Collections.Concurrent.ConcurrentQueue<(string Route, int Bytes)>();
+        transport.AfterHostResponse = (route, body) => wires.Enqueue((route, System.Text.Encoding.UTF8.GetByteCount(body)));
+        var invocation = Guid.NewGuid();
+        var decision = await fixture.DecideAsync(transport, new(invocation));
+        Assert.True(decision["evaluation"]?["publications"]?[0] is not null, decision.ToJsonString());
+        var original = decision["evaluation"]!["publications"]![0]!["journal"]!;
+        Assert.Equal("Rejected", (string?)original["state"]);
+        var operation = (string)original["id"]!;
+        Assert.InRange(System.Text.Encoding.UTF8.GetByteCount((string)original["intent"]!["body"]!), 50_000, 60_000);
+        transport.Restart();
+        FactoryActivationTests.ConnectAudit(transport);
+        transport.PublicationFailure = null;
+        transport.IssueResponseJson = issue =>
+        {
+            var options = new System.Text.Json.JsonSerializerOptions
+                { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
+            issue["body_html"] = "";
+            var bytes = System.Text.Encoding.UTF8.GetByteCount(issue.ToJsonString(options));
+            issue["body_html"] = new string('<', 256 * 1024 - bytes);
+            var json = issue.ToJsonString(options);
+            Assert.Equal(256 * 1024, System.Text.Encoding.UTF8.GetByteCount(json));
+            return json;
+        };
+        var inspected = await transport.Scenario.Machine.InvokeAsync("publication", "--operation", operation);
+        Assert.Equal("Rejected", (string?)inspected.Result["state"]);
+        var retried = await transport.Scenario.Machine.InvokeAsync("publication", "--operation", operation, "--retry",
+            "--revision", (string)inspected.Result["revision"]!, "--attempt", (string)inspected.Result["attempt"]!);
+        var durable = transport.SeedDocuments.Single(p => p.Key.EndsWith("/" + operation, StringComparison.Ordinal)).Value;
+        Assert.Equal("Confirmed", (string?)JsonNode.Parse(durable)!["state"]);
+        Assert.Contains(wires, wire => wire.Route == "/publish" && wire.Bytes > 2_080_768);
+        output.WriteLine($"Intended UTF-8: {System.Text.Encoding.UTF8.GetByteCount((string)original["intent"]!["body"]!)}; native response: 262144; "
+            + $"journal UTF-8: {System.Text.Encoding.UTF8.GetByteCount(durable)}; AUTH wire UTF-8: {wires.Where(w => w.Route == "/publish").Max(w => w.Bytes)}");
+        Assert.True((string?)retried.Result["state"] == "Confirmed", retried.Terminal.Output);
+        Assert.Equal(operation, (string?)retried.Result["operation"]);
+        Assert.Equal((string)original["intent"]!["body"]!, (string)retried.Result["reviewedIntent"]!["body"]!);
+        Assert.Equal(2, transport.IssuePosts);
+        Assert.Single(transport.PublishedIssues);
+        Assert.All(transport.SeedDocuments.Where(p => p.Key.Contains("/proposal-publications/docs/", StringComparison.Ordinal)),
+            record => Assert.InRange(System.Text.Encoding.UTF8.GetByteCount(record.Value), 1, 2_080_768));
+        var after = await transport.Scenario.Machine.InvokeAsync("publication", "--operation", operation);
+        Assert.Equal("Confirmed", (string?)after.Result["state"]);
+        var reconciled = await transport.Scenario.Machine.InvokeAsync("publication", "--operation", operation, "--reconcile",
+            "--revision", (string)after.Result["revision"]!, "--attempt", (string)after.Result["attempt"]!);
+        Assert.Equal("Confirmed", (string?)reconciled.Result["state"]);
+        Assert.Equal(2, transport.IssuePosts);
+        Assert.DoesNotContain(transport.Requests, r => r.Uri.AbsolutePath.Contains("/search/", StringComparison.Ordinal)
+            || r.Uri.Host == "api.github.com" && r.Method is "PATCH" or "PUT" or "DELETE");
+        Directory.CreateDirectory("artifacts/onboard218");
+        var signal = $"artifacts/onboard218/wire-signal-{invocation:N}.json";
+        await File.WriteAllTextAsync(signal, System.Text.Json.JsonSerializer.Serialize(new
+            { invocation_id = invocation, product_hints = new[] { "widget" }, source_kinds = new[] { "azuremonitor" } }));
+        using var http = new HttpClient(transport, false) { Timeout = Timeout.InfiniteTimeSpan };
+        try
+        {
+            var standard = new StringWriter(); var error = new StringWriter();
+            var exit = await fixture.AdvanceUntilCompletedAsync(transport, RuntimeCliApplication.InvokeAsync(["run", "--signal", signal],
+                new Dictionary<string, string?>
+                {
+                    [RuntimeIntegrationSettings.FactoryProfilePin] = transport.Manifest.ProfilePin,
+                    [RuntimeSettingsComposer.DsfProduct] = "widget",
+                    [RuntimeSettingsComposer.AzureAppConfigEndpoint] = $"https://dsfo-{transport.Manifest.Identity.FactoryId:N}.azconfig.io",
+                }, standard, error, transport.DecisionDependencies(http), CancellationToken.None));
+            Assert.True(exit == 0, error.ToString());
+            Assert.Equal(2, transport.IssuePosts);
+        }
+        finally { File.Delete(signal); }
+    }
+
     [Fact]
     public async Task Original_issue_response_reconciles_via_installed_operator_and_native_hosts_after_pause()
     {

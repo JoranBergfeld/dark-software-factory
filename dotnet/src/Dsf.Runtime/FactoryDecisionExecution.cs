@@ -56,7 +56,7 @@ internal sealed class FactoryDecisionExecution
         { Content = JsonContent.Create(new FactoryLiveRequest(plan.Selection.OperationId, plan.Fingerprint), options: FactorySourceValidation.RecordJson) };
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", (await publisher.Credential.GetTokenAsync(
             new TokenRequestContext(["api://" + plan.Selection.AudienceClientId + "/.default"]), pending.Token)).Token);
-        using var response = await http.SendAsync(request, pending.Token);
+        using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, pending.Token);
         if (response.StatusCode != HttpStatusCode.OK)
             throw new PreviewCapabilityException(FactoryCharterState.Blocked, "CurrentNativePublicationProviderOrAutomationUnavailable");
         using var body = await EvidencePayload.ReadAsync(response, pending.Token, 64 * 1024);
@@ -106,7 +106,7 @@ internal sealed class FactoryDecisionExecution
                 using var response = await http.SendAsync(request, pending.Token);
                 if (response.StatusCode is not (HttpStatusCode.OK or HttpStatusCode.Conflict))
                     throw new PreviewCapabilityException(FactoryCharterState.Blocked, "CurrentAuthenticatedProposalPublicationUnavailable");
-                using var document = await EvidencePayload.ReadAsync(response, pending.Token, AzureCosmosDocumentGateway.MaximumCheckpointBytes);
+                using var document = await EvidencePayload.ReadAsync(response, pending.Token, FactoryPublicationWire.MaximumResponseBytes);
                 var result = document.RootElement.Deserialize<FactoryPublicationResult>(FactorySourceValidation.RecordJson) ?? throw new JsonException();
                 if (result.Journal.Intent.FactoryId != publisher.Manifest.Identity.FactoryId
                     || result.Journal.Intent.RepositoryId != publisher.Manifest.Identity.RepositoryId

@@ -283,6 +283,12 @@ public static class FactoryAudit
                 var publication = Parse<CharterPublication>(record);
                 Payload(record, publication.PayloadRecords, publication.PayloadSha256,
                     i => $"dsf/factory/charter/publications/{publication.Operation:N}/payload/{i:D4}", null);
+                foreach (var effect in publication.Effects.Where(e => e.ResponseRecord is not null))
+                {
+                    var response = Require(AuditStoreKind.Governance, FactoryCharterResponses.Key(publication.Operation, effect.Attempt));
+                    _ = FactoryCharterResponses.Read(publication, effect, response.Content, response.Identity.NativeRevision);
+                    Link(record, response);
+                }
             }
         }
         if (FactoryAuditDocuments.ReadPreviewPreparation(input.Where(r => r.Identity.Store == AuditStoreKind.Governance)

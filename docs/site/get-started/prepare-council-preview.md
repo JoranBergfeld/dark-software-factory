@@ -882,6 +882,14 @@ historical effect, not readiness, approval, completed stop or permission to edit
 `Unknown` remain distinct; only `Confirmed` exits 0, cancellation exits 130 and
 other incomplete states exit 1.
 
+AUTH, context and operator publication readers share a 4,177,920-byte UTF-8
+response envelope: twice the 2,080,768-byte native checkpoint budget, plus
+16 KiB for protocol/native-identity framing. This accounts for the result's
+duplicated receipt/attempt fields and JSON escaping, not merely raw issue-body
+length. Aggregate decision responses additionally budget their captured
+evaluation/run and the publications permitted by the existing bounded model-call
+policy. Reads remain bounded streams; native Cosmos item limits are unchanged.
+
 Repeat the same complete command with `--reconcile --revision ORIGINAL_ETAG
 --attempt ORIGINAL_ATTEMPT_GUID` to conditionally close an original retained
 creation response. Only the acknowledged AUTH dispatcher records that witness,

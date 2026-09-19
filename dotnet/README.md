@@ -74,6 +74,8 @@ Set `DSF_SMOKE_DIRECTORY=artifacts/my-package-smoke` to run the tool-package
 check in a new, explicitly named workspace directory instead of system temporary
 storage. That directory must not exist; it and its verification evidence are
 retained for caller-owned cleanup.
+`DSF_SMOKE_CONFIGURATION=Release` isolates verification from active Debug
+outputs; `DSF_SMOKE_NO_RESTORE=1` reuses already-restored smoke dependencies.
 
 ## Existing repository attachment review
 

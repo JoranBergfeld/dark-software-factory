@@ -111,7 +111,7 @@ internal sealed partial class FactoryCharterService
                     await CheckCurrentAsync(admission, review, token);
                     publication = WithEffect(publication, failed with
                     {
-                        State = CharterEffectState.Intended, Attempt = Guid.NewGuid(), Receipt = null, ObjectId = null, Response = null,
+                        State = CharterEffectState.Intended, Attempt = Guid.NewGuid(), Receipt = null, ObjectId = null, Response = null, ResponseRecord = null,
                         Reconciliation = null, PreviousAttempts = [.. failed.PreviousAttempts, new(failed.Attempt, failed.State, failed.Receipt)],
                     }) with { State = FactoryCharterState.Partial };
                 }
@@ -123,7 +123,7 @@ internal sealed partial class FactoryCharterService
             publication = new(1, operation, review.FactoryId, (preceding?.Sequence ?? 0) + 1, review.Fingerprint, parts.Length,
                 FactoryModelsValidation.Hash(serialized), "refs/heads/dsf/charter/" + operation.ToString("N"), clock.GetUtcNow(),
                 review.OperatorId, FactoryCharterState.Partial, [], null) { PreviousOperation = preceding?.Operation };
-            CheckPublicationCapacity(publication, parts);
+            CheckPublicationPayloadCapacity(publication, parts);
             native.CheckBase(review, token);
             if (native.Head(review, publication.Branch["refs/heads/".Length..], token) is not null)
                 throw new CharterOperationException(FactoryCharterState.Blocked, "Proposed branch already exists; no adoption or overwrite.");
@@ -168,6 +168,7 @@ internal sealed partial class FactoryCharterService
                     intent = current.Attempt == Guid.Empty ? current with { Attempt = Guid.NewGuid() } : current;
                     publication = WithEffect(publication, intent);
                 }
+                CheckPublicationCapacity(publication, review);
                 root = await SavePublicationAsync(store, root!, publication, token);
                 await CheckCurrentAsync(admission, review, token);
                 native.CheckBase(review, token);
@@ -183,6 +184,8 @@ internal sealed partial class FactoryCharterService
                 native.CheckBase(review, token);
                 if (i == 1) native.CheckEmptyBranch(review, publication, token);
                 if (i == 2) native.CheckProposal(review, publication, token);
+                if (root.ETag.ToString().Length > MaximumReconciliationRevisionCharacters)
+                    throw new CharterOperationException(FactoryCharterState.Partial, "Native revision exceeds reserved reconciliation metadata; no GitHub dispatch.");
                 issued = true;
                 var response = native.Request("POST", route, body, token);
                 if (response.Status != 200 || response.Body.TryGetProperty("errors", out _))
@@ -201,8 +204,16 @@ internal sealed partial class FactoryCharterService
                 var confirmed = ConfirmResponse(publication, review, witnessed);
                 if (i == 2 && confirmed.PullRequest!.NodeId == preceding?.PullRequest?.NodeId) throw new JsonException();
                 // Only this acknowledged dispatcher can retain the original response. Recovery accepts no caller-supplied bytes.
-                publication = WithEffect(publication, witnessed);
                 using var completion = new CancellationTokenSource(TimeSpan.FromSeconds(30), clock);
+                await FencePublicationAsync(store, root, completion.Token);
+                var savedResponse = await store.WriteAsync(FactoryCharterResponses.Key(publication.Operation, intent.Attempt),
+                    FactoryReservationRecords.Serialize(FactoryCharterResponses.Encode(witnessed.Response!)), null, completion.Token);
+                var retained = confirmed.Effects[i] with
+                {
+                    Response = null, ResponseRecord = new(FactoryAudit.TextHash(savedResponse.ETag.ToString()), FactoryAudit.TextHash(savedResponse.Value)),
+                };
+                publication = WithEffect(publication, retained with { State = CharterEffectState.Dispatched });
+                confirmed = WithEffect(confirmed, retained);
                 root = await SavePublicationAsync(store, root, publication, completion.Token);
                 root = await SavePublicationAsync(store, root, confirmed, completion.Token);
                 publication = confirmed;
@@ -223,6 +234,8 @@ internal sealed partial class FactoryCharterService
             await RetainNoDispatchAsync();
             var state = publication.Effects.Any(e => e.State == CharterEffectState.Dispatched) ? FactoryCharterState.Unknown
                 : e is CharterOperationException problem ? problem.State : FactoryCharterState.Unknown;
+            if (!issued && state == FactoryCharterState.Partial && e is CharterOperationException capacity)
+                return Result(ReadPublication(root, admission), root, capacity.Message, state);
             return Result(publication, root, "Publication held; native response or current authority unconfirmed. Inspect original receipts; no recreation.", state);
         }
 
@@ -383,10 +396,13 @@ internal sealed partial class FactoryCharterService
                     || a.State == CharterEffectState.KnownFailed && !KnownRejection(a.Native))
                 || effect.State == CharterEffectState.KnownFailed && !KnownRejection(effect.Receipt))
                 throw new JsonException();
-            if (effect.Response is not null)
+            if (await ReadResponseAsync(store, p, effect, token) is { } response)
             {
-                var confirmed = ConfirmResponse(p, payload.Review, effect).Effects[effect.Index];
-                if (effect.State == CharterEffectState.Confirmed && (effect.ObjectId != confirmed.ObjectId || effect.Receipt != confirmed.Receipt))
+                if (effect.State is not (CharterEffectState.Dispatched or CharterEffectState.Unknown or CharterEffectState.Confirmed))
+                    throw new JsonException();
+                var confirmed = ConfirmResponse(p, payload.Review, effect with { Response = response }).Effects[effect.Index];
+                if ((effect.State == CharterEffectState.Confirmed || effect.ResponseRecord is not null)
+                    && (effect.ObjectId != confirmed.ObjectId || effect.Receipt != confirmed.Receipt))
                     throw new JsonException();
             }
         }
@@ -415,14 +431,12 @@ internal sealed partial class FactoryCharterService
         receipt is { Method: "POST", Route: "graphql", Status: 400 or 401 or 403 or 404 or 422, RequestId.Length: > 0 and <= 128 }
         && FactorySourceValidation.Hash(receipt.ResponseSha256);
 
-    private static void CheckPublicationCapacity(CharterPublication p, IReadOnlyList<string> parts)
+    private static async Task<CharterResponseWitness?> ReadResponseAsync(OwnerReservationStore store, CharterPublication publication,
+        CharterEffect effect, CancellationToken token)
     {
-        for (var i = 0; i < parts.Count; i++)
-            OwnerReservationStore.CheckSize(PayloadKey(p.Operation, i), ProductConfigurationKeys.NoLabel, FactoryReservationRecords.Serialize(parts[i]));
-        var effects = Enumerable.Range(0, 3).Select(i => new CharterEffect(i, "createCommitOnBranch", CharterEffectState.Confirmed, new string('a', 64),
-            new("POST", "graphql", 200, new string('x', 128), new string('a', 64)), new string('x', 128))).ToArray();
-        OwnerReservationStore.CheckSize(PublicationKey, ProductConfigurationKeys.NoLabel, FactoryReservationRecords.Serialize(p with
-            { Effects = effects, PullRequest = new(long.MaxValue, new string('x', 128), int.MaxValue, new string('x', 512), long.MaxValue,
-                new string('x', 256), new string('a', 40), p.Branch, new string('a', 40)) }));
+        if (effect.ResponseRecord is null) return effect.Response;
+        var record = await store.ReadAsync(FactoryCharterResponses.Key(publication.Operation, effect.Attempt), token) ?? throw new JsonException();
+        if (record.ContentType != OwnerReservationStore.ContentType) throw new JsonException();
+        return FactoryCharterResponses.Read(publication, effect, record.Value, record.ETag.ToString());
     }
 }

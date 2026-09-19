@@ -6,7 +6,7 @@ namespace Dsf.Cli;
 internal sealed partial class FactoryCharterService
 {
     private const int MaximumCharterAttempts = 8;
-    private const int MaximumCharterResponseBytes = 2048;
+    private const int MaximumCharterResponseBytes = FactoryCharterResponses.MaximumBytes;
 
     internal async Task<FactoryCharterResult> InspectPublicationAsync(FactoryReservationResult admission, CancellationToken token)
     {
@@ -36,10 +36,13 @@ internal sealed partial class FactoryCharterService
         if (publication.Effects.LastOrDefault() is not { State: CharterEffectState.Dispatched or CharterEffectState.Unknown } effect)
             return Result(publication, root, "No unresolved issued effect; no GitHub mutation.", PublicationState(publication))
                 with { Review = payload.Review };
-        if (effect.Response is null)
+        var witness = await ReadResponseAsync(store, publication, effect, token);
+        if (witness is null)
             return Result(publication, root, "Original native response unavailable. Search matches, shared authors and copied markers prove neither creation nor absence.",
                 FactoryCharterState.Unknown) with { Review = payload.Review, NextAction = NextPublicationAction(publication) };
-        var confirmed = ConfirmResponse(publication, payload.Review, effect);
+        if (revision.Length > MaximumReconciliationRevisionCharacters)
+            throw new CharterOperationException(FactoryCharterState.Partial, "Original native revision exceeds the bounded reconciliation metadata.");
+        var confirmed = ConfirmResponse(publication, payload.Review, effect with { Response = witness });
         confirmed = WithEffect(confirmed, confirmed.Effects.Last() with
         {
             Reconciliation = new(revision, admission.Identity!.AzureActorId, clock.GetUtcNow()),
@@ -83,7 +86,8 @@ internal sealed partial class FactoryCharterService
         if (body.RootElement.TryGetProperty("errors", out _)) throw new JsonException("GraphQL errors are not positive creation proof.");
         var result = body.RootElement.GetProperty("data").GetProperty(effect.Kind);
         var objectId = Confirm(effect.Index, review, publication, result);
-        var confirmed = WithEffect(publication, effect with { State = CharterEffectState.Confirmed, ObjectId = objectId, Receipt = witness.Native });
+        var confirmed = WithEffect(publication, effect with { State = CharterEffectState.Confirmed, ObjectId = objectId, Receipt = witness.Native,
+            Response = effect.ResponseRecord is null ? witness : null });
         return effect.Index == 2
             ? confirmed with { PullRequest = PullReceipt(review, publication, result.GetProperty("pullRequest")), State = FactoryCharterState.Published }
             : confirmed with { State = FactoryCharterState.Partial };

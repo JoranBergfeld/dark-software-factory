@@ -268,10 +268,10 @@ public static partial class RuntimeVerbs
                 { Content = JsonContent.Create(request, options: FactorySourceValidation.RecordJson) };
                 message.Headers.Authorization = new AuthenticationHeaderValue("Bearer", (await snapshot.Credential.GetTokenAsync(
                     new TokenRequestContext(["api://" + (audience ?? snapshot.Capability.Plan.Selection.AudienceClientId) + "/.default"]), cancellation)).Token);
-                using var response = await http.SendAsync(message, cancellation);
+                using var response = await http.SendAsync(message, HttpCompletionOption.ResponseHeadersRead, cancellation);
                 if (response.StatusCode != HttpStatusCode.OK && !(knownOutcome && response.StatusCode == HttpStatusCode.Conflict))
                     throw Denied("AuthenticatedNativePublicationDependencyUnavailable");
-                using var body = await EvidencePayload.ReadAsync(response, cancellation, 256 * 1024);
+                using var body = await EvidencePayload.ReadAsync(response, cancellation, FactoryPublicationWire.MaximumResponseBytes);
                 return body.RootElement.Deserialize<T>(FactorySourceValidation.RecordJson) ?? throw new JsonException();
             }
         }

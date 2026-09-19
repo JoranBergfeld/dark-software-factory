@@ -17,7 +17,7 @@ public sealed class FactoryCharterReconciliationTests
         var review = await scenario.Machine.InvokeAsync("charter");
         scenario.Arm.Product.LoseResponseWhen = (key, value) => key == Root
             && JsonNode.Parse(value)!["effects"] is JsonArray effects && effects.Count == effect
-            && (string?)effects[^1]!["state"] == "Dispatched" && effects[^1]!["response"] is not null;
+            && (string?)effects[^1]!["state"] == "Dispatched" && effects[^1]!["responseRecord"] is not null;
         var interrupted = await scenario.Machine.InvokeAsync("charter", "--publish", "--approve", (string)review.Result["revision"]!);
         Assert.Equal("Unknown", (string?)interrupted.Result["state"]);
         scenario.Reconstruct();
@@ -85,24 +85,40 @@ public sealed class FactoryCharterReconciliationTests
     [InlineData("repositoryId")]
     [InlineData("attempt")]
     [InlineData("responseHash")]
+    [InlineData("revision")]
+    [InlineData("missing")]
     public async Task Copied_or_conflicting_original_response_binding_is_never_adopted(string damage)
     {
         using var scenario = await CharterScenario.ReadyAsync();
         var review = await scenario.Machine.InvokeAsync("charter");
         scenario.Arm.Product.LoseResponseWhen = (key, value) => key == Root
-            && JsonNode.Parse(value)!["effects"] is JsonArray effects && effects.Count == 1 && effects[0]!["response"] is not null;
+            && JsonNode.Parse(value)!["effects"] is JsonArray effects && effects.Count == 1 && effects[0]!["responseRecord"] is not null;
         await scenario.Machine.InvokeAsync("charter", "--publish", "--approve", (string)review.Result["revision"]!);
         scenario.Reconstruct();
         var original = await scenario.Machine.InvokeAsync("charter", "--inspect-publication");
-        scenario.Arm.Product.Change(Root, text =>
+        var publication = original.Result["publication"]!;
+        var responseKey = Dsf.Core.Onboarding.FactoryCharterResponses.Key((Guid)publication["operation"]!, (Guid)publication["effects"]![0]!["attempt"]!);
+        if (damage == "missing") scenario.Arm.Product.Remove(responseKey);
+        else scenario.Arm.Product.Change(responseKey, text =>
         {
-            var root = JsonNode.Parse(text)!;
-            var witness = root["effects"]![0]!["response"]!;
+            var witness = JsonNode.Parse(text)!;
+            if (damage == "revision") return text;
             if (damage == "repositoryId") witness[damage] = 42;
             else if (damage == "responseHash") witness["native"]!["responseSha256"] = new string('a', 64);
             else witness[damage] = Guid.NewGuid();
-            return root.ToJsonString();
+            return witness.ToJsonString();
         });
+        if (damage is not ("revision" or "missing"))
+        {
+            var native = JsonNode.Parse(scenario.Arm.Product.ListJson())!.AsArray().Single(r => (string?)r!["key"] == responseKey)!;
+            scenario.Arm.Product.Change(Root, text =>
+            {
+                var root = JsonNode.Parse(text)!;
+                root["effects"]![0]!["responseRecord"]!["revisionSha256"] = Dsf.Core.Onboarding.FactoryAudit.TextHash((string)native["etag"]!);
+                root["effects"]![0]!["responseRecord"]!["sha256"] = Dsf.Core.Onboarding.FactoryAudit.TextHash((string)native["value"]!);
+                return root.ToJsonString();
+            });
+        }
         var damaged = scenario.Arm.Product.Export();
         var result = await scenario.Machine.InvokeAsync("charter", "--reconcile",
             "--operation", (string)original.Result["publication"]!["operation"]!, "--revision", (string)original.Result["revision"]!);
@@ -118,7 +134,7 @@ public sealed class FactoryCharterReconciliationTests
         var review = await scenario.Machine.InvokeAsync("charter");
         scenario.Arm.Product.LoseResponseWhen = (key, value) => key == Root
             && JsonNode.Parse(value)!["effects"] is JsonArray effects && effects.Count == 2
-            && (string?)effects[^1]!["state"] == "Dispatched" && effects[^1]!["response"] is not null;
+            && (string?)effects[^1]!["state"] == "Dispatched" && effects[^1]!["responseRecord"] is not null;
         await scenario.Machine.InvokeAsync("charter", "--publish", "--approve", (string)review.Result["revision"]!);
         scenario.Reconstruct();
         scenario.HumanBranchEdit = true;
@@ -183,7 +199,7 @@ public sealed class FactoryCharterReconciliationTests
         using var scenario = await CharterScenario.ReadyAsync();
         var review = await scenario.Machine.InvokeAsync("charter");
         scenario.Arm.Product.LoseResponseWhen = (key, value) => key == Root
-            && JsonNode.Parse(value)!["effects"] is JsonArray effects && effects.Count == 1 && effects[0]!["response"] is not null;
+            && JsonNode.Parse(value)!["effects"] is JsonArray effects && effects.Count == 1 && effects[0]!["responseRecord"] is not null;
         await scenario.Machine.InvokeAsync("charter", "--publish", "--approve", (string)review.Result["revision"]!);
         scenario.Reconstruct();
         var inspection = await scenario.Machine.InvokeAsync("charter", "--inspect-publication");

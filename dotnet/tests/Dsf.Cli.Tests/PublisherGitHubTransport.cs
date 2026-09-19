@@ -20,7 +20,12 @@ internal sealed partial class PreviewPreparationTransport
     internal string? PublicationFailure { get; set; }
     internal int IssuePosts { get; private set; }
     internal Func<CancellationToken, Task>? BeforeIssueResponse { get; set; }
-    internal void ResetPublications() { IssuePosts = 0; PublishedIssues.Clear(); PublicationFailure = null; BeforeIssueResponse = null; }
+    internal Func<JsonNode, string>? IssueResponseJson { get; set; }
+    internal void ResetPublications()
+    {
+        IssuePosts = 0; PublishedIssues.Clear(); PublicationFailure = null; BeforeIssueResponse = null;
+        IssueResponseJson = null; AfterHostResponse = null;
+    }
 
     private async Task<HttpResponseMessage?> PublisherGitHubAsync(HttpRequestMessage request, CancellationToken token)
     {
@@ -108,6 +113,11 @@ internal sealed partial class PreviewPreparationTransport
             if (PublicationFailure == "lost") throw new HttpRequestException("Lost native create response.");
             if (PublicationFailure == "canceled") throw new OperationCanceledException(token);
             var created = Reply(issue);
+            if (IssueResponseJson is not null)
+            {
+                created.Content.Dispose();
+                created.Content = new StringContent(IssueResponseJson(issue), System.Text.Encoding.UTF8, "application/json");
+            }
             created.StatusCode = HttpStatusCode.Created;
             created.Headers.Add("X-GitHub-Request-Id", "native-create-" + number);
             return created;

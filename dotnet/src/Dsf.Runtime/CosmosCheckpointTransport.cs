@@ -18,7 +18,7 @@ internal sealed class CosmosCheckpointException(CosmosCheckpointFailure failure)
 
 internal sealed partial class AzureCosmosDocumentGateway
 {
-    internal const int MaximumCheckpointBytes = 2 * 1024 * 1024 - 16 * 1024;
+    internal const int MaximumCheckpointBytes = Dsf.Core.Runtime.NativeCosmosDocumentLimits.MaximumCheckpointBytes;
     internal static readonly string[] SystemProperties = ["_rid", "_self", "_etag", "_attachments", "_ts"];
 
     public async Task<CosmosCheckpoint?> ReadCheckpointAsync(

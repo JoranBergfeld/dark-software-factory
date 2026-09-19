@@ -5,7 +5,7 @@ public static class FactoryCharterLimits
     public const string AuditPrefix = "dsf/factory/charter/";
     public const int MaximumPayloadRecords = 512;
     public const int MaximumRevisions = 8;
-    public const int MaximumAuditRecords = MaximumRevisions * (2 * MaximumPayloadRecords + 3) + 4;
+    public const int MaximumAuditRecords = MaximumRevisions * (2 * MaximumPayloadRecords + 6) + 4;
     public const int RecordBytes = 10 * 1024;
     public const string RecordContentType = "application/vnd.dsf.reservation+json;version=1";
 }
@@ -46,6 +46,9 @@ public enum CharterEffectState { Intended, Dispatched, Confirmed, KnownFailed, U
 public sealed record CharterNativeReceipt(string Method, string Route, int Status, string RequestId, string ResponseSha256);
 public sealed record CharterResponseWitness(Guid FactoryId, long RepositoryId, Guid Operation, Guid Attempt,
     string ReviewFingerprint, string RequestSha256, CharterNativeReceipt Native, string ResponseJson);
+public sealed record CharterResponseReference(string RevisionSha256, string Sha256);
+public sealed record CharterResponseRecord(int Protocol, Guid FactoryId, long RepositoryId, Guid Operation, Guid Attempt,
+    string ReviewFingerprint, string RequestSha256, CharterNativeReceipt Native, string ResponseUtf8);
 public sealed record CharterAttemptReceipt(Guid Attempt, CharterEffectState State, CharterNativeReceipt? Native);
 public sealed record CharterReconciliation(string OriginalRevision, string Actor, DateTimeOffset At);
 public sealed record CharterPullReceipt(long? Id, string NodeId, int Number, string Url, long RepositoryId,
@@ -56,6 +59,8 @@ public sealed record CharterEffect(int Index, string Kind, CharterEffectState St
     public Guid Attempt { get; init; }
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public CharterResponseWitness? Response { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public CharterResponseReference? ResponseRecord { get; init; }
     public IReadOnlyList<CharterAttemptReceipt> PreviousAttempts { get; init; } = [];
     public CharterReconciliation? Reconciliation { get; init; }
 }

@@ -481,8 +481,8 @@ public sealed class FactoryCharterWorkflowTests
 
     [Theory]
     [InlineData(520, "Reviewed")]
-    [InlineData(8220, "Reviewed")]
-    [InlineData(8221, "Partial")]
+    [InlineData(FactoryCharterLimits.MaximumAuditRecords, "Reviewed")]
+    [InlineData(FactoryCharterLimits.MaximumAuditRecords + 1, "Partial")]
     public async Task Private_charter_audit_has_a_separate_bounded_budget_not_the_source_governance_key_budget(int records, string state)
     {
         using var scenario = await CharterScenario.ReadyAsync();

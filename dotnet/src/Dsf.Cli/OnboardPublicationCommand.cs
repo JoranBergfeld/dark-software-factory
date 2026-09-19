@@ -61,8 +61,7 @@ public static partial class CliApplication
                     { Content = JsonContent.Create(request, options: FactorySourceValidation.RecordJson) };
                 message.Headers.Authorization = new AuthenticationHeaderValue("Bearer", (await credential.GetTokenAsync(
                     new TokenRequestContext([audience + "/.default"]), pending.Token)).Token);
-                using var response = await transport.SendAsync(message, pending.Token);
-                await response.Content.LoadIntoBufferAsync(512 * 1024, pending.Token);
+                using var response = await transport.SendAsync(message, HttpCompletionOption.ResponseHeadersRead, pending.Token);
                 if (response.StatusCode != HttpStatusCode.OK)
                 {
                     output = new(response.StatusCode == HttpStatusCode.Forbidden ? FactoryPublicationRecoveryState.Blocked : FactoryPublicationRecoveryState.Unknown,
@@ -70,7 +69,8 @@ public static partial class CliApplication
                 }
                 else
                 {
-                    output = await response.Content.ReadFromJsonAsync<FactoryPublicationInspection>(FactorySourceValidation.RecordJson, pending.Token) ?? throw new JsonException();
+                    using var body = await EvidencePayload.ReadAsync(response, pending.Token, FactoryPublicationWire.MaximumResponseBytes);
+                    output = body.RootElement.Deserialize<FactoryPublicationInspection>(FactorySourceValidation.RecordJson) ?? throw new JsonException();
                     if (output.FactoryId != factory.FactoryId || output.RepositoryId != factory.RepositoryId || output.Product != factory.ProductKey
                         || output.Operation != request.Operation || output.Protocol != 1 || output.Workflow != FactoryPublicationRecovery.Protocol
                         || !Enum.IsDefined(output.State)) throw new JsonException();
@@ -84,7 +84,7 @@ public static partial class CliApplication
             catch (OperationCanceledException)
             { output = new(FactoryPublicationRecoveryState.Canceled, "Canceled; remote outcome may have persisted. Inspect original operation, not rollback."); }
             catch (Exception e) when (e is JsonException or InvalidOperationException or HttpRequestException or IOException
-                or ReservationStoreException or OwnerReservationStore.AuthenticationFailedException or KeyNotFoundException)
+                or ReservationStoreException or OwnerReservationStore.AuthenticationFailedException or KeyNotFoundException or SupplementalSourceException)
             { output = new(FactoryPublicationRecoveryState.Unknown, "Original native publication authority or outcome unavailable; no fallback or GitHub search adoption."); }
             terminal.WriteLine(JsonSerializer.Serialize(output, ReviewJson));
             return output.State == FactoryPublicationRecoveryState.Confirmed ? Success

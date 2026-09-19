@@ -21,6 +21,7 @@ internal sealed partial class PreviewPreparationTransport
     internal string? SeedFailure { get; set; }
     internal Action? BeforeSeed { get; set; }
     internal string LastPreviewResponse = "";
+    internal Action<string, string>? AfterHostResponse { get; set; }
     internal readonly List<string> HostFailures = [];
     internal TimeSpan? IngressLimit { get; set; }
     internal TimeSpan? EvaluationModelDelay { get; set; }
@@ -83,6 +84,7 @@ internal sealed partial class PreviewPreparationTransport
         scenario.Source.Source!.Values = Values();
         var response = await runner.SendAsync(request, token);
         LastPreviewResponse = await response.Content.ReadAsStringAsync(token);
+        AfterHostResponse?.Invoke(request.RequestUri.AbsolutePath, LastPreviewResponse);
         if (response.StatusCode is not (HttpStatusCode.OK or HttpStatusCode.Accepted)) HostFailures.Add(runner.Verb + ": " + LastPreviewResponse);
         return response;
     }

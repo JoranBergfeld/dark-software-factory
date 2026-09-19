@@ -34,10 +34,10 @@ internal sealed class FactoryDecisionClient(RuntimeSettings settings, RuntimeDep
         { Content = JsonContent.Create(input, options: FactorySourceValidation.RecordJson) };
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", forwardedBearer ?? (await credential.GetTokenAsync(
             new TokenRequestContext(["api://" + live.Plan.Selection.AudienceClientId + "/.default"]), pending.Token)).Token);
-        using var response = await Http.SendAsync(request, pending.Token);
+        using var response = await Http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, pending.Token);
         if (response.StatusCode is not (HttpStatusCode.OK or HttpStatusCode.Accepted))
             throw new RuntimeVerbException("Current authenticated onboarding decision admission unavailable; retain original invocation, no fallback or automatic new invocation.");
-        using var body = await EvidencePayload.ReadAsync(response, pending.Token, AzureCosmosDocumentGateway.MaximumCheckpointBytes);
+        using var body = await EvidencePayload.ReadAsync(response, pending.Token, FactoryPublicationWire.MaximumDecisionBytes);
         var observed = body.RootElement.Deserialize<PreviewHttpObservation>(FactorySourceValidation.RecordJson) ?? throw new JsonException();
         if (observed.Protocol != 2 || observed.FactoryId != manifest.Identity.FactoryId || observed.RequestId != input.InvocationId
             || observed.OperationId != manifest.PreviewOperationId || observed.ApprovalFingerprint != manifest.PreviewApprovalFingerprint)
@@ -79,7 +79,8 @@ internal sealed class FactoryDecisionClient(RuntimeSettings settings, RuntimeDep
         }
         catch (RuntimeVerbException) { throw; }
         catch (Exception e) when (e is PreviewCapabilityException or JsonException or InvalidOperationException or ArgumentException
-            or KeyNotFoundException or HttpRequestException or IOException or OperationCanceledException or Azure.RequestFailedException or AuthenticationFailedException)
+            or KeyNotFoundException or HttpRequestException or IOException or OperationCanceledException or Azure.RequestFailedException or AuthenticationFailedException
+            or SupplementalSourceException)
         {
             throw new RuntimeVerbException($"Original onboarding decision {request.InvocationId:D} unconfirmed. Inspect/resume that invocation only; cancellation is not rollback.");
         }
