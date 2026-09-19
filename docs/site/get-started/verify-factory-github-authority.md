@@ -29,6 +29,14 @@ dictionaries are pinned; adding permissions afterward is a detected authority
 change, not an upgrade DSF can perform or silently approve.
 An existing narrower pinned factory needs separate reviewed reconfiguration.
 
+Attachment and council readiness gate **proposal-issue** automation, not every
+possible repository mutation. Unrelated push, pull-request and check CI does
+not block issue-only Decide. The complete per-class review remains visible:
+charter-PR publication still requires its own current charter-mutation gate;
+adopting an existing charter is read-only. Applicable issue/dispatch consumers,
+opaque hooks and incomplete or paginated inventories remain blocked or unknown.
+An owner declaration cannot turn unknown automation into permission.
+
 Supply an accessible, digest-pinned image built from the DSF runtime containing
 `serve-github-auth`. The existing runtime Dockerfile and image workflow include
 the implementation; an arbitrary placeholder image is not verification.

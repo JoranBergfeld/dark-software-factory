@@ -34,7 +34,7 @@ internal sealed class ApplicationBoundaryPlanner(RepositoryAttachmentReviewer? r
         [
             .. discovery.Findings, .. admission.Findings,
             .. ApplicationBoundaryPolicy.Review(selection, discovery),
-            .. repository.Findings.Where(f => f.State != RepositoryReviewState.Confirmed).Select(f =>
+            .. repository.FindingsFor(RepositoryMutationClass.ProposalIssue).Where(f => f.State != RepositoryReviewState.Confirmed).Select(f =>
                 new BoundaryPlanFinding("repository:" + f.Check, BoundaryPlanCategoriesBuilder.Map(f.State), f.Detail,
                     f.NextActor ?? "repository administrator", f.NextAction ?? "Reconcile current repository review.")),
         ];

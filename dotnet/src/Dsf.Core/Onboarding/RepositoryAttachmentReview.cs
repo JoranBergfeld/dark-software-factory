@@ -101,6 +101,10 @@ public sealed record RepositoryAttachmentReview(
     public IReadOnlyList<ReviewedRepositoryLabel> Labels { get; init; } = [];
     public IReadOnlyList<RepositoryMutationReview> Automation { get; init; } = [];
 
+    public IEnumerable<RepositoryReviewFinding> FindingsFor(RepositoryMutationClass mutation) =>
+        Findings.Where(f => !f.Check.StartsWith("automation:", StringComparison.Ordinal)
+            || f.Check == "automation:" + mutation);
+
     public RepositoryReviewState State =>
         Findings.Any(finding => finding.State is RepositoryReviewState.Denied or RepositoryReviewState.Blocked)
             ? RepositoryReviewState.Blocked

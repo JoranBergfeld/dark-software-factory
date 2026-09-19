@@ -9,6 +9,24 @@ namespace Dsf.Cli.Tests;
 public sealed class ApplicationBoundaryPlanTests
 {
     [Theory]
+    [InlineData("push")]
+    [InlineData("pull_request")]
+    [InlineData("check_run")]
+    [InlineData("check_suite")]
+    public async Task Proposal_only_attachment_preserves_separate_charter_gate_for_unrelated_CI(string trigger)
+    {
+        var fixture = new BoundaryPlanFixture();
+        fixture.Repository.SetWorkflow($"on: {trigger}\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm test\n");
+        var reviewed = await fixture.ReviewAsync();
+        Assert.True(reviewed.Exit == 0, reviewed.Terminal.Output + reviewed.Terminal.Error);
+        Assert.Equal("Reviewed", (string?)reviewed.Plan["state"]);
+        var mutations = reviewed.Plan["repositoryReview"]!["automation"]!.AsArray();
+        Assert.Equal("Confirmed", (string?)mutations.Single(m => (string?)m!["mutation"] == "ProposalIssue")!["state"]);
+        if (trigger is "push" or "pull_request")
+            Assert.Equal("Unknown", (string?)mutations.Single(m => (string?)m!["mutation"] == "CharterPullRequest")!["state"]);
+    }
+
+    [Theory]
     [InlineData("number")]
     [InlineData("object")]
     [InlineData("invalid-id")]

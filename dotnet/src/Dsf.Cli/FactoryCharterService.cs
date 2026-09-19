@@ -71,8 +71,10 @@ internal sealed partial class FactoryCharterService(RepositoryAttachmentReviewer
             AutomationOwner = selection.AutomationOwner,
         }, token);
         if (boundary.Repository is not { } repository || repository.Id != admission.RepositoryId || boundary.Operator is null
-            || boundary.Findings.Any(f => f.State != RepositoryReviewState.Confirmed)
-            || boundary.Automation.SingleOrDefault(a => a.Mutation == RepositoryMutationClass.CharterPullRequest)?.State != RepositoryReviewState.Confirmed)
+            || boundary.FindingsFor(existing ? RepositoryMutationClass.ProposalIssue : RepositoryMutationClass.CharterPullRequest)
+                .Any(f => f.State != RepositoryReviewState.Confirmed)
+            || boundary.Automation.SingleOrDefault(a => a.Mutation ==
+                (existing ? RepositoryMutationClass.ProposalIssue : RepositoryMutationClass.CharterPullRequest))?.State != RepositoryReviewState.Confirmed)
             throw new CharterOperationException(FactoryCharterState.Blocked, "Current repository identity, consent, labels and charter-write automation boundary required; no repairs.");
         var evidence = await new FactorySourceService(azure, http, clock).ReviewCharterAsync(admission, token);
         var source = evidence.Source;

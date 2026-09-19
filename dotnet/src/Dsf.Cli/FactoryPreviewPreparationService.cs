@@ -238,7 +238,7 @@ internal sealed partial class FactoryPreviewPreparationService(
         var review = await reviewer.ReviewAsync(new(selection.Repository, selection.OwnerAppConfigEndpoint, selection.OwnerKeyVaultUri)
         { DurableRepositoryId = admission.RepositoryId, AutomationDeclarations = selection.AutomationDeclarations, AutomationOwner = selection.AutomationOwner }, token);
         if (review.Repository?.Id != admission.Identity!.RepositoryId || review.Operator?.Id != admission.Identity.GitHubActorId
-            || review.Findings.Any(f => f.State != RepositoryReviewState.Confirmed)
+            || review.FindingsFor(RepositoryMutationClass.ProposalIssue).Any(f => f.State != RepositoryReviewState.Confirmed)
             || review.Automation.SingleOrDefault(a => a.Mutation == RepositoryMutationClass.ProposalIssue)?.State != RepositoryReviewState.Confirmed)
             throw Failure("CurrentRepositoryOperatorConsentAndProposalCompatibilityRequired");
         return FactoryModelsValidation.Hash(new { review.Repository, review.Operator, review.App, review.Installation, review.Labels, review.Automation });
