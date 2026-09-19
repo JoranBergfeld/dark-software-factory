@@ -71,35 +71,40 @@ internal sealed partial class FactoryFoundationService
         if (actualTargets.Except(targets.Select(t => t.Id), StringComparer.Ordinal).Any())
             throw new ReservationStoreException(FactoryReservationState.Unknown, "Deployment returned unexpected resource operations; no completion or further dispatch.");
         var principals = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var blockers = new List<FoundationRecoveryBlocker>();
         foreach (var (intent, record) in receipts)
         {
             if (intent.ManagedBy is not null)
             {
                 var parent = confirmedOperations.Values.Single(o => o.Target == intent.ManagedBy);
-                if (parent.State != FoundationOperationState.Completed) continue;
-                using var groupResponse = await ReadArmAsync(intent.Target, intent.ApiVersion, access, token);
-                if (!groupResponse.IsSuccessStatusCode) throw new JsonException();
-                using var groupJson = JsonDocument.Parse(await groupResponse.Content.ReadAsStringAsync(token));
-                if (!string.Equals(groupJson.RootElement.GetProperty("id").GetString(), intent.Target, StringComparison.OrdinalIgnoreCase)
-                    || !string.Equals(groupJson.RootElement.GetProperty("managedBy").GetString(), intent.ManagedBy, StringComparison.OrdinalIgnoreCase))
-                    throw new JsonException();
-                var owned = intent with
+                if (verifyOnly)
                 {
+                    var associated = parent.State == FoundationOperationState.Completed
+                        && await ObserveHostingAssociationAsync(intent, parent, access, token);
+                    blockers.Add(new(intent.Index, intent.Target,
+                        (associated ? "Parent/group association is observable, but " : "Parent/group association is missing, changed or unavailable, and ")
+                        + "Resource Groups GET supplies no supported current group generation. managedBy and the parent's incarnation are not group ownership; administrator handoff required."));
+                    continue;
+                }
+                if (parent.State != FoundationOperationState.Completed) continue;
+                if (!await ObserveHostingAssociationAsync(intent, parent, access, token)) throw new JsonException();
+                var association = intent with
+                {
+                    // This confirms a historical association observation, not creation or ownership of the group.
                     State = FoundationOperationState.Completed,
-                    Disposition = FoundationResourceDisposition.Created,
+                    Disposition = FoundationResourceDisposition.Associated,
                     ResourceId = intent.Target,
-                    ProviderCorrelationId = parent.ProviderCorrelationId,
-                    Incarnation = "provider-managed-by:" + parent.ResourceId + ";creation:" + parent.Incarnation,
-                    ProviderOperationId = parent.ProviderOperationId,
+                    Association = new(parent.ResourceId!, parent.Incarnation!, parent.ProviderOperationId!, parent.ProviderCorrelationId!),
                 };
-                if (!verifyOnly) await SaveReconciledReceiptAsync(store, record, intent, owned, token);
-                else RequireUnchangedReceipt(intent, owned);
-                confirmedOperations[owned.Index] = owned;
+                await SaveReconciledReceiptAsync(store, record, intent, association, token);
+                confirmedOperations[association.Index] = association;
                 continue;
             }
             var matches = operations.Where(o => o.GetProperty("properties").TryGetProperty("targetResource", out var target)
                 && target.GetProperty("id").GetString()?.Equals(intent.Target, StringComparison.OrdinalIgnoreCase) == true).ToArray();
-            if (matches.Length != 1) continue;
+            if (matches.Length != 1)
+                throw new ReservationStoreException(FactoryReservationState.Unknown,
+                    "Current deployment listing must contain exactly one native creation operation for each target; missing or duplicate evidence cannot reuse a historical Completed receipt.");
             var receipt = matches[0];
             var properties = receipt.GetProperty("properties");
             var statusCode = properties.GetProperty("statusCode").GetString();
@@ -211,22 +216,53 @@ internal sealed partial class FactoryFoundationService
             else RequireUnchangedReceipt(intent, completed);
             confirmedOperations[completed.Index] = completed;
         }
-        return verifyOnly ? (root, anchor) : await CompleteDeploymentAsync(store, root, anchor, token);
+        return verifyOnly ? (root, anchor with { Foundation = anchor.Foundation! with { RecoveryBlockers = blockers } })
+            : await CompleteDeploymentAsync(store, root, anchor, token);
+    }
+
+    private async Task<bool> ObserveHostingAssociationAsync(
+        FoundationOperation group, FoundationOperation parent, string access, CancellationToken token)
+    {
+        using var environment = await ReadArmAsync(parent.Target, parent.ApiVersion, access, token);
+        if (!environment.IsSuccessStatusCode) return false;
+        using var environmentJson = JsonDocument.Parse(await environment.Content.ReadAsStringAsync(token));
+        var native = environmentJson.RootElement;
+        var incarnation = parent.Incarnation?.StartsWith("etag-sha256:", StringComparison.Ordinal) == true
+            ? "etag-sha256:" + FactoryReservationRecords.Hash(native.GetProperty("etag").GetString()!)
+            : native.GetProperty("systemData").GetProperty("createdAt").GetDateTimeOffset().ToUniversalTime().ToString("O");
+        if (!string.Equals(native.GetProperty("id").GetString(), parent.Target, StringComparison.OrdinalIgnoreCase)
+            || incarnation != parent.Incarnation || native.GetProperty("properties").GetProperty("provisioningState").GetString() != "Succeeded"
+            || native.TryGetProperty("systemData", out var metadata) && metadata.TryGetProperty("lastModifiedAt", out var modified)
+                && modified.GetDateTimeOffset() != metadata.GetProperty("createdAt").GetDateTimeOffset())
+            throw new ReservationStoreException(FactoryReservationState.Blocked,
+                "Hosting environment no longer matches its own original creation receipt; no reuse or group ownership inference.");
+        if (!native.GetProperty("properties").TryGetProperty("infrastructureResourceGroup", out var infrastructureGroup)
+            || !string.Equals(infrastructureGroup.GetString(), group.Target.Split('/').Last(), StringComparison.OrdinalIgnoreCase))
+            return false;
+        using var response = await ReadArmAsync(group.Target, group.ApiVersion, access, token);
+        if (!response.IsSuccessStatusCode) return false;
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(token));
+        return string.Equals(document.RootElement.GetProperty("id").GetString(), group.Target, StringComparison.OrdinalIgnoreCase)
+            && document.RootElement.TryGetProperty("managedBy", out var managedBy)
+            && string.Equals(managedBy.GetString(), parent.Target, StringComparison.OrdinalIgnoreCase);
     }
 
     private async Task<(ConfigurationSetting Root, FactoryReservationAnchor Anchor)> CompleteDeploymentAsync(
         OwnerReservationStore store, ConfigurationSetting root, FactoryReservationAnchor anchor, CancellationToken token)
     {
-        var complete = confirmedOperations.Values.All(o => o.State == FoundationOperationState.Completed);
+        var blocked = anchor.Foundation!.RecoveryBlockers is { Count: > 0 };
+        var complete = !blocked && confirmedOperations.Values.All(o => o.State == FoundationOperationState.Completed);
         var unknown = confirmedOperations.Values.Any(o => o.State is FoundationOperationState.Intent or FoundationOperationState.InFlight or FoundationOperationState.Unknown);
         var canceled = confirmedOperations.Values.Any(o => o.State == FoundationOperationState.Canceled);
         anchor = anchor with
         {
             Foundation = anchor.Foundation! with
             {
-                State = complete ? FactoryFoundationState.Inactive : unknown ? FactoryFoundationState.Unknown
+                State = blocked ? FactoryFoundationState.Blocked : complete ? FactoryFoundationState.Inactive : unknown ? FactoryFoundationState.Unknown
                     : canceled ? FactoryFoundationState.Canceled : FactoryFoundationState.Failed,
                 Stage = complete ? "inactive-foundation" : "base-deployment",
+                RecoveryDetail = blocked ? "Supported independent native receipts reconciled; hosting resource-group generation remains unproven. "
+                    + "Original receipts are historical, not current ownership. Blocked administrator handoff; no redeployment or cleanup." : null,
             }
         };
         root = await SaveRootAsync(store, root, anchor, token);

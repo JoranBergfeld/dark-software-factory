@@ -345,7 +345,7 @@ public sealed class FactoryFoundationRecoveryTests
     [InlineData("after-target-intent", "Unknown", 1, false)]
     [InlineData("before-deployment", "Unknown", 1, false)]
     [InlineData("after-deployment-provider", "Unknown", 1, false)]
-    [InlineData("after-deployment", "Inactive", 0, true)]
+    [InlineData("after-deployment", "Blocked", 1, true)]
     public async Task Delayed_original_actor_cannot_dispatch_conflicting_work_across_recovery_boundaries(
         string boundary, string state, int exit, bool takeover)
     {
@@ -436,9 +436,9 @@ public sealed class FactoryFoundationRecoveryTests
     }
 
     [Theory]
-    [InlineData(false, false, true, "Inactive", 0)]
-    [InlineData(true, false, true, "Failed", 1)]
-    [InlineData(false, true, true, "Canceled", 130)]
+    [InlineData(false, false, true, "Blocked", 1)]
+    [InlineData(true, false, true, "Blocked", 1)]
+    [InlineData(false, true, true, "Blocked", 1)]
     [InlineData(false, false, false, "Unknown", 1)]
     public async Task Provider_completion_after_local_cancellation_is_reconciled_without_redeploying(
         bool failed, bool canceled, bool originalResponses, string state, int expectedExit)
@@ -461,6 +461,9 @@ public sealed class FactoryFoundationRecoveryTests
         first.Boundary.Repository.ReservationHttp = new HttpClient(provider);
         Assert.Equal(130, (await first.InvokeAsync("provision", "--reviewed-fingerprint", fingerprint)).Exit);
         Assert.Equal(3, provider.Writes.Count);
+        var pendingRuns = first.Store.Values().Where(p => p.Key.StartsWith("dsf/foundation/", StringComparison.Ordinal))
+            .Select(p => JsonNode.Parse(p.Value)!).Single(o => ((string?)o["target"])?.EndsWith("/containers/runs", StringComparison.Ordinal) == true);
+        Assert.Equal("Intent", (string?)pendingRuns["state"]);
         var second = new ReservationMachine(ReservationTestStore.Restore(first.Store.Export()));
         var restored = new FoundationTransport(second.Store)
         { Product = ReservationTestStore.Restore(provider.Product.Export()), DeploymentFails = failed, DeploymentCanceled = canceled };
@@ -474,11 +477,33 @@ public sealed class FactoryFoundationRecoveryTests
         Assert.Equal(state, (string?)result["foundation"]?["state"]);
         Assert.True(JsonNode.DeepEquals(reserved["identity"], result["identity"]));
         var steps = result["foundation"]!["operations"]!.AsArray();
-        if (state == "Inactive") Assert.All(steps, step => Assert.Equal("Completed", (string?)step!["state"]));
-        else if (state != "Unknown")
+        if (state == "Blocked")
         {
-            Assert.Contains(steps, step => (string?)step!["state"] == state && (string?)step["disposition"] == "Unproven");
+            if (failed || canceled)
+                Assert.Contains(steps, step => (string?)step!["state"] == (failed ? "Failed" : "Canceled")
+                    && (string?)step["disposition"] == "Unproven");
             Assert.Contains(steps, step => (string?)step!["state"] == "Completed" && (string?)step["disposition"] == "Created");
+            var runs = steps.Single(step => (string?)step!["target"] == (string?)pendingRuns["target"])!;
+            Assert.Equal("Completed", (string?)runs["state"]);
+            Assert.Equal("Created", (string?)runs["disposition"]);
+            Assert.StartsWith("cosmos-rid-sha256:", (string?)runs["incarnation"]);
+            Assert.NotNull(runs["providerOperationId"]);
+            Assert.Equal((string?)pendingRuns["clientRequestId"], (string?)runs["clientRequestId"]);
+            var group = Assert.Single(steps, step => ((string?)step!["target"])?.EndsWith("-hosting-infra", StringComparison.Ordinal) == true)!;
+            Assert.Equal("Unknown", (string?)group["state"]);
+            Assert.Equal("CreateRequested", (string?)group["disposition"]);
+            Assert.Null(group["incarnation"]);
+            Assert.Single(result["foundation"]!["recoveryBlockers"]!.AsArray());
+            var third = new ReservationMachine(ReservationTestStore.Restore(second.Store.Export()));
+            var reloaded = new FoundationTransport(third.Store) { Product = ReservationTestStore.Restore(restored.Product.Export()) };
+            reloaded.RestoreNative(restored.ExportNative());
+            third.Boundary.Repository.ReservationHttp = new HttpClient(reloaded);
+            var inspected = await third.InvokeAsync("status");
+            Assert.Equal("Blocked", (string?)inspected.Result["foundation"]!["state"]);
+            Assert.True(JsonNode.DeepEquals(steps, inspected.Result["foundation"]!["operations"]));
+            Assert.True(JsonNode.DeepEquals(result["foundation"]!["recoveryBlockers"], inspected.Result["foundation"]!["recoveryBlockers"]));
+            Assert.Empty(reloaded.Writes);
+            Assert.Empty(reloaded.Product.Writes);
         }
         Assert.Empty(restored.Writes);
         Assert.Empty(restored.Product.Writes);

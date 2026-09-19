@@ -279,7 +279,8 @@ internal sealed partial class FactoryFoundationService(IAzureCliRunner azure, Ht
                 anchor.Foundation.OperationId, confirmedOperations.OrderBy(p => p.Key).Select(p => p.Value.State is FoundationOperationState.Intent or FoundationOperationState.InFlight
                     ? p.Value with { State = FoundationOperationState.Unknown } : p.Value).ToArray())
                 { ProductEndpoint = anchor.Foundation.ProductEndpoint, ProfilePin = anchor.Foundation.ProfilePin,
-                    CoordinatorId = anchor.Foundation.CoordinatorId, RetryAdmission = anchor.Foundation.RetryAdmission },
+                    CoordinatorId = anchor.Foundation.CoordinatorId, RetryAdmission = anchor.Foundation.RetryAdmission,
+                    RecoveryBlockers = anchor.Foundation.RecoveryBlockers },
         };
 
     public async Task<FactoryReservationResult> InspectAsync(
@@ -320,7 +321,16 @@ internal sealed partial class FactoryFoundationService(IAzureCliRunner azure, Ht
                         || operation.Target == assets.HostingPlatformGroup && operation.ManagedBy == assets.HostingEnvironment
                         || pointer.ProductEndpoint is not null && operation.Target.StartsWith(pointer.ProductEndpoint + "/kv/dsf%2Ffactory%2F", StringComparison.Ordinal))
                     || operation.State == FoundationOperationState.Completed
-                        && (operation.Disposition != FoundationResourceDisposition.Created || operation.ResourceId != operation.Target))
+                        && (operation.Disposition is not (FoundationResourceDisposition.Created or FoundationResourceDisposition.Associated)
+                            || operation.ResourceId != operation.Target)
+                    || operation.Disposition == FoundationResourceDisposition.Associated
+                        && (operation.State != FoundationOperationState.Completed || operation.Target != assets.HostingPlatformGroup
+                            || operation.ManagedBy != assets.HostingEnvironment || operation.Incarnation is not null
+                            || operation.ProviderOperationId is not null || operation.ProviderCorrelationId is not null
+                            || operation.ProviderRequestId is not null || operation.HttpStatus is not null
+                            || operation.ResponseDate is not null || operation.NativeRevision is not null
+                            || operation.PrincipalId is not null || operation.ClientId is not null
+                            || operation.Association is null))
                     throw new JsonException();
                 operations.Add(operation.State is FoundationOperationState.Intent or FoundationOperationState.InFlight
                     ? operation with { State = FoundationOperationState.Unknown } : operation);
@@ -328,6 +338,27 @@ internal sealed partial class FactoryFoundationService(IAzureCliRunner azure, Ht
             if (operations.Any(o => o.State == FoundationOperationState.Unknown)) state = FactoryFoundationState.Unknown;
             else if (operations.Any(o => o.State == FoundationOperationState.Canceled)) state = FactoryFoundationState.Canceled;
             else if (state != FactoryFoundationState.Unknown && operations.Any(o => o.State == FoundationOperationState.Failed)) state = FactoryFoundationState.Failed;
+            foreach (var association in operations.Where(o => o.Disposition == FoundationResourceDisposition.Associated))
+            {
+                var parents = operations.Where(o => o.Target == association.ManagedBy).ToArray();
+                if (parents.Length != 1) throw new JsonException();
+                var parent = parents[0];
+                if (parent.State != FoundationOperationState.Completed || parent.Disposition != FoundationResourceDisposition.Created
+                    || parent.ResourceId is null || parent.Incarnation is null || parent.ProviderOperationId is null
+                    || parent.ProviderCorrelationId is null || association.Association != new FoundationResourceAssociation(
+                        parent.ResourceId, parent.Incarnation, parent.ProviderOperationId, parent.ProviderCorrelationId))
+                    throw new JsonException();
+            }
+            if (pointer.RecoveryBlockers is { Count: > 0 } blockers)
+            {
+                if (pointer.Stage != "base-deployment" || blockers.Count > operations.Count
+                    || blockers.Select(b => b.Index).Distinct().Count() != blockers.Count
+                    || blockers.Any(b => b.Index < 0 || b.Index >= operations.Count || operations[b.Index].Target != b.Target
+                        || operations[b.Index].ManagedBy is null || string.IsNullOrWhiteSpace(b.Detail)
+                        || b.CurrentOwnership != FoundationResourceDisposition.Unproven))
+                    throw new JsonException();
+                state = FactoryFoundationState.Blocked;
+            }
             if (pointer.RetryAdmission is { } pending
                 && (operations.Count <= pending.Index || operations[pending.Index].ClientRequestId != pending.ClientRequestId))
             {
@@ -371,7 +402,8 @@ internal sealed partial class FactoryFoundationService(IAzureCliRunner azure, Ht
             Revision = confirmedRoot?.ETag.ToString() ?? admission.Revision,
             Foundation = new(state, pointer.Stage, detail, pointer.OperationId, operations)
             { ProductEndpoint = pointer.ProductEndpoint, ProfilePin = pointer.ProfilePin,
-                CoordinatorId = pointer.CoordinatorId, RetryAdmission = pointer.RetryAdmission },
+                CoordinatorId = pointer.CoordinatorId, RetryAdmission = pointer.RetryAdmission,
+                RecoveryBlockers = pointer.RecoveryBlockers },
         };
         if (result.Foundation.State != FactoryFoundationState.Inactive) return result;
         try

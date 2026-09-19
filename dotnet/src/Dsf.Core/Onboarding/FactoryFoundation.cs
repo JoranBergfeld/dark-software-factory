@@ -4,7 +4,7 @@ namespace Dsf.Core.Onboarding;
 
 public enum FactoryFoundationState { Inactive, Partial, Blocked, Failed, Canceled, Unknown }
 public enum FoundationOperationState { Intent, InFlight, Completed, Failed, Unknown, Canceled }
-public enum FoundationResourceDisposition { CreateRequested, Created, Reused, Unproven, NoEffect }
+public enum FoundationResourceDisposition { CreateRequested, Created, Reused, Unproven, NoEffect, Associated }
 
 public sealed record FactoryFoundationPointer(
     Guid OperationId, FactoryFoundationState State, int OperationCount, string Stage,
@@ -18,9 +18,19 @@ public sealed record FactoryFoundationPointer(
     public Guid? CoordinatorId { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public FoundationRetryAdmission? RetryAdmission { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<FoundationRecoveryBlocker>? RecoveryBlockers { get; init; }
 }
 
 public sealed record FoundationRetryAdmission(int Index, Guid ClientRequestId);
+
+public sealed record FoundationRecoveryBlocker(int Index, string Target, string Detail)
+{
+    public FoundationResourceDisposition CurrentOwnership { get; init; } = FoundationResourceDisposition.Unproven;
+}
+
+public sealed record FoundationResourceAssociation(
+    string ParentResourceId, string ParentIncarnation, string ParentOperationId, string ParentCorrelationId);
 
 public sealed record FoundationOperation(
     int SchemaVersion, string Kind, Guid FactoryId, Guid OperationId, int Index,
@@ -49,6 +59,8 @@ public sealed record FoundationOperation(
     public string? NativeRevision { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IReadOnlyList<FoundationAttemptReceipt>? PreviousAttempts { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public FoundationResourceAssociation? Association { get; init; }
 }
 
 public sealed record FoundationAttemptReceipt(
@@ -94,6 +106,8 @@ public sealed record FactoryFoundationResult(
     public Guid? CoordinatorId { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public FoundationRetryAdmission? RetryAdmission { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<FoundationRecoveryBlocker>? RecoveryBlockers { get; init; }
     public IReadOnlyList<string> PendingStages { get; init; } =
         ["workload grants", "GitHub authentication", "evidence access and connectivity",
             "factory telemetry connectivity", "models", "code inventory and analysis",

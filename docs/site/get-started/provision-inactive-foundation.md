@@ -53,9 +53,12 @@ names derive from the reserved Factory ID; they are not ownership evidence.
 | Four user-assigned identities | Separate `factory:council`, `factory:source-azuremonitor`, `factory:code-intent`, `factory:github-auth`; actual principal/client IDs recorded, no grants |
 
 The Container Apps platform creates its own dedicated
-`df-<factory-id-prefix>-hosting-infra` resource group. Its receipt is bound to the
-new hosting environment's provider `managedBy` relationship and creation receipt,
-not its name or tags. DSF does not mutate that group directly.
+`df-<factory-id-prefix>-hosting-infra` resource group. Its `Associated` receipt
+records a **historical observation**, not group creation or current ownership:
+the group's `managedBy` and the environment's `infrastructureResourceGroup`
+must identify each other. Parent creation/operation evidence is explicitly stored
+under `association`; no group incarnation or group provider-operation ID is
+inferred. DSF does not mutate that group directly.
 
 Infrastructure incurs charges even while inactive. Endpoint names, private
 endpoints, identities and containers do **not** prove effective workload access.
@@ -142,7 +145,7 @@ Factory ID and foundation operation, then continues only proven eligible work:
 | Original product store incarnation, confirmed publication prefix | Verify original request, native policy, exact key values and original ETags; conditionally create remaining profile/plan/manifest keys |
 | Definite no-effect product-key rejection | Retry only the same absent key and original value; retain prior rejection |
 | Completed product handoff, base deployment not dispatched | Retain `Blocked` administrator handoff rather than guessing resource-group ownership |
-| Acknowledged native deployment, now terminal | Match original request/correlation, protected product revisions and every target's original/current creation evidence; reconcile receipts without another deployment |
+| Acknowledged native deployment, now terminal | Match original request/correlation, protected product revisions and supported targets' original/current creation evidence; persist independently verified receipts without another deployment. Hosting-group current generation remains `Blocked` |
 | Missing intent, unresolved dispatch, lost publication ETag, changed/recreated resource, newer authority, unavailable original request bytes | Remain `Unknown` or `Blocked`; preserve claims, identity and receipts for administrator reconciliation |
 
 Retries of **proven no-effect** attempts are bounded to eight retained prior
@@ -161,6 +164,17 @@ The original HTTP 201/request/date is historical, not proof that today's group
 was never deleted/recreated. Recovery therefore cannot automatically resume
 new ARM work inside that group. Verified product-key handoff and reconciliation
 of already-issued deployment effects do not require pretending otherwise.
+This limitation also applies to the **platform-managed hosting group**.
+An unchanged `managedBy`, unchanged parent incarnation, or the environment's
+[infrastructureResourceGroup property](https://learn.microsoft.com/en-us/rest/api/resource-manager/containerapps/managed-environments/get?view=rest-resource-manager-containerapps-2025-01-01)
+cannot distinguish a recreated group. Recovery records a durable
+`foundation.recoveryBlockers` entry with `currentOwnership: Unproven`, preserves
+the original association receipt, and cannot close the interrupted base as
+`Inactive`. Legacy synthetic group-incarnation receipts remain unchanged
+historical data, never current ownership or cleanup authorization.
+Supported independent effects can still reconcile, including native completion,
+failure or cancellation after local cancellation; inspect their individual
+outcomes beneath the blocked foundation.
 
 Native [deployment operation responses](https://learn.microsoft.com/en-us/rest/api/resources/deployment-operations/list?view=rest-resources-2025-04-01)
 may retain original per-target response content. Where an original target
@@ -169,6 +183,11 @@ and compares its incarnation/identity with current provider state. A terminal
 deployment plus current resource names is insufficient. Missing optional response
 content remains `Unknown`. DSF neither enables ARM debug-response capture nor
 stores whole provider responses, which can contain secrets.
+Every ordinary target must also have exactly one current native creation
+operation and pass current resource/incarnation validation. Missing or duplicate
+listing entries remain `Unknown`, **even if all Completed receipts were saved
+before the final owner-root closeout failed**. Historical success cannot fill a
+gap in current proof.
 
 Before a safe continuation, a fresh owner-root ETag CAS prevents the previous
 DSF coordinator from admitting its **next** dispatch. This works only at a

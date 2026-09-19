@@ -137,10 +137,12 @@ internal sealed partial class FactoryFoundationService
             RequireUnchangedReceipt(parent, reconciled);
 
             Dictionary<int, FoundationOperation> verified;
+            IReadOnlyList<FoundationRecoveryBlocker>? blockers;
             try
             {
                 confirmedOperations[parent.Index] = reconciled;
-                await ReconcileDeploymentAsync(store, root, anchor, assets, reconciled, children, access.Token, token, verifyOnly: true);
+                var observed = await ReconcileDeploymentAsync(store, root, anchor, assets, reconciled, children, access.Token, token, verifyOnly: true);
+                blockers = observed.Anchor.Foundation!.RecoveryBlockers;
                 verified = new(confirmedOperations);
             }
             finally
@@ -150,6 +152,17 @@ internal sealed partial class FactoryFoundationService
             }
             // Every next dispatch in the old coordinator requires its old root ETag; the acknowledged
             // single PUT cannot recur. This CAS fences future DSF dispatch, not ARM or administrators.
+            anchor = anchor with
+            {
+                Foundation = anchor.Foundation! with
+                {
+                    RecoveryBlockers = blockers,
+                    State = blockers is { Count: > 0 } ? FactoryFoundationState.Blocked : anchor.Foundation.State,
+                    RecoveryDetail = blockers is { Count: > 0 }
+                        ? "Hosting resource-group generation is unproven; administrator handoff required. Independently verified receipts may still await conditional persistence."
+                        : anchor.Foundation.RecoveryDetail,
+                },
+            };
             (root, anchor) = await TakeRecoveryCoordinatorAsync(store, root, anchor, token);
             await SaveReconciledReceiptAsync(store, deployment.Record, parent, reconciled, token);
             confirmedOperations[parent.Index] = reconciled;
@@ -186,7 +199,9 @@ internal sealed partial class FactoryFoundationService
         var root = await store.ReadAsync(ProductConfigurationKeys.OwnerProductClaim(admission.Identity!.ProductKey), token)
             ?? throw new JsonException();
         var anchor = FactoryReservationRecords.Parse<FactoryReservationAnchor>(root.Value);
-        if (root.ETag.ToString() != admission.Revision || anchor.Foundation != pointer || anchor.Identity != admission.Identity)
+        if (root.ETag.ToString() != admission.Revision
+            || FactoryReservationRecords.Serialize(anchor.Foundation) != FactoryReservationRecords.Serialize(pointer)
+            || anchor.Identity != admission.Identity)
             throw new ReservationStoreException(FactoryReservationState.Blocked, "Owner coordinator revision changed; no takeover or dispatch.");
         var records = await store.ReadNamespaceAsync($"dsf/foundation/{pointer.OperationId:D}/operations/", token);
         if (records.Count != pointer.OperationCount || inspected.Foundation!.Operations.Count != records.Count)

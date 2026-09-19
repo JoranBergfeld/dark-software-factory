@@ -461,7 +461,7 @@ public sealed class FactoryFoundationTests
     }
 
     [Fact]
-    public async Task Hosting_platform_group_is_declared_before_deployment_and_bound_to_the_created_environment()
+    public async Task Hosting_platform_group_records_only_a_historical_parent_association_not_group_ownership()
     {
         var machine = new ReservationMachine(new ReservationTestStore());
         var reviewed = await machine.Boundary.ReviewAsync();
@@ -477,8 +477,14 @@ public sealed class FactoryFoundationTests
             operation => ((string)operation!["target"]!).EndsWith("-hosting-infra", StringComparison.Ordinal));
         Assert.Contains("/managedenvironments/", (string?)managed!["managedBy"]);
         Assert.Equal("Completed", (string?)managed["state"]);
-        Assert.NotNull(managed["providerCorrelationId"]);
-        Assert.NotNull(managed["incarnation"]);
+        Assert.Equal("Associated", (string?)managed["disposition"]);
+        Assert.Null(managed["providerCorrelationId"]);
+        Assert.Null(managed["providerOperationId"]);
+        Assert.Null(managed["incarnation"]);
+        Assert.Equal((string?)managed["managedBy"], (string?)managed["association"]!["parentResourceId"]);
+        Assert.NotNull(managed["association"]!["parentIncarnation"]);
+        Assert.NotNull(managed["association"]!["parentOperationId"]);
+        Assert.NotNull(managed["association"]!["parentCorrelationId"]);
         Assert.Equal(3, arm.Writes.Count);
     }
 
@@ -934,6 +940,9 @@ public sealed class FactoryFoundationTests
                         created[target]["properties"]!["principalId"] = BoundaryPlanFixture.Principal;
                     if (IncludeCreationResponses && target.Contains("/microsoft.network/", StringComparison.Ordinal))
                         created[target].AsObject().Remove("systemData");
+                    if (target.Contains("/microsoft.app/managedenvironments/", StringComparison.Ordinal))
+                        created[target]["properties"]!["infrastructureResourceGroup"] = ((string)pending.Single(
+                            p => (string?)p["managedBy"] == target)["target"]!).Split('/').Last();
                     if (target.EndsWith("-cosmos", StringComparison.Ordinal))
                     {
                         var properties = created[target]["properties"]!;
