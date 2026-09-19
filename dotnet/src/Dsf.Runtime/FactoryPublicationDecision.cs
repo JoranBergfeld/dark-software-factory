@@ -21,6 +21,9 @@ internal static partial class RuntimeWorkflow
         var live = await liveAuthority.CheckAsync(liveRequest, false, token);
         var factory = publisher.Manifest.Identity;
         var id = FactoryPromotion.DecisionId(factory.FactoryId, request.InvocationId);
+        var seeds = JsonSerializer.Deserialize<FactoryPromotionSeeds>(values[promotion.NativeIndices!.Key], FactorySourceValidation.RecordJson) ?? throw new JsonException();
+        await new FactoryActivityStore(publisher.Manifest, promotion, false, seeds.Decisions.Identity, publisher.Credential, http, dependencies.PreviewClock)
+            .RequireSettledAsync(id, token);
         var endpoint = "https://" + FactoryPreviewValidation.Prefix(factory.FactoryId) + "-cosmos.documents.azure.com";
         var gateway = new AzureCosmosDocumentGateway(publisher.Credential, http);
         var execution = new PreviewExecutionStore(live.Preview, credential, http, dependencies.PreviewClock,
@@ -38,7 +41,7 @@ internal static partial class RuntimeWorkflow
             || evaluation.OperationId != live.Preview.Capability.OperationId || evaluation.Phase != PreviewExecutionPhase.Evaluated
             || evaluation.CreatedAt < promotion.ApprovedAt || evaluation.CreatedAt > dependencies.PreviewClock.GetUtcNow()
             || evaluation.Checksum != evaluation.CalculateChecksum() || evaluation.DecisionScope is not { } scope
-            || scope.InvocationId != request.InvocationId || scope.Promotion != identities[FactoryPromotion.RootKey] || scope.Publisher != identities[FactoryPublisher.RootKey]
+            || scope.InvocationId != request.InvocationId || scope.DryRun || scope.Promotion != identities[FactoryPromotion.RootKey] || scope.Publisher != identities[FactoryPublisher.RootKey]
             || evaluation.LiveScope is null || evaluation.LiveScope.RolloutFingerprint != promotion.LiveFingerprint
             || evaluation.LiveScope.OperationId != request.InvocationId
             || evaluation.Admission is not { State: PreviewWorkState.Released, Readiness: PreviewReadiness.ReadyAwaitingActivation }
@@ -76,10 +79,20 @@ internal static partial class RuntimeWorkflow
             || review.JuryVerdicts.Count != 3 || review.JuryVerdicts.Any(j => j.Position != JurorPosition.Go))
             throw Denied("OnlyUnanimousGoQualifiesForPublication");
         var payload = candidate.IntendedPublication ?? throw Denied("OriginalUnassignedProposalPayloadRequired");
+        var problemScope = FactoryPromotion.ProblemScope(factory.FactoryId, factory.RepositoryId);
         if (payload.Disposition != ProposalVerdict.Proceed || payload.Assignees.Count != 0 || !payload.Labels.SequenceEqual(["dsf:proposal"])
             || string.IsNullOrWhiteSpace(candidate.IntentKey) || candidate.IntentKey.Contains(request.InvocationId.ToString("N"), StringComparison.OrdinalIgnoreCase)
-            || candidate.IntentKey.Contains(request.InvocationId.ToString("D"), StringComparison.OrdinalIgnoreCase))
+            || candidate.IntentKey.Contains(request.InvocationId.ToString("D"), StringComparison.OrdinalIgnoreCase)
+            || !candidate.IntentKey.StartsWith(problemScope + ":", StringComparison.Ordinal)
+            || !Guid.TryParseExact(candidate.IntentKey[(problemScope.Length + 1)..], "N", out var problem))
             throw Denied("StableUnassignedProposalOnlyIntentRequired");
+        var nativeProblems = await gateway.ReadCheckpointAsync(endpoint, factory.ProductKey, FactoryPreviewValidation.PreviewContainer,
+            factory.ProductKey, FactoryPromotion.ProblemIndex(factory.FactoryId, factory.RepositoryId), token) ?? throw new JsonException();
+        using var problems = JsonDocument.Parse(nativeProblems.Json, new() { AllowDuplicateProperties = false });
+        if (problems.RootElement.GetProperty("_rid").GetString() != seeds.Problems.Identity.NativeResourceId
+            || problems.RootElement.GetProperty("scope").GetString() != problemScope
+            || !problems.RootElement.GetProperty("problems").EnumerateArray().Any(p => p.GetProperty("key").GetString() == problem.ToString("N")))
+            throw Denied("OriginalStableNativeLogicalProblemRequired");
         var latest = await gateway.ReadCheckpointAsync(endpoint, factory.ProductKey, FactoryPreviewValidation.PreviewContainer, factory.ProductKey, id, token);
         var latestRun = await gateway.ReadCheckpointAsync(endpoint, factory.ProductKey, "runs", factory.ProductKey, id + "-run", token);
         if (latest is null || latestRun is null || NativeIdentity(latest, FactoryPreviewValidation.PreviewContainer, id) != evaluationIdentity

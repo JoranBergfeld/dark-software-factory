@@ -41,7 +41,8 @@ public sealed class S3Synthesis : IStation
             var cluster = clusters[index];
             var resolver = services.ProblemIdentityResolver
                 ?? throw new InvalidOperationException("S3 requires a configured problem identity resolver for nonempty clusters");
-            var problemKey = await resolver.ResolveAsync(run.Fingerprint, cluster, cancellationToken);
+            var intentScope = services.ProblemIdentityScope ?? run.Fingerprint;
+            var problemKey = await resolver.ResolveAsync(intentScope, cluster, cancellationToken);
             if (string.IsNullOrWhiteSpace(problemKey))
             {
                 throw new InvalidOperationException("S3 problem identity resolver returned a blank problem key");
@@ -72,7 +73,7 @@ public sealed class S3Synthesis : IStation
                 if (structured.Candidate is { } draft)
                     proposals.Add(new($"{run.Id}-{index}-{kindLabel}", draft.Title, cluster.SourceKinds, references)
                     {
-                        Body = draft.Body, Synthesis = draft, IntentKey = $"{run.Fingerprint}:{problemKey}",
+                        Body = draft.Body, Synthesis = draft, IntentKey = $"{intentScope}:{problemKey}",
                         ClusterEvidence = cluster.Evidence.Distinct().ToArray(),
                     });
                 run.Record(StationName, $"evaluated synthesis for cluster {index}: candidate={structured.Candidate is not null}.");
@@ -84,7 +85,7 @@ public sealed class S3Synthesis : IStation
                 sourceKinds: cluster.SourceKinds,
                 evidenceReferences: references)
             {
-                IntentKey = $"{run.Fingerprint}:{problemKey}",
+                IntentKey = $"{intentScope}:{problemKey}",
                 ClusterEvidence = cluster.Evidence.Distinct().ToArray(),
             };
             proposals.Add(proposal);

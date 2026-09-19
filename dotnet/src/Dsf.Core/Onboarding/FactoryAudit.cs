@@ -49,7 +49,7 @@ public static class FactoryAudit
     public const int MaximumRecords = 81920;
     public const int MaximumBytes = 96 * 1024 * 1024;
     public const int PageSize = 128;
-    public const int GovernanceHistoryRecords = FactoryAuditRetention.MaximumRecords + 32 + FactoryLive.MaximumRecords + FactoryPublisher.MaximumRecords;
+    public const int GovernanceHistoryRecords = FactoryAuditRetention.MaximumRecords + 40 + FactoryLive.MaximumRecords + FactoryPublisher.MaximumRecords;
     public static TimeSpan UnusedAnalysisRetention => TimeSpan.FromDays(90);
 
     public static AuditGraph Build(Guid factory, IReadOnlyList<FactoryAuditRecord> input, DateTimeOffset now)
@@ -291,11 +291,25 @@ public static class FactoryAudit
             foreach (var chunk in prepared.Chunks) Link(prepared.Owner, chunk);
             ProtectAnalysis(prepared.Owner, prepared.Plan.Source.AnalysisRevision);
         }
-        foreach (var record in input.Where(r => r.Identity.Store == AuditStoreKind.Preview))
+        foreach (var record in input.Where(r => r.Identity.Store == AuditStoreKind.Preview
+            && !r.Identity.Key.Contains("/docs/decision-index-", StringComparison.Ordinal)
+            && !r.Identity.Key.Contains("/docs/problem-index-", StringComparison.Ordinal)))
         {
             using var document = JsonDocument.Parse(record.Content);
             var body = document.RootElement;
             var preview = PreviewEvaluationDocument.ReadNative(body);
+            if (preview.Kind == FactoryPromotion.DecisionKind)
+            {
+                var scope = preview.DecisionScope ?? throw new JsonException("Promoted native decision scope required.");
+                foreach (var reference in new[] { scope.Promotion, scope.Publisher })
+                {
+                    var target = Require(reference.Store, reference.Key);
+                    if (target.Identity != reference) throw new JsonException("Original promoted decision authority differs.");
+                    Link(record, target);
+                }
+                Link(record, Require(AuditStoreKind.Preview, $"dbs/{manifest.Identity.ProductKey}/colls/{FactoryPreviewValidation.PreviewContainer}/docs/"
+                    + FactoryPromotion.ProblemIndex(factory, manifest.Identity.RepositoryId)));
+            }
             var operation = body.GetProperty("operationId").GetGuid();
             Link(Require(AuditStoreKind.Governance, FactoryPreviewExecution.ConfigurationKey(operation)), record);
             foreach (var field in new[] { "inputs", "finalInputs" })
@@ -315,7 +329,8 @@ public static class FactoryAudit
                     && r.Identity.NativeRevision == run.GetProperty("eTag").GetString()));
             }
         }
-        foreach (var record in input.Where(r => r.Identity.Store == AuditStoreKind.Publication))
+        foreach (var record in input.Where(r => r.Identity.Store == AuditStoreKind.Publication
+            && !r.Identity.Key.Contains("/docs/publication-index-", StringComparison.Ordinal)))
         {
             using var native = JsonDocument.Parse(record.Content, new JsonDocumentOptions { AllowDuplicateProperties = false });
             if (NativeCosmosResourceId.RequireDocument(native.RootElement.GetProperty("_rid").GetString()) != record.Identity.NativeResourceId
@@ -468,6 +483,42 @@ public static class FactoryAudit
             var promotion = FactoryPromotion.RequireApproved(values, identities, publisher.Plan, now);
             var root = Require(AuditStoreKind.Governance, FactoryPromotion.RootKey);
             foreach (var reference in promotion.References) Link(root, Require(reference.Store, reference.Key));
+            Link(root, Require(AuditStoreKind.Governance, FactoryPromotion.IntentKey));
+            var completed = Require(AuditStoreKind.Governance, FactoryPromotion.CompletionKey(promotion.OperationId));
+            Link(root, completed);
+            Link(completed, root);
+            var proof = Require(AuditStoreKind.Governance, promotion.NativeIndices!.Key);
+            if (proof.Identity != promotion.NativeIndices) throw new JsonException();
+            Link(root, proof);
+            var seeds = Parse<FactoryPromotionSeeds>(proof);
+            foreach (var (seed, publication) in new[] { (seeds.Decisions.Identity, false), (seeds.Publications.Identity, true) })
+            {
+                var currentIndex = Require(seed.Store, seed.Key);
+                if (currentIndex.Identity.NativeResourceId != seed.NativeResourceId) throw new JsonException();
+                Link(proof, currentIndex);
+                var index = FactoryActivityIndex.Read(currentIndex.Content, factory, manifest.Identity.ProductKey, promotion.OperationId, publication, now);
+                foreach (var entry in index.Entries)
+                {
+                    foreach (var reference in entry.Publication?.References
+                        ?? (entry.Decision is { } scope ? new[] { scope.Promotion, scope.Publisher } : []))
+                    {
+                        var original = Require(reference.Store, reference.Key);
+                        if (original.Identity != reference) throw new JsonException("Original indexed admission evidence differs.");
+                        Link(currentIndex, original);
+                    }
+                    var target = Require(seed.Store, $"dbs/{manifest.Identity.ProductKey}/colls/{FactoryActivityIndex.Container(publication)}/docs/{entry.Id}");
+                    if (entry.NativeResourceId is null || target.Identity.NativeResourceId != entry.NativeResourceId) throw new JsonException();
+                    Link(currentIndex, target);
+                }
+            }
+            var problemIndex = Require(seeds.Problems.Identity.Store, seeds.Problems.Identity.Key);
+            if (problemIndex.Identity.NativeResourceId != seeds.Problems.Identity.NativeResourceId) throw new JsonException();
+            using var problems = JsonDocument.Parse(problemIndex.Content, new() { AllowDuplicateProperties = false });
+            if (problems.RootElement.GetProperty("scope").GetString() != FactoryPromotion.ProblemScope(factory, manifest.Identity.RepositoryId)
+                || problems.RootElement.GetProperty("product").GetString() != manifest.Identity.ProductKey
+                || problems.RootElement.GetProperty("id").GetString() != FactoryPromotion.ProblemIndex(factory, manifest.Identity.RepositoryId))
+                throw new JsonException("Original native logical-problem scope differs.");
+            Link(proof, problemIndex);
         }
         var protectedIds = new HashSet<AuditRecordIdentity>();
         var pending = new Queue<AuditRecordIdentity>(roots);

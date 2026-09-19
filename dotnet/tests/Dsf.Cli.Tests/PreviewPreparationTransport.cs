@@ -52,8 +52,7 @@ internal sealed partial class PreviewPreparationTransport(CharterScenario scenar
         return transport;
     }
 
-    internal Dictionary<string, string> Values() => JsonNode.Parse(scenario.Arm.Product.ListJson())!.AsArray()
-        .ToDictionary(r => (string)r!["key"]!, r => (string)r!["value"]!, StringComparer.Ordinal);
+    internal Dictionary<string, string> Values() => scenario.Arm.Product.Values();
     internal FactoryManifest Manifest => JsonSerializer.Deserialize<FactoryManifest>(Values()[ProductConfigurationKeys.FactoryManifest], FactoryGitHubJson.Options)!;
     internal FactoryTelemetry Authority => JsonSerializer.Deserialize<FactoryTelemetry>(Values()[ProductConfigurationKeys.FactoryTelemetry], FactoryGitHubJson.Options)!;
 
@@ -69,7 +68,8 @@ internal sealed partial class PreviewPreparationTransport(CharterScenario scenar
         if (await PublisherGitHubAsync(request, token) is { } github) return github;
         if (uri.Host == "shared-models.services.ai.azure.com") return await ModelProbeAsync(request, token);
         if (uri.Host.EndsWith("-cosmos.documents.azure.com", StringComparison.Ordinal)
-            && (path.Contains("/colls/council-preview/", StringComparison.Ordinal) || path.Contains("/colls/runs/", StringComparison.Ordinal)))
+            && (path.Contains("/colls/council-preview/", StringComparison.Ordinal) || path.Contains("/colls/runs/", StringComparison.Ordinal)
+                || path.Contains("/colls/proposal-publications/", StringComparison.Ordinal)))
             return await SeedAsync(request, token);
         if (uri.Host == "management.azure.com" && request.Method == HttpMethod.Put)
         {

@@ -35,6 +35,19 @@ internal sealed partial class PreviewPreparationTransport
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, Lazy<Task<PreviewRunner>>> previewHosts = new();
     private readonly object seedGate = new();
 
+    internal RuntimeDependencies DecisionDependencies(HttpClient http)
+    {
+        var council = scenario.Arm.CreatedResources.Values.Single(r => ((string?)r["id"])?.EndsWith("-council", StringComparison.Ordinal) == true);
+        var credential = new PreviewCredential(this, council);
+        return RuntimeDependencies.Production(new Dictionary<string, string?>()) with
+        {
+            PreviewHttp = http, PreviewCredential = credential, PreviewClock = scenario.Source.Source!.Clock,
+            ConfigurationSettingsGateway = new AzureConfigurationSettingsGateway(credential, http),
+            ConveyorComposer = new FactoryActivationAuthorityTests.ForbiddenComposer(),
+            SweepLeaseFactory = _ => throw new InvalidOperationException("No unreviewed legacy sweep lease."),
+        };
+    }
+
     internal async Task<JsonNode> InspectEvaluationAsync(PreviewCapabilityRequest request, string route = "/evaluation")
     {
         var host = HostedResources.Single(r => (string?)r["properties"]?["template"]?["containers"]?[0]?["args"]?[0] == "serve-preview");
@@ -181,7 +194,8 @@ internal sealed partial class PreviewPreparationTransport
     private async Task<HttpResponseMessage> SeedAsync(HttpRequestMessage request, CancellationToken token)
     {
         Assert.True(request.RequestUri!.AbsolutePath.Contains("/colls/council-preview/docs", StringComparison.Ordinal)
-            || request.RequestUri.AbsolutePath.Contains("/colls/runs/docs", StringComparison.Ordinal));
+            || request.RequestUri.AbsolutePath.Contains("/colls/runs/docs", StringComparison.Ordinal)
+            || request.RequestUri.AbsolutePath.Contains("/colls/proposal-publications/docs", StringComparison.Ordinal));
         Assert.Equal("[\"" + Manifest.Identity.ProductKey + "\"]", request.Headers.GetValues("x-ms-documentdb-partitionkey").Single());
         Assert.False(request.Headers.Contains("x-ms-documentdb-is-upsert"));
         var path = request.RequestUri.AbsolutePath;
@@ -195,7 +209,7 @@ internal sealed partial class PreviewPreparationTransport
                 if (SeedDocuments.ContainsKey(path)) return new(HttpStatusCode.Conflict);
                 if (path.Contains("/council-preview/", StringComparison.Ordinal)) { BeforeSeed?.Invoke(); SeedCreates++; }
                 body["_rid"] = path.Contains("/council-preview/", StringComparison.Ordinal) ? SeedResourceId : RunResourceId;
-                if (((string)body["id"]!).StartsWith("live-", StringComparison.Ordinal))
+                if (!((string)body["id"]!).StartsWith("preview-", StringComparison.Ordinal))
                 {
                     var rid = Convert.FromBase64String(((string)body["_rid"]!).Replace('-', '/'));
                     var suffix = System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(path));

@@ -1086,6 +1086,7 @@ internal sealed class ReservationTestStore
     private readonly object gate = new();
     private Dictionary<string, string> records = [];
     private int revision;
+    private Dictionary<string, string>? valueSnapshot;
     public string? LoseResponseForKey { get; set; }
     public Func<string, string, bool>? LoseResponseWhen { get; set; }
     public bool LoseBeforeCommit { get; set; }
@@ -1097,7 +1098,15 @@ internal sealed class ReservationTestStore
     public List<(string Key, string? IfMatch, string? IfNoneMatch, string Value)> Writes { get; } = [];
     public HttpMessageHandler Client() => new ClientHandler(this);
     public string Export() { lock (gate) return JsonSerializer.Serialize(records); }
-    public void Remove(string key) { lock (gate) records.Remove(key); }
+    public void Remove(string key) { lock (gate) { records.Remove(key); valueSnapshot = null; } }
+    public Dictionary<string, string> Values()
+    {
+        lock (gate)
+        {
+            valueSnapshot ??= records.ToDictionary(p => p.Key, p => (string)JsonNode.Parse(p.Value)!["value"]!, StringComparer.Ordinal);
+            return new(valueSnapshot, StringComparer.Ordinal);
+        }
+    }
     public void Change(string key, Func<string, string> change)
     {
         lock (gate)
@@ -1106,6 +1115,7 @@ internal sealed class ReservationTestStore
             record["value"] = change((string)record["value"]!);
             record["etag"] = "revision-" + ++revision;
             records[key] = record.ToJsonString();
+            valueSnapshot = null;
         }
     }
     public static ReservationTestStore Restore(string persisted) => new()
@@ -1175,6 +1185,7 @@ internal sealed class ReservationTestStore
                     ["tags"] = new JsonObject(),
                 };
                 store.records[key] = record.ToJsonString();
+                store.valueSnapshot = null;
                 store.AfterPut?.Invoke(key, (string)incoming["value"]!);
                 if (store.LoseResponseForKey == key || store.LoseResponseWhen?.Invoke(key, (string)incoming["value"]!) == true)
                 {

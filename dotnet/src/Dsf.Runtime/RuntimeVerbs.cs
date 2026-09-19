@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Dsf.Core.Runtime;
+using Dsf.Core.Onboarding;
 using Dsf.FeatureCouncil.Conveyor;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -75,7 +76,13 @@ public static partial class RuntimeVerbs
         ArgumentNullException.ThrowIfNull(signal);
         ArgumentNullException.ThrowIfNull(dependencies);
 
-        await RuntimeWorkflow.EnsureWorkAdmittedAsync(settings, dependencies, cancellationToken, env);
+        var onboarding = await RuntimeWorkflow.EnsureWorkAdmittedAsync(settings, dependencies, cancellationToken, env, onboardingForwarding: true);
+        if (onboarding is not null)
+        {
+            if (signal.InvocationId is not { } invocation || signal.ProductHints.Any(p => p != onboarding.Identity.ProductKey))
+                throw new RuntimeVerbException("Onboarding signals require an explicit nonempty invocation_id and the original product; use that same invocation to resume.");
+            return await new FactoryDecisionClient(settings, dependencies, onboarding).RunAsync(new(invocation, signal.DryRun), cancellationToken);
+        }
         RuntimeWorkflow.EnsureLiveFilingConfirmed(signal.DryRun, env);
 
         var services = ComposeServices(settings, dependencies);
@@ -104,7 +111,9 @@ public static partial class RuntimeVerbs
         ArgumentNullException.ThrowIfNull(settings);
         ArgumentNullException.ThrowIfNull(dependencies);
 
-        await RuntimeWorkflow.EnsureWorkAdmittedAsync(settings, dependencies, cancellationToken, env);
+        var onboarding = await RuntimeWorkflow.EnsureWorkAdmittedAsync(settings, dependencies, cancellationToken, env, onboardingForwarding: true);
+        if (onboarding is not null)
+            return await new FactoryDecisionClient(settings, dependencies, onboarding).RunAsync(new(Guid.NewGuid(), dryRun), cancellationToken);
         RuntimeWorkflow.EnsureLiveFilingConfirmed(dryRun, env);
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -332,7 +341,7 @@ public static partial class RuntimeVerbs
                 sweepInterval.Value,
                 env,
                 dependencies.SweepControlStoreFor(settings),
-                dependencies.SweepLeaseFor(settings, env),
+                null,
                 provider.GetRequiredService<ILogger<PeriodicSweepService>>()));
         }
 
@@ -364,6 +373,23 @@ public static partial class RuntimeVerbs
 
             try
             {
+                using var deadline = new CancellationTokenSource(FactoryPreviewValidation.RequestBudget, dependencies.PreviewClock);
+                using var admission = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline.Token);
+                var onboarding = await RuntimeWorkflow.EnsureWorkAdmittedAsync(settings, dependencies, admission.Token, env, onboardingForwarding: true);
+                if (onboarding is not null)
+                {
+                    if (signal.InvocationId is not { } invocation || signal.ProductHints.Any(p => p != onboarding.Identity.ProductKey))
+                        return Results.BadRequest(new { error = "Original product and explicit invocation_id required for onboarding intake." });
+                    if (request.Headers.Authorization.Count != 1
+                        || !System.Net.Http.Headers.AuthenticationHeaderValue.TryParse(request.Headers.Authorization.Single(), out var caller)
+                        || !caller.Scheme.Equals("Bearer", StringComparison.OrdinalIgnoreCase) || string.IsNullOrWhiteSpace(caller.Parameter))
+                        return Results.Json(new { error = "Original caller bearer for the pinned native decision audience required; server credentials are never lent to HTTP callers." },
+                            statusCode: StatusCodes.Status403Forbidden);
+                    var observed = (await new FactoryDecisionClient(settings, dependencies, onboarding).ObserveAsync(
+                        new(invocation, true), true, admission.Token, caller.Parameter)).Observation;
+                    return Results.Json(observed, OutputJson, statusCode: observed.Readiness is PreviewReadiness.Queued or PreviewReadiness.Running
+                        or PreviewReadiness.Checking ? StatusCodes.Status202Accepted : StatusCodes.Status200OK);
+                }
                 var run = await RunSignalAsync(settings, signal, dependencies, cancellationToken, env);
                 var summary = RuntimeRunSummary.From(run);
                 return run.Status == RunStatus.Error
@@ -373,6 +399,12 @@ public static partial class RuntimeVerbs
             catch (RuntimeVerbException exception)
             {
                 return Results.Json(new { error = exception.Message }, statusCode: StatusCodes.Status403Forbidden);
+            }
+            catch (Exception exception) when (exception is OperationCanceledException or HttpRequestException or IOException
+                or JsonException or InvalidOperationException or Azure.RequestFailedException)
+            {
+                return Results.Json(new { state = "Unknown", error = "Original HTTP intake or response unconfirmed; preserve invocation_id. No automatic replacement." },
+                    statusCode: StatusCodes.Status409Conflict);
             }
         });
 
@@ -462,8 +494,8 @@ public static partial class RuntimeVerbs
         ArgumentNullException.ThrowIfNull(dependencies);
         if (sweepInterval is not null)
         {
-            await RuntimeWorkflow.EnsureWorkAdmittedAsync(settings, dependencies, cancellationToken, env);
-            RuntimeWorkflow.EnsureLiveFilingConfirmed(dryRun: false, env);
+            var onboarding = await RuntimeWorkflow.EnsureWorkAdmittedAsync(settings, dependencies, cancellationToken, env, onboardingForwarding: true);
+            if (onboarding is null) RuntimeWorkflow.EnsureLiveFilingConfirmed(dryRun: false, env);
         }
 
         var app = BuildOrchestratorHost(settings, dependencies, host, port, sweepInterval, env);

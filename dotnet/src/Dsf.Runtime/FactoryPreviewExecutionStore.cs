@@ -10,14 +10,15 @@ using Dsf.FeatureCouncil.Conveyor;
 namespace Dsf.Runtime;
 
 internal sealed partial class PreviewExecutionStore(PreviewCapabilitySnapshot authority, TokenCredential credential, HttpClient http, TimeProvider clock,
-    FactoryLiveExecution? live = null, FactoryPublicationDecisionScope? decision = null)
+    FactoryLiveExecution? live = null, FactoryPublicationDecisionScope? inspection = null)
     : IRunStore, IPreviewModelDispatchJournal
 {
+    private readonly FactoryPublicationDecisionScope? decision = inspection ?? live?.Decision?.Scope;
     private readonly AzureCosmosDocumentGateway gateway = new(
         new FactoryWorkloadCredential(credential, authority.Manifest.Identity.TenantId, authority.Council, clock), http);
     private readonly string product = authority.Manifest.Identity.ProductKey;
     private readonly string endpoint = "https://" + FactoryPreviewValidation.Prefix(authority.Manifest.Identity.FactoryId) + "-cosmos.documents.azure.com";
-    internal string Id { get; } = decision is not null ? FactoryPromotion.DecisionId(authority.Manifest.Identity.FactoryId, decision.InvocationId)
+    internal string Id { get; } = (inspection ?? live?.Decision?.Scope) is { } scope ? FactoryPromotion.DecisionId(authority.Manifest.Identity.FactoryId, scope.InvocationId)
         : live is null ? FactoryPreviewExecution.Id(authority.Manifest.Identity.FactoryId, authority.Capability.OperationId)
         : "live-" + FactoryModelsValidation.Hash(new { authority.Manifest.Identity.FactoryId, live.Scope.OperationId });
     private string? version;
@@ -34,23 +35,33 @@ internal sealed partial class PreviewExecutionStore(PreviewCapabilitySnapshot au
 
     internal async Task PrepareLiveAsync(CancellationToken token)
     {
-        if (live is null || decision is not null) throw new InvalidOperationException("Publication decision inspection is read-only.");
+        if (live is null || inspection is not null) throw new InvalidOperationException("Publication decision inspection is read-only.");
         await live.RequireCurrentAsync(token);
+        var indexed = live.Decision is null || await live.Decision.Decisions.RegisterAsync(Id, FactoryModelsValidation.Hash(decision!),
+            live.RequireCurrentAsync, token, intendedDecision: decision);
         var prior = await gateway.ReadCheckpointAsync(endpoint, product, FactoryPreviewValidation.PreviewContainer, product, Id, token);
         if (prior is not null)
         {
+            if (live.Decision is not null && indexed)
+                throw new PreviewCapabilityException(FactoryCharterState.Unknown, "UnindexedOriginalDecisionNoAdoption");
             using var body = JsonDocument.Parse(prior.Json);
             _ = Parse(body.RootElement);
             return;
         }
+        if (!indexed) throw new PreviewCapabilityException(FactoryCharterState.Unknown, "OriginalIndexedDecisionMissingNoRecreation");
         if (await gateway.ReadCheckpointAsync(endpoint, product, "runs", product, RunId, token) is not null)
             throw new PreviewCapabilityException(FactoryCharterState.Unknown, "LiveJournalMissingDespiteRetainedRunNoRecreation");
         var initial = new PreviewEvaluationDocument(1, Id, product, authority.Manifest.Identity.FactoryId, authority.Capability.OperationId, clock.GetUtcNow())
-            { Kind = "council-live-exercise", LiveScope = live.Scope };
+            { Kind = decision is null ? "council-live-exercise" : FactoryPromotion.DecisionKind, LiveScope = live.Scope, DecisionScope = decision };
         initial = initial with { Checksum = initial.CalculateChecksum() };
         await live.RequireCurrentAsync(token);
-        _ = await gateway.WriteCheckpointAsync(endpoint, product, FactoryPreviewValidation.PreviewContainer, product, Id,
+        var created = await gateway.WriteCheckpointAsync(endpoint, product, FactoryPreviewValidation.PreviewContainer, product, Id,
             JsonSerializer.Serialize(initial, FactoryGitHubJson.Options), null, token);
+        if (live.Decision is not null)
+        {
+            using var native = JsonDocument.Parse(created.Json);
+            await live.Decision.Decisions.ConfirmAsync(Id, Resource(native.RootElement), token);
+        }
     }
 
     internal async Task<PreviewExecutionSeed> PrepareAsync(TimeProvider clock, CancellationToken token, bool readOnly = false)
@@ -202,7 +213,7 @@ internal sealed partial class PreviewExecutionStore(PreviewCapabilitySnapshot au
 
     private async Task WriteAsync(PreviewEvaluationDocument next, CancellationToken token)
     {
-        if (decision is not null || poisoned || version is null || owner == Guid.Empty || next.Owner != owner)
+        if (inspection is not null || poisoned || version is null || owner == Guid.Empty || next.Owner != owner)
             throw new PreviewCapabilityException(FactoryCharterState.Unknown, "PreviewWriterUnconfirmedNoRetry");
         next = next with { Checksum = next.CalculateChecksum() };
         var payload = JsonSerializer.Serialize(next, FactoryGitHubJson.Options);

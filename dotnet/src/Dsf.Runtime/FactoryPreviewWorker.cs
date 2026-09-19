@@ -12,7 +12,7 @@ internal sealed class FactoryPreviewWorker(FactoryHostSettings settings, Runtime
     ILogger<FactoryPreviewWorker> logger) : BackgroundService
 {
     private sealed record Work(PreviewCapabilitySnapshot Authority, PreviewCapabilityRequest Request, PreviewWorkAdmission? Admission, bool Inputs,
-        FactoryLiveExecution? Live);
+        FactoryLiveExecution? Live, bool Execute);
     private sealed record Completion(PreviewHttpObservation Observation, bool Inputs, string AuthorityRevision, string? ExecutionRevision, DateTimeOffset ExpiresAt);
     private readonly Guid workerId = Guid.NewGuid();
     private readonly SemaphoreSlim gate = new(1, 1);
@@ -60,7 +60,7 @@ internal sealed class FactoryPreviewWorker(FactoryHostSettings settings, Runtime
                 && prior.Observation.FactoryId == authority.Manifest.Identity.FactoryId && prior.Observation.OperationId == request.OperationId
                 && prior.Observation.ApprovalFingerprint == request.ApprovalFingerprint && prior.AuthorityRevision != authority.Revision)
                 return Observation(authority, request, PreviewReadiness.Unknown, "PreviewGovernanceChangedDuringObservation");
-            if (completed is { } cached && cached.Inputs == inputs && cached.AuthorityRevision == authority.Revision
+            if (completed is { } cached && (live?.Decision is null || !execute) && cached.Inputs == inputs && cached.AuthorityRevision == authority.Revision
                 && cached.Observation is { } previous
                 && (live is null || previous.RequestId == request.RequestId)
                 && previous.FactoryId == authority.Manifest.Identity.FactoryId && previous.OperationId == request.OperationId
@@ -99,11 +99,11 @@ internal sealed class FactoryPreviewWorker(FactoryHostSettings settings, Runtime
                     return Observation(authority, request, PreviewReadiness.Unknown, "PreviewAdmissionAuthorityUnconfirmedNoDispatch");
                 }
                 // The CAS and governance reads are not a cross-store transaction. Later stop requests may drain admitted work.
-                active = new(authority, admission.Request, admission, false, live);
+                active = new(authority, admission.Request, admission, false, live, true);
                 if (!queue.Writer.TryWrite(active)) throw new InvalidOperationException("Bounded preview worker unavailable.");
                 return Observation(authority, request, PreviewReadiness.Queued, "DurablyAdmittedAwaitingOriginalWorker");
             }
-            active = new(authority, request, null, inputs, live);
+            active = new(authority, request, null, inputs, live, execute);
             if (!queue.Writer.TryWrite(active)) throw new InvalidOperationException("Bounded preview reader unavailable.");
             return Observation(authority, request, PreviewReadiness.Checking, "ReadOnlyCurrentInspectionPending");
         }
@@ -140,6 +140,7 @@ internal sealed class FactoryPreviewWorker(FactoryHostSettings settings, Runtime
         var began = false;
         string? executionRevision = null;
         DateTimeOffset? evidenceExpires = null;
+        PreviewExecutionResult? decisionReport = null;
         PreviewHttpObservation outcome;
         try
         {
@@ -166,6 +167,7 @@ internal sealed class FactoryPreviewWorker(FactoryHostSettings settings, Runtime
                     ? await RuntimeWorkflow.InspectPreviewAsync(settings, dependencies, work.Request, http, token, live: work.Live)
                     : await RuntimeWorkflow.ExecutePreviewAsync(settings, dependencies, work.Request, http, token, work.Admission, work.Live);
                 evidenceExpires = EvidenceExpires(report.Inputs);
+                decisionReport = report;
                 executionRevision = report.ExecutionRevision;
                 outcome = Observation(work.Authority, work.Request, report.Readiness, report.Reason, JsonSerializer.SerializeToElement(report, Json));
             }
@@ -217,6 +219,24 @@ internal sealed class FactoryPreviewWorker(FactoryHostSettings settings, Runtime
                     logger.LogWarning("Native council quarantine could not be confirmed; operation {OperationId} requires its original authority.",
                         work.Live?.Scope.OperationId ?? work.Request.OperationId);
                 }
+            }
+        }
+        if (work.Live?.Decision is { } decision && decisionReport is not null && outcome.Readiness == PreviewReadiness.ReadyAwaitingActivation)
+        {
+            try
+            {
+                var publications = await decision.ObservePublicationsAsync(decisionReport.Run, work.Execute, token);
+                decisionReport = decisionReport with { Publications = publications };
+                var unknown = publications.Any(p => p.State is FactoryPublicationState.Unknown or FactoryPublicationState.Dispatched);
+                var blocked = publications.Any(p => p.State is FactoryPublicationState.Rejected or FactoryPublicationState.NotDispatched);
+                outcome = Observation(work.Authority, work.Request, unknown ? PreviewReadiness.Unknown : blocked ? PreviewReadiness.Blocked
+                    : PreviewReadiness.ReadyAwaitingActivation, unknown ? "OriginalPublicationUnconfirmedNoSecondCreate" : blocked ? "KnownPublicationNotCreated"
+                    : "PromotedDecisionRetained", JsonSerializer.SerializeToElement(decisionReport, Json));
+            }
+            catch (Exception exception) when (Unconfirmed(exception) || exception is PreviewCapabilityException)
+            {
+                outcome = Observation(work.Authority, work.Request, PreviewReadiness.Unknown, "OriginalPublicationAdmissionOrResponseUnconfirmed",
+                    JsonSerializer.SerializeToElement(decisionReport, Json));
             }
         }
         var expires = outcome.ObservedAt + FactoryPreviewValidation.RequestBudget;

@@ -469,7 +469,7 @@ public static class RuntimeCliApplication
                     : null,
                 token,
                 env),
-            cancellationToken));
+            cancellationToken, factoryClient: true));
         return command;
     }
 
@@ -586,7 +586,7 @@ public static class RuntimeCliApplication
         Func<RuntimeSettings, CancellationToken, Task<ConveyorRun?>> operation,
         CancellationToken cancellationToken)
     {
-        var settings = await ComposeSettings(env, stderr, productOption, dependencies, cancellationToken);
+        var settings = await ComposeSettings(env, stderr, productOption, dependencies, cancellationToken, factoryClient: true);
         if (settings is null)
         {
             return Failure;
@@ -635,9 +635,10 @@ public static class RuntimeCliApplication
         string? productOption,
         RuntimeDependencies dependencies,
         Func<RuntimeSettings, CancellationToken, Task> operation,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool factoryClient = false)
     {
-        var settings = await ComposeSettings(env, stderr, productOption, dependencies, cancellationToken);
+        var settings = await ComposeSettings(env, stderr, productOption, dependencies, cancellationToken, factoryClient);
         if (settings is null)
         {
             return Failure;
@@ -708,10 +709,13 @@ public static class RuntimeCliApplication
         TextWriter stderr,
         string? productOption,
         RuntimeDependencies dependencies,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool factoryClient = false)
     {
         try
         {
+            if (factoryClient && await RuntimeWorkflow.ComposeFactoryClientAsync(env, productOption, dependencies, cancellationToken) is { } client)
+                return client;
             return await RuntimeSettingsComposer.ComposeAsync(
                 env, productOption, dependencies.OwnerRuntimeIndexReader, cancellationToken);
         }

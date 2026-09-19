@@ -117,7 +117,8 @@ public sealed record ConveyorServices(
     int DeliberationRounds = 2,
     TimeSpan? JuryTimeout = null,
     IProblemIdentityResolver? ProblemIdentityResolver = null,
-    Dsf.Core.Onboarding.IFactoryModelWorkloads? EvaluationModels = null)
+    Dsf.Core.Onboarding.IFactoryModelWorkloads? EvaluationModels = null,
+    string? ProblemIdentityScope = null)
 {
     public IRunStore RunStore { get; } = RunStore ?? throw new ArgumentNullException(nameof(RunStore));
 

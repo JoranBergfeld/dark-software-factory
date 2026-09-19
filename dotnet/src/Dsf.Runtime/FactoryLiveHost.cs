@@ -25,7 +25,41 @@ public static partial class RuntimeVerbs
         var app = builder.Build();
         app.MapPost("/exercise", (Func<HttpContext, Task<IResult>>)(context => Handle(context, true)));
         app.MapPost("/execution", (Func<HttpContext, Task<IResult>>)(context => Handle(context, false)));
+        app.MapPost("/decide", (Func<HttpContext, Task<IResult>>)(context => Decide(context, true)));
+        app.MapPost("/decision", (Func<HttpContext, Task<IResult>>)(context => Decide(context, false)));
+        app.MapPost("/activation-capability", (Func<HttpContext, Task<IResult>>)(context => Handle(context, false)));
         return app;
+
+        async Task<IResult> Decide(HttpContext context, bool execute)
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            using var deadline = new CancellationTokenSource(FactoryPreviewValidation.RequestBudget, dependencies.PreviewClock);
+            using var pending = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted, deadline.Token);
+            try
+            {
+                if (context.Request.Headers["X-MS-CLIENT-PRINCIPAL-IDP"] != "aad")
+                    throw new PreviewCapabilityException(FactoryCharterState.Blocked, "NativeCallerRequired");
+                var request = await context.Request.ReadFromJsonAsync<FactoryDecisionRequest>(FactorySourceValidation.RecordJson, pending.Token) ?? throw new JsonException();
+                var credential = dependencies.PreviewCredential
+                    ?? new ManagedIdentityCredential(ManagedIdentityId.FromUserAssignedClientId(settings.ManagedIdentityClientId));
+                var decision = await FactoryDecisionExecution.AdmitAuthorityAsync(settings, dependencies, request, credential, http, pending.Token, execute);
+                var live = await decision.LiveAsync(settings, dependencies, credential, pending.Token);
+                var factory = live.Authority.Preview.Manifest.Identity;
+                if (!NativeCaller(context, factory.AzureActorId, factory.TenantId, null)
+                    && !NativeCaller(context, live.Authority.Preview.Council.PrincipalId!, factory.TenantId, live.Authority.Preview.Council.ClientId))
+                    throw new PreviewCapabilityException(FactoryCharterState.Blocked, "OriginalGovernanceOperatorOrCouncilCallerRequired");
+                var observed = await app.Services.GetRequiredService<FactoryPreviewWorker>().ObserveAsync(
+                    live.Authority.Preview, live.Authority.Request, execute, false, pending.Token, live);
+                return Results.Json(observed, OutputJson, statusCode: observed.Readiness is PreviewReadiness.Queued or PreviewReadiness.Running
+                    or PreviewReadiness.Checking ? 202 : 200);
+            }
+            catch (PreviewCapabilityException e) { return Failure(e.State, e.Message, 403); }
+            catch (Exception e) when (e is OperationCanceledException or JsonException or InvalidOperationException or ArgumentException
+                or KeyNotFoundException or HttpRequestException or IOException or Azure.RequestFailedException or AuthenticationFailedException
+                or BadHttpRequestException or CosmosCheckpointException or FormatException or ModelCapabilityException or SupplementalSourceException
+                or SourceAcquisitionException or IntentException or CharterAdoptionEvidenceException)
+            { return Failure(FactoryCharterState.Unknown, "OriginalDecisionAdmissionUnconfirmedNoAutomaticReplay", 409); }
+        }
 
         async Task<IResult> Handle(HttpContext context, bool execute)
         {
@@ -43,9 +77,27 @@ public static partial class RuntimeVerbs
                     ?? new ManagedIdentityCredential(ManagedIdentityId.FromUserAssignedClientId(settings.ManagedIdentityClientId));
                 var authority = new FactoryLiveAuthority(settings, dependencies, credential, http);
                 var current = await authority.CheckAsync(request, execute, pending.Token);
-                if (!NativeCaller(context, current.Preview.Manifest.Identity.AzureActorId, current.Preview.Manifest.Identity.TenantId, null))
+                var capability = context.Request.Path == "/activation-capability";
+                if (!NativeCaller(context, current.Preview.Manifest.Identity.AzureActorId, current.Preview.Manifest.Identity.TenantId, null)
+                    && !(capability && NativeCaller(context, current.Preview.Council.PrincipalId!, current.Preview.Manifest.Identity.TenantId, current.Preview.Council.ClientId)))
                     throw new PreviewCapabilityException(FactoryCharterState.Blocked, "ExplicitGovernanceOperatorExerciseRequired");
-                var live = new FactoryLiveExecution(current, request, authority);
+                if (capability)
+                    return Results.Json(new FactoryDecisionCapability(1, current.Preview.Manifest.Identity.FactoryId, current.Live.Plan.Fingerprint,
+                        FactoryPromotion.Workflow, FactoryPreviewExecution.Policy), OutputJson);
+                FactoryLiveExecution live;
+                var gateway = new AzureCosmosDocumentGateway(new FactoryWorkloadCredential(credential, current.Preview.Manifest.Identity.TenantId,
+                    current.Preview.Council, dependencies.PreviewClock), http);
+                var identity = current.Preview.Manifest.Identity;
+                var indexed = execute || await gateway.ReadCheckpointAsync("https://" + FactoryPreviewValidation.Prefix(identity.FactoryId)
+                    + "-cosmos.documents.azure.com", identity.ProductKey, FactoryPreviewValidation.PreviewContainer, identity.ProductKey,
+                    FactoryPromotion.DecisionId(identity.FactoryId, request.OperationId), pending.Token) is not null;
+                if (indexed)
+                {
+                    var decision = await FactoryDecisionExecution.AdmitAuthorityAsync(settings, dependencies, new(request.OperationId, true),
+                        credential, http, pending.Token, execute);
+                    live = await decision.LiveAsync(settings, dependencies, credential, pending.Token);
+                }
+                else live = new FactoryLiveExecution(current, request, authority);
                 phase = "worker-admission";
                 var observation = await app.Services.GetRequiredService<FactoryPreviewWorker>()
                     .ObserveAsync(current.Preview, current.Request, execute, false, pending.Token, live);

@@ -138,6 +138,7 @@ internal sealed class FactoryLiveAuthority(FactoryHostSettings settings, Runtime
     private static AuditRecordIdentity Identity(ConfigurationSetting record, Guid factory) =>
         new(factory, AuditStoreKind.Governance, record.Key, record.ETag.ToString(), FactoryAudit.TextHash(record.Value));
     private static string Revision(Dictionary<string, ConfigurationSetting> records) => FactoryModelsValidation.Hash(
-        records.OrderBy(p => p.Key, StringComparer.Ordinal).Select(p => new { p.Key, p.Value.Value, ETag = p.Value.ETag.ToString(), p.Value.ContentType }));
+        records.Where(p => FactoryPromotion.IsLiveAuthorityKey(p.Key)).OrderBy(p => p.Key, StringComparer.Ordinal)
+            .Select(p => new { p.Key, p.Value.Value, ETag = p.Value.ETag.ToString(), p.Value.ContentType }));
     private static PreviewCapabilityException Denied(string reason) => new(FactoryCharterState.Blocked, reason);
 }

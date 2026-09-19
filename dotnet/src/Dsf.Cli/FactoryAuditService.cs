@@ -82,6 +82,7 @@ internal sealed partial class FactoryAuditService(IAzureCliRunner azure, HttpCli
             }
         }
         await ReadPreviewAsync(admission, governance, records, token);
+        await ReadActivityAsync(admission, governance, records, token);
         var graph = FactoryAudit.Build(identity.FactoryId, records, clock.GetUtcNow());
         _ = FactoryAuditDocuments.Read(graph);
         if (governance.ContainsKey(ProductConfigurationKeys.CharterAdopted))

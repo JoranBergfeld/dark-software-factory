@@ -58,9 +58,9 @@ internal static partial class RuntimeWorkflow
 
     private static readonly JsonSerializerOptions RegistrationJson = new() { AllowDuplicateProperties = false };
 
-    public static async Task EnsureWorkAdmittedAsync(
+    public static async Task<FactoryManifest?> EnsureWorkAdmittedAsync(
         RuntimeSettings settings, RuntimeDependencies dependencies, CancellationToken cancellationToken,
-        IReadOnlyDictionary<string, string?>? env = null)
+        IReadOnlyDictionary<string, string?>? env = null, bool onboardingForwarding = false)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var values = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -93,6 +93,19 @@ internal static partial class RuntimeWorkflow
                 if (settings.IntegrationSettings.ContainsKey(RuntimeIntegrationSettings.FactoryProfilePin) && configuredPin != manifest.ProfilePin
                     || env?.ContainsKey(RuntimeIntegrationSettings.FactoryProfilePin) == true && envPin != manifest.ProfilePin)
                     throw new JsonException();
+                if (values.ContainsKey(FactoryPromotion.RootKey))
+                {
+                    if (!onboardingForwarding)
+                        throw new RuntimeVerbException("Onboarding permits only the promoted proposal workflow; legacy source, outcome and control mutation paths remain unavailable.");
+                    var promotion = JsonSerializer.Deserialize<FactoryPromotionApproval>(values[FactoryPromotion.RootKey], FactorySourceValidation.RecordJson)
+                        ?? throw new JsonException();
+                    if (promotion.FactoryId != manifest.Identity.FactoryId || promotion.ReviewFingerprint != FactoryPromotion.Fingerprint(promotion)
+                        || promotion.NativeIndices is null || !values.ContainsKey(FactoryPromotion.IntentKey)
+                        || !values.ContainsKey(promotion.NativeIndices.Key) || promotion.Phase != FactoryPromotionPhase.Active
+                        || !values.ContainsKey(FactoryPromotion.CompletionKey(promotion.OperationId))) throw new JsonException();
+                    // This only selects the authenticated route; its native worker performs actual current admission.
+                    return manifest;
+                }
             }
             catch (Exception exception) when (exception is JsonException or KeyNotFoundException or InvalidOperationException)
             {
@@ -133,6 +146,7 @@ internal static partial class RuntimeWorkflow
 
         T Read<T>(string key) => string.IsNullOrWhiteSpace(values[key]) ? throw new JsonException()
             : JsonSerializer.Deserialize<T>(values[key], RegistrationJson) ?? throw new JsonException();
+        return null;
     }
 
     public static void EnsureLiveFilingConfirmed(bool dryRun, IReadOnlyDictionary<string, string?>? env)

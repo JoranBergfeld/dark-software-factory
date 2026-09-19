@@ -40,7 +40,14 @@ public static class SignalReader
             .Select(kind => kind.Trim().ToLowerInvariant())
             .Where(SourceAgentKinds.IsKnown)
             .ToArray();
-        return new Signal(origin, productHints, sourceKinds, dryRun);
+        Guid? invocation = null;
+        if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("invocation_id", out var requested))
+        {
+            if (requested.ValueKind != JsonValueKind.String || !requested.TryGetGuid(out var value) || value == Guid.Empty)
+                throw new JsonException("signal invocation_id must be a nonempty GUID.");
+            invocation = value;
+        }
+        return new Signal(origin, productHints, sourceKinds, dryRun) { InvocationId = invocation };
     }
 
     private static JsonDocument Parse(string json, string origin)

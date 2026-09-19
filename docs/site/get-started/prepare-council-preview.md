@@ -437,12 +437,13 @@ unknown, never silently truncated or successful.
 
 This command persists bounded preview/provenance and readonly intended
 publication. [Retention/export](retain-audit-evidence.md) is a separate
-operator command. Final activation/live publication and uncertain-effect
-recovery remain unavailable; the following command retains approval only.
+operator command. The following command retains approval only; native rollout
+and explicit final promotion are separate steps below. Uncertain-effect
+recovery remains unavailable: unknown effects stay quarantined.
 
 ## Review operator activation authority
 
-This release supports **approval only**, not active onboarding or live filing.
+This first authorization step grants **approval only**, not activation or filing.
 The operator must have the original governance authority, current predecessor
 access, private source-progress read access and native Cosmos point-read access
 to `council-preview` and `runs`. It does not grant permissions, borrow a runtime
@@ -493,8 +494,8 @@ history never authorize replay, takeover, reset or rollback.
 In this inactive profile the final result is `ApprovalOnly`, exit **1**:
 `approvalRetained` and `approvalCurrent` may be true, but `isActivated`,
 `historicallyCompleted` and `firstConfirmedFiling` remain false.
-`promotionBlockedBy` names the missing live onboarding workflow and create-once
-proposal-publication capability. No active manifest, new grant, issue or
+`promotionBlockedBy` names the separate live workflow and create-once
+proposal-publication prerequisites. No active manifest, new grant, issue or
 repository mutation is produced. A separately reviewed supported live rollout
 and actual promotion must precede activation; retained approval cannot enable
 a future capability silently.
@@ -565,10 +566,13 @@ inference. Unknown/lost/canceled native effects retain their original
 operation; this command never retries a deployment, adopts an existing name,
 replaces a host or treats lease expiry as fencing.
 
-### Exercise the new host explicitly
+### Compatibility: explicit nonpublishing exercise
 
-Use a new explicit invocation GUID and the retained **live rollout**
-fingerprint. This intentionally runs models but cannot file:
+After final promotion, the existing exercise interface remains an alias for an
+indexed dry-run decision. Before promotion it is blocked, including when only
+the native live host has been prepared. Use a new explicit invocation GUID and
+the retained **live rollout** fingerprint; it intentionally runs models but
+cannot file:
 
 ```bash
 dsf onboard decide live --exercise INVOCATION_GUID \
@@ -579,8 +583,8 @@ dsf onboard decide live --exercise INVOCATION_GUID \
 
 The operator authenticates only to the native host. The host uses its original
 managed identity for all source/model/telemetry/state access, never operator
-credentials. Authenticated `POST /exercise` admits a separately scoped native
-execution before HTTP 202; subsequent `POST /execution` requests observe the
+credentials. Authenticated `POST /exercise` admits an indexed dry-run decision
+before HTTP 202; subsequent `POST /execution` requests observe the
 original bounded worker. The shared actual conveyor gathers current evidence,
 synthesizes, grounds, embeds, deliberates and runs all three native jury
 families. The original reviewed preview remains immutable.
@@ -592,12 +596,11 @@ at admission, after conditional admission, before worker execution and before
 model dispatch. Already-issued effects may drain or remain unknown; cancellation
 does not undo them.
 
-The result explicitly says `NativeNonpublishingExercise`, never active/live
-filing. Even unanimous GO is only retained evaluation here. Ordinary
-`run`, `sweep`, schedules, HTTP intake, resume and outcome paths remain
-closed by shared inactive onboarding admission, including supplied live-filing
-booleans. Final promotion still requires the separately reviewed create-once
-publication capability and an explicit new promotion approval.
+The result explicitly says `NativeNonpublishingExercise`, never proof of
+activation or live filing. Even unanimous GO is only retained evaluation here.
+Historical prepromotion exercise documents remain read-only and cannot become
+publication evidence. Ordinary work remains closed until separate final
+promotion; legacy outcome/relabeling paths remain closed afterward.
 
 All locators and complete selection/invocation inputs are mandatory when
 redirected or using `--json`; no prompts or inferred approval.
@@ -714,13 +717,116 @@ The current inventory hash and original explicit owner review are retained.
 No issue PATCH, comment, closure, assignment, milestone/project change, outcome
 relabel or delivery-trigger label is available.
 
-Final promotion and the stable live-problem producer/all-entry routing are not
-yet exposed in this release. Therefore `/publish` rejects the existing
-approval-only factory, rather than treating native rollout as activation.
-Automatic discovery/retention of publication-linked live execution also remains
-to be wired. The native module and guarded route are installed, but no onboarding
-completion or first confirmed filing is claimed until those remaining gates and
-actual orchestration are completed.
+### Explicit final activation
+
+The earlier approval and both native rollout receipts remain immutable and
+insufficient to activate. With current complete readiness, review a **new**
+final-promotion operation:
+
+```bash
+dsf onboard decide activate --promote --operation FINAL_OPERATION_GUID \
+  --owner-appconfig-endpoint https://OWNER.azconfig.io \
+  --product PRODUCT --tenant TENANT_GUID --subscription SUBSCRIPTION_GUID --json
+```
+
+Repeat the exact command with `--approve FINGERPRINT` from its review. Redirected
+input and `--json` never prompt or imply approval. The operator must have the
+original governance authority; neither a runtime identity nor a model can
+approve. A complete GO, SPLIT or NO-GO preview may authorize activation; it is
+not itself an issue-creation decision.
+
+Promotion rechecks the original preview, retained analysis/charter, native
+models and telemetry, App permissions, mutation-specific automation review,
+both pinned hosts and effective grants. The installed live host must expose
+the actual promoted-worker protocol. Older images without that protocol cannot
+be promoted from a receipt or user-supplied boolean.
+
+After protected intent is persisted, authenticated COUNCIL and original AUTH
+create bounded native discovery indices and the logical-problem index using
+their reviewed managed identities. Original native creation bodies and
+incarnations are retained. A conditional Pending→Active transition and an
+exact protected completion receipt finish promotion. Every transition rechecks
+current authority; stale review, concurrent pause, missing closeout, uncertain
+creation or changed native identity fail closed. Partial index creation is not
+adopted or replayed. This is **not** an atomic transaction across App
+Configuration, Cosmos and GitHub.
+
+Read current and historical state:
+
+```bash
+dsf onboard decide activate --status \
+  --owner-appconfig-endpoint https://OWNER.azconfig.io \
+  --product PRODUCT --tenant TENANT_GUID --subscription SUBSCRIPTION_GUID --json
+```
+
+`isActivated` requires current readiness and final promotion. Historical
+completion and the first original confirmed issue receipt remain separate
+facts. A transient dependency failure or deliberate pause blocks current work
+without converting old approval into current activation or erasing confirmed
+history. Unknown first-filing evidence is reported as unknown, not success.
+
+### Run the activated factory
+
+Use the original operator identity with product governance read access and the
+reviewed live-host audience. The client never receives an issue token or App
+signing key. Native model and telemetry settings remain behind the deployed
+capabilities, rather than becoming client-side credentials.
+
+Supply a signal JSON file with a caller-chosen nonempty `invocation_id`, for
+example `{"invocation_id":"GUID","product_hints":["PRODUCT"],"source_kinds":["azuremonitor"]}`.
+Reuse that invocation for inspection/resumption of the same request; changing
+its dry-run mode is incompatible. Invocation identity is **not** publication
+identity.
+
+```bash
+export DSF_PRODUCT=PRODUCT
+export AZURE_APPCONFIG_ENDPOINT=https://PRODUCT.azconfig.io
+export DSF_FACTORY_PROFILE_PIN=REVIEWED_PROFILE_PIN
+dsf run --signal signal.json --dry-run
+# A separate explicit invocation may request actual proposal publication:
+dsf run --signal live-signal.json
+dsf sweep
+dsf serve-orchestrator --loop --interval 300
+```
+
+Manual, sweep and periodic work use the same current protected admission and
+native worker. The generic orchestrator's `POST /run` requires the caller's
+Bearer token for the pinned live-host audience, forwards it unchanged for
+native authentication, and never lends its server identity based on supplied
+platform headers. It remains dry-run and returns HTTP 202 for admitted work.
+Native `/decide` accepts only
+an invocation and dry-run mode; `/decision` inspects that exact invocation.
+Admission uses bounded 180-second HTTP hops; long council work runs in the
+durable 5,400-second worker, outside the 240-second ingress window. A client
+timeout does not roll back remote work or authorize a replacement invocation.
+
+The worker retains source analysis through CODE's native interlock **before**
+capturing live references, then runs the full shared synthesis, semantic
+grounding, embedding, lenses and three-family jury. SPLIT, NO-GO and failures
+remain inspectable without creating issues. Only a released, current unanimous
+GO decision reaches AUTH's IDs-only publisher.
+
+Problem identity is conditionally retained in a fixed factory/repository
+scope; subsequent invocations of the same problem converge on one publication
+journal and original issue receipt. Native discovery records the intended
+decision or publication before creation and acknowledges its original Cosmos
+identity afterward. No unindexed admission is allowed. Each index is bounded
+at 256 entries; exhaustion blocks new work rather than granting query, delete,
+purge or untracked-storage permissions.
+
+`audit` automatically point-reads these original indices, retained decisions,
+runs, problem identity, publication witnesses and journals. Its reader needs
+the existing reviewed read permissions on those native containers, not query
+or delete authority. Missing records, unacknowledged admissions and uncertain
+effects make closure unknown and prevent a complete export claim. Search
+results, shared App authorship, labels and copied body markers are never
+ownership or reconciliation evidence.
+
+Before promotion, audit also requires the pinned live host's actual
+indexed-only writer protocol. An older or unreachable writer cannot prove
+complete discovery of arbitrary historical exercises. Closure stays unknown;
+known historical invocation inspection does not authorize publication or a
+complete export. Existing image receipts are never rewritten to imply support.
 
 ## Deliberately pause council admission
 

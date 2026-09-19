@@ -189,10 +189,11 @@ try
     Require(liveIncomplete.ExitCode == 1 && liveIncomplete.Output.Contains("\"state\": \"Blocked\"", StringComparison.Ordinal),
         "Installed live rollout accepted incomplete redirected input.");
     var activationHelp = await Run("onboard", "decide", "activate", "--help");
-    Require(activationHelp.ExitCode == 0 && new[] { "--operation", "--approve", "--status", "--owner-appconfig-endpoint" }
+    Require(activationHelp.ExitCode == 0 && new[] { "--operation", "--approve", "--status", "--promote", "--owner-appconfig-endpoint" }
         .All(option => activationHelp.Output.Contains(option, StringComparison.Ordinal)), "Installed operator activation review grammar is incomplete.");
     foreach (var action in new[] { Array.Empty<string>(), new[] { "--status" },
-        new[] { "--operation", Guid.Empty.ToString() }, new[] { "--approve", "true" } })
+        new[] { "--operation", Guid.Empty.ToString() }, new[] { "--approve", "true" },
+        new[] { "--promote" }, new[] { "--promote", "--operation", Guid.NewGuid().ToString() } })
     {
         var incompleteActivation = await Run(["onboard", "decide", "activate", .. action, "--json"]);
         Require(incompleteActivation.ExitCode == 1 && incompleteActivation.Output.Contains("\"state\": \"Blocked\"", StringComparison.Ordinal)

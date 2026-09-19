@@ -47,9 +47,24 @@ public static class FactoryPublication
     public static IReadOnlyDictionary<string, string> GitHubPermissions { get; } =
         new System.Collections.ObjectModel.ReadOnlyDictionary<string, string>(new Dictionary<string, string>
         { ["metadata"] = "read", ["contents"] = "read", ["issues"] = "write", ["actions"] = "read", ["repository_hooks"] = "read" });
-    public static string Id(FactoryPublicationIntent intent) => "proposal-" + FactoryModelsValidation.Hash(
-        new { intent.FactoryId, intent.RepositoryId, intent.LogicalIntent });
+    public static string Id(FactoryPublicationIntent intent) => Id(intent.FactoryId, intent.RepositoryId, intent.LogicalIntent);
+    public static string Id(Guid factoryId, long repositoryId, string logicalIntent) => "proposal-" + FactoryModelsValidation.Hash(
+        new { FactoryId = factoryId, RepositoryId = repositoryId, LogicalIntent = logicalIntent });
     public static string OriginId(FactoryPublicationIntent intent) => Id(intent) + "-origin";
+
+    public static void RequireOrigin(FactoryPublicationDocument document, string json, AuditRecordIdentity identity)
+    {
+        var value = System.Text.Json.Nodes.JsonNode.Parse(json, documentOptions: new() { AllowDuplicateProperties = false })!.AsObject();
+        foreach (var key in new[] { "_rid", "_etag", "_self", "_attachments", "_ts" }) value.Remove(key);
+        var original = System.Text.Json.JsonSerializer.Deserialize<FactoryPublicationOrigin>(value.ToJsonString(),
+            FactorySourceValidation.RecordJson) ?? throw new System.Text.Json.JsonException();
+        var intent = document.Intent;
+        if (original.Protocol != 1 || original.Id != OriginId(intent) || original.Product != intent.Product || original.FactoryId != intent.FactoryId
+            || original.RepositoryId != intent.RepositoryId || original.LogicalIntent != intent.LogicalIntent
+            || original.IntentSha256 != FactoryModelsValidation.Hash(intent) || original.CreatedAt != document.IntendedAt
+            || document.Origin != identity)
+            throw new System.Text.Json.JsonException("Original native publication witness changed.");
+    }
 
     public static FactoryPublicationDocument ReadDocument(string json, DateTimeOffset now)
     {

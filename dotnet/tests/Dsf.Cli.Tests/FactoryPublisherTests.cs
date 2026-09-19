@@ -154,6 +154,7 @@ public sealed class FactoryPublisherTests(PublisherFixture fixture) : IClassFixt
 
     internal static void ConfigureInitialApp(BoundaryPlanFixture fixture)
     {
+        fixture.Repository.SetWorkflow("on: push\njobs:\n  ci:\n    steps:\n      - run: dotnet test\n");
         foreach (var path in new[] { "/app", "/app/installations/42" })
         {
             var response = fixture.Repository.AppResponses[path];
@@ -173,6 +174,7 @@ public sealed class PublisherFixture : IAsyncLifetime
     private string product = "";
     private Dictionary<string, JsonNode> resources = [];
     private Dictionary<string, JsonNode[]> operations = [];
+    private Dictionary<string, string> nativeDocuments = [];
     public async Task InitializeAsync()
     {
         transport = await FactoryActivationTests.ReadyAsync(publisher: true);
@@ -190,14 +192,21 @@ public sealed class PublisherFixture : IAsyncLifetime
         var native = await transport.Scenario.Machine.InvokeAsync("live", "--selection", selection.ToJsonString(),
             "--approve", (string)live.Result["approvalFingerprint"]!);
         Assert.True(native.Exit == 0, native.Terminal.Output);
+        CaptureCurrent();
+    }
+    internal void CaptureCurrent()
+    {
         product = transport.Scenario.Arm.Product.Export();
         resources = transport.Resources.ToDictionary(p => p.Key, p => p.Value.DeepClone());
         operations = transport.DeploymentOperations.ToDictionary(p => p.Key, p => p.Value.Select(v => v.DeepClone()).ToArray());
+        nativeDocuments = transport.SeedDocuments.ToDictionary();
     }
     internal PreviewPreparationTransport Reset()
     {
-        transport.Scenario.Arm.Product = ReservationTestStore.Restore(product);
         transport.Restart();
+        transport.Scenario.Arm.Product = ReservationTestStore.Restore(product);
+        transport.SeedDocuments.Clear();
+        foreach (var pair in nativeDocuments) transport.SeedDocuments.Add(pair.Key, pair.Value);
         transport.Resources.Clear();
         foreach (var pair in resources) transport.Resources.Add(pair.Key, pair.Value.DeepClone());
         transport.DeploymentOperations.Clear();
@@ -206,10 +215,13 @@ public sealed class PublisherFixture : IAsyncLifetime
         transport.HostFailures.Clear();
         transport.NativeFailure = null;
         transport.AfterNativeWrite = null;
+        transport.BeforeIngressRequest = null;
+        transport.SeedFailure = null;
         transport.PublisherTokenRequests.Clear();
         transport.PublisherKeyPrincipals.Clear();
         transport.PublisherPermissionDrift = false;
         transport.PublisherWorkflowEvent = null;
+        transport.ResetPublications();
         FactoryActivationTests.ConnectAudit(transport);
         return transport;
     }

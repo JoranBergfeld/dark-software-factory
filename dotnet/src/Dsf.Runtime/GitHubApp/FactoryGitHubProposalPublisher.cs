@@ -7,14 +7,19 @@ namespace Dsf.Runtime.GitHubApp;
 internal sealed class FactoryGitHubProposalPublisher(TokenCredential credential, HttpClient http, TimeProvider clock)
 {
     internal async Task<FactoryPublicationResult> CreateAsync(FactoryPublicationIntent intent, FactoryGitHubAuthority authority,
-        CancellationToken token, Func<CancellationToken, Task>? requireAdmission = null)
+        CancellationToken token, Func<CancellationToken, Task>? requireAdmission = null, FactoryActivityStore? discovery = null)
     {
         FactoryPublication.Validate(intent);
         if (intent.FactoryId != authority.FactoryId || intent.RepositoryId != authority.RepositoryId)
             throw new InvalidOperationException("Exact factory and durable repository required.");
         if (requireAdmission is not null) await requireAdmission(token);
+        if (discovery is not null)
+            await discovery.RegisterAsync(FactoryPublication.Id(intent), FactoryModelsValidation.Hash(intent),
+                requireAdmission ?? throw new InvalidOperationException("Indexed publication requires protected current admission."), token, intendedPublication: intent);
         var journal = new FactoryPublicationJournal(intent, credential, http, clock);
         var original = await journal.OpenAsync(token);
+        if (discovery is not null)
+            await discovery.ConfirmAsync(original.Id, journal.NativeIdentity!.NativeResourceId!, token);
         if (original.State == FactoryPublicationState.Confirmed) return Result(original.State);
         if (original.State is FactoryPublicationState.Dispatched or FactoryPublicationState.Unknown)
             return Result(FactoryPublicationState.Unknown, "Original issued request unconfirmed; no second create.");

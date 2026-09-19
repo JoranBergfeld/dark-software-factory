@@ -8,6 +8,8 @@ namespace Dsf.Runtime;
 public sealed record PreviewExecutionResult(PreviewExecutionPhase State, PreviewInputSnapshot Inputs,
     ConveyorRun Run, PreviewRunReceipt Receipt, IReadOnlyList<PreviewModelDispatch> Dispatches)
 {
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<FactoryPublicationResult>? Publications { get; init; }
     public PreviewReadiness Readiness { get; init; }
     public PreviewReadinessProof? Proof { get; init; }
     public string? Reason { get; init; }
@@ -79,7 +81,7 @@ internal static partial class RuntimeWorkflow
             };
             await store.SaveAsync(run, "evaluation:initialized", token);
         }
-        var services = PreviewServices(inputs, run, acquired.Models, store);
+        var services = PreviewServices(inputs, run, acquired.Models, store, live?.Decision?.Problems(), live?.Decision?.ProblemScope);
         await ConveyorLine.RunAsync(run, services, token);
         await store.SaveAsync(run, "evaluation:complete", token);
         await store.FinishAsync(run, token);
@@ -170,7 +172,8 @@ internal static partial class RuntimeWorkflow
                 ? PreviewReadiness.Unknown : store.Document.Phase == PreviewExecutionPhase.Failed ? PreviewReadiness.Failed : PreviewReadiness.NotReady
         };
 
-    private static ConveyorServices PreviewServices(PreviewInputSnapshot inputs, ConveyorRun run, IFactoryPreviewModelWorkloads models, IRunStore store)
+    private static ConveyorServices PreviewServices(PreviewInputSnapshot inputs, ConveyorRun run, IFactoryPreviewModelWorkloads models, IRunStore store,
+        IProblemIdentityResolver? problems = null, string? problemScope = null)
     {
         var context = new PreviewConveyorContext(inputs, run, models);
         var lenses = inputs.Context.Judgment.Lenses.Select(l => l.Name switch
@@ -186,7 +189,7 @@ internal static partial class RuntimeWorkflow
             run.SourceKinds.Select(kind => (IEvidenceGatherer)new CapturedPreviewEvidence(kind, inputs)).ToArray(),
             null, store, context, context, context, DeliberationLenses: lenses, ProductMaturity: "low",
             DeliberationRounds: inputs.Context.Judgment.Rounds, JuryTimeout: TimeSpan.FromSeconds(FactoryPreviewExecution.Policy.JurorSeconds),
-            ProblemIdentityResolver: context, EvaluationModels: models);
+            ProblemIdentityResolver: problems ?? context, EvaluationModels: models, ProblemIdentityScope: problemScope);
     }
 
     private static void ValidateCapturedInputs(PreviewInputSnapshot captured, PreviewInputSnapshot current, DateTimeOffset now)

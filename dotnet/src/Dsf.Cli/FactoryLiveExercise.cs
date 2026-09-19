@@ -45,7 +45,8 @@ internal sealed partial class FactoryPreviewPreparationService
                 {
                     var proof = observed.Evaluation?.GetProperty("proof").Deserialize<PreviewReadinessProof>(FactorySourceValidation.RecordJson)
                         ?? throw new JsonException();
-                    if (proof.PreviewId != "live-" + FactoryModelsValidation.Hash(new { identity.FactoryId, input.OperationId })
+                    if (proof.PreviewId != FactoryPromotion.DecisionId(identity.FactoryId, input.OperationId)
+                        && (!readOnly || proof.PreviewId != "live-" + FactoryModelsValidation.Hash(new { identity.FactoryId, input.OperationId }))
                         || proof.Candidates.Count == 0 || proof.FactoryId != identity.FactoryId) throw new JsonException();
                 }
                 if (observed.Readiness is not (PreviewReadiness.Queued or PreviewReadiness.Running or PreviewReadiness.Checking)

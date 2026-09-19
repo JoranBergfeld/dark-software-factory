@@ -16,6 +16,11 @@ internal sealed partial class PreviewPreparationTransport
     internal List<JsonNode> PublisherTokenRequests { get; } = [];
     internal List<string> PublisherKeyPrincipals { get; } = [];
     internal const string PublisherToken = "native-test-publisher-token-must-not-leave-auth";
+    internal List<JsonNode> PublishedIssues { get; } = [];
+    internal string? PublicationFailure { get; set; }
+    internal int IssuePosts { get; private set; }
+    internal Func<CancellationToken, Task>? BeforeIssueResponse { get; set; }
+    internal void ResetPublications() { IssuePosts = 0; PublishedIssues.Clear(); PublicationFailure = null; BeforeIssueResponse = null; }
 
     private async Task<HttpResponseMessage?> PublisherGitHubAsync(HttpRequestMessage request, CancellationToken token)
     {
@@ -75,6 +80,38 @@ internal sealed partial class PreviewPreparationTransport
             return minted;
         }
         Assert.Equal(PublisherToken, request.Headers.Authorization?.Parameter);
+        if (path == "/repos/acme/renamed/issues" && request.Method == HttpMethod.Post)
+        {
+            IssuePosts++;
+            var payload = JsonNode.Parse(await request.Content!.ReadAsStringAsync(token))!;
+            Assert.Equal(new[] { "body", "labels", "title" }, payload.AsObject().Select(p => p.Key).Order());
+            Assert.Equal(new[] { "dsf:proposal" }, payload["labels"]!.AsArray().Select(l => (string)l!));
+            if (PublicationFailure == "rejected")
+            {
+                var rejected = new HttpResponseMessage(HttpStatusCode.UnprocessableEntity) { Content = new StringContent("{}") };
+                rejected.Headers.Add("X-GitHub-Request-Id", "native-rejection");
+                return rejected;
+            }
+            var number = 71 + PublishedIssues.Count;
+            var issue = JsonSerializer.SerializeToNode(new
+            {
+                id = 97000 + number, node_id = "I_NATIVE_" + number, number,
+                title = (string)payload["title"]!, body = (string)payload["body"]!,
+                state = "open", assignees = Array.Empty<object>(), milestone = (object?)null,
+                labels = new[] { new { name = "dsf:proposal" } }, created_at = scenario.Source.Source!.Clock.Now,
+                url = "https://api.github.com/repos/acme/renamed/issues/" + number,
+                html_url = "https://github.com/acme/renamed/issues/" + number,
+                repository_url = "https://api.github.com/repos/acme/renamed"
+            })!;
+            PublishedIssues.Add(issue.DeepClone());
+            if (BeforeIssueResponse is not null) await BeforeIssueResponse(token);
+            if (PublicationFailure == "lost") throw new HttpRequestException("Lost native create response.");
+            if (PublicationFailure == "canceled") throw new OperationCanceledException(token);
+            var created = Reply(issue);
+            created.StatusCode = HttpStatusCode.Created;
+            created.Headers.Add("X-GitHub-Request-Id", "native-create-" + number);
+            return created;
+        }
         Assert.Equal(HttpMethod.Get, request.Method);
         if (path == "/installation/repositories") return Reply(new { total_count = 1, repositories = new[] { new { id = 913 } } });
         if (path == "/repositories/913") return Reply(new { id = 913, owner = new { id = 81 }, full_name = "acme/renamed",

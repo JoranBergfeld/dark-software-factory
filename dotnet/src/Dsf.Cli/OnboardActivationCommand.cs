@@ -9,16 +9,17 @@ public static partial class CliApplication
     private static Command BuildActivationCommand(ICliTerminal terminal, RepositoryAttachmentReviewer? reviewer,
         IAzureCliRunner? azure, HttpClient? http, TimeProvider? clock)
     {
-        var command = new Command("activate", "review or retain exact operator activation approval; inactive runtime promotion remains blocked");
+        var command = new Command("activate", "review operator approval or explicitly promote an exactly reviewed, currently ready native factory");
         var endpoint = StringOption("--owner-appconfig-endpoint", "trusted owner endpoint");
         var product = StringOption("--product", "reserved product");
         var tenant = StringOption("--tenant", "reserved tenant");
         var subscription = StringOption("--subscription", "reserved subscription");
         var operation = StringOption("--operation", "caller-chosen nonempty activation approval identifier");
         var approve = StringOption("--approve", "exact review fingerprint; never inferred or a live-filing switch");
+        var promote = BoolOption("--promote", "explicit final activation after separately reviewed native live and publication capabilities");
         var status = BoolOption("--status", "read retained approval and current readiness without writes");
         var json = BoolOption("--json", "structured nonsecret approval state; never prompt");
-        AddOptions(command, endpoint, product, tenant, subscription, operation, approve, status, json);
+        AddOptions(command, endpoint, product, tenant, subscription, operation, approve, promote, status, json);
         command.SetAction(async (parse, token) =>
         {
             FactoryActivationResult result;
@@ -42,8 +43,13 @@ public static partial class CliApplication
                 var transport = http ?? PreviewPreparationHttp;
                 var admission = await new FactoryReservationService(reviews, runner, transport, time)
                     .StatusAsync(owner, tenantId, subscriptionId, name, pending.Token);
-                result = await new FactoryActivationService(reviews, runner, transport, time)
-                    .ExecuteAsync(admission, id, approval, pending.Token);
+                var final = parse.GetValue(promote);
+                if (inspect && admission.Identity is { } factory && admission.Foundation?.ProductEndpoint is { } productEndpoint)
+                    final = (await new OwnerReservationStore(productEndpoint, factory.TenantId, factory.SubscriptionId,
+                        runner, transport, factory.AzureActorId).ReadNamespaceAsync(FactoryPromotion.Prefix, pending.Token)).Count != 0;
+                result = final
+                    ? await new FactoryPromotionService(runner, transport, time).ExecuteAsync(admission, id, approval, pending.Token)
+                    : await new FactoryActivationService(reviews, runner, transport, time).ExecuteAsync(admission, id, approval, pending.Token);
             }
             catch (ArgumentException) { result = new(FactoryActivationState.Blocked, "Exact locators and --operation required; --status is read-only and mutually exclusive with review/approval. No provider writes."); }
             catch (OperationCanceledException) { result = new(FactoryActivationState.Canceled, "Canceled before approval admission; inspect original operation."); }
@@ -51,7 +57,7 @@ public static partial class CliApplication
                 or KeyNotFoundException or HttpRequestException or IOException or OwnerReservationStore.AuthenticationFailedException)
             { result = new(FactoryActivationState.Unknown, "Protected owner/operator authority unavailable; no activation or approval fallback."); }
             terminal.WriteLine(JsonSerializer.Serialize(result, ReviewJson));
-            return result.State == FactoryActivationState.Reviewed || parse.GetValue(status) && result.State == FactoryActivationState.ApprovalOnly
+            return result.State is FactoryActivationState.Reviewed or FactoryActivationState.Activated || parse.GetValue(status) && result.State == FactoryActivationState.ApprovalOnly
                 ? Success : result.State == FactoryActivationState.Canceled ? CanceledExitCode : Failure;
 
             string Input(Option<string> option)

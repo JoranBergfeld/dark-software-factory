@@ -185,7 +185,8 @@ internal sealed class FactoryPublisherAuthority(FactoryHostSettings settings, bo
         return body.RootElement.Clone();
     }
     private static string Revision(IReadOnlyDictionary<string, ConfigurationSetting> records) => FactoryModelsValidation.Hash(
-        records.OrderBy(p => p.Key, StringComparer.Ordinal).Select(p => new { p.Key, p.Value.Value, ETag = p.Value.ETag.ToString(), p.Value.ContentType }));
+        records.Where(p => FactoryPromotion.IsLiveAuthorityKey(p.Key)).OrderBy(p => p.Key, StringComparer.Ordinal)
+            .Select(p => new { p.Key, p.Value.Value, ETag = p.Value.ETag.ToString(), p.Value.ContentType }));
     private static bool Same(string? first, string? second) => string.Equals(first, second, StringComparison.OrdinalIgnoreCase);
     private static PreviewCapabilityException Denied(string reason) => new(FactoryCharterState.Blocked, reason);
 }

@@ -65,38 +65,43 @@ internal sealed partial class FactoryAuditService
             if (current.Identity != preview.Identity) throw new JsonException("Native preview changed during audit.");
 
             async Task<FactoryAuditRecord> NativeAsync(string container, string id, AuditStoreKind kind)
-            {
-                var path = $"dbs/{Uri.EscapeDataString(identity.ProductKey)}/colls/{container}/docs/{Uri.EscapeDataString(id)}";
-                var endpoint = "https://" + FactoryPreviewValidation.Prefix(identity.FactoryId) + "-cosmos.documents.azure.com/";
-                var credential = new OwnerReservationStore.OperatorCredential(azure, identity.TenantId, identity.SubscriptionId,
-                    identity.AzureActorId, "https://cosmos.azure.com");
-                var access = await credential.GetTokenAsync(new TokenRequestContext(["https://cosmos.azure.com/.default"]), token);
-                using var request = new HttpRequestMessage(HttpMethod.Get, endpoint + path);
-                request.Headers.TryAddWithoutValidation("Authorization", Uri.EscapeDataString("type=aad&ver=1.0&sig=" + access.Token));
-                request.Headers.TryAddWithoutValidation("x-ms-version", "2018-12-31");
-                request.Headers.TryAddWithoutValidation("x-ms-date", clock.GetUtcNow().ToString("r"));
-                request.Headers.TryAddWithoutValidation("x-ms-documentdb-partitionkey", JsonSerializer.Serialize(new[] { identity.ProductKey }));
-                using var response = await (http ?? NativeHttp).SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token);
-                if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
-                    throw new FactoryAuditException(FactoryAuditState.Blocked, "Operator Cosmos point-read permission required on retained preview/runs containers; runtime permissions are unchanged.");
-                if (response.StatusCode != HttpStatusCode.OK) throw new JsonException("Required native evidence unavailable.");
-                await response.Content.LoadIntoBufferAsync(2 * 1024 * 1024, token);
-                var json = await response.Content.ReadAsStringAsync(token);
-                using var parsed = JsonDocument.Parse(json, new JsonDocumentOptions { AllowDuplicateProperties = false });
-                var native = parsed.RootElement;
-                var etag = native.GetProperty("_etag").GetString();
-                if (etag is not { Length: >= 3 and <= 256 } || etag[0] != '"' || etag[^1] != '"'
-                    || !response.Headers.TryGetValues("ETag", out var values) || !values.SequenceEqual([etag])
-                    || native.GetProperty("id").GetString() != id || native.GetProperty("product").GetString() != identity.ProductKey)
-                    throw new JsonException();
-                var rid = NativeCosmosResourceId.RequireDocument(native.GetProperty("_rid").GetString());
-                return new(new(identity.FactoryId, kind, path, etag, FactoryAudit.TextHash(json)) { NativeResourceId = rid },
-                    kind == AuditStoreKind.Preview ? native.GetProperty("createdAt").GetDateTimeOffset() : identity.CreatedAt,
-                    json, [], AuditRetentionStatus.Protected);
-            }
+                => await ReadNativeAsync(admission, container, id, kind, token);
         }
         if (governance.ContainsKey(FactoryPreviewPublication.RootKey)
             && !governance.Keys.Any(k => k.StartsWith("dsf/factory/preview-execution-configuration/", StringComparison.Ordinal)))
             throw new FactoryAuditException(FactoryAuditState.Partial, "Preview seed/publication has not reached a protected native execution binding; no complete closure receipt.");
+    }
+
+    private async Task<FactoryAuditRecord> ReadNativeAsync(FactoryReservationResult admission, string container, string id,
+        AuditStoreKind kind, CancellationToken token)
+    {
+        var identity = admission.Identity!;
+        var path = $"dbs/{Uri.EscapeDataString(identity.ProductKey)}/colls/{container}/docs/{Uri.EscapeDataString(id)}";
+        var endpoint = "https://" + FactoryPreviewValidation.Prefix(identity.FactoryId) + "-cosmos.documents.azure.com/";
+        var credential = new OwnerReservationStore.OperatorCredential(azure, identity.TenantId, identity.SubscriptionId,
+            identity.AzureActorId, "https://cosmos.azure.com");
+        var access = await credential.GetTokenAsync(new TokenRequestContext(["https://cosmos.azure.com/.default"]), token);
+        using var request = new HttpRequestMessage(HttpMethod.Get, endpoint + path);
+        request.Headers.TryAddWithoutValidation("Authorization", Uri.EscapeDataString("type=aad&ver=1.0&sig=" + access.Token));
+        request.Headers.TryAddWithoutValidation("x-ms-version", "2018-12-31");
+        request.Headers.TryAddWithoutValidation("x-ms-date", clock.GetUtcNow().ToString("r"));
+        request.Headers.TryAddWithoutValidation("x-ms-documentdb-partitionkey", JsonSerializer.Serialize(new[] { identity.ProductKey }));
+        using var response = await (http ?? NativeHttp).SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token);
+        if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+            throw new FactoryAuditException(FactoryAuditState.Blocked, "Operator Cosmos point-read permission required on retained native containers; runtime permissions are unchanged.");
+        if (response.StatusCode != HttpStatusCode.OK) throw new JsonException("Required native evidence unavailable.");
+        await response.Content.LoadIntoBufferAsync(2 * 1024 * 1024, token);
+        var json = await response.Content.ReadAsStringAsync(token);
+        using var parsed = JsonDocument.Parse(json, new JsonDocumentOptions { AllowDuplicateProperties = false });
+        var native = parsed.RootElement;
+        var etag = native.GetProperty("_etag").GetString();
+        if (etag is not { Length: >= 3 and <= 256 } || etag[0] != '"' || etag[^1] != '"'
+            || !response.Headers.TryGetValues("ETag", out var values) || !values.SequenceEqual([etag])
+            || native.GetProperty("id").GetString() != id || native.GetProperty("product").GetString() != identity.ProductKey)
+            throw new JsonException();
+        var rid = NativeCosmosResourceId.RequireDocument(native.GetProperty("_rid").GetString());
+        return new(new(identity.FactoryId, kind, path, etag, FactoryAudit.TextHash(json)) { NativeResourceId = rid },
+            native.TryGetProperty("createdAt", out var created) ? created.GetDateTimeOffset() : identity.CreatedAt,
+            json, [], AuditRetentionStatus.Protected);
     }
 }

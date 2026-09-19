@@ -41,31 +41,18 @@ public sealed class FactoryLiveTests(ActivationAuthorityFixture fixture) : IClas
         var originalDocuments = transport.SeedDocuments.ToDictionary();
         using var http = new HttpClient(transport, false) { Timeout = Timeout.InfiniteTimeSpan };
         using var accepted = await http.PostAsJsonAsync(live.Endpoint + "/exercise", invocation, FactoryGitHubJson.Options);
-        Assert.True(accepted.StatusCode == HttpStatusCode.Accepted, await accepted.Content.ReadAsStringAsync());
-        JsonNode? evaluation = null;
-        for (var i = 0; i < 1000; i++)
-        {
-            using var observed = await http.PostAsJsonAsync(live.Endpoint + "/execution", invocation, FactoryGitHubJson.Options);
-            evaluation = JsonNode.Parse(await observed.Content.ReadAsStringAsync())!;
-            if (observed.StatusCode == HttpStatusCode.OK) break;
-            Assert.Equal(HttpStatusCode.Accepted, observed.StatusCode);
-            await Task.Delay(100);
-        }
-        Assert.True(evaluation?["evaluation"] is not null, evaluation?.ToJsonString());
-        Assert.Equal("ReadyAwaitingActivation", (string?)evaluation!["readiness"]);
-        Assert.False((bool)evaluation["isActivated"]!);
-        Assert.False((bool)evaluation["publicationPermitted"]!);
-        Assert.Equal(16, transport.EvaluationInference.Count - fixture.ModelCalls);
-        foreach (var pair in originalDocuments) Assert.Equal(pair.Value, transport.SeedDocuments[pair.Key]);
-        Assert.Equal(2, transport.SeedDocuments.Count - originalDocuments.Count);
+        Assert.Equal(HttpStatusCode.Forbidden, accepted.StatusCode);
+        Assert.Contains("ReviewedNativePublicationCapabilityRequired", await accepted.Content.ReadAsStringAsync());
+        Assert.Equal(fixture.ModelCalls, transport.EvaluationInference.Count);
+        Assert.Equal(originalDocuments, transport.SeedDocuments);
         var execution = await transport.Scenario.Machine.InvokeAsync("live", "--execution", invocation.OperationId.ToString(),
             "--approve", live.Plan.Fingerprint);
-        Assert.True(execution.Exit == 0, execution.Terminal.Output);
+        Assert.Equal(1, execution.Exit);
         Assert.Equal("NativeNonpublishingExercise", (string?)execution.Result["mode"]);
         Assert.False((bool)execution.Result["publicationPermitted"]!);
         var completedDocuments = transport.SeedDocuments.ToDictionary();
         using var duplicate = await http.PostAsJsonAsync(live.Endpoint + "/exercise", invocation, FactoryGitHubJson.Options);
-        Assert.Equal(HttpStatusCode.OK, duplicate.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, duplicate.StatusCode);
         Assert.Equal(completedDocuments, transport.SeedDocuments);
         using var incompatible = await http.PostAsJsonAsync(live.Endpoint + "/exercise",
             invocation with { RolloutFingerprint = new string('a', 64) }, FactoryGitHubJson.Options);
@@ -91,7 +78,7 @@ public sealed class FactoryLiveTests(ActivationAuthorityFixture fixture) : IClas
         Assert.Equal("PreparedAwaitingPublication", (string?)status.Result["state"]);
         Assert.Equal(saved, transport.Scenario.Arm.Product.Export());
         Assert.Equal(writes, transport.NativeWrites.Count);
-        Assert.Equal(fixture.ModelCalls + 16, transport.EvaluationInference.Count);
+        Assert.Equal(fixture.ModelCalls, transport.EvaluationInference.Count);
         var approval = await transport.Scenario.Machine.InvokeAsync("activate", "--status");
         Assert.True((bool)approval.Result["approvalCurrent"]!);
         Assert.False((bool)approval.Result["isActivated"]!);
@@ -127,35 +114,14 @@ public sealed class FactoryLiveTests(ActivationAuthorityFixture fixture) : IClas
         using var drift = await http.PostAsJsonAsync(live.Endpoint + "/execution", invocation, FactoryGitHubJson.Options);
         Assert.Equal(HttpStatusCode.Forbidden, drift.StatusCode);
         transport.Resources[hostTarget] = retainedHost;
-        var stoppedAtModel = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        transport.BeforeEvaluationResponse = async (_, _) =>
-        {
-            transport.BeforeEvaluationResponse = null;
-            var pause = await transport.Scenario.Machine.InvokeAsync("pause", "--request", "--operation", Guid.NewGuid().ToString());
-            Assert.Equal("DrainingUnknown", (string?)pause.Result["state"]);
-            stoppedAtModel.SetResult();
-        };
-        var draining = invocation with { OperationId = Guid.NewGuid() };
-        using var admitted = await http.PostAsJsonAsync(live.Endpoint + "/exercise", draining, FactoryGitHubJson.Options);
-        Assert.True(admitted.StatusCode == HttpStatusCode.Accepted, await admitted.Content.ReadAsStringAsync());
-        await stoppedAtModel.Task.WaitAsync(TimeSpan.FromMinutes(3));
-        var journalId = "live-" + FactoryModelsValidation.Hash(new { transport.Manifest.Identity.FactoryId, draining.OperationId });
-        var journalKey = "/dbs/widget/colls/council-preview/docs/" + journalId;
-        JsonNode? held = null;
-        for (var i = 0; i < 2000; i++)
-        {
-            held = JsonNode.Parse(transport.SeedDocuments[journalKey]);
-            if ((string?)held?["admission"]?["state"] == "Unknown") break;
-            await Task.Delay(100);
-        }
-        Assert.Equal("Unknown", (string?)held!["admission"]!["state"]);
-        Assert.Contains(held["dispatches"]!.AsArray(), d => (string?)d!["state"] == "Unknown");
+        var pause = await transport.Scenario.Machine.InvokeAsync("pause", "--request", "--operation", Guid.NewGuid().ToString());
+        Assert.Equal("DrainingUnknown", (string?)pause.Result["state"]);
         using var stopped = await http.PostAsJsonAsync(live.Endpoint + "/exercise",
             invocation with { OperationId = Guid.NewGuid() }, FactoryGitHubJson.Options);
         Assert.Equal(HttpStatusCode.Forbidden, stopped.StatusCode);
         foreach (var pair in completedDocuments) Assert.Equal(pair.Value, transport.SeedDocuments[pair.Key]);
-        Assert.Equal(completedDocuments.Count + 2, transport.SeedDocuments.Count);
-        Assert.Equal(fixture.ModelCalls + 17, transport.EvaluationInference.Count);
+        Assert.Equal(completedDocuments.Count, transport.SeedDocuments.Count);
+        Assert.Equal(fixture.ModelCalls, transport.EvaluationInference.Count);
     }
 
     [Theory]

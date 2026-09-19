@@ -91,6 +91,7 @@ public sealed class FactoryActivationTests
     [InlineData("empty-operation")]
     [InlineData("invalid-approval")]
     [InlineData("conflicting")]
+    [InlineData("promotion-missing-operation")]
     public async Task Redirected_activation_requires_complete_explicit_input_before_access(string invalid)
     {
         var terminal = new ScriptedTerminal(new(false, true, true), []);
@@ -99,6 +100,7 @@ public sealed class FactoryActivationTests
             "empty-operation" => ["--operation", Guid.Empty.ToString()],
             "invalid-approval" => ["--operation", Guid.NewGuid().ToString(), "--approve", "yes"],
             "conflicting" => ["--status", "--approve", new string('a', 64)],
+            "promotion-missing-operation" => ["--promote"],
             _ => [],
         };
         var exit = await CliApplication.InvokeAsync(["onboard", "decide", "activate", "--json",

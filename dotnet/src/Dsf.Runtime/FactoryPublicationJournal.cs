@@ -43,11 +43,7 @@ internal sealed class FactoryPublicationJournal(FactoryPublicationIntent intent,
                     Serialize(initial), null, token);
             }
             Accept(stored);
-            var original = Payload(origin!.Json).Deserialize<FactoryPublicationOrigin>(FactorySourceValidation.RecordJson) ?? throw new JsonException();
-            if (original.Protocol != 1 || original.Id != originId || original.Product != intent.Product || original.FactoryId != intent.FactoryId
-                || original.RepositoryId != intent.RepositoryId || original.LogicalIntent != intent.LogicalIntent
-                || original.IntentSha256 != FactoryModelsValidation.Hash(Document.Intent) || original.CreatedAt != Document.IntendedAt
-                || Document.Origin != Identity(origin, originId)) throw new JsonException("Original native publication witness changed.");
+            FactoryPublication.RequireOrigin(Document, origin!.Json, Identity(origin, originId));
             if (Document.State is FactoryPublicationState.Intended or FactoryPublicationState.Rejected or FactoryPublicationState.NotDispatched
                 && FactoryModelsValidation.Hash(Document.Intent) != FactoryModelsValidation.Hash(intent))
                 throw new InvalidOperationException("Original logical intent differs; no replacement or dispatch.");
@@ -133,13 +129,6 @@ internal sealed class FactoryPublicationJournal(FactoryPublicationIntent intent,
         return new(intent.FactoryId, AuditStoreKind.Publication,
             $"dbs/{intent.Product}/colls/{FactoryPublication.Container}/docs/{documentId}", value.ETag, FactoryAudit.TextHash(value.Json))
             { NativeResourceId = NativeCosmosResourceId.RequireDocument(body.RootElement.GetProperty("_rid").GetString()) };
-    }
-
-    private static JsonObject Payload(string json)
-    {
-        var value = JsonNode.Parse(json, documentOptions: new() { AllowDuplicateProperties = false })!.AsObject();
-        foreach (var property in AzureCosmosDocumentGateway.SystemProperties) value.Remove(property);
-        return value;
     }
 
     private static bool ValidRequestId(string value) => value.Length is > 0 and <= 256 && !value.Any(char.IsControl);

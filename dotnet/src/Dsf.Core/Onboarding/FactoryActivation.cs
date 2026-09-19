@@ -3,7 +3,7 @@ using Dsf.Core.Runtime;
 
 namespace Dsf.Core.Onboarding;
 
-public enum FactoryActivationState { Reviewed, ApprovalOnly, Partial, Blocked, Failed, Canceled, Unknown }
+public enum FactoryActivationState { Reviewed, ApprovalOnly, Activated, Partial, Blocked, Failed, Canceled, Unknown }
 public enum FactoryActivationPhase { Intended, ApprovalOnly, Rejected }
 public sealed record FactoryActivationReview(int Protocol, Guid OperationId, Guid FactoryId, long RepositoryId,
     string AuthorityRevision, string ManifestRevision, string ManifestSha256, string ProfilePin,
@@ -24,16 +24,19 @@ public sealed record FactoryActivationOperation(int Protocol, Guid FactoryId, Gu
 public sealed record FactoryActivationResult(FactoryActivationState State, string Detail)
 {
     public FactoryActivationReview? Review { get; init; }
-    public string? ApprovalFingerprint => Review?.Fingerprint;
+    public FactoryPromotionApproval? PromotionReview { get; init; }
+    public FactoryPromotionApproval? Promotion { get; init; }
+    public string? ApprovalFingerprint => PromotionReview?.ReviewFingerprint ?? Review?.Fingerprint;
     public FactoryActivationApproval? Approval { get; init; }
     public bool ApprovalRetained => Approval is not null;
     public bool ApprovalCurrent { get; init; }
     public bool CurrentReady { get; init; }
     public JsonElement? Evaluation { get; init; }
-    public bool IsActivated => false;
-    public bool HistoricallyCompleted => false;
-    public bool FirstConfirmedFiling => false;
-    public string PromotionBlockedBy => "Live onboarding workflow and create-once proposal publication capability are not installed in this inactive profile.";
+    public bool IsActivated { get; init; }
+    public bool HistoricallyCompleted { get; init; }
+    public bool FirstConfirmedFiling { get; init; }
+    public string FirstFilingState { get; init; } = "None";
+    public string? PromotionBlockedBy => IsActivated ? null : "Live promotion requires exact explicit final review and current native readiness; prior approval alone is insufficient.";
 }
 public sealed class FactoryActivationException(FactoryActivationState state, string detail) : Exception(detail)
 {

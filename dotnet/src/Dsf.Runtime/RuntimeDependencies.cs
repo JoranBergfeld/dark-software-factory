@@ -89,7 +89,7 @@ public sealed record RuntimeDependencies(
     public ISweepControlStore SweepControlStoreFor(RuntimeSettings settings)
     {
         ArgumentNullException.ThrowIfNull(settings);
-        return (SweepControlStoreFactory ?? (s => new AzureAppConfigurationSweepControlStore(s)))(settings);
+        return (SweepControlStoreFactory ?? (s => new AzureAppConfigurationSweepControlStore(ConfigurationSettingsGateway, s)))(settings);
     }
 
     /// <summary>Resolves the product-wide lease shared by manual and periodic sweeps.</summary>
