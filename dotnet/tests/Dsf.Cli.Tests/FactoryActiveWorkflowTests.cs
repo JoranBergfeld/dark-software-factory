@@ -534,10 +534,13 @@ public sealed class FactoryActiveWorkflowTests(ActivatedFactoryFixture fixture) 
         Assert.Equal("Unknown", (string?)missing.Result["firstFilingState"]);
     }
 
-    [Fact]
-    public async Task Runtime_manual_sweep_and_serialized_dry_run_resume_use_native_promoted_workflow_not_legacy_composition()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Runtime_manual_sweep_and_serialized_dry_run_resume_use_native_promoted_workflow_not_legacy_composition(bool changedSource)
     {
         var transport = fixture.Reset();
+        if (changedSource) FactoryEvidenceRefreshTests.AdvanceDefaultBranch(transport);
         using var http = new HttpClient(transport, false) { Timeout = Timeout.InfiniteTimeSpan };
         var dependencies = transport.DecisionDependencies(http);
         var settings = new RuntimeSettings("widget", $"https://dsfo-{transport.Manifest.Identity.FactoryId:N}.azconfig.io",
@@ -567,10 +570,12 @@ public sealed class FactoryActiveWorkflowTests(ActivatedFactoryFixture fixture) 
         var changed = signal with { DryRun = false };
         await Assert.ThrowsAsync<RuntimeVerbException>(() => RuntimeVerbs.RunSignalAsync(settings, changed, dependencies, CancellationToken.None, env));
         Assert.Equal(0, transport.IssuePosts);
+        if (changedSource) FactoryEvidenceRefreshTests.AdvanceDefaultBranch(transport, commit: 'f');
         var sweep = await fixture.AdvanceUntilCompletedAsync(transport, RuntimeVerbs.SweepAsync(settings, false, dependencies, CancellationToken.None, env));
         Assert.Equal(RunStatus.Filed, sweep!.Status);
         Assert.Single(sweep.FiledIssues);
         Assert.Equal(1, transport.IssuePosts);
+        Assert.Equal(changedSource ? 12 : 0, transport.SourceInferenceInputs.Count);
         await transport.Scenario.Machine.InvokeAsync("pause", "--request", "--operation", Guid.NewGuid().ToString());
         var requests = transport.Requests.Count;
         await Assert.ThrowsAsync<RuntimeVerbException>(() => RuntimeVerbs.RunSignalAsync(settings, signal, dependencies, CancellationToken.None, env));
@@ -673,10 +678,13 @@ public sealed class FactoryActiveWorkflowTests(ActivatedFactoryFixture fixture) 
         Assert.Equal(1, transport.IssuePosts);
     }
 
-    [Fact]
-    public async Task Existing_periodic_orchestrator_uses_promoted_native_worker_without_legacy_lease_or_filer()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Existing_periodic_orchestrator_uses_promoted_native_worker_without_legacy_lease_or_filer(bool changedSource)
     {
         var transport = fixture.Reset();
+        if (changedSource) FactoryEvidenceRefreshTests.AdvanceDefaultBranch(transport);
         using var http = new HttpClient(transport, false) { Timeout = Timeout.InfiniteTimeSpan };
         var dependencies = transport.DecisionDependencies(http);
         var settings = new RuntimeSettings("widget", $"https://dsfo-{transport.Manifest.Identity.FactoryId:N}.azconfig.io",
@@ -697,6 +705,7 @@ public sealed class FactoryActiveWorkflowTests(ActivatedFactoryFixture fixture) 
             Assert.Equal(HttpStatusCode.OK, (await probe.GetAsync(host.Urls.Single() + "/healthz")).StatusCode);
             await issued.Task.WaitAsync(TimeSpan.FromMinutes(5));
             Assert.Equal(1, transport.IssuePosts);
+            Assert.Equal(changedSource ? 6 : 0, transport.SourceInferenceInputs.Count);
             var confirmed = false;
             for (var i = 0; i < 300; i++)
             {
@@ -714,10 +723,13 @@ public sealed class FactoryActiveWorkflowTests(ActivatedFactoryFixture fixture) 
         finally { await host.StopAsync(); }
     }
 
-    [Fact]
-    public async Task Generic_HTTP_requires_forwarded_native_caller_token_not_forged_platform_headers_or_server_identity()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Generic_HTTP_requires_forwarded_native_caller_token_not_forged_platform_headers_or_server_identity(bool changedSource)
     {
         var transport = fixture.Reset();
+        if (changedSource) FactoryEvidenceRefreshTests.AdvanceDefaultBranch(transport);
         using var native = new HttpClient(transport, false) { Timeout = Timeout.InfiniteTimeSpan };
         var dependencies = transport.DecisionDependencies(native);
         var settings = new RuntimeSettings("widget", $"https://dsfo-{transport.Manifest.Identity.FactoryId:N}.azconfig.io",
@@ -750,6 +762,13 @@ public sealed class FactoryActiveWorkflowTests(ActivatedFactoryFixture fixture) 
             var completed = await fixture.DecideAsync(transport, request);
             Assert.Equal("ReadyAwaitingActivation", (string?)completed["readiness"]);
             Assert.Equal(0, transport.IssuePosts);
+            Assert.Equal(changedSource ? 6 : 0, transport.SourceInferenceInputs.Count);
+            await transport.Scenario.Machine.InvokeAsync("pause", "--request", "--operation", Guid.NewGuid().ToString());
+            var calls = transport.EvaluationInference.Count;
+            using var paused = await client.PostAsJsonAsync(host.Urls.Single() + "/run",
+                new { invocation_id = Guid.NewGuid(), product_hints = new[] { "widget" } });
+            Assert.Equal(HttpStatusCode.Forbidden, paused.StatusCode);
+            Assert.Equal(calls, transport.EvaluationInference.Count);
         }
         finally { await host.StopAsync(); }
     }
@@ -809,8 +828,9 @@ public sealed class FactoryActiveWorkflowTests(ActivatedFactoryFixture fixture) 
     }
 }
 
-public sealed class ActivatedFactoryFixture : IAsyncLifetime
+public class ActivatedFactoryFixture : IAsyncLifetime
 {
+    protected virtual bool SelectedSources => false;
     private readonly PublisherFixture publisher = new();
     private DateTimeOffset snapshotAt;
     private Dictionary<string, (string Value, int Revision)> sourceProgress = [];
@@ -820,7 +840,7 @@ public sealed class ActivatedFactoryFixture : IAsyncLifetime
     private string sourceBranch = "";
     public async Task InitializeAsync()
     {
-        await publisher.InitializeAsync(TimeSpan.FromHours(24) - TimeSpan.FromMinutes(5));
+        await publisher.InitializeAsync(TimeSpan.FromHours(24) - TimeSpan.FromMinutes(5), SelectedSources);
         var transport = publisher.Reset();
         var machine = transport.Scenario.Machine;
         var selection = FactoryPublisherTests.Selection().ToJsonString();

@@ -242,6 +242,6 @@ public static partial class RuntimeVerbs
             || result.Adoption.Original.Review.RepositoryId != capability.Manifest.Identity.RepositoryId
             || result.Current.Source.Snapshot.RepositoryId != capability.Manifest.Identity.RepositoryId)
             throw new PreviewCapabilityException(FactoryCharterState.Blocked, "ApprovedPreviewAdoptionChanged");
-        FactoryCharterAdoptionReader.RequireCurrent(result.Adoption.Adoption, result.Current, capability.Manifest.Identity.ProductKey);
+        FactorySourceRefreshValidation.RequireCurrent(result, capability.Manifest.Identity.ProductKey);
     }
 }

@@ -14,6 +14,7 @@ internal class SourceAcquisitionException(SourceState state, string reason) : Ex
 
 internal sealed class FactorySourceAccess(FactoryHostSettings settings, TokenCredential credential, HttpClient http, TimeProvider clock)
 {
+    internal FactoryHostSettings Settings => settings;
     internal FactoryManifest Manifest { get; private set; } = null!;
     internal FactoryGitHubAuthority GitHub { get; private set; } = null!;
     internal FactorySource Source { get; private set; } = null!;

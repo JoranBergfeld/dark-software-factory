@@ -176,9 +176,9 @@ public sealed class PublisherFixture : IAsyncLifetime
     private Dictionary<string, JsonNode[]> operations = [];
     private Dictionary<string, string> nativeDocuments = [];
     public Task InitializeAsync() => InitializeAsync(null);
-    internal async Task InitializeAsync(TimeSpan? applicationRecordAge)
+    internal async Task InitializeAsync(TimeSpan? applicationRecordAge, bool selectedSources = false)
     {
-        transport = await FactoryActivationTests.ReadyAsync(publisher: true, applicationRecordAge: applicationRecordAge);
+        transport = await FactoryActivationTests.ReadyAsync(publisher: true, applicationRecordAge: applicationRecordAge, selectedSources: selectedSources);
         var github = JsonNode.Parse(transport.Values()[ProductConfigurationKeys.FactoryGitHubAuthority])!;
         Assert.Equal("read", (string?)github["expectedAppPermissions"]!["repository_hooks"]);
         var operation = Guid.NewGuid().ToString();

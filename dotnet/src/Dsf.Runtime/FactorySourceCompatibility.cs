@@ -7,9 +7,7 @@ internal static class FactorySourceCompatibility
 {
     private static readonly JsonSerializerOptions PromptJson = new(FactoryGitHubJson.Options) { IgnoreReadOnlyProperties = false };
     internal static string[] Targets(IntentResult current, IntentResult original) =>
-        new[] { "Purpose", "Users", "Goals", "NonGoals", "SuccessMeasures" }
-            .Concat(current.Claims.Select(c => "current:" + c.Index))
-            .Concat(original.Claims.Select(c => "approved:" + c.Index)).ToArray();
+        FactorySourceRefreshValidation.Targets(current, original);
 
     internal static string Prompt(RetainedCharterAdoption governing, IntentResult current,
         SourceChunkReference chunk, string content, IReadOnlyList<SourceChunkReference> dependencies) =>

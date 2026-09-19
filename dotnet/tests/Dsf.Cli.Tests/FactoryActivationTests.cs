@@ -114,9 +114,9 @@ public sealed class FactoryActivationTests
     }
 
     internal static async Task<PreviewPreparationTransport> ReadyAsync(string votes = "GO,GO,GO", bool publisher = false,
-        TimeSpan? applicationRecordAge = null)
+        TimeSpan? applicationRecordAge = null, bool selectedSources = false)
     {
-        var transport = await PreviewEvaluationTests.ConfiguredAsync(publisher: publisher);
+        var transport = await PreviewEvaluationTests.ConfiguredAsync(web: selectedSources, foundry: selectedSources, publisher: publisher);
         if (applicationRecordAge is not null)
             transport.AlterApplication = body =>
             {

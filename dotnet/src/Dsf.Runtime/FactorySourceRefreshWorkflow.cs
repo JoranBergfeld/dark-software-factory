@@ -6,7 +6,7 @@ using Dsf.Core.Onboarding;
 namespace Dsf.Runtime;
 
 /// <summary>CODE-owned descriptive work. Only the authenticated promoted council admits advances; reads never advance.</summary>
-internal sealed class FactorySourceRefreshWorkflow(FactoryHostSettings settings, FactorySourceAccess source,
+internal sealed partial class FactorySourceRefreshWorkflow(FactoryHostSettings settings, FactorySourceAccess source,
     HttpClient http, TimeProvider clock)
 {
     private readonly SourceProgressStore store = new(source, http, "intent");
@@ -49,7 +49,7 @@ internal sealed class FactorySourceRefreshWorkflow(FactoryHostSettings settings,
             if (analysis.Revision == adoption.Adoption.AnalysisRevision)
                 return Observation(SourceRefreshState.Current, "OriginalSourceOrExactlyReconciledCharterOnlyMerge");
             if (root is not null && progress.State == SourceRefreshState.Compatible)
-                return Observation(SourceRefreshState.Compatible, "CompatibleSourceRefreshAwaitingQualification");
+                return Observation(SourceRefreshState.Compatible, "CompleteSourceCompatibleWithUnchangedAdoption");
         }
         catch (SourceAcquisitionException e) when (e.Message.StartsWith("MaterialSourceChanged;", StringComparison.Ordinal)) { }
         return Observation(SourceRefreshState.Pending, "CompleteCurrentSourceRefreshRequired");
@@ -181,7 +181,7 @@ internal sealed class FactorySourceRefreshWorkflow(FactoryHostSettings settings,
             else if (progress.CheckedChunks == progress.Chunks)
                 progress = progress.AddressedTargets.Order().SequenceEqual(targets.Order())
                     ? progress with { State = SourceRefreshState.Compatible, Phase = SourceRefreshPhase.Complete,
-                        Reason = "CompatibleSourceRefreshAwaitingQualification" }
+                        Reason = "CompleteSourceCompatibleWithUnchangedAdoption" }
                     : progress with { State = SourceRefreshState.ReviewRequired, Reason = "NecessaryGoverningImpactRemainsUnresolved" };
             await github.CheckExactSnapshotAsync(binding.Snapshot, token);
             return await FinishAsync(request, token);

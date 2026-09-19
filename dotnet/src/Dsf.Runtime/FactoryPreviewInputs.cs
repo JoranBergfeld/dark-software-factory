@@ -214,5 +214,7 @@ internal static partial class RuntimeWorkflow
     }
     private static IReadOnlyDictionary<string, string> SupplementalRevisions(PreviewSupplementalEvidence evidence) =>
         evidence.Sources.ToDictionary(s => s.Evidence.Proof.Kind, s => FactoryModelsValidation.Hash(new {
-            s.Authority, s.NativeRevisions, s.Evidence.Proof.NativeSourceRevision }));
+            Authority = s.Authority with { Request = s.Authority.Request with {
+                Preview = s.Authority.Request.Preview with { RequestId = Guid.Empty } } },
+            s.NativeRevisions, s.Evidence.Proof.NativeSourceRevision }));
 }

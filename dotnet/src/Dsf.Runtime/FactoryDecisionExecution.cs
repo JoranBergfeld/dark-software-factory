@@ -77,7 +77,7 @@ internal sealed class FactoryDecisionExecution
             throw new PreviewCapabilityException(FactoryCharterState.Unknown, "OriginalSourceRefreshRootMissingDespiteNativeReferences");
         if (refresh.State == SourceRefreshState.Pending)
             await RuntimeWorkflow.RequireSourceRefreshDependenciesAsync(settings, dependencies, current.Request, current.Preview, http, token);
-        else if (refresh.State == SourceRefreshState.Current)
+        else if (refresh.State is SourceRefreshState.Current or SourceRefreshState.Compatible)
             current = await authority.CheckAsync(request, true, token, modelEvaluationAdmission: true);
         else throw new PreviewCapabilityException(refresh.State == SourceRefreshState.Unknown ? FactoryCharterState.Unknown
             : refresh.State == SourceRefreshState.Partial ? FactoryCharterState.Partial : FactoryCharterState.Blocked, refresh.Reason);

@@ -35,7 +35,12 @@ internal static partial class RuntimeWorkflow
         if (current is null || current.Revision != retained.Revision || current.OperationRevision != retained.OperationRevision
             || FactoryModelsValidation.Hash(current.Adoption) != FactoryModelsValidation.Hash(retained.Adoption))
             throw new CharterAdoptionEvidenceException("Adoption changed during final native verification.");
-        return new(FactoryCharterState.Adopted, "Current source-side adopted intent only; not council readiness or activation.", retained, evidence);
+        var result = new SourceCharterContextResult(FactoryCharterState.Adopted,
+            "Current source-side adopted intent only; not council readiness or activation.", retained, evidence);
+        if (analysis.Progress!.Revision != retained.Adoption.AnalysisRevision)
+            result = result with { Refresh = await new FactorySourceRefreshWorkflow(source.Settings, source, http, clock).QualifyAsync(result, token) };
+        FactorySourceRefreshValidation.RequireCurrent(result, source.Manifest.Identity.ProductKey);
+        return result;
     }
 
     internal static Task<SupplementalEvidence> ObserveSupplementalAsync(IFactorySupplementalEvidenceSource source,

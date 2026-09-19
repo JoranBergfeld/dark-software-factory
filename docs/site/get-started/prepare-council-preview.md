@@ -854,7 +854,7 @@ process restart or forced retry.
 | `ReviewRequired` | Material conflict, necessary unread content, unbounded semantic impact or a changed charter/snapshot requires deliberate review. |
 | `KnownNoModelDispatch` | The original process confirmed failure before the model POST; a new invocation may continue only after fresh dependency checks. |
 | `Unknown` | Original issued CODE/model outcome remains unconfirmed; retain its native identity, never replay. |
-| `CompatibleSourceRefreshAwaitingQualification` | Complete descriptive compatibility retained, **but live publication remains blocked** by the current original-revision qualification gate. |
+| `CompleteSourceCompatibleWithUnchangedAdoption` | Complete descriptive compatibility retained; the worker must still qualify current inputs and finish the real council evaluation before publication. |
 
 Current GitHub access, model authority, application telemetry, every selected
 source and protected stop/configuration state are checked before work, not
@@ -867,8 +867,30 @@ surviving native work references prevent recreating an erased refresh namespace.
 Temporary raw source is disposed rather than archived.
 
 This is descriptive refresh, not runtime approval: manifest, adoption, approval
-and original preview are never rewritten. Compatible-revision publication
-qualification is not yet enabled; no CLI flag bypasses that remaining gate.
+and original preview are never rewritten. CODE rereads the complete immutable
+compatibility chain, original model/dependency receipts, retained analysis and
+current protected authority before issuing a compact native qualification.
+The captured council inputs retain that qualification and its exact checkpoint
+and receipt references. Missing or changed proof blocks current readiness and
+new work even when an older report was complete.
+
+Completed promotion may use that qualification to reconcile its historical
+approved preview with current descriptive source; initial promotion remains
+strict. Its old supplemental observations are also historical: ordinary new
+content may be evaluated automatically, but query, backend, disclosure, access
+and selection configuration remain pinned. Captured live inputs and
+prepublication checks still require the exact same current qualified revision
+and supplemental content. The worker exercises synthesis, embedding and
+all three jury families against fresh telemetry and every selected source.
+Only the actual released unanimous-GO decision can publish an unassigned
+`dsf:proposal`; changed commits or analysis revisions do not change the stable
+logical issue identity. A completed refresh alone is not current council
+readiness or permission to publish. No CLI flag bypasses these gates.
+Council prompts carry every final grounded claim, original chunk reference,
+excluded path, limitation and explicit unknown, rather than repeating every
+intermediate inference receipt. The complete original chain remains captured
+and validated before each model call; this projection is never an acquisition
+or coverage shortcut. Oversized complete findings still fail the model budget.
 An older CODE context host without `complete-source-refresh-v1` is an explicit
 upgrade/review blocker, not an assumed protocol or automatic image replacement.
 

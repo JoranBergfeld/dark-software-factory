@@ -10,10 +10,13 @@ namespace Dsf.Cli.Tests;
 
 public sealed class FactoryPublicationReconciliationTests(ActivatedFactoryFixture fixture, Xunit.Abstractions.ITestOutputHelper output) : IClassFixture<ActivatedFactoryFixture>
 {
-    [Fact]
-    public async Task Large_unicode_original_issue_retries_through_operator_context_and_AUTH_wire_envelopes()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Large_unicode_original_issue_retries_through_operator_context_and_AUTH_wire_envelopes(bool changedSource)
     {
         var transport = fixture.Reset();
+        if (changedSource) FactoryEvidenceRefreshTests.AdvanceDefaultBranch(transport);
         transport.PublicationFailure = "rejected";
         transport.AlterCompletion = (prompt, answer) =>
         {
@@ -27,6 +30,7 @@ public sealed class FactoryPublicationReconciliationTests(ActivatedFactoryFixtur
         transport.AfterHostResponse = (route, body) => wires.Enqueue((route, System.Text.Encoding.UTF8.GetByteCount(body)));
         var invocation = Guid.NewGuid();
         var decision = await fixture.DecideAsync(transport, new(invocation));
+        Assert.Equal(changedSource ? 6 : 0, transport.SourceInferenceInputs.Count);
         Assert.True(decision["evaluation"]?["publications"]?[0] is not null, decision.ToJsonString());
         var original = decision["evaluation"]!["publications"]![0]!["journal"]!;
         Assert.Equal("Rejected", (string?)original["state"]);

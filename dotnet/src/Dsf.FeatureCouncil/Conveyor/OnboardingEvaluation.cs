@@ -59,10 +59,24 @@ internal static partial class OnboardingEvaluation
     {
         Context(run).Adoption,
         AdoptedCharter = Context(run).Intent.Source.Content,
-        CompleteAnalysis = Context(run).Intent.Analysis,
+        CompleteAnalysis = AnalysisPackage(Context(run).Intent.Analysis),
         Context(run).Application,
         EvidenceProvenance = Context(run).Evidence,
     }, Json);
+
+    private static object AnalysisPackage(IntentResult analysis) => new
+    {
+        Projection = "verified-complete-final-intent-v1",
+        analysis.Progress,
+        analysis.Acquisition,
+        analysis.Draft,
+        analysis.Claims,
+        analysis.ExcludedPaths,
+        analysis.Limitations,
+        analysis.Governs,
+        analysis.DeployedSourceCorrelation,
+        OriginalChunks = analysis.Chunks.SelectMany(c => c.Dependencies).Distinct().ToArray(),
+    };
 
     internal static async Task<ModelTextResult> CompleteAsync(
         ConveyorRun run, ConveyorServices services, string step, string prompt, CancellationToken token,

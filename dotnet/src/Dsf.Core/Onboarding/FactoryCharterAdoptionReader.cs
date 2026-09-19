@@ -18,7 +18,11 @@ public sealed record RetainedCharterAdoption(
     CharterAdoption Adoption, CharterPublicationPayload Original, string Revision, string OperationRevision);
 
 public sealed record SourceCharterContextResult(
-    FactoryCharterState State, string Detail, RetainedCharterAdoption? Adoption, CharterEvidence? Current);
+    FactoryCharterState State, string Detail, RetainedCharterAdoption? Adoption, CharterEvidence? Current)
+{
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public SourceRefreshQualification? Refresh { get; init; }
+}
 
 public sealed class CharterAdoptionEvidenceException(string detail, CharterAdoption? historical = null) : Exception(detail)
 {

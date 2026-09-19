@@ -180,6 +180,7 @@ internal sealed class FactoryPreviewWorker(FactoryHostSettings settings, Runtime
             var receipt = await store.AdvanceSourceAsync(work.Admission!, binding,
                 (request, cancellation) => FactorySourceRefreshClient.AdvanceAsync(work.Authority, request, workload, http, dependencies.PreviewClock, cancellation), token);
             if (receipt.State == SourceRefreshState.Pending) continue;
+            if (receipt.State == SourceRefreshState.Compatible) return;
             throw new PreviewCapabilityException(receipt.State switch
             {
                 SourceRefreshState.Unknown => FactoryCharterState.Unknown, SourceRefreshState.Partial => FactoryCharterState.Partial,

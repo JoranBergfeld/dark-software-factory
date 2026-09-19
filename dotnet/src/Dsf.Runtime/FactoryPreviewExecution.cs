@@ -153,7 +153,8 @@ internal static partial class RuntimeWorkflow
                 current.Snapshot.Request.RequestId, current.Snapshot.Telemetry.Capture, now);
             foreach (var selected in current.Snapshot.Supplemental.Sources)
                 FactoryPreviewSupplementalValidation.ValidateEvidence(selected.Authority, selected.Evidence, now);
-            if (promotion is not null && !modelEvaluationAdmission && authority.Models!.Proof!.ExpiresAt <= now)
+            if (promotion is not null && !modelEvaluationAdmission
+                && (authority.Models!.Proof!.ExpiresAt <= now || current.Snapshot.Source.Context.Refresh is not null))
                 await RequireCurrentPromotedModelEvidenceAsync(settings, dependencies, promotion, current, credential, http, token);
             else if (live is not null)
                 RequireRecentModelEvaluation(store.Document, authority.Models!, now);
@@ -165,9 +166,9 @@ internal static partial class RuntimeWorkflow
             {
                 // Completed promotion pins historical proof, not an endless freshness lease on its old rows.
                 // Acquisition and final capture validation still require genuinely fresh current evidence.
-                ValidateCapturedInputs(report.Inputs, current.Snapshot, promotion is null ? now : proof.CompletedAt);
+                ValidateCapturedInputs(report.Inputs, current.Snapshot, promotion is null ? now : proof.CompletedAt, promotion is not null);
                 if (promotion is not null)
-                    ValidateCapturedInputs(store.Document.FinalInputs ?? throw new System.Text.Json.JsonException(), current.Snapshot, proof.CompletedAt);
+                    ValidateCapturedInputs(store.Document.FinalInputs ?? throw new System.Text.Json.JsonException(), current.Snapshot, proof.CompletedAt, true);
             }
         }
         catch (PreviewCapabilityException exception)
@@ -221,13 +222,15 @@ internal static partial class RuntimeWorkflow
             ProblemIdentityResolver: problems ?? context, EvaluationModels: models, ProblemIdentityScope: problemScope);
     }
 
-    private static void ValidateCapturedInputs(PreviewInputSnapshot captured, PreviewInputSnapshot current, DateTimeOffset now)
+    private static void ValidateCapturedInputs(PreviewInputSnapshot captured, PreviewInputSnapshot current, DateTimeOffset now,
+        bool promotedHistory = false)
     {
         if (captured.Revision != captured.CalculateRevision() || captured.CapabilityRevision != current.CapabilityRevision
             || SourceRevision(captured.Source) != SourceRevision(current.Source)
+                && !(promotedHistory && FactorySourceRefreshValidation.IsCompatibleSuccessor(captured.Source.Context, current.Source.Context))
             || captured.Telemetry.SourceAuthorityRevision != current.Telemetry.SourceAuthorityRevision
             || !SupplementalRevisions(captured.Supplemental).OrderBy(p => p.Key).SequenceEqual(SupplementalRevisions(current.Supplemental).OrderBy(p => p.Key))
-            || FactoryModelsValidation.Hash(captured.Supplemental.Sources.Select(s => s.Evidence.Items))
+            || !promotedHistory && FactoryModelsValidation.Hash(captured.Supplemental.Sources.Select(s => s.Evidence.Items))
                 != FactoryModelsValidation.Hash(current.Supplemental.Sources.Select(s => s.Evidence.Items)))
             throw new PreviewCapabilityException(FactoryCharterState.Blocked, "CapturedPreviewInputsChanged");
         foreach (var row in captured.Telemetry.Capture.Rows)

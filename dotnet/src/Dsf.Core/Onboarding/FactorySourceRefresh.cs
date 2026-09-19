@@ -41,6 +41,8 @@ public sealed record SourceRefreshReceipt(Guid RequestId, string RequestSha256, 
     string Reason, AuditRecordIdentity Progress);
 public sealed record SourceRefreshDispatch(SourceRefreshRequest Request, PreviewModelDispatchState State,
     SourceRefreshReceipt? Receipt);
+public sealed record SourceRefreshQualification(int Protocol, SourceRefreshProgress Progress,
+    AuditRecordIdentity Checkpoint, AuditRecordIdentity Receipt);
 
 public static class FactorySourceRefresh
 {

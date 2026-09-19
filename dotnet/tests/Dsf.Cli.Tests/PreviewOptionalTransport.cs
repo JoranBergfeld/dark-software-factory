@@ -14,25 +14,38 @@ internal sealed partial class PreviewPreparationTransport
     private SupplementalWorkflowTransport? supplemental;
     private HttpMessageInvoker? supplementalNative;
     internal int WebQueries;
+    internal int FoundryQueries;
     internal string WebPayload = """{"webResults":[]}""";
+    internal string FoundryPayload = """{"response":[],"activity":[{"id":1,"type":"searchIndex","knowledgeSourceName":"product-docs","count":0}],"references":[]}""";
     private DateTimeOffset? webSecretCreated;
     private IEnumerable<JsonNode> HostedResources => Resources.Values.Concat(supplemental?.Resources.Values ?? Enumerable.Empty<JsonNode>());
 
-    internal Task SelectWebAsync() => SelectSupplementalAsync(false);
-    internal Task SelectFoundryAsync() => SelectSupplementalAsync(true);
+    internal Task SelectWebAsync() => SelectSupplementalAsync(false, true);
+    internal Task SelectFoundryAsync() => SelectSupplementalAsync(true, false);
+    internal Task SelectBothAsync() => SelectSupplementalAsync(true, true);
 
-    private async Task SelectSupplementalAsync(bool foundry)
+    private async Task SelectSupplementalAsync(bool foundry, bool web)
     {
         supplemental = new(scenario.Arm);
         supplementalNative = new(supplemental, false);
         supplemental.HostedProof = (request, token) => PreviewHostAsync(request, token);
         var selection = FactorySupplementalWorkflowTests.Selection();
-        if (foundry) selection["sources"] = new JsonArray(FactorySupplementalWorkflowTests.FoundrySelection());
+        if (!web) selection["sources"] = new JsonArray();
+        if (foundry) selection["sources"]!.AsArray().Add(FactorySupplementalWorkflowTests.FoundrySelection());
         var selected = await FactorySupplementalWorkflowTests.PrepareSelectionAsync(scenario.Machine, selection);
         Assert.True(selected.Exit == 0, (string?)selected.Result["detail"] + "\n" + string.Join("\n", HostFailures)
             + "\n" + string.Join("\n", Requests.TakeLast(10)));
-        Selection["supplemental"] = new JsonArray(new JsonObject { ["kind"] = foundry ? "foundryiq" : "webiq", ["runtimeImage"] = FactoryTelemetryWorkflowTests.Image,
-            ["audienceClientId"] = "ab444444-4444-4444-4444-444444444444", ["metadataRoleDefinitionId"] = foundry ? FoundryRole : WebRole });
+        var consumers = new JsonArray();
+        if (web) consumers.Add(Consumer("webiq", WebRole, "ab444444-4444-4444-4444-444444444444"));
+        if (foundry) consumers.Add(Consumer("foundryiq", FoundryRole,
+            web ? "ab555555-5555-5555-5555-555555555555" : "ab444444-4444-4444-4444-444444444444"));
+        Selection["supplemental"] = consumers;
+
+        static JsonObject Consumer(string kind, string role, string audience) => new()
+        {
+            ["kind"] = kind, ["runtimeImage"] = FactoryTelemetryWorkflowTests.Image,
+            ["audienceClientId"] = audience, ["metadataRoleDefinitionId"] = role,
+        };
     }
 
     private async Task<HttpResponseMessage?> OptionalNativeAsync(HttpRequestMessage request, CancellationToken token)
@@ -50,10 +63,11 @@ internal sealed partial class PreviewPreparationTransport
                 "/knowledgebases('product-kb')" => """{"name":"product-kb","@odata.etag":"kb-v1","outputMode":"extractiveData","knowledgeSources":[{"name":"product-docs"}]}""",
                 "/knowledgesources('product-docs')" => """{"name":"product-docs","@odata.etag":"source-v1","kind":"searchIndex","searchIndexParameters":{"searchIndexName":"product-index"}}""",
                 "/indexes" => """{"value":[{"name":"product-index","@odata.etag":"index-v1","fields":[{"name":"id","type":"Edm.String","key":true}]}]}""",
-                "/knowledgebases('product-kb')/retrieve" => """{"response":[],"activity":[{"id":1,"type":"searchIndex","knowledgeSourceName":"product-docs","count":0}],"references":[]}""",
+                "/knowledgebases('product-kb')/retrieve" => FoundryPayload,
                 _ => throw new InvalidOperationException("Unexpected selected Search request: " + uri.AbsolutePath),
             };
             Assert.Equal(uri.AbsolutePath.EndsWith("/retrieve", StringComparison.Ordinal) ? HttpMethod.Post : HttpMethod.Get, request.Method);
+            if (request.Method == HttpMethod.Post) FoundryQueries++;
             return new(HttpStatusCode.OK) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
         }
         if (uri.Host.EndsWith(".vault.azure.net", StringComparison.Ordinal))

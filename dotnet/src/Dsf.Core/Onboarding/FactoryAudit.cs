@@ -325,6 +325,18 @@ public static class FactoryAudit
                 var inputs = body.GetProperty(field).Deserialize<PreviewInputSnapshot>(FactorySourceValidation.RecordJson) ?? throw new JsonException();
                 if (inputs.Revision != inputs.CalculateRevision() || inputs.Context.FactoryId != factory
                     || inputs.Context.Intent.Analysis.Progress is not { } progress) throw new JsonException();
+                FactorySourceRefreshValidation.RequireCurrent(inputs.Source.Context, inputs.Manifest.Identity.ProductKey);
+                if (inputs.Source.Context.Refresh is { } refresh)
+                {
+                    var checkpoint = Require(refresh.Checkpoint.Store, refresh.Checkpoint.Key);
+                    var response = Require(refresh.Receipt.Store, refresh.Receipt.Key);
+                    if (preview.DecisionScope is null || checkpoint.Identity != refresh.Checkpoint || response.Identity != refresh.Receipt
+                        || FactoryModelsValidation.Hash(Parse<SourceRefreshProgress>(checkpoint)) != FactoryModelsValidation.Hash(refresh.Progress)
+                        || Parse<SourceRefreshReceipt>(response).Progress != refresh.Checkpoint)
+                        throw new JsonException("Captured original compatibility qualification differs.");
+                    Link(record, checkpoint);
+                    Link(record, response);
+                }
                 ProtectAnalysis(record, progress.Revision);
                 Link(record, Require(AuditStoreKind.Governance, ProductConfigurationKeys.CharterAdoptionReceipt(inputs.Context.Adoption.Revision, "receipt")));
             }

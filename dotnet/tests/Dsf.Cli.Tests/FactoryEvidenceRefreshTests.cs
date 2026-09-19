@@ -11,7 +11,157 @@ namespace Dsf.Cli.Tests;
 public sealed class FactoryEvidenceRefreshTests(ActivatedFactoryFixture fixture) : IClassFixture<ActivatedFactoryFixture>
 {
     [Fact]
-    public async Task Promoted_decision_automatically_refreshes_complete_source_without_changing_governing_intent_or_publishing()
+    public async Task Complete_compatible_refresh_qualifies_actual_council_and_create_once_without_reapproval()
+    {
+        var transport = fixture.Reset();
+        var governance = transport.Scenario.Arm.Product.Export();
+        var calls = transport.EvaluationInference.Count;
+        AdvanceDefaultBranch(transport);
+        var decision = await RefreshAsync(transport, new FactoryDecisionRequest(Guid.NewGuid()));
+        Assert.True((string?)decision["readiness"] == "ReadyAwaitingActivation",
+            decision.ToJsonString() + "\n" + string.Join("\n", transport.HostFailures.TakeLast(5)));
+        Assert.Equal("Confirmed", (string?)Assert.Single(decision["evaluation"]!["publications"]!.AsArray())!["state"]);
+        Assert.NotNull(decision["evaluation"]!["inputs"]!["source"]!["context"]!["refresh"]);
+        Assert.Equal(6, transport.SourceInferenceInputs.Count);
+        Assert.Equal(22, transport.EvaluationInference.Count - calls);
+        Assert.Equal(1, transport.IssuePosts);
+        Assert.Equal(governance, transport.Scenario.Arm.Product.Export());
+        FactoryActivationTests.ConnectAudit(transport);
+        var current = await transport.Scenario.Machine.InvokeAsync("activate", "--status");
+        Assert.True((bool)current.Result["currentReady"]!, current.Terminal.Output);
+        var audit = await transport.Scenario.Machine.InvokeAsync("audit");
+        Assert.True(audit.Exit == 0, audit.Terminal.Output);
+        transport.Restart();
+        FactoryActivationTests.ConnectAudit(transport);
+        AdvanceDefaultBranch(transport, commit: 'f');
+        var next = await fixture.DecideAsync(transport, new FactoryDecisionRequest(Guid.NewGuid()));
+        Assert.Equal("ReadyAwaitingActivation", (string?)next["readiness"]);
+        Assert.Equal(1, transport.IssuePosts);
+        Assert.Equal(12, transport.SourceInferenceInputs.Count);
+        Assert.Equal(44, transport.EvaluationInference.Count - calls);
+        Assert.Equal(governance, transport.Scenario.Arm.Product.Export());
+    }
+
+    [Fact]
+    public async Task Confirmed_bounded_refresh_continues_in_next_native_invocation_without_replaying_chunks()
+    {
+        var transport = fixture.Reset();
+        var synthesisInputs = new List<string>();
+        transport.AlterCompletion = (prompt, response) =>
+        {
+            if (prompt.StartsWith("PROPOSAL_SYNTHESIS", StringComparison.Ordinal)) synthesisInputs.Add(prompt);
+            return response;
+        };
+        AdvanceDefaultBranch(transport);
+        var source = transport.Scenario.Source.Source!;
+        var governing = transport.Scenario.Arm.Product.Export();
+        var entries = source.Trees[source.RootTree]["tree"]!.AsArray()
+            .Select(n => ((string)n!["path"]!, (string)n["mode"]!, (string)n["sha"]!)).ToList();
+        for (var index = 0; index < 17; index++)
+            entries.Add(($"zz-scheduling-{index:D2}.cs", "100644",
+                source.Blob(Dsf.Runtime.Tests.IntentModelFixture.SourceText + $"\nScheduling dependency {index} remains within existing product intent.\n")));
+        source.RootTree = source.Tree(entries.ToArray());
+        var first = await RefreshAsync(transport, new FactoryDecisionRequest(Guid.NewGuid()));
+        Assert.True((string?)first["readiness"] == "Partial", first.ToJsonString());
+        Assert.Contains("SourceRefreshWorkerBudgetReached", (string?)first["reason"]);
+        Assert.Equal(0, transport.IssuePosts);
+        var partial = JsonSerializer.Deserialize<SourceRefreshProgress>(
+            source.Progress[FactorySourceRefresh.CurrentKey].Value, FactorySourceValidation.RecordJson)!;
+        Assert.Null(partial.Work);
+        Assert.Null(partial.Dispatch);
+        var issued = transport.SourceInferenceInputs.ToArray();
+        transport.Restart();
+        FactoryActivationTests.ConnectAudit(transport);
+        var completed = await fixture.DecideAsync(transport, new FactoryDecisionRequest(Guid.NewGuid()));
+        Assert.True((string?)completed["readiness"] == "ReadyAwaitingActivation", completed.ToJsonString());
+        var complete = JsonSerializer.Deserialize<SourceRefreshProgress>(
+            source.Progress[FactorySourceRefresh.CurrentKey].Value, FactorySourceValidation.RecordJson)!;
+        Assert.Equal(partial.Id, complete.Id);
+        Assert.Equal(3 * complete.Chunks, transport.SourceInferenceInputs.Count);
+        Assert.Equal(issued, transport.SourceInferenceInputs.Take(issued.Length));
+        Assert.Equal(2 * complete.Chunks, completed["evaluation"]!["inputs"]!["context"]!["intent"]!["analysis"]!["chunks"]!.AsArray().Count);
+        var synthesis = Assert.Single(synthesisInputs);
+        Assert.Contains("verified-complete-final-intent-v1", synthesis);
+        Assert.Contains("Coordinate volunteer shifts without double booking.", synthesis);
+        Assert.Contains("\"deployedSourceCorrelation\":\"Unknown\"", synthesis);
+        Assert.Contains(complete.AnalysisChain!, synthesis);
+        Assert.Equal(1, transport.IssuePosts);
+        Assert.Equal(governing, transport.Scenario.Arm.Product.Export());
+    }
+
+    [Fact]
+    public async Task Qualified_refresh_never_substitutes_cache_for_current_access_charter_telemetry_models_or_configuration()
+    {
+        var transport = fixture.Reset();
+        AdvanceDefaultBranch(transport);
+        var completed = await RefreshAsync(transport, new FactoryDecisionRequest(Guid.NewGuid()));
+        Assert.Equal("ReadyAwaitingActivation", (string?)completed["readiness"]);
+        var source = transport.Scenario.Source.Source!;
+        var tree = source.RootTree;
+        var head = source.Head;
+        var governing = transport.Scenario.Arm.Product.Export();
+        var retained = source.Progress.ToDictionary();
+        var calls = transport.EvaluationInference.Count;
+        using var http = new HttpClient(transport, false) { Timeout = Timeout.InfiniteTimeSpan };
+        foreach (var failure in new[] { "revoked", "empty", "stale", "model", "charter-missing", "charter-malformed", "configuration" })
+        {
+            try
+            {
+                source.GitHubStatus = failure == "revoked" ? 403 : 200;
+                if (failure is "empty" or "stale")
+                    transport.AlterApplication = body =>
+                    {
+                        if (failure == "empty") body["tables"]![0]!["rows"] = new JsonArray();
+                        else body["tables"]![0]!["rows"]![0]![0] = source.Clock.Now.AddDays(-2).ToString("O");
+                        return body;
+                    };
+                if (failure == "model")
+                    transport.BeforeIngressRequest = uri => uri.AbsolutePath == "/authority"
+                        ? throw new HttpRequestException("test-only-current-model-authority-outage") : Task.CompletedTask;
+                if (failure.StartsWith("charter-", StringComparison.Ordinal))
+                {
+                    var entries = source.Trees[tree]["tree"]!.AsArray().Where(n => (string?)n!["path"] != ".dsf")
+                        .Select(n => ((string)n!["path"]!, (string)n["mode"]!, (string)n["sha"]!)).ToList();
+                    if (failure == "charter-malformed")
+                        entries.Add((".dsf", "040000", source.Tree(
+                            (Dsf.Core.Charters.CharterMarkdown.CharterPath.Split('/').Last(), "100644", source.Blob("Not an adopted product charter.")))));
+                    source.RootTree = source.Tree(entries.ToArray());
+                    source.Head = new string('d', 40);
+                }
+                if (failure == "configuration")
+                    transport.Scenario.Arm.Product.Change(ProductConfigurationKeys.FactoryTelemetry, value =>
+                    {
+                        var configuration = JsonNode.Parse(value)!;
+                        configuration["configuration"]!["freshnessSeconds"] = 120;
+                        return configuration.ToJsonString();
+                    });
+                var current = await transport.Scenario.Machine.InvokeAsync("activate", "--status");
+                Assert.False((bool)current.Result["currentReady"]!, failure + ": " + current.Terminal.Output);
+                using var denied = await http.PostAsJsonAsync(fixture.LiveEndpoint(transport) + "/decide",
+                    new FactoryDecisionRequest(Guid.NewGuid()), FactorySourceValidation.RecordJson);
+                Assert.True(denied.StatusCode == HttpStatusCode.Forbidden, failure + ": " + await denied.Content.ReadAsStringAsync());
+                Assert.Equal(calls, transport.EvaluationInference.Count);
+                Assert.Equal(retained, source.Progress);
+                Assert.Equal(1, transport.IssuePosts);
+            }
+            finally
+            {
+                source.GitHubStatus = 200;
+                source.RootTree = tree;
+                source.Head = head;
+                transport.AlterApplication = null;
+                transport.BeforeIngressRequest = null;
+                transport.Scenario.Arm.Product = ReservationTestStore.Restore(governing);
+            }
+        }
+        var recovered = await transport.Scenario.Machine.InvokeAsync("activate", "--status");
+        Assert.True((bool)recovered.Result["currentReady"]!, recovered.Terminal.Output);
+        Assert.Equal(governing, transport.Scenario.Arm.Product.Export());
+        Assert.Equal(calls, transport.EvaluationInference.Count);
+    }
+
+    [Fact]
+    public async Task Promoted_decision_automatically_refreshes_complete_source_without_changing_governing_intent()
     {
         var transport = fixture.Reset();
         transport.SourceInferenceInputs.Clear();
@@ -41,11 +191,10 @@ public sealed class FactoryEvidenceRefreshTests(ActivatedFactoryFixture fixture)
             observed = JsonNode.Parse(await status.Content.ReadAsStringAsync())!;
             if (status.StatusCode != HttpStatusCode.Accepted) break;
         }
-        Assert.True((string?)observed["readiness"] == "Blocked", observed.ToJsonString() + "\n"
+        Assert.True((string?)observed["readiness"] == "ReadyAwaitingActivation", observed.ToJsonString() + "\n"
             + string.Join("\n", transport.HostFailures.TakeLast(5)) + "\n"
             + source.Progress.GetValueOrDefault("intent/refresh/current").Value + "\n"
             + source.Progress["intent/current"].Value);
-        Assert.Equal("CompatibleSourceRefreshAwaitingQualification", (string?)observed["reason"]);
         var refreshed = JsonNode.Parse(source.Progress["intent/current"].Value)!;
         Assert.NotEqual((string?)original["revision"], (string?)refreshed["revision"]);
         Assert.Equal(source.Head, (string?)refreshed["snapshot"]!["commit"]);
@@ -66,7 +215,7 @@ public sealed class FactoryEvidenceRefreshTests(ActivatedFactoryFixture fixture)
         Assert.Contains(source.Progress, p => p.Key.EndsWith("/retention", StringComparison.Ordinal)
             && p.Value.Value.Contains((string)refreshed["revision"]!, StringComparison.Ordinal));
         Assert.Equal(governance, transport.Scenario.Arm.Product.Export());
-        Assert.Equal(0, transport.IssuePosts);
+        Assert.Equal(1, transport.IssuePosts);
         FactoryActivationTests.ConnectAudit(transport);
         var audit = await transport.Scenario.Machine.InvokeAsync("audit");
         Assert.True(audit.Exit == 0, audit.Terminal.Output);
@@ -74,6 +223,14 @@ public sealed class FactoryEvidenceRefreshTests(ActivatedFactoryFixture fixture)
         source.Progress.Remove(step.Key);
         var damaged = await transport.Scenario.Machine.InvokeAsync("audit");
         Assert.Equal(1, damaged.Exit);
+        var blocked = await transport.Scenario.Machine.InvokeAsync("activate", "--status");
+        Assert.False((bool)blocked.Result["currentReady"]!);
+        var calls = transport.EvaluationInference.Count;
+        using var missingProof = await http.PostAsJsonAsync(fixture.LiveEndpoint(transport) + "/decide",
+            new FactoryDecisionRequest(Guid.NewGuid()), FactorySourceValidation.RecordJson);
+        Assert.Equal(HttpStatusCode.Forbidden, missingProof.StatusCode);
+        Assert.Equal(calls, transport.EvaluationInference.Count);
+        Assert.Equal(1, transport.IssuePosts);
         source.Progress.Add(step.Key, step.Value);
         var history = source.Progress.Where(p => p.Key.StartsWith(FactorySourceRefresh.Prefix, StringComparison.Ordinal)).ToArray();
         foreach (var record in history) source.Progress.Remove(record.Key);
@@ -88,7 +245,7 @@ public sealed class FactoryEvidenceRefreshTests(ActivatedFactoryFixture fixture)
         transport.Restart();
         FactoryActivationTests.ConnectAudit(transport);
         var historical = await transport.Scenario.Machine.InvokeAsync("activate", "--status");
-        Assert.False((bool)historical.Result["currentReady"]!);
+        Assert.True((bool)historical.Result["currentReady"]!, historical.Terminal.Output);
         Assert.Equal(held, transport.Scenario.Source.Source!.Progress[FactorySourceRefresh.CurrentKey]);
     }
 
@@ -270,9 +427,9 @@ public sealed class FactoryEvidenceRefreshTests(ActivatedFactoryFixture fixture)
         transport.Restart();
         FactoryActivationTests.ConnectAudit(transport);
         var recovered = await RefreshAsync(transport, new FactoryDecisionRequest(Guid.NewGuid()));
-        Assert.Equal("CompatibleSourceRefreshAwaitingQualification", (string?)recovered["reason"]);
+        Assert.Equal("ReadyAwaitingActivation", (string?)recovered["readiness"]);
         Assert.Equal(6, transport.SourceInferenceInputs.Count);
-        Assert.Equal(0, transport.IssuePosts);
+        Assert.Equal(1, transport.IssuePosts);
     }
 
     [Fact]
@@ -323,14 +480,15 @@ public sealed class FactoryEvidenceRefreshTests(ActivatedFactoryFixture fixture)
         Assert.Equal(0, transport.IssuePosts);
     }
 
-    private static void AdvanceDefaultBranch(PreviewPreparationTransport transport, bool gap = false)
+    internal static void AdvanceDefaultBranch(PreviewPreparationTransport transport, bool gap = false, char commit = 'e')
     {
         var source = transport.Scenario.Source.Source!;
         var entries = source.Trees[source.RootTree]["tree"]!.AsArray().Select(n => ((string)n!["path"]!, (string)n["mode"]!,
-            (string)n["path"]! == "README.md" ? source.Blob(Dsf.Runtime.Tests.IntentModelFixture.SourceText + "\nCurrent scheduling implementation changed.\n") : (string)n["sha"]!)).ToList();
+            (string)n["path"]! == "README.md" ? source.Blob(Dsf.Runtime.Tests.IntentModelFixture.SourceText
+                + $"\nCurrent scheduling implementation changed ({commit}).\n") : (string)n["sha"]!)).ToList();
         if (gap) entries.Add(("z-external", "120000", source.Blob("../unread-necessary-dependency")));
         source.RootTree = source.Tree(entries.ToArray());
-        source.Head = new string('e', 40);
+        source.Head = new string(commit, 40);
     }
 
     private async Task<JsonNode> RefreshAsync(PreviewPreparationTransport transport, FactoryDecisionRequest invocation)
