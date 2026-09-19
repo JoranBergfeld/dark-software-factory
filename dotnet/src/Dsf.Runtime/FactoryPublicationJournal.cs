@@ -20,6 +20,52 @@ internal sealed class FactoryPublicationJournal(FactoryPublicationIntent intent,
     internal FactoryPublicationDocument Document => document ?? throw new InvalidOperationException("Original native journal must be opened.");
     internal AuditRecordIdentity? NativeIdentity { get; private set; }
 
+    internal static async Task<FactoryPublicationJournal> ReadExistingAsync(Guid factoryId, string product, long repositoryId,
+        string operation, TokenCredential credential, HttpClient http, TimeProvider clock, CancellationToken token)
+    {
+        var gateway = new AzureCosmosDocumentGateway(credential, http);
+        var endpoint = "https://" + FactoryPreviewValidation.Prefix(factoryId) + "-cosmos.documents.azure.com";
+        var stored = await gateway.ReadCheckpointAsync(endpoint, product, FactoryPublication.Container, product, operation, token)
+            ?? throw new InvalidOperationException("Original publication missing; inspection never creates history.");
+        var document = FactoryPublication.ReadDocument(stored.Json, clock.GetUtcNow());
+        if (document.Intent.FactoryId != factoryId || document.Product != product || document.Intent.RepositoryId != repositoryId || document.Id != operation)
+            throw new JsonException("Original publication boundary differs.");
+        var journal = new FactoryPublicationJournal(document.Intent, credential, http, clock);
+        journal.Accept(stored);
+        var origin = await gateway.ReadCheckpointAsync(endpoint, product, FactoryPublication.Container, product, FactoryPublication.OriginId(document.Intent), token)
+            ?? throw new JsonException("Original native publication origin missing.");
+        FactoryPublication.RequireOrigin(document, origin.Json, journal.Identity(origin, FactoryPublication.OriginId(document.Intent)));
+        return journal;
+    }
+
+    internal void RequireRetry(FactoryPublicationRetry expected)
+    {
+        RequireOriginal(expected.Operation, expected.Revision, expected.Attempt);
+        if (Document.State is not (FactoryPublicationState.Rejected or FactoryPublicationState.NotDispatched))
+            throw new PreviewCapabilityException(FactoryCharterState.Blocked, "OriginalKnownNoEffectOutcomeRequired");
+    }
+
+    internal async Task ReconcileAsync(FactoryPublicationRecoveryRequest expected, string actor, CancellationToken token)
+    {
+        RequireOriginal(expected.Operation, expected.Revision!, expected.Attempt!.Value);
+        if (Document.State is not (FactoryPublicationState.Dispatched or FactoryPublicationState.Unknown) || Document.Response is not { } witness) return;
+        await WriteAsync(Document with
+        {
+            State = FactoryPublicationState.Confirmed, Receipt = witness.Receipt, Response = null,
+            Attempts = [.. Document.Attempts.SkipLast(1), Document.Attempts.Last() with
+            {
+                State = FactoryPublicationState.Confirmed, StatusCode = 201, RequestId = witness.Receipt.RequestId,
+                Reconciliation = new(expected.Revision!, actor, clock.GetUtcNow()),
+            }],
+        }, token);
+    }
+
+    private void RequireOriginal(string operation, string revision, Guid attempt)
+    {
+        if (Document.Id != operation || etag != revision || Document.Attempts.LastOrDefault()?.Id != attempt)
+            throw new PreviewCapabilityException(FactoryCharterState.Blocked, "OriginalPublicationRevisionAndAttemptChanged");
+    }
+
     internal async Task<FactoryPublicationDocument> OpenAsync(CancellationToken token)
     {
         if (poisoned || document is not null) throw new InvalidOperationException("A journal instance cannot be reopened.");
@@ -74,17 +120,21 @@ internal sealed class FactoryPublicationJournal(FactoryPublicationIntent intent,
         return FinishAsync(FactoryPublicationState.Rejected, status, requestId, null, token);
     }
 
-    internal Task ConfirmAsync(FactoryPublicationReceipt receipt, CancellationToken token)
+    internal async Task ConfirmAsync(FactoryPublicationReceipt receipt, CancellationToken token)
     {
+        if (poisoned || issued == Guid.Empty || Document.State != FactoryPublicationState.Dispatched || Document.Attempts.Last().Id != issued)
+            throw new InvalidOperationException("Only the original acknowledged dispatcher may retain its response.");
         FactoryPublication.ValidateReceipt(Document.Intent, Document.Attempts.Last(), receipt, clock.GetUtcNow());
-        return FinishAsync(FactoryPublicationState.Confirmed, 201, receipt.RequestId, receipt, token);
+        await WriteAsync(Document with { Response = new(intent.FactoryId, intent.RepositoryId, id, issued, resourceId!,
+            FactoryModelsValidation.Hash(Document.Intent), receipt) }, token);
+        await FinishAsync(FactoryPublicationState.Confirmed, 201, receipt.RequestId, receipt, token);
     }
 
     private Task FinishAsync(FactoryPublicationState state, int? status, string? requestId, FactoryPublicationReceipt? receipt, CancellationToken token)
     {
         if (poisoned || issued == Guid.Empty || Document.State != FactoryPublicationState.Dispatched || Document.Attempts.Last().Id != issued)
             throw new InvalidOperationException("Only the original acknowledged dispatcher may retain its response.");
-        return WriteAsync(Document with { State = state, Receipt = receipt, Attempts = [
+        return WriteAsync(Document with { State = state, Receipt = receipt, Response = state == FactoryPublicationState.Confirmed ? null : Document.Response, Attempts = [
             .. Document.Attempts.SkipLast(1), Document.Attempts.Last() with { State = state, StatusCode = status, RequestId = requestId }] }, token);
     }
 
@@ -104,7 +154,7 @@ internal sealed class FactoryPublicationJournal(FactoryPublicationIntent intent,
     {
         value = value with { Checksum = value.CalculateChecksum() };
         var json = JsonSerializer.Serialize(value, FactoryGitHubJson.Options);
-        if (Encoding.UTF8.GetByteCount(json) + (value.Receipt is null ? 6 * 256 * 1024 + 16384 : 16384) > AzureCosmosDocumentGateway.MaximumCheckpointBytes)
+        if (Encoding.UTF8.GetByteCount(json) + (value.Receipt is null && value.Response is null ? 6 * 256 * 1024 + 16384 : 16384) > AzureCosmosDocumentGateway.MaximumCheckpointBytes)
             throw new CosmosCheckpointException(CosmosCheckpointFailure.Capacity);
         return json;
     }
@@ -115,7 +165,7 @@ internal sealed class FactoryPublicationJournal(FactoryPublicationIntent intent,
         var native = NativeCosmosResourceId.RequireDocument(node["_rid"]?.GetValue<string>());
         if (resourceId is not null && resourceId != native) throw new InvalidOperationException("Original native publication incarnation changed.");
         var parsed = FactoryPublication.ReadDocument(stored.Json, clock.GetUtcNow());
-        if (parsed.Id != id || parsed.Product != intent.Product)
+        if (parsed.Id != id || parsed.Product != intent.Product || parsed.Response is { } witness && witness.NativeResourceId != native)
             throw new JsonException("Complete original native publication journal required.");
         resourceId = native;
         etag = stored.ETag;

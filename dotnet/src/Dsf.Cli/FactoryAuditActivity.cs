@@ -12,7 +12,11 @@ namespace Dsf.Cli;
 internal sealed partial class FactoryAuditService
 {
     internal async Task<bool> ReadFirstFilingAsync(FactoryReservationResult admission, FactoryPromotionApproval promotion,
-        IReadOnlyDictionary<string, ConfigurationSetting> governance, CancellationToken token)
+        IReadOnlyDictionary<string, ConfigurationSetting> governance, CancellationToken token) =>
+        (await ReadPublicationOutcomesAsync(admission, promotion, governance, token)).Any(p => p.State == FactoryPublicationRecoveryState.Confirmed);
+
+    internal async Task<IReadOnlyList<FactoryPublicationInspection>> ReadPublicationOutcomesAsync(FactoryReservationResult admission,
+        FactoryPromotionApproval promotion, IReadOnlyDictionary<string, ConfigurationSetting> governance, CancellationToken token)
     {
         var seedRecord = governance[promotion.NativeIndices!.Key];
         if (new AuditRecordIdentity(promotion.FactoryId, AuditStoreKind.Governance, seedRecord.Key, seedRecord.ETag.ToString(),
@@ -23,7 +27,7 @@ internal sealed partial class FactoryAuditService
             FactoryActivityIndex.Name(factory.FactoryId, true), AuditStoreKind.Publication, token);
         if (indexRecord.Identity.NativeResourceId != seeds.Publications.Identity.NativeResourceId) throw new JsonException();
         var index = FactoryActivityIndex.Read(indexRecord.Content, factory.FactoryId, factory.ProductKey, promotion.OperationId, true, clock.GetUtcNow());
-        var confirmed = false;
+        var outcomes = new List<FactoryPublicationInspection>();
         foreach (var entry in index.Entries)
         {
             var native = await ReadNativeAsync(admission, FactoryPublication.Container, entry.Id, AuditStoreKind.Publication, token);
@@ -33,11 +37,11 @@ internal sealed partial class FactoryAuditService
                 || FactoryModelsValidation.Hash(journal.Intent) != entry.IntentSha256) throw new JsonException();
             var origin = await ReadNativeAsync(admission, FactoryPublication.Container, entry.Id + "-origin", AuditStoreKind.Publication, token);
             FactoryPublication.RequireOrigin(journal, origin.Content, origin.Identity);
-            confirmed |= journal.State == FactoryPublicationState.Confirmed;
+            outcomes.Add(FactoryPublicationRecovery.Inspect(journal, native.Identity, governance.Keys.Any(FactoryPause.IsStopRecord)));
         }
         if ((await ReadNativeAsync(admission, FactoryPublication.Container, index.Id, AuditStoreKind.Publication, token)).Identity != indexRecord.Identity)
             throw new JsonException("Publication history changed during inspection.");
-        return confirmed;
+        return outcomes;
     }
 
     private async Task ReadActivityAsync(FactoryReservationResult admission, IReadOnlyDictionary<string, ConfigurationSetting> governance,

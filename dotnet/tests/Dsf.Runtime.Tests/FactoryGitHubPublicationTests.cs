@@ -9,6 +9,24 @@ namespace Dsf.Runtime.Tests;
 
 public sealed class FactoryGitHubPublicationTests
 {
+    [Fact]
+    public async Task Explicit_retry_never_recreates_missing_original_history()
+    {
+        using var native = new PublicationTransport();
+        using var github = new AuthorityTransport { PublicationEnabled = true, IssueFailure = "rejected" };
+        using var remote = new PublicationWorkflowTransport(native, github);
+        using var http = new HttpClient(remote);
+        var intent = FactoryPublicationJournalTests.Intent();
+        var rejected = await Publisher(http).CreateAsync(intent, Authority(github), CancellationToken.None);
+        var retry = new FactoryPublicationRetry(rejected.Journal.Id, rejected.NativeIdentity!.NativeRevision, rejected.Attempts.Last().Id);
+        native.Documents.Clear();
+        var count = native.Writes.Count;
+        await Assert.ThrowsAnyAsync<Exception>(() => Publisher(http).CreateAsync(intent, Authority(github), CancellationToken.None, retry: retry));
+        Assert.Empty(native.Documents);
+        Assert.Equal(count, native.Writes.Count);
+        Assert.Single(github.IssueCreates);
+    }
+
     [Theory]
     [InlineData("push")]
     [InlineData("pull_request")]

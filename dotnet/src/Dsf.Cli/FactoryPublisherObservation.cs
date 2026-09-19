@@ -25,6 +25,8 @@ internal sealed partial class FactoryPreviewPreparationService
         await response.Content.LoadIntoBufferAsync(32 * 1024, pending.Token);
         using var body = JsonDocument.Parse(await response.Content.ReadAsStreamAsync(pending.Token), new() { AllowDuplicateProperties = false });
         var observed = body.RootElement.Deserialize<FactoryPublisherObservation>(FactorySourceValidation.RecordJson) ?? throw new JsonException();
+        if (observed.RecoveryProtocol != FactoryPublicationRecovery.Protocol)
+            throw Failure("ReviewedOriginalPublicationOutcomeImplementationRequiredNoLegacyUpgrade");
         FactoryPublisher.ValidateObservation(observed, plan, clock.GetUtcNow() - FactoryPreviewValidation.RequestBudget, clock.GetUtcNow());
         return observed;
     }

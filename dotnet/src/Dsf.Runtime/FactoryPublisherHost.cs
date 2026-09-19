@@ -25,6 +25,7 @@ public static partial class RuntimeVerbs
         var app = builder.Build();
         if (contextHost)
         {
+            app.MapPost("/publication-retry", (Func<HttpContext, Task<IResult>>)(c => Handle(c, false)));
             app.MapPost("/readiness", (Func<HttpContext, Task<IResult>>)(c => Handle(c, true)));
             app.MapPost("/activation-readiness", (Func<HttpContext, Task<IResult>>)(c => Handle(c, true)));
             app.MapPost("/prepare-activation", (Func<HttpContext, Task<IResult>>)(c => Handle(c, true)));
@@ -36,6 +37,8 @@ public static partial class RuntimeVerbs
             app.MapPost("/prepare-activation", (Func<HttpContext, Task<IResult>>)(c => Handle(c, true)));
             app.MapPost("/publish", (Func<HttpContext, Task<IResult>>)(c => Handle(c, false)));
         }
+        app.MapPost("/publication-inspect", (Func<HttpContext, Task<IResult>>)(c => Handle(c, false)));
+        app.MapPost("/publication-reconcile", (Func<HttpContext, Task<IResult>>)(c => Handle(c, false)));
         return app;
 
         async Task<IResult> Handle(HttpContext context, bool readiness)
@@ -51,14 +54,52 @@ public static partial class RuntimeVerbs
                 if (context.Request.Headers["X-MS-CLIENT-PRINCIPAL-IDP"] != "aad") throw Denied("NativeCallerRequired");
                 var credential = dependencies.PreviewCredential
                     ?? new ManagedIdentityCredential(ManagedIdentityId.FromUserAssignedClientId(settings.ManagedIdentityClientId));
+                var recovery = context.Request.Path is var path
+                    && (path == "/publication-inspect" || path == "/publication-reconcile" || path == "/publication-retry");
+                var outcomeAuthority = new FactoryPublicationOutcomeAuthority(settings, contextHost, credential, http, dependencies.PreviewClock);
                 var authority = new FactoryPublisherAuthority(settings, contextHost, credential, http, dependencies.PreviewClock);
-                var current = await authority.CheckAsync(token);
+                var current = recovery ? await outcomeAuthority.ReadAsync(token) : await authority.CheckAsync(token);
                 var capability = current.Capability;
                 var identity = current.Manifest.Identity;
                 var caller = capability.Plan.Deployment.Bindings[contextHost ? "auth" : "council"];
-                if (!NativeCaller(context, contextHost && readiness ? identity.AzureActorId : caller.PrincipalId!,
-                    identity.TenantId, contextHost && readiness ? null : caller.ClientId))
+                if (!NativeCaller(context, contextHost && (readiness || recovery) ? identity.AzureActorId : caller.PrincipalId!,
+                    identity.TenantId, contextHost && (readiness || recovery) ? null : caller.ClientId))
                     throw Denied("ExactNativePublicationCallerRequired");
+                if (recovery)
+                {
+                    phase = "original-publication-outcome";
+                    var request = await context.Request.ReadFromJsonAsync<FactoryPublicationRecoveryRequest>(FactorySourceValidation.RecordJson, token)
+                        ?? throw new JsonException();
+                    FactoryPublicationRecovery.Validate(request, context.Request.Path != "/publication-inspect");
+                    var original = await outcomeAuthority.OpenAsync(current, request, token);
+                    if (contextHost)
+                    {
+                        if (context.Request.Path == "/publication-retry")
+                        {
+                            var retry = await outcomeAuthority.RetryRequestAsync(current, original, request, token);
+                            var fresh = await authority.CheckAsync(token);
+                            var retried = await PostAsync<FactoryPublicationResult>(capability.PublisherEndpoint, "/publish", retry, fresh, token,
+                                knownOutcome: true);
+                            if (retried.NativeIdentity is null || retried.Journal.Id != request.Operation
+                                || FactoryModelsValidation.Hash(retried.Journal.Intent) != FactoryModelsValidation.Hash(original.Document.Intent))
+                                throw new JsonException();
+                            _ = FactoryPublication.ReadDocument(JsonSerializer.Serialize(retried.Journal, FactoryGitHubJson.Options), dependencies.PreviewClock.GetUtcNow());
+                            return Results.Json(FactoryPublicationRecovery.Inspect(retried.Journal, retried.NativeIdentity, false), OutputJson);
+                        }
+                        var observed = await PostAsync<FactoryPublicationInspection>(capability.PublisherEndpoint, context.Request.Path, request, current, token);
+                        if (observed.FactoryId != identity.FactoryId || observed.RepositoryId != identity.RepositoryId
+                            || observed.Operation != request.Operation || observed.Protocol != 1 || observed.Workflow != FactoryPublicationRecovery.Protocol)
+                            throw new JsonException();
+                        await outcomeAuthority.RequireSameAsync(current, token);
+                        return Results.Json(observed, OutputJson);
+                    }
+                    if (context.Request.Path == "/publication-reconcile")
+                    {
+                        await outcomeAuthority.RequireSameAsync(current, token);
+                        await original.ReconcileAsync(request, caller.PrincipalId!, token);
+                    }
+                    return Results.Json(FactoryPublicationRecovery.Inspect(original.Document, original.NativeIdentity!, outcomeAuthority.AdmissionClosed), OutputJson);
+                }
                 if (readiness)
                 {
                     phase = "readiness-request";
@@ -121,7 +162,8 @@ public static partial class RuntimeVerbs
                             .AcquireProposalAccessAsync(capability.Plan.GitHubAuthority, token);
                         phase = "proposal-mutation-review";
                         var review = await access.ReviewAsync(capability.Plan.Automation, token);
-                        observed = new(1, identity.FactoryId, capability.Plan.Fingerprint, current.Revision, access.Proof, review);
+                        observed = new(1, identity.FactoryId, capability.Plan.Fingerprint, current.Revision, access.Proof, review)
+                            { RecoveryProtocol = FactoryPublicationRecovery.Protocol };
                     }
                     await authority.RequireSameAsync(current, token);
                     if (contextHost && context.Request.Path == "/activation-readiness")
@@ -195,7 +237,7 @@ public static partial class RuntimeVerbs
                     }, new FactoryActivityStore(current.Manifest, promotionApproval, true,
                         (JsonSerializer.Deserialize<FactoryPromotionSeeds>(current.Records[promotionApproval.NativeIndices!.Key].Value,
                             FactorySourceValidation.RecordJson) ?? throw new JsonException()).Publications.Identity,
-                        current.Credential, http, dependencies.PreviewClock));
+                        current.Credential, http, dependencies.PreviewClock), publication.Retry);
                 return Results.Json(result, OutputJson, statusCode: result.State == FactoryPublicationState.Confirmed ? 200 : 409);
 
                 void ValidateAdmission(FactoryPublicationAdmission admission)
@@ -220,14 +262,15 @@ public static partial class RuntimeVerbs
             { return Failure(FactoryCharterState.Unknown, "PublicationCapabilityOrOriginalDecisionUnconfirmedNoFallback:" + phase, 409); }
 
             async Task<T> PostAsync<T>(string endpoint, string route, object request, PublisherAuthoritySnapshot snapshot, CancellationToken cancellation,
-                string? audience = null)
+                string? audience = null, bool knownOutcome = false)
             {
                 using var message = new HttpRequestMessage(HttpMethod.Post, FactoryGovernance.NormalizeEndpoint(endpoint) + route)
                 { Content = JsonContent.Create(request, options: FactorySourceValidation.RecordJson) };
                 message.Headers.Authorization = new AuthenticationHeaderValue("Bearer", (await snapshot.Credential.GetTokenAsync(
                     new TokenRequestContext(["api://" + (audience ?? snapshot.Capability.Plan.Selection.AudienceClientId) + "/.default"]), cancellation)).Token);
                 using var response = await http.SendAsync(message, cancellation);
-                if (response.StatusCode != HttpStatusCode.OK) throw Denied("AuthenticatedNativePublicationDependencyUnavailable");
+                if (response.StatusCode != HttpStatusCode.OK && !(knownOutcome && response.StatusCode == HttpStatusCode.Conflict))
+                    throw Denied("AuthenticatedNativePublicationDependencyUnavailable");
                 using var body = await EvidencePayload.ReadAsync(response, cancellation, 256 * 1024);
                 return body.RootElement.Deserialize<T>(FactorySourceValidation.RecordJson) ?? throw new JsonException();
             }

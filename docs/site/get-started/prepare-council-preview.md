@@ -619,6 +619,9 @@ activation. Do not rotate operation IDs to evade uncertain history.
 
 ### Prepare the isolated native publication capability
 
+Original proposal issue outcomes can later be inspected with `dsf onboard decide
+publication`; see [uncertain publication recovery](#uncertain-publication-recovery).
+
 After the original approved native live rollout, explicitly review a **new**
 publication rollout. Existing `ApprovalOnly` and `PreparedAwaitingPublication`
 receipts stay immutable and do not authorize publication.
@@ -857,6 +860,70 @@ indexed-only writer protocol. An older or unreachable writer cannot prove
 complete discovery of arbitrary historical exercises. Closure stays unknown;
 known historical invocation inspection does not authorize publication or a
 complete export. Existing image receipts are never rewritten to imply support.
+
+## Uncertain publication recovery
+
+Inspect the original `evaluation.publications[].journal.id` from native decision
+output. Inspection never creates a missing journal or origin:
+
+```bash
+dsf onboard decide publication --operation proposal-ORIGINAL_SHA256 \
+  --owner-appconfig-endpoint https://owner.azconfig.io --product widget \
+  --tenant 11111111-1111-1111-1111-111111111111 \
+  --subscription 22222222-2222-2222-2222-222222222222 --json
+```
+
+Output identifies factory, durable repository, logical intent, original invocation,
+reviewed issue payload/configuration, current attempt, native journal revision,
+known issue/response identities, uncertainty and next actor. It does not return
+credentials, raw provider response, or source evidence. `Confirmed` is an original
+historical effect, not readiness, approval, completed stop or permission to edit.
+`Rejected`, `NotDispatched`, `Partial`, `Blocked`, `Failed`, `Canceled` and
+`Unknown` remain distinct; only `Confirmed` exits 0, cancellation exits 130 and
+other incomplete states exit 1.
+
+Repeat the same complete command with `--reconcile --revision ORIGINAL_ETAG
+--attempt ORIGINAL_ATTEMPT_GUID` to conditionally close an original retained
+creation response. Only the acknowledged AUTH dispatcher records that witness,
+inside the already indexed native journal, before final confirmation. Native
+factory/repository/intent/attempt/incarnation bindings must agree. The successful
+transition records its original revision, authenticated workload actor and time.
+No GitHub request, token mint, search, replacement, edit, comment, assignment or
+delivery action occurs. A copied marker, shared App author, request ID, self-hash
+or uploaded JSON cannot establish creation ownership or absence.
+
+Loss **before any original response is retained** stays `Unknown`. So does a
+missing/corrupt/recreated journal or origin. A lost closeout acknowledgement may
+already have committed; reread instead of repeating. Concurrent operators use
+native conditional replacement, not a lease or time-based remote fence. Original
+late responses can still close out during cancellation/pause. These records remain
+in the existing audit closure; resolved and unresolved effects stay distinguishable
+without certifying completed stop or detach.
+Pause output includes `issuedPublications` with original operation, observed
+revision and resolved/unknown state. An incomplete or unavailable native index
+keeps `publicationInventoryComplete` false; even a complete observed inventory
+does not set `stopCompleted` or prove a remote fencing boundary.
+
+`--retry --revision ORIGINAL_ETAG --attempt ORIGINAL_ATTEMPT_GUID` is different:
+it can send the original issue POST **only** after a native known-no-effect
+rejection or the original process's confirmed no-dispatch. The original full
+three-GO decision, unchanged payload/configuration, repository/mutation automation
+and current open admission are revalidated. Factory/repository/logical identity
+and bounded attempt history remain unchanged. Unknown outcomes never qualify.
+
+The operator calls the existing separately reviewed COUNCIL context host; it
+forwards outcome-only requests to AUTH using its own native identity. COUNCIL
+retains read-only publication-store rights; AUTH retains its existing exact
+container writer rights. No operator key access or new grants are introduced.
+Recovery requires the immutable native rollout proof to advertise
+`original-publication-outcome-v1`; an older host/proof without that capability is
+blocked, not silently upgraded or rewritten. A newly reviewed publisher rollout
+must serve this capability. Reconciliation remains available after deliberate
+pause or current evidence-readiness failure while original protected/native
+identity authority remains verifiable; it never clears the stop.
+
+For operator-owned branch/commit/PR effects use the separate
+[charter publication recovery commands](publish-adopt-charter.md#durable-outcomes-and-limits).
 
 ## Deliberately pause council admission
 

@@ -32,7 +32,7 @@ internal sealed class FactoryPauseService(IAzureCliRunner azure, HttpClient? htt
             if (operation is not null && operation != retained.OperationId)
                 return new(FactoryPauseState.Blocked, "Another protected stop request already closes admission; no replacement.")
                 { Request = retained, AdmissionClosed = true };
-            return Requested(retained);
+            return await ObservePublicationsAsync(admission, store, Requested(retained), token);
         }
         if (operation is null)
             return new(FactoryPauseState.NotRequested, "No deliberate pause request observed. This is not readiness, activation or runtime admission.")
@@ -60,7 +60,51 @@ internal sealed class FactoryPauseService(IAzureCliRunner azure, HttpClient? htt
             return new(FactoryPauseState.Partial, "Admission closed by original durable request; audit copy or readback unconfirmed. Inspect, never reset or replay.")
             { Request = request, AdmissionClosed = true };
         }
-        return Requested(request);
+        return await ObservePublicationsAsync(admission, store, Requested(request), token);
+    }
+
+    private async Task<FactoryPauseResult> ObservePublicationsAsync(FactoryReservationResult admission, OwnerReservationStore store,
+        FactoryPauseResult result, CancellationToken token)
+    {
+        var effects = new List<FactoryIssuedPublication>();
+        using var deadline = new CancellationTokenSource(FactoryPreviewValidation.RequestBudget, clock);
+        using var pending = CancellationTokenSource.CreateLinkedTokenSource(token, deadline.Token);
+        try
+        {
+            var charter = await new FactoryCharterService(RepositoryAttachmentReviewer.Create(azure), azure, http, clock)
+                .InspectPublicationAsync(admission, pending.Token);
+            if (charter.Publication is { } publication)
+                effects.AddRange(publication.Effects.Select(e => new FactoryIssuedPublication("Charter",
+                    $"{publication.Operation:D}/{e.Index}", e.State == CharterEffectState.Dispatched ? "Unknown" : e.State.ToString(), charter.Revision!)));
+            var records = await store.ReadNamespaceAsync(FactoryPromotion.Prefix, pending.Token);
+            if (!records.TryGetValue(FactoryPromotion.RootKey, out var root))
+                return result with { IssuedPublications = effects };
+            var promotion = JsonSerializer.Deserialize<FactoryPromotionApproval>(root.Value, FactorySourceValidation.RecordJson) ?? throw new JsonException();
+            if (promotion.FactoryId != admission.Identity!.FactoryId || promotion.Phase != FactoryPromotionPhase.Active
+                || promotion.NativeIndices?.Key != FactoryPromotion.SeedsKey(promotion.OperationId)
+                || !records.TryGetValue(FactoryPromotion.CompletionKey(promotion.OperationId), out var completionRecord))
+                throw new JsonException();
+            var completion = JsonSerializer.Deserialize<FactoryPromotionCompletion>(completionRecord.Value, FactorySourceValidation.RecordJson) ?? throw new JsonException();
+            if (completion.FactoryId != promotion.FactoryId || completion.OperationId != promotion.OperationId
+                || completion.Approval != new AuditRecordIdentity(promotion.FactoryId, AuditStoreKind.Governance,
+                    root.Key, root.ETag.ToString(), FactoryAudit.TextHash(root.Value)))
+                throw new JsonException();
+            var publications = await new FactoryAuditService(azure, http, clock)
+                .ReadPublicationOutcomesAsync(admission, promotion, records, pending.Token);
+            effects.AddRange(publications.Select(p => new FactoryIssuedPublication("ProposalIssue", p.Operation!, p.State.ToString(), p.Revision!)));
+            if ((await store.ReadAsync(root.Key, pending.Token))?.ETag != root.ETag) throw new JsonException();
+            if (charter.Publication is not null
+                && (await store.ReadAsync("dsf/factory/charter/publication", pending.Token))?.ETag.ToString() != charter.Revision)
+                throw new JsonException();
+            return result with { IssuedPublications = effects, PublicationInventoryComplete = true };
+        }
+        catch (Exception e) when (e is JsonException or InvalidOperationException or ArgumentException or KeyNotFoundException
+            or HttpRequestException or IOException or ReservationStoreException or FactoryAuditException
+            or OwnerReservationStore.AuthenticationFailedException || e is OperationCanceledException && !token.IsCancellationRequested)
+        {
+            return result with { IssuedPublications = effects, Detail = result.Detail
+                + " Publication inventory incomplete/unavailable; observed outcomes are historical, not a completed stop." };
+        }
     }
 
     private static FactoryPauseResult Requested(FactoryPauseRequest request) =>

@@ -11,6 +11,10 @@ public sealed class FactoryPublisherHostTests
     [Theory]
     [InlineData("serve-publisher", "/publish")]
     [InlineData("serve-publication-context", "/publication-context")]
+    [InlineData("serve-publisher", "/publication-reconcile")]
+    [InlineData("serve-publisher", "/publication-inspect")]
+    [InlineData("serve-publication-context", "/publication-retry")]
+    [InlineData("serve-publication-context", "/publication-reconcile")]
     public async Task Installed_native_publication_hosts_reject_untrusted_requests_before_provider_access(string verb, string route)
     {
         var runner = new UntrustedRunner(route);

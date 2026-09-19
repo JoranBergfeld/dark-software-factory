@@ -23,12 +23,16 @@ public sealed record FactoryDecisionCapability(int Protocol, Guid FactoryId, str
     PreviewExecutionPolicy Policy);
 public sealed record FactoryPublicationDecisionScope(Guid InvocationId, AuditRecordIdentity Promotion, AuditRecordIdentity Publisher, bool DryRun = false);
 public sealed record FactoryDecisionRequest(Guid InvocationId, bool DryRun = false);
-public sealed record FactoryPublicationRequest(Guid InvocationId, string CandidateId);
+public sealed record FactoryPublicationRequest(Guid InvocationId, string CandidateId)
+{
+    public FactoryPublicationRetry? Retry { get; init; }
+}
 public sealed record FactoryPublicationAdmission(FactoryPublicationIntent Intent, AuditRecordIdentity Promotion,
     AuditRecordIdentity Publisher, AuditRecordIdentity Evaluation, AuditRecordIdentity Run, string AuthorityRevision);
 public sealed record FactoryPublisherObservation(int Protocol, Guid FactoryId, string CapabilityFingerprint,
     string AuthorityRevision, GitHubAuthorityProof GitHub, string MutationReviewSha256)
 {
+    public string? RecoveryProtocol { get; init; }
     public bool IsActivated => false;
     public bool PublicationPermitted => false;
 }

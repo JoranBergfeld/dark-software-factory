@@ -42,12 +42,23 @@ public sealed record FactoryCharterResult(FactoryCharterState State, string Deta
     public string NextAction { get; init; } = "Review exact private evidence and charter; activation is separate.";
 }
 
-public enum CharterEffectState { Intended, Dispatched, Confirmed, KnownFailed, Unknown }
+public enum CharterEffectState { Intended, Dispatched, Confirmed, KnownFailed, Unknown, NotDispatched }
 public sealed record CharterNativeReceipt(string Method, string Route, int Status, string RequestId, string ResponseSha256);
+public sealed record CharterResponseWitness(Guid FactoryId, long RepositoryId, Guid Operation, Guid Attempt,
+    string ReviewFingerprint, string RequestSha256, CharterNativeReceipt Native, string ResponseJson);
+public sealed record CharterAttemptReceipt(Guid Attempt, CharterEffectState State, CharterNativeReceipt? Native);
+public sealed record CharterReconciliation(string OriginalRevision, string Actor, DateTimeOffset At);
 public sealed record CharterPullReceipt(long? Id, string NodeId, int Number, string Url, long RepositoryId,
     string Base, string BaseCommit, string Head, string HeadCommit);
 public sealed record CharterEffect(int Index, string Kind, CharterEffectState State, string RequestSha256,
-    CharterNativeReceipt? Receipt = null, string? ObjectId = null);
+    CharterNativeReceipt? Receipt = null, string? ObjectId = null)
+{
+    public Guid Attempt { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public CharterResponseWitness? Response { get; init; }
+    public IReadOnlyList<CharterAttemptReceipt> PreviousAttempts { get; init; } = [];
+    public CharterReconciliation? Reconciliation { get; init; }
+}
 public sealed record CharterPublication(int Protocol, Guid Operation, Guid FactoryId, int Sequence,
     string ReviewFingerprint, int PayloadRecords, string PayloadSha256, string Branch, DateTimeOffset ApprovedAt,
     long OperatorId, FactoryCharterState State, IReadOnlyList<CharterEffect> Effects, CharterPullReceipt? PullRequest)

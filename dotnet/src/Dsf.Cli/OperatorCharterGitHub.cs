@@ -7,7 +7,7 @@ namespace Dsf.Cli;
 
 internal sealed class OperatorCharterGitHub(IGhCliRunner gh)
 {
-    internal sealed record Response(int Status, JsonElement Body, CharterNativeReceipt Receipt);
+    internal sealed record Response(int Status, JsonElement Body, CharterNativeReceipt Receipt, string ResponseJson);
 
     internal Response Request(string method, string route, object? body, CancellationToken token)
     {
@@ -27,7 +27,7 @@ internal sealed class OperatorCharterGitHub(IGhCliRunner gh)
         var json = text[(end + 2)..];
         using var document = JsonDocument.Parse(json, new JsonDocumentOptions { AllowDuplicateProperties = false });
         if (result.ExitCode != 0 && status is >= 200 and < 300) throw new JsonException();
-        return new(status, document.RootElement.Clone(), new(method, route, status, requestId, FactoryModelsValidation.Hash(json)));
+        return new(status, document.RootElement.Clone(), new(method, route, status, requestId, FactoryModelsValidation.Hash(json)), json);
     }
 
     internal void CheckBase(CharterReview review, CancellationToken token)
@@ -71,19 +71,21 @@ internal sealed class OperatorCharterGitHub(IGhCliRunner gh)
     internal void CheckProposal(CharterReview review, CharterPublication publication, CancellationToken token)
     {
         var commit = publication.Effects[1].ObjectId!;
-        if (Head(review, publication.Branch["refs/heads/".Length..], token) != commit)
-            throw new CharterOperationException(FactoryCharterState.Blocked, "Proposal branch contains unexpected human edits; never overwrite or force-push.");
+        CheckBranch(review, publication, commit, token);
         CheckCommit(review, publication, token);
     }
 
-    internal void CheckEmptyBranch(CharterReview review, CharterPublication publication, CancellationToken token)
+    internal void CheckEmptyBranch(CharterReview review, CharterPublication publication, CancellationToken token) =>
+        CheckBranch(review, publication, review.Commit, token);
+
+    private void CheckBranch(CharterReview review, CharterPublication publication, string head, CancellationToken token)
     {
         var response = Get(Route(review, "git/ref/heads/" + Uri.EscapeDataString(publication.Branch["refs/heads/".Length..])), token);
         if (response.GetProperty("ref").GetString() != publication.Branch
             || response.GetProperty("node_id").GetString() != publication.Effects[0].ObjectId
             || response.GetProperty("object").GetProperty("type").GetString() != "commit"
-            || response.GetProperty("object").GetProperty("sha").GetString() != review.Commit)
-            throw new CharterOperationException(FactoryCharterState.Blocked, "Original proposal ref changed; no overwrite or inferred ref ownership.");
+            || response.GetProperty("object").GetProperty("sha").GetString() != head)
+            throw new CharterOperationException(FactoryCharterState.Blocked, "Original proposal ref/head changed; no human overwrite, force-push or inferred ref ownership.");
     }
 
     internal void CheckCommit(CharterReview review, CharterPublication publication, CancellationToken token)

@@ -19,21 +19,36 @@ public static partial class CliApplication
         var adopt = BoolOption("--adopt", "review human-merged charter adoption; --approve records intent only");
         var existing = BoolOption("--existing", "explicit unchanged default-branch charter adoption without an empty PR");
         var status = BoolOption("--status-only", "inspect original publication receipts without mutation");
+        var inspectPublication = BoolOption("--inspect-publication", "inspect historical publication without requiring current source/model readiness");
+        var reconcile = BoolOption("--reconcile", "conditionally resolve original native response only; never send a GitHub mutation");
+        var retry = BoolOption("--retry", "explicitly retry original known-no-effect request after fresh unchanged review");
+        var operation = StringOption("--operation", "original publication operation GUID for reconciliation or retry");
+        var revision = StringOption("--revision", "exact native publication revision from --inspect-publication");
         var approve = StringOption("--approve", "exact current charter review fingerprint");
         var json = BoolOption("--json", "structured private charter review; never prompt");
-        AddOptions(command, endpoint, product, tenant, subscription, publish, adopt, existing, status, approve, json);
+        AddOptions(command, endpoint, product, tenant, subscription, publish, adopt, existing, status, approve, json,
+            inspectPublication, reconcile, retry, operation, revision);
         command.SetAction(async (parse, token) =>
         {
             FactoryCharterResult output;
             var interactive = terminal.Capabilities.IsInteractive && !parse.GetValue(json);
             try
             {
+                var recovery = parse.GetValue(reconcile) || parse.GetValue(retry);
+                var historical = parse.GetValue(inspectPublication) || parse.GetValue(reconcile);
+                if (new[] { parse.GetValue(publish), parse.GetValue(adopt), parse.GetValue(status),
+                    parse.GetValue(inspectPublication), parse.GetValue(reconcile), parse.GetValue(retry) }.Count(v => v) > 1
+                    || historical && (parse.GetValue(existing) || parse.GetValue(approve) is not null)
+                    || recovery && (!Guid.TryParse(parse.GetValue(operation), out var original) || original == Guid.Empty
+                        || string.IsNullOrWhiteSpace(parse.GetValue(revision)))
+                    || !recovery && (parse.GetValue(operation) is not null || parse.GetValue(revision) is not null))
+                    throw new CharterOperationException(FactoryCharterState.Blocked, "Exclusive action and original --operation plus --revision required for reconcile/retry. No supplied receipts or forced retry.");
                 if (parse.GetValue(publish) && (parse.GetValue(adopt) || parse.GetValue(existing))
                     || parse.GetValue(existing) && !parse.GetValue(adopt)
-                    || parse.GetValue(approve) is not null && !parse.GetValue(adopt) && !parse.GetValue(publish)
+                    || parse.GetValue(approve) is not null && !parse.GetValue(adopt) && !parse.GetValue(publish) && !parse.GetValue(retry)
                     || parse.GetValue(status) && (parse.GetValue(publish) || parse.GetValue(adopt) || parse.GetValue(approve) is not null))
                     throw new CharterOperationException(FactoryCharterState.Blocked, "Status is read-only; mutation options cannot be combined.");
-                if (parse.GetValue(publish) && !interactive && string.IsNullOrWhiteSpace(parse.GetValue(approve)))
+                if ((parse.GetValue(publish) || parse.GetValue(retry)) && !interactive && string.IsNullOrWhiteSpace(parse.GetValue(approve)))
                     throw new CharterOperationException(FactoryCharterState.Blocked, "--approve current exact fingerprint required; no provider access.");
                 var owner = FactoryGovernance.NormalizeEndpoint(Input(endpoint));
                 var key = Input(product);
@@ -47,10 +62,13 @@ public static partial class CliApplication
                 if (admission.State != FactoryReservationState.Reserved || admission.Foundation?.State != FactoryFoundationState.Inactive)
                     throw new CharterOperationException(FactoryCharterState.Blocked, "Current owner registration and inactive factory required.");
                 var service = new FactoryCharterService(reviews, runner, http, time);
-                output = parse.GetValue(status) ? await service.StatusAsync(admission, token)
+                output = parse.GetValue(reconcile) ? await service.ReconcilePublicationAsync(admission, Guid.Parse(parse.GetValue(operation)!),
+                        parse.GetValue(revision)!, token)
+                    : parse.GetValue(inspectPublication) ? await service.InspectPublicationAsync(admission, token)
+                    : parse.GetValue(status) ? await service.StatusAsync(admission, token)
                     : parse.GetValue(adopt) ? await service.ReviewAdoptionAsync(admission, parse.GetValue(existing), token)
                     : await service.PreviewAsync(admission, false, token);
-                if (parse.GetValue(publish))
+                if (parse.GetValue(publish) || parse.GetValue(retry))
                 {
                     var approval = parse.GetValue(approve);
                     if (interactive && string.IsNullOrWhiteSpace(approval))
@@ -59,7 +77,8 @@ public static partial class CliApplication
                         approval = terminal.Prompt("Approve this exact charter-only PR by entering its revision (blank cancels): ");
                     }
                     PrintReplay(approval);
-                    output = await service.PublishAsync(admission, output, approval ?? "", token);
+                    output = await service.PublishAsync(admission, output, approval ?? "", token,
+                        parse.GetValue(retry) ? Guid.Parse(parse.GetValue(operation)!) : null, parse.GetValue(revision));
                 }
                 if (parse.GetValue(adopt) && (parse.GetValue(approve) is not null || interactive))
                 {
@@ -90,6 +109,10 @@ public static partial class CliApplication
                     if (parse.GetValue(adopt)) args.Add("--adopt");
                     if (parse.GetValue(existing)) args.Add("--existing");
                     if (parse.GetValue(status)) args.Add("--status-only");
+                    if (parse.GetValue(inspectPublication)) args.Add("--inspect-publication");
+                    if (parse.GetValue(reconcile)) args.Add("--reconcile");
+                    if (parse.GetValue(retry)) args.Add("--retry");
+                    if (recovery) args.AddRange(["--operation", parse.GetValue(operation)!, "--revision", parse.GetValue(revision)!]);
                     args.AddRange(["--owner-appconfig-endpoint", owner, "--product", key, "--tenant", tenantId, "--subscription", subscriptionId]);
                     if (approval is not null) args.AddRange(["--approve", approval]);
                     terminal.WriteLine(CliPresentation.EquivalentCommand(terminal.Capabilities, ReviewText(string.Join(' ', args.Select(a =>
@@ -103,8 +126,10 @@ public static partial class CliApplication
                 or HttpRequestException or FormatException or CharterParseException or OwnerReservationStore.AuthenticationFailedException)
             { output = new(FactoryCharterState.Unknown, "Current charter/source/model/operator authority unconfirmed; provider details withheld. No forced retry."); }
             if (output.State is not (FactoryCharterState.Reviewed or FactoryCharterState.Published or FactoryCharterState.Adopted))
-                output = output with { BlockedOperation = parse.GetValue(publish) ? "Publication" : parse.GetValue(adopt) ? "Adoption" : "CharterReview",
-                    NextAction = "Inspect current authority and original durable receipts. Restore access or review complete changed source; never force retry an uncertain effect." };
+                output = output with { BlockedOperation = parse.GetValue(publish) || parse.GetValue(retry) ? "Publication"
+                        : parse.GetValue(reconcile) ? "RemainingPublication" : parse.GetValue(adopt) ? "Adoption" : "CharterReview",
+                    NextAction = parse.GetValue(reconcile) || parse.GetValue(inspectPublication) ? output.NextAction
+                        : "Inspect current authority and original durable receipts. Restore access or review complete changed source; never force retry an uncertain effect." };
             terminal.WriteLine(JsonSerializer.Serialize(output, ReviewJson));
             return output.State is FactoryCharterState.Reviewed or FactoryCharterState.Published or FactoryCharterState.Adopted ? Success
                 : output.State == FactoryCharterState.Canceled ? CanceledExitCode : Failure;

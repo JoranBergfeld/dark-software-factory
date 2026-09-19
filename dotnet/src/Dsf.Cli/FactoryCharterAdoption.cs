@@ -44,7 +44,7 @@ internal sealed partial class FactoryCharterService
         var payload = await ReadPayloadAsync(store, publication, token);
         var merge = ReadMerge(review.Review!, publication, payload.Review, token);
         await FencePublicationAsync(store, record, token);
-        return review with { Publication = publication, Merge = merge, Detail = "Exact human-merged charter and complete source reconciliation; explicit adoption approval still required.",
+        return review with { Publication = PublicPublication(publication), Merge = merge, Detail = "Exact human-merged charter and complete source reconciliation; explicit adoption approval still required.",
             Revision = AdoptionFingerprint(review.Review!, merge, publication.Operation) };
     }
 

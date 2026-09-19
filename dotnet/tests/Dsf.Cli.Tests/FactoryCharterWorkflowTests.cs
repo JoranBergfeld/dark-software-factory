@@ -520,10 +520,12 @@ public sealed class FactoryCharterWorkflowTests
         Assert.Equal("Canceled", (string?)JsonNode.Parse(terminal.Output)!["state"]);
         scenario.Reconstruct();
         var status = await scenario.Machine.InvokeAsync("charter", "--status-only");
-        Assert.Equal("Unknown", (string?)status.Result["state"]);
-        Assert.Equal("Dispatched", (string?)status.Result["publication"]?["effects"]?[0]?["state"]);
-        Assert.Equal("Unknown", (string?)(await scenario.Machine.InvokeAsync("charter", "--publish", "--approve", (string)review.Result["revision"]!)).Result["state"]);
+        Assert.Equal("Partial", (string?)status.Result["state"]);
+        Assert.Equal("Confirmed", (string?)status.Result["publication"]?["effects"]?[0]?["state"]);
         Assert.Single(scenario.GitHubWrites);
+        scenario.AfterEffect = null;
+        Assert.Equal("Published", (string?)(await scenario.Machine.InvokeAsync("charter", "--publish", "--approve", (string)review.Result["revision"]!)).Result["state"]);
+        Assert.Equal(3, scenario.GitHubWrites.Count);
     }
 
     [Theory]

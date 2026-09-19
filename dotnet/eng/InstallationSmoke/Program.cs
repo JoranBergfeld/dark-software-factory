@@ -15,7 +15,9 @@ if (args.Length != 4 || args[2] != "--payload")
 
 var cli = Path.GetFullPath(args[1]);
 var payload = Path.GetFullPath(args[3]);
-var scratch = Directory.CreateTempSubdirectory("dsf-installed-smoke-");
+var retainedScratch = Environment.GetEnvironmentVariable("DSF_INSTALLED_SMOKE_DIRECTORY");
+var scratch = retainedScratch is null ? Directory.CreateTempSubdirectory("dsf-installed-smoke-")
+    : Directory.CreateDirectory(Path.GetFullPath(retainedScratch));
 try
 {
     var version = File.ReadAllText(Path.Combine(payload, "dsf-bundle.version")).Trim();
@@ -228,6 +230,22 @@ try
             "Installed charter command accepted incomplete redirected inputs.");
     }
     Require(File.ReadAllText(Path.Combine(scratch.FullName, "azure.log")).Length == 0, "Incomplete charter command reached Azure.");
+    var recoveryHelp = await Run("onboard", "decide", "publication", "--help");
+    Require(recoveryHelp.ExitCode == 0 && new[] { "--operation", "--revision", "--attempt", "--reconcile", "--retry" }
+        .All(option => recoveryHelp.Output.Contains(option, StringComparison.Ordinal)), "Installed publication recovery grammar missing.");
+    foreach (var action in new[] { "--inspect-publication", "--reconcile", "--retry" })
+    {
+        var incomplete = await Run("onboard", "decide", "charter", action, "--json");
+        Require(incomplete.ExitCode == 1 && incomplete.Output.Contains("\"state\": \"Blocked\"", StringComparison.Ordinal),
+            "Installed charter recovery accepted incomplete explicit inputs.");
+    }
+    foreach (var action in new[] { "--json", "--reconcile", "--retry" })
+    {
+        var incomplete = await Run("onboard", "decide", "publication", action);
+        Require(incomplete.ExitCode == 1 && incomplete.Output.Contains("\"state\": \"Blocked\"", StringComparison.Ordinal),
+            "Installed publication recovery accepted incomplete explicit inputs.");
+    }
+    Require(File.ReadAllText(Path.Combine(scratch.FullName, "azure.log")).Length == 0, "Incomplete recovery command reached Azure.");
 
     var foundationAsset = Path.Combine(payload, "assets", "infra", "onboard-foundation.json");
     var foundationBytes = File.ReadAllBytes(foundationAsset);
@@ -374,7 +392,7 @@ try
 }
 finally
 {
-    scratch.Delete(recursive: true);
+    if (retainedScratch is null) scratch.Delete(recursive: true);
 }
 
 Task<(int ExitCode, string Output)> Run(params string[] arguments) =>

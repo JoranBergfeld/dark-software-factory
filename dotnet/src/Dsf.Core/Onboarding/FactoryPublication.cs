@@ -13,7 +13,13 @@ public sealed record FactoryPublicationAttempt(Guid Id, DateTimeOffset IssuedAt,
     int? StatusCode = null, string? RequestId = null)
 {
     public string? MutationReviewSha256 { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public FactoryPublicationReconciliation? Reconciliation { get; init; }
 }
+
+public sealed record FactoryPublicationReconciliation(string OriginalRevision, string Actor, DateTimeOffset At);
+public sealed record FactoryPublicationResponse(Guid FactoryId, long RepositoryId, string Operation, Guid Attempt,
+    string NativeResourceId, string IntentSha256, FactoryPublicationReceipt Receipt);
 
 public sealed record FactoryPublicationReceipt(long RepositoryId, long IssueId, string NodeId, long Number,
     string Url, DateTimeOffset CreatedAt, string RequestId, string ResponseSha256)
@@ -30,6 +36,8 @@ public sealed record FactoryPublicationDocument(int Protocol, string Id, string 
 {
     [System.Text.Json.Serialization.JsonRequired] public AuditRecordIdentity Origin { get; init; } = null!;
     public string Checksum { get; init; } = "";
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public FactoryPublicationResponse? Response { get; init; }
     public string CalculateChecksum() => FactoryModelsValidation.Hash(this with { Checksum = "" });
 }
 
@@ -80,6 +88,10 @@ public static class FactoryPublication
             || document.Attempts.Any(a => a.Id == Guid.Empty || !Enum.IsDefined(a.State) || a.IssuedAt < document.IntendedAt
                 || a.IssuedAt > now || a.State == FactoryPublicationState.Intended
                 || a.MutationReviewSha256 is not null && !FactorySourceValidation.Hash(a.MutationReviewSha256)
+                || a.Reconciliation is { } reconciliation && (a.State != FactoryPublicationState.Confirmed
+                    || reconciliation.At < a.IssuedAt || reconciliation.At > now
+                    || reconciliation.OriginalRevision is not { Length: > 0 and <= 256 } || reconciliation.OriginalRevision.Any(char.IsControl)
+                    || !Guid.TryParse(reconciliation.Actor, out var actor) || actor == Guid.Empty)
                 || a.State == FactoryPublicationState.Rejected && (a.StatusCode is not (401 or 403 or 404 or 422) || !RequestId(a.RequestId))
                 || a.State == FactoryPublicationState.Confirmed && (a.StatusCode != 201 || !RequestId(a.RequestId))
                 || a.State is FactoryPublicationState.Dispatched or FactoryPublicationState.NotDispatched or FactoryPublicationState.Unknown
@@ -94,6 +106,16 @@ public static class FactoryPublication
             throw new System.Text.Json.JsonException("Complete original native publication journal required.");
         _ = Dsf.Core.Runtime.NativeCosmosResourceId.RequireDocument(document.Origin.NativeResourceId);
         if (document.Receipt is { } receipt) ValidateReceipt(document.Intent, document.Attempts.Last(), receipt, now);
+        if (document.Response is { } response)
+        {
+            if (document.State is not (FactoryPublicationState.Dispatched or FactoryPublicationState.Unknown)
+                || response.FactoryId != document.Intent.FactoryId || response.RepositoryId != document.Intent.RepositoryId
+                || response.Operation != document.Id || response.Attempt != document.Attempts.Last().Id
+                || response.IntentSha256 != FactoryModelsValidation.Hash(document.Intent))
+                throw new System.Text.Json.JsonException("Original response belongs to a different publication or attempt.");
+            _ = Dsf.Core.Runtime.NativeCosmosResourceId.RequireDocument(response.NativeResourceId);
+            ValidateReceipt(document.Intent, document.Attempts.Last(), response.Receipt, now);
+        }
         return document;
     }
 

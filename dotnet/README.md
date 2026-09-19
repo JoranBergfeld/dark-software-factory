@@ -59,7 +59,7 @@ executables and require neither the SDK nor a separately installed .NET runtime.
 The CLI's build-only runtime dependency builds the matching runtime automatically,
 including for `dotnet run --project src/Dsf.Cli -- sweep --product <product>`.
 `eng/CliBundle.targets` publishes its dependency closure into `runtime/` and compiles
-the twelve provisioning entrypoints into self-contained ARM JSON under `assets/infra/`.
+the fifteen provisioning entrypoints into self-contained ARM JSON under `assets/infra/`.
 Use one `-p:Version=<version>` for build, pack, and publish; when using `--no-build`,
 the configuration and version must match the preceding build.
 
@@ -69,6 +69,11 @@ Offline installation checks (no Azure/GitHub writes):
 ./eng/smoke-test-tool-package.sh artifacts/release/nuget/DarkSoftwareFactory.Cli.<version>.nupkg
 ./eng/smoke-test-release-archive.sh <archive.tar.gz> linux-x64
 ```
+
+Set `DSF_SMOKE_DIRECTORY=artifacts/my-package-smoke` to run the tool-package
+check in a new, explicitly named workspace directory instead of system temporary
+storage. That directory must not exist; it and its verification evidence are
+retained for caller-owned cleanup.
 
 ## Existing repository attachment review
 

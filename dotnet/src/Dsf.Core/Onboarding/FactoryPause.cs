@@ -7,6 +7,7 @@ public enum FactoryPauseState { NotRequested, DrainingUnknown, Partial, Blocked,
 public sealed record FactoryPauseRequest(int Protocol, string Kind, Guid OperationId, Guid FactoryId, long RepositoryId,
     string ProfilePin, string ManifestRevision, string ManifestSha256, FactoryManifest ReviewedManifest,
     string RequestedBy, DateTimeOffset RequestedAt);
+public sealed record FactoryIssuedPublication(string Kind, string Operation, string State, string Revision);
 
 public sealed record FactoryPauseResult(FactoryPauseState State, string Detail)
 {
@@ -14,6 +15,8 @@ public sealed record FactoryPauseResult(FactoryPauseState State, string Detail)
     public bool? AdmissionClosed { get; init; }
     public bool StopCompleted => false;
     public bool IsActivated => false;
+    public IReadOnlyList<FactoryIssuedPublication> IssuedPublications { get; init; } = [];
+    public bool PublicationInventoryComplete { get; init; }
     public string NextAction => AdmissionClosed == true
         ? "Inspect retained work and issued effects. No automatic restart, takeover, rollback or completed-stop claim."
         : "Pause inspection grants no work or publication authority.";

@@ -27,7 +27,7 @@ internal sealed partial class FactoryCharterService
         {
             var pending = root is null ? null : ReadPublication(root, admission);
             if (pending is not null) _ = await ReadPayloadAsync(store, pending, token);
-            return adopted with { Publication = pending };
+            return adopted with             { Publication = pending is null ? null : PublicPublication(pending) };
         }
         if (root is null) return await PreviewAsync(admission, false, token);
         var publication = ReadPublication(root, admission);
@@ -38,20 +38,20 @@ internal sealed partial class FactoryCharterService
         catch (CharterOperationException e)
         {
             return new(e.State, e.Message + " Publication receipts retained as history; no current authority.")
-                { Publication = publication, Revision = root.ETag.ToString(), BlockedOperation = "Adoption/publication" };
+                { Publication = PublicPublication(publication), Revision = root.ETag.ToString(), BlockedOperation = "Adoption/publication" };
         }
         return new(state, state == FactoryCharterState.Unknown
             ? "Publication quarantined. Original native receipts required; no search-marker adoption, recreation or forced retry."
             : "Publication receipt history; pending PR is not governing intent.", payload.Review)
         {
-            Publication = publication, Revision = root.ETag.ToString(),
+            Publication = PublicPublication(publication), Revision = root.ETag.ToString(),
             NextAction = state == FactoryCharterState.Published ? "Human reviews/merges the exact PR, then operator previews adoption."
                 : "Inspect original durable operation and native receipts; no automatic takeover.",
         };
     }
 
     internal async Task<FactoryCharterResult> PublishAsync(FactoryReservationResult admission, FactoryCharterResult reviewed,
-        string approval, CancellationToken token)
+        string approval, CancellationToken token, Guid? retryOperation = null, string? retryRevision = null)
     {
         var review = reviewed.Review ?? throw new JsonException();
         if (approval != review.Fingerprint)
@@ -61,6 +61,8 @@ internal sealed partial class FactoryCharterService
         var store = ProductStore(admission);
         var native = new OperatorCharterGitHub(reviewer.OperatorGitHub);
         var root = await store.ReadAsync(PublicationKey, token);
+        if (retryOperation is not null && root is null)
+            throw new CharterOperationException(FactoryCharterState.Blocked, "Original rejected operation required; retry cannot create replacement intent.");
         if (root is null) await store.RequirePristineAsync(PublicationPrefix, token);
         CharterPublication publication = null!;
         CharterPublication? preceding = null;
@@ -73,6 +75,13 @@ internal sealed partial class FactoryCharterService
         if (root is not null)
         {
             publication = ReadPublication(root, admission);
+            if (retryOperation is { } originalOperation)
+            {
+                RequireOriginalPublication(publication, root.ETag.ToString(), originalOperation, retryRevision!);
+                if (publication.ReviewFingerprint != review.Fingerprint
+                    || publication.Effects.LastOrDefault() is not { State: CharterEffectState.KnownFailed or CharterEffectState.NotDispatched })
+                    throw new CharterOperationException(FactoryCharterState.Blocked, "Retry requires original unchanged review and native known-no-effect outcome.");
+            }
             if (publication.ReviewFingerprint != review.Fingerprint)
             {
                 var adopted = await AdoptionStatusAsync(admission, token);
@@ -87,12 +96,25 @@ internal sealed partial class FactoryCharterService
             }
             else
             {
-                if (publication.Effects.Any(e => e.State is CharterEffectState.Dispatched or CharterEffectState.Unknown or CharterEffectState.KnownFailed))
+                if (publication.Effects.Any(e => e.State is CharterEffectState.Dispatched or CharterEffectState.Unknown)
+                    || retryOperation is null && publication.Effects.Any(e => e.State is CharterEffectState.KnownFailed or CharterEffectState.NotDispatched))
                     return await StatusAsync(admission, token, publicationOnly: true);
                 if (publication.State == FactoryCharterState.Published) return await StatusAsync(admission, token, publicationOnly: true);
                 var original = await ReadPayloadAsync(store, publication, token);
                 payload = original;
                 serialized = FactoryReservationRecords.Serialize(original);
+                if (retryOperation is not null)
+                {
+                    var failed = publication.Effects.Last();
+                    if (publication.Effects.Sum(e => e.PreviousAttempts.Count + 1) >= MaximumCharterAttempts)
+                        throw new CharterOperationException(FactoryCharterState.Partial, "Bounded original attempt history exhausted; no dispatch.");
+                    await CheckCurrentAsync(admission, review, token);
+                    publication = WithEffect(publication, failed with
+                    {
+                        State = CharterEffectState.Intended, Attempt = Guid.NewGuid(), Receipt = null, ObjectId = null, Response = null,
+                        Reconciliation = null, PreviousAttempts = [.. failed.PreviousAttempts, new(failed.Attempt, failed.State, failed.Receipt)],
+                    }) with { State = FactoryCharterState.Partial };
+                }
             }
         }
         if (root is null || preceding is not null)
@@ -123,14 +145,29 @@ internal sealed partial class FactoryCharterService
                 await store.WriteAsync(PayloadKey(operation, i), FactoryReservationRecords.Serialize(parts[i]), null, token);
             }
         }
+        var issued = false;
+        var acknowledgedDispatch = false;
         try
         {
             for (var i = publication.Effects.TakeWhile(e => e.State == CharterEffectState.Confirmed).Count(); i < 3; i++)
             {
                 var (kind, route, body) = EffectRequest(i, review, publication);
-                var intent = new CharterEffect(i, kind, CharterEffectState.Intended, FactoryModelsValidation.Hash(body));
-                if (publication.Effects.Count == i) publication = publication with { Effects = [.. publication.Effects, intent] };
-                else if (publication.Effects.Count != i + 1 || publication.Effects[i] != intent) throw new JsonException();
+                issued = false;
+                acknowledgedDispatch = false;
+                var intent = new CharterEffect(i, kind, CharterEffectState.Intended, FactoryModelsValidation.Hash(body)) { Attempt = Guid.NewGuid() };
+                if (publication.Effects.Count == i)
+                {
+                    if (publication.Effects.Sum(e => e.PreviousAttempts.Count + 1) >= MaximumCharterAttempts)
+                        throw new CharterOperationException(FactoryCharterState.Partial, "Bounded original attempt history exhausted; no next dispatch.");
+                    publication = publication with { Effects = [.. publication.Effects, intent] };
+                }
+                else
+                {
+                    if (publication.Effects.Count != i + 1 || publication.Effects[i] is not { State: CharterEffectState.Intended } current
+                        || current.Kind != kind || current.RequestSha256 != intent.RequestSha256) throw new JsonException();
+                    intent = current.Attempt == Guid.Empty ? current with { Attempt = Guid.NewGuid() } : current;
+                    publication = WithEffect(publication, intent);
+                }
                 root = await SavePublicationAsync(store, root!, publication, token);
                 await CheckCurrentAsync(admission, review, token);
                 native.CheckBase(review, token);
@@ -140,32 +177,35 @@ internal sealed partial class FactoryCharterService
                 if (i == 2) native.CheckProposal(review, publication, token);
                 publication = WithEffect(publication, intent with { State = CharterEffectState.Dispatched });
                 root = await SavePublicationAsync(store, root, publication, token);
+                acknowledgedDispatch = true;
                 // A conditional record coordinates DSF workers, not GitHub actors. No ref update or lease takeover exists.
                 await CheckCurrentAsync(admission, review, token);
                 native.CheckBase(review, token);
                 if (i == 1) native.CheckEmptyBranch(review, publication, token);
                 if (i == 2) native.CheckProposal(review, publication, token);
+                issued = true;
                 var response = native.Request("POST", route, body, token);
                 if (response.Status != 200 || response.Body.TryGetProperty("errors", out _))
                 {
-                    var rejected = response.Status is 400 or 401 or 403 or 404 or 422;
+                    var rejected = response.Status is 400 or 401 or 403 or 404 or 422 && response.Receipt.RequestId.Length > 0
+                        && !response.Body.TryGetProperty("data", out var data);
                     publication = WithEffect(publication, intent with { State = rejected ? CharterEffectState.KnownFailed : CharterEffectState.Unknown,
                         Receipt = response.Receipt }) with { State = rejected ? FactoryCharterState.Failed : FactoryCharterState.Unknown };
-                    root = await SavePublicationAsync(store, root, publication, token);
+                    using var closeout = new CancellationTokenSource(TimeSpan.FromSeconds(30), clock);
+                    root = await SavePublicationAsync(store, root, publication, closeout.Token);
                     return Result(publication, root, "GitHub write rejected or uncertain; partial effects retained, no automatic retry.");
                 }
                 if (response.Receipt.RequestId.Length == 0) throw new JsonException();
-                var result = response.Body.GetProperty("data").GetProperty(kind);
-                var objectId = Confirm(i, review, publication, result);
-                publication = WithEffect(publication, intent with { State = CharterEffectState.Confirmed,
-                    Receipt = response.Receipt, ObjectId = objectId });
-                if (i == 2)
-                {
-                    var pull = PullReceipt(review, publication, result.GetProperty("pullRequest"));
-                    if (pull.NodeId == preceding?.PullRequest?.NodeId) throw new JsonException();
-                    publication = publication with { PullRequest = pull, State = FactoryCharterState.Published };
-                }
-                root = await SavePublicationAsync(store, root, publication, token);
+                var witnessed = intent with { State = CharterEffectState.Dispatched, Response = new(publication.FactoryId,
+                    review.RepositoryId, publication.Operation, intent.Attempt, review.Fingerprint, intent.RequestSha256, response.Receipt, response.ResponseJson) };
+                var confirmed = ConfirmResponse(publication, review, witnessed);
+                if (i == 2 && confirmed.PullRequest!.NodeId == preceding?.PullRequest?.NodeId) throw new JsonException();
+                // Only this acknowledged dispatcher can retain the original response. Recovery accepts no caller-supplied bytes.
+                publication = WithEffect(publication, witnessed);
+                using var completion = new CancellationTokenSource(TimeSpan.FromSeconds(30), clock);
+                root = await SavePublicationAsync(store, root, publication, completion.Token);
+                root = await SavePublicationAsync(store, root, confirmed, completion.Token);
+                publication = confirmed;
             }
             await CheckCurrentAsync(admission, review, token);
             native.CheckBase(review, token);
@@ -173,13 +213,30 @@ internal sealed partial class FactoryCharterService
             return Result(publication, root, "Exact charter-only PR published using effective gh identity; human merge/adoption outstanding. Factory inactive.");
         }
         catch (OperationCanceledException)
-        { return Result(publication, root, "Canceled; dispatched effects may have committed. No rollback or replay.", FactoryCharterState.Canceled); }
+        {
+            await RetainNoDispatchAsync();
+            return Result(publication, root, "Canceled; dispatched effects may have committed. No rollback or replay.", FactoryCharterState.Canceled);
+        }
         catch (Exception e) when (e is CharterOperationException or ReservationStoreException or JsonException or InvalidOperationException
             or HttpRequestException or IOException or KeyNotFoundException or FormatException)
         {
+            await RetainNoDispatchAsync();
             var state = publication.Effects.Any(e => e.State == CharterEffectState.Dispatched) ? FactoryCharterState.Unknown
                 : e is CharterOperationException problem ? problem.State : FactoryCharterState.Unknown;
             return Result(publication, root, "Publication held; native response or current authority unconfirmed. Inspect original receipts; no recreation.", state);
+        }
+
+        async Task RetainNoDispatchAsync()
+        {
+            if (issued || !acknowledgedDispatch) return;
+            try
+            {
+                var notIssued = WithEffect(publication, publication.Effects.Last() with { State = CharterEffectState.NotDispatched });
+                using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(30), clock);
+                root = await SavePublicationAsync(store, root!, notIssued, cleanup.Token);
+                publication = notIssued;
+            }
+            catch (Exception e) when (e is ReservationStoreException or JsonException or OperationCanceledException or HttpRequestException) { }
         }
     }
 
@@ -251,6 +308,10 @@ internal sealed partial class FactoryCharterService
 
     private async Task CheckCurrentAsync(FactoryReservationResult admission, CharterReview expected, CancellationToken token)
     {
+        var stops = await ProductStore(admission).ReadNamespaceAsync(FactoryPause.Key, token);
+        var history = await ProductStore(admission).ReadNamespaceAsync(FactoryPause.HistoryPrefix, token);
+        if (stops.Count != 0 || history.Count != 0)
+            throw new CharterOperationException(FactoryCharterState.Blocked, "Stop closes all new charter dispatch, not original outcome inspection.");
         var fresh = await new FactoryReservationService(reviewer, azure, http, clock).StatusAsync(admission.Identity!.OwnerEndpoint,
             admission.Identity.TenantId, admission.Identity.SubscriptionId, admission.Identity.ProductKey, token);
         if (fresh.State != FactoryReservationState.Reserved || fresh.Identity != admission.Identity || fresh.Foundation?.State != FactoryFoundationState.Inactive)
@@ -268,6 +329,7 @@ internal sealed partial class FactoryCharterService
             || p.Sequence is < 1 or > FactoryCharterLimits.MaximumRevisions || p.PayloadRecords is < 1 or > MaximumPayloadRecords
             || (p.Sequence == 1) != (p.PreviousOperation is null)
             || p.Branch != "refs/heads/dsf/charter/" + p.Operation.ToString("N") || p.Effects.Count > 3
+            || p.Effects.Sum(e => e.PreviousAttempts.Count + 1) > MaximumCharterAttempts
             || !FactorySourceValidation.Hash(p.ReviewFingerprint) || !FactorySourceValidation.Hash(p.PayloadSha256)
             || p.Effects.Where((e, index) => e.Index != index || !Enum.IsDefined(e.State)
                 || index < p.Effects.Count - 1 && e.State != CharterEffectState.Confirmed).Any()) throw new JsonException();
@@ -316,6 +378,17 @@ internal sealed partial class FactoryCharterService
                     || effect.Receipt is not { Method: "POST", Status: 200, RequestId.Length: > 0 and <= 128 } receipt
                     || receipt.Route != route || !FactorySourceValidation.Hash(receipt.ResponseSha256)))
                 throw new JsonException();
+            if (effect.PreviousAttempts.Count > MaximumCharterAttempts
+                || effect.PreviousAttempts.Any(a => a.State is not (CharterEffectState.KnownFailed or CharterEffectState.NotDispatched)
+                    || a.State == CharterEffectState.KnownFailed && !KnownRejection(a.Native))
+                || effect.State == CharterEffectState.KnownFailed && !KnownRejection(effect.Receipt))
+                throw new JsonException();
+            if (effect.Response is not null)
+            {
+                var confirmed = ConfirmResponse(p, payload.Review, effect).Effects[effect.Index];
+                if (effect.State == CharterEffectState.Confirmed && (effect.ObjectId != confirmed.ObjectId || effect.Receipt != confirmed.Receipt))
+                    throw new JsonException();
+            }
         }
         if (p.State == FactoryCharterState.Published && (p.Effects.Count != 3 || p.Effects.Any(e => e.State != CharterEffectState.Confirmed)
             || p.PullRequest is not { } pull || pull.NodeId != p.Effects[2].ObjectId || pull.RepositoryId != payload.Review.RepositoryId
@@ -336,7 +409,11 @@ internal sealed partial class FactoryCharterService
         return await store.WriteAsync(root.Key, FactoryReservationRecords.Serialize(p), root.ETag, token);
     }
     private static FactoryCharterResult Result(CharterPublication p, ConfigurationSetting root, string detail, FactoryCharterState? state = null) =>
-        new(state ?? p.State, detail) { Publication = p, Revision = root.ETag.ToString() };
+        new(state ?? p.State, detail) { Publication = PublicPublication(p), Revision = root.ETag.ToString() };
+
+    private static bool KnownRejection(CharterNativeReceipt? receipt) =>
+        receipt is { Method: "POST", Route: "graphql", Status: 400 or 401 or 403 or 404 or 422, RequestId.Length: > 0 and <= 128 }
+        && FactorySourceValidation.Hash(receipt.ResponseSha256);
 
     private static void CheckPublicationCapacity(CharterPublication p, IReadOnlyList<string> parts)
     {

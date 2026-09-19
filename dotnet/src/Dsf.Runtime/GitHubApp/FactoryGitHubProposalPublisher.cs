@@ -7,17 +7,26 @@ namespace Dsf.Runtime.GitHubApp;
 internal sealed class FactoryGitHubProposalPublisher(TokenCredential credential, HttpClient http, TimeProvider clock)
 {
     internal async Task<FactoryPublicationResult> CreateAsync(FactoryPublicationIntent intent, FactoryGitHubAuthority authority,
-        CancellationToken token, Func<CancellationToken, Task>? requireAdmission = null, FactoryActivityStore? discovery = null)
+        CancellationToken token, Func<CancellationToken, Task>? requireAdmission = null, FactoryActivityStore? discovery = null,
+        FactoryPublicationRetry? retry = null)
     {
         FactoryPublication.Validate(intent);
         if (intent.FactoryId != authority.FactoryId || intent.RepositoryId != authority.RepositoryId)
             throw new InvalidOperationException("Exact factory and durable repository required.");
         if (requireAdmission is not null) await requireAdmission(token);
+        var initialAdmission = true;
         if (discovery is not null)
-            await discovery.RegisterAsync(FactoryPublication.Id(intent), FactoryModelsValidation.Hash(intent),
+            initialAdmission = await discovery.RegisterAsync(FactoryPublication.Id(intent), FactoryModelsValidation.Hash(intent),
                 requireAdmission ?? throw new InvalidOperationException("Indexed publication requires protected current admission."), token, intendedPublication: intent);
-        var journal = new FactoryPublicationJournal(intent, credential, http, clock);
-        var original = await journal.OpenAsync(token);
+        var journal = retry is not null || !initialAdmission
+            ? await FactoryPublicationJournal.ReadExistingAsync(intent.FactoryId, intent.Product, intent.RepositoryId,
+                FactoryPublication.Id(intent), credential, http, clock, token)
+            : new FactoryPublicationJournal(intent, credential, http, clock);
+        var original = retry is not null || !initialAdmission ? journal.Document : await journal.OpenAsync(token);
+        if (original.State is FactoryPublicationState.Intended or FactoryPublicationState.Rejected or FactoryPublicationState.NotDispatched
+            && FactoryModelsValidation.Hash(original.Intent) != FactoryModelsValidation.Hash(intent))
+            throw new InvalidOperationException("Original logical intent differs; no replacement or dispatch.");
+        if (retry is not null) journal.RequireRetry(retry);
         if (discovery is not null)
             await discovery.ConfirmAsync(original.Id, journal.NativeIdentity!.NativeResourceId!, token);
         if (original.State == FactoryPublicationState.Confirmed) return Result(original.State);
@@ -35,7 +44,8 @@ internal sealed class FactoryGitHubProposalPublisher(TokenCredential credential,
             if (requireAdmission is not null) await requireAdmission(token);
             createIssued = true;
             var receipt = await access.CreateAsync(journal.Document.Intent, token);
-            await journal.ConfirmAsync(receipt, token);
+            using var completion = new CancellationTokenSource(TimeSpan.FromSeconds(30), clock);
+            await journal.ConfirmAsync(receipt, completion.Token);
             return Result(FactoryPublicationState.Confirmed);
         }
         catch (FactoryIssueRejectedException rejection)

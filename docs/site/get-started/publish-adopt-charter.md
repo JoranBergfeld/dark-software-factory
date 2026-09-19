@@ -158,7 +158,7 @@ succeeded; exit 1 means incomplete/blocked/failed/unknown, and 130 means cancele
 
 Private product App Configuration keys under `dsf/factory/charter/` retain stable
 publication intents, approved payload chunks, per-effect intended/dispatched/
-confirmed/known-failed/unknown states, native request IDs and response hashes,
+confirmed/known-failed/not-dispatched/unknown states, native request IDs and response hashes,
 exact repository/ref/commit/PR identities, and adoption intents/receipts.
 Publication history links prior operation IDs. Adopted records pin exact charter,
 source, analysis chain, model revision, operator and time; payload/receipt loss
@@ -180,8 +180,42 @@ quarantine the result; cancellation is not rollback. An intended but undispatche
 publication step can resume with its exact original inputs. Confirmed steps are
 not repeated. A lost/ambiguous dispatch never recreates a branch or PR, searches
 for ownership markers, adopts shared-App authorship, or force-overwrites work.
-Known rejected and uncertain effects remain inspectable; full uncertain-publication
-reconciliation is a separate lifecycle capability, not a force/retry switch here.
+Inspect historical publication independently of current source/model readiness:
+
+```bash
+dsf onboard decide charter --inspect-publication \
+  --owner-appconfig-endpoint https://owner.azconfig.io --product widget \
+  --tenant 11111111-1111-1111-1111-111111111111 \
+  --subscription 22222222-2222-2222-2222-222222222222 --json
+```
+
+Use its `publication.operation` and exact native `revision` with `--reconcile
+--operation ORIGINAL_GUID --revision ORIGINAL_ETAG` and the same four locators.
+This is an outcome-only conditional write, **not another GitHub request**. It can
+resolve an original response retained by the acknowledged dispatcher before
+closeout failed. The response is bound to factory, repository, immutable review,
+operation and attempt; it is retained inside the existing bounded, auditable
+publication record. Operator output withholds raw provider response and source
+evidence, exposing original reviewed charter and native identities instead.
+Reconciliation records the original revision, actor and time. A stale or racing
+operator cannot overwrite a newer outcome.
+
+No original response means `Unknown`, even if the branch, commit, PR, marker or
+author looks correct. There is no uploaded-receipt or force option. Older
+uncertain publications without a retained response cannot be retroactively
+given creation provenance. `--reconcile` does not adopt a charter, restore current
+readiness, clear pause, publish remaining steps or certify completed stop.
+
+A native known rejection or original process's confirmed **no dispatch** can be
+retried explicitly using `--retry --operation ORIGINAL_GUID --revision
+ORIGINAL_ETAG --approve EXACT_CURRENT_REVIEW`, plus the four locators. This
+requires fresh unchanged source/model/operator/mutation-automation checks and
+open admission. It keeps the same branch/operation and bounded prior-attempt
+receipts (at most eight total attempts); confirmed steps are never repeated.
+Human branch edits block continuation. After positive reconciliation of an
+intermediate step, a separately reviewed `--publish` may continue only the
+remaining steps. Cancellation stops new dispatch, but an original response
+arriving during cancellation may still be durably confirmed.
 
 Council evidence/preview and activation remain separate. Adoption grants neither
 standing GitHub write authority nor permission for live factory work.
