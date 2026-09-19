@@ -91,6 +91,7 @@ public sealed class OwnerReservationStoreTests
     [InlineData("label")]
     [InlineData("value")]
     [InlineData("etag")]
+    [InlineData("content_type")]
     public async Task Successful_status_code_without_the_exact_conditional_record_is_unknown(string field)
     {
         var record = new Dictionary<string, object?>
@@ -130,8 +131,8 @@ public sealed class OwnerReservationStoreTests
             Assert.Equal("Bearer", request.Headers.Authorization?.Scheme);
             requests.Add((request.Headers.TryGetValues("If-Match", out var matches) ? matches.Single() : null,
                 request.Headers.TryGetValues("If-None-Match", out var nones) ? nones.Single() : null));
-            return Reply(HttpStatusCode.OK, """
-                {"key":"a/b","label":null,"value":"data","content_type":"application/json","etag":"opaque:A-1",
+            return Reply(HttpStatusCode.OK, $$$"""
+                {"key":"a/b","label":null,"value":"data","content_type":"{{{OwnerReservationStore.ContentType}}}","etag":"opaque:A-1",
                  "last_modified":"2026-09-15T23:00:00Z","locked":false,"tags":{}}
                 """);
         }));
