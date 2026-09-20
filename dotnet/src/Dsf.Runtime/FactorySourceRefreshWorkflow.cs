@@ -83,6 +83,8 @@ internal sealed partial class FactorySourceRefreshWorkflow(FactoryHostSettings s
             throw Denied(observed.State, observed.Reason);
         source.BeforeWork = FenceWorkAsync;
         source.IsRefreshWork = true;
+        var modelResponseReceived = false;
+        var validatingModelOutput = false;
         try
         {
             if (root is null || progress.Binding.Snapshot.Id != binding.Snapshot.Id)
@@ -184,9 +186,12 @@ internal sealed partial class FactorySourceRefreshWorkflow(FactoryHostSettings s
             progress = progress with { Dispatch = dispatch, CompatibilityAttempts = attempts + 1 };
             await SaveAsync(token);
             var response = await models.CompleteAsync(input, token);
+            modelResponseReceived = true;
             await workflow.RevalidateCharterReviewAsync(review, token);
+            validatingModelOutput = true;
             var resultCheck = FactoryIntentPrompts.Parse<SourceCompatibilityResult>(response.Text);
             FactorySourceCompatibility.Validate(resultCheck, targets, chunk.Content);
+            validatingModelOutput = false;
             var step = new SourceCompatibilityStep(progress.Id, progress.AnalysisRevision.Value, dispatch,
                 chunk.Source, chunk.Dependencies, progress.CompatibilityChain, response.Observation, resultCheck);
             var saved = await store.WriteAsync(FactorySourceRefresh.StepKey(progress.Id, progress.CheckedChunks), step, null, token);
@@ -202,6 +207,10 @@ internal sealed partial class FactorySourceRefreshWorkflow(FactoryHostSettings s
                     : progress with { State = SourceRefreshState.ReviewRequired, Reason = "NecessaryGoverningImpactRemainsUnresolved" };
             await github.CheckExactSnapshotAsync(binding.Snapshot, token);
             return await FinishAsync(request, token);
+        }
+        catch (IntentException e) when (modelResponseReceived && !validatingModelOutput)
+        {
+            throw new IntentException(IntentState.Unknown, "AcceptedCompatibilityResultCloseoutUnconfirmed; " + e.Message);
         }
         catch (IntentException e) when (source.ModelRequestIssued && progress.Dispatch is not null && e.State != IntentState.Unknown)
         {

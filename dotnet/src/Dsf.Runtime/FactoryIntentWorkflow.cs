@@ -134,6 +134,8 @@ internal sealed class FactoryIntentWorkflow(FactorySourceAccess source, HttpClie
             await ConfirmAsync(receipt, recovered, token);
         }
         if (status || Completed == chunks.Length * 2) return await ReportAsync(request.Page, null, null, token);
+        var modelResponseReceived = false;
+        var validatingModelOutput = false;
         try
         {
             if (progress.ModelAttempts >= 2 * chunks.Length + FactoryIntentLimits.MaximumAdditionalAttempts)
@@ -151,9 +153,12 @@ internal sealed class FactoryIntentWorkflow(FactorySourceAccess source, HttpClie
                 ModelAttempts = progress.ModelAttempts + 1, ModelOutcome = IntentModelOutcome.Dispatched };
             await SaveAsync(token);
             var response = await access.CompleteAsync(input, token);
+            modelResponseReceived = true;
             await CheckSourceAsync(token);
             IntentCandidate? candidate = null;
             IntentVerification? verification = null;
+            // Only acknowledged semantic-output errors may close a dispatched result without its receipt.
+            validatingModelOutput = true;
             if (checking)
             {
                 verification = FactoryIntentPrompts.Parse<IntentVerification>(response.Text);
@@ -164,10 +169,15 @@ internal sealed class FactoryIntentWorkflow(FactorySourceAccess source, HttpClie
                 candidate = FactoryIntentPrompts.Parse<IntentCandidate>(response.Text);
                 FactoryIntentPrompts.Validate(candidate, chunk, content, previous);
             }
+            validatingModelOutput = false;
             var result = new IntentChunkAnalysis(progress.Revision, dispatch, Reference(chunk), progress.ChainSha256,
                 response.Observation, candidate, verification, dependencies);
             var record = await WriteImmutableAsync(StepKey(Completed), result, token);
             await ConfirmAsync(record, result, token);
+        }
+        catch (IntentException e) when (modelResponseReceived && !validatingModelOutput)
+        {
+            throw new IntentException(IntentState.Unknown, "AcceptedModelResultCloseoutUnconfirmed; " + e.Message);
         }
         catch (IntentException e) when (e.State != IntentState.Unknown)
         {
@@ -177,7 +187,7 @@ internal sealed class FactoryIntentWorkflow(FactorySourceAccess source, HttpClie
                     ? new(dispatched, e.State, e.Message) { ModelRejection = e.ModelRejection, ModelRejectionProof = e.ModelRejectionProof } : progress.LastFailure };
             await SaveAsync(token);
         }
-        catch (SourceAcquisitionException e) when (progress.Dispatch is null && e is not SourceProgressException)
+        catch (SourceAcquisitionException e) when (!modelResponseReceived && progress.Dispatch is null && e is not SourceProgressException)
         {
             progress = progress with { State = Map(e.State), Reason = e.Message };
             await SaveAsync(token);

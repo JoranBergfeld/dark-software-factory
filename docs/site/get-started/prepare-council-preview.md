@@ -884,6 +884,15 @@ CODE's post-response authority check. An unavailable or malformed final
 governance response is not a pre-dispatch rejection. Plain legacy HTTP 401/403
 responses to an issued synthesis request likewise cannot prove no inference
 occurred; the original work stays quarantined and visible to pause/draining.
+That boundary continues through later charter/source revalidation, native
+record capacity and writer checks, immutable result storage and checkpoint
+confirmation. A failed currentness check after accepted inference is not a
+model rejection, even when an exact result receipt already exists.
+Only acknowledged malformed or unsupported semantic model output may use the
+existing explicit failed/review path. Original durable receipts remain intact
+and can only reconcile their exact dispatch, never authorize replay.
+Reporting, retention or refresh closeout failures cannot hide unconfirmed
+issued work from pause merely because a model result was already stored.
 Older host responses or checkpoints containing only `UnsupportedTarget` or
 `RateLimited` cannot retroactively prove an inference rejection.
 The original CODE process may also close a transient snapshot GET failure before

@@ -12,6 +12,46 @@ namespace Dsf.Runtime.Tests;
 public sealed class FactoryIntentWorkflowTests
 {
     [Fact]
+    public async Task Accepted_original_receipt_survives_failed_confirmation_and_reconciles_without_model_replay()
+    {
+        using var first = await IntentWorkflowTransport.CreateAsync();
+        await first.RunAsync("/acquire");
+        var grant = first.Models.Authority.Grants!.Single(g => g.Scope.Contains("/microsoft.cognitiveservices/", StringComparison.Ordinal));
+        var originalGrant = first.Models.Resources[grant.Target].DeepClone();
+        string? stepKey = null;
+        var removed = false;
+        first.Source.AfterWrite = (key, _) =>
+        {
+            if (!key.Contains("/steps/", StringComparison.Ordinal)) return;
+            stepKey = key;
+            removed = true;
+            first.Models.Resources.Remove(grant.Target);
+        };
+        first.AfterAuthorityResponse = () =>
+        {
+            if (!removed) return;
+            first.Models.Resources[grant.Target] = originalGrant.DeepClone();
+            removed = false;
+        };
+        var failed = await first.RunAsync("/infer");
+        Assert.NotNull(stepKey);
+        Assert.Equal("Unknown", (string?)JsonNode.Parse(failed.Body)!["state"]);
+        var pending = JsonSerializer.Deserialize<IntentProgress>(first.Source.Progress["intent/current"].Value, FactorySourceValidation.RecordJson)!;
+        var receipt = first.Source.Progress[stepKey];
+        var original = JsonSerializer.Deserialize<IntentChunkAnalysis>(receipt.Value, FactorySourceValidation.RecordJson)!;
+        Assert.Equal(original.Dispatch, pending.Dispatch);
+        Assert.Null(pending.LastFailure);
+        using var second = await IntentWorkflowTransport.CreateAsync();
+        second.Source.ImportProgress(first.Source);
+        Assert.Equal("Partial", (string?)JsonNode.Parse((await second.RunAsync("/intent-status")).Body)!["state"]);
+        Assert.Empty(second.AnalysisPrompts);
+        var completed = await second.RunAsync("/infer");
+        Assert.Equal("DraftReady", (string?)JsonNode.Parse(completed.Body)!["state"]);
+        Assert.Contains("CHECK_EVERY_CLAIM", Assert.Single(second.AnalysisPrompts), StringComparison.Ordinal);
+        Assert.Equal(receipt, second.Source.Progress[stepKey]);
+    }
+
+    [Fact]
     public async Task CODE_post_completion_authority_check_cannot_reclassify_accepted_inference_as_rejected()
     {
         using var transport = await IntentWorkflowTransport.CreateAsync();
@@ -443,11 +483,23 @@ public sealed class FactoryIntentWorkflowTests
             return result.ToJsonString();
         };
         var result = await transport.RunAsync("/infer");
-        Assert.Equal("Partial", (string?)JsonNode.Parse(result.Body)!["state"]);
-        Assert.Equal(reason, (string?)JsonNode.Parse(result.Body)!["detail"]);
-        Assert.Equal(0, (int?)JsonNode.Parse(result.Body)!["progress"]!["analyzedChunks"]);
+        Assert.Equal(recordLimit ? "Unknown" : "Partial", (string?)JsonNode.Parse(result.Body)!["state"]);
+        Assert.Equal(recordLimit ? "AcceptedModelResultCloseoutUnconfirmed; " + reason : reason, (string?)JsonNode.Parse(result.Body)!["detail"]);
+        var progress = JsonSerializer.Deserialize<IntentProgress>(transport.Source.Progress["intent/current"].Value, FactorySourceValidation.RecordJson)!;
+        Assert.Equal(0, progress.AnalyzedChunks);
+        Assert.Equal(recordLimit, progress.Dispatch is not null);
+        Assert.Equal(recordLimit ? IntentModelOutcome.Dispatched : IntentModelOutcome.KnownFailure, progress.ModelOutcome);
         Assert.All(transport.Source.Progress, record =>
             Assert.True(System.Text.Encoding.UTF8.GetByteCount(record.Key + record.Value.Value) + 1024 < 10 * 1024));
+        if (recordLimit)
+        {
+            var before = transport.Source.Progress.ToDictionary();
+            var calls = transport.Models.Inference.Count;
+            transport.Models.Completion = IntentModelFixture.Complete;
+            Assert.Equal("Unknown", (string?)JsonNode.Parse((await transport.RunAsync("/infer")).Body)!["state"]);
+            Assert.Equal(before, transport.Source.Progress);
+            Assert.Equal(calls, transport.Models.Inference.Count);
+        }
     }
 
     [Fact]
