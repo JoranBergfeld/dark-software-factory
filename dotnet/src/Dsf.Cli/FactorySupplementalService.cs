@@ -6,6 +6,14 @@ namespace Dsf.Cli;
 
 internal sealed partial class FactorySupplementalService
 {
+    internal async Task<FactorySupplemental> ReviewChangeAsync(FactoryReservationResult admission, SupplementalSelection selection, CancellationToken token)
+    {
+        current = await PreviewAsync(admission, selection, token);
+        effects.Clear();
+        await CheckNativeAsync(admission, token);
+        return current;
+    }
+
     internal async Task<FactorySupplemental> PreviewAsync(FactoryReservationResult admission, SupplementalSelection selection, CancellationToken token)
     {
         var preview = Preview(admission, selection);

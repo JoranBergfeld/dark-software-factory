@@ -160,6 +160,7 @@ public static partial class CliApplication
         decide.Subcommands.Add(BuildPreviewCommand(terminal, reviewer, boundaryAzure, reservationHttp, reservationClock));
         decide.Subcommands.Add(BuildAuditCommand(terminal, reviewer, boundaryAzure, reservationHttp, reservationClock));
         decide.Subcommands.Add(BuildPauseCommand(terminal, reviewer, boundaryAzure, reservationHttp, reservationClock));
+        decide.Subcommands.Add(BuildReconfigureCommand(terminal, reviewer, boundaryAzure, reservationHttp, reservationClock));
         decide.Subcommands.Add(BuildActivationCommand(terminal, reviewer, boundaryAzure, reservationHttp, reservationClock));
         decide.Subcommands.Add(BuildLiveCommand(terminal, reviewer, boundaryAzure, reservationHttp, reservationClock));
         decide.Subcommands.Add(BuildReservationCommand("reserve", terminal, reviewer, boundaryAzure, reservationHttp, reservationClock));

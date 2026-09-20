@@ -24,11 +24,16 @@ internal sealed partial class PreviewPreparationTransport
     internal Task SelectFoundryAsync() => SelectSupplementalAsync(true, false);
     internal Task SelectBothAsync() => SelectSupplementalAsync(true, true);
 
-    private async Task SelectSupplementalAsync(bool foundry, bool web)
+    internal void ConfigureSupplementalPrerequisites()
     {
         supplemental = new(scenario.Arm);
         supplementalNative = new(supplemental, false);
         supplemental.HostedProof = (request, token) => PreviewHostAsync(request, token);
+    }
+
+    private async Task SelectSupplementalAsync(bool foundry, bool web)
+    {
+        ConfigureSupplementalPrerequisites();
         var selection = FactorySupplementalWorkflowTests.Selection();
         if (!web) selection["sources"] = new JsonArray();
         if (foundry) selection["sources"]!.AsArray().Add(FactorySupplementalWorkflowTests.FoundrySelection());

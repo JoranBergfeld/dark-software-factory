@@ -187,6 +187,22 @@ try
     }
     Require(File.ReadAllText(Path.Combine(scratch.FullName, "azure.log")).Length == 0, "Incomplete pause reached Azure.");
 
+    var reconfigureHelp = await Run("onboard", "decide", "reconfigure", "--help");
+    Require(reconfigureHelp.ExitCode == 0 && new[] { "--inspect", "--input", "--reviewed-fingerprint", "--owner-appconfig-endpoint" }
+        .All(option => reconfigureHelp.Output.Contains(option, StringComparison.Ordinal))
+        && reconfigureHelp.Output.Contains("applying changes is not yet available", StringComparison.Ordinal),
+        "Installed read-only reconfiguration grammar or its limitation is missing.");
+    foreach (var action in new[] { Array.Empty<string>(), new[] { "--inspect" }, new[] { "--reviewed-fingerprint", "yes" } })
+    {
+        var incompleteReconfiguration = await Run(["onboard", "decide", "reconfigure", .. action, "--json"]);
+        Require(incompleteReconfiguration.ExitCode == 1
+            && incompleteReconfiguration.Output.Contains("\"state\": \"Blocked\"", StringComparison.Ordinal)
+            && incompleteReconfiguration.Output.Contains("\"canApply\": false", StringComparison.Ordinal)
+            && incompleteReconfiguration.Output.Contains("\"hasRemoteEffects\": false", StringComparison.Ordinal),
+            "Installed reconfiguration review accepted incomplete explicit input or implied application.");
+    }
+    Require(File.ReadAllText(Path.Combine(scratch.FullName, "azure.log")).Length == 0, "Incomplete reconfiguration review reached Azure.");
+
     var liveHelp = await Run("onboard", "decide", "live", "--help");
     Require(liveHelp.ExitCode == 0 && new[] { "--selection", "--approve", "--status", "--publication", "--exercise", "--execution" }
         .All(option => liveHelp.Output.Contains(option, StringComparison.Ordinal)), "Installed native live-rollout grammar missing.");

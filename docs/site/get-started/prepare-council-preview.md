@@ -15,6 +15,11 @@ fresh application telemetry proof. Every selected supplemental source must
 retain its original reviewed configuration, identity, grants and proof.
 Missing, unreadable or orphaned selected history cannot become Azure-only.
 
+For a retained factory, [review input changes](review-factory-reconfiguration.md)
+before considering different membership, sources, models or judgment.
+That command currently provides read-only diffs, **not** staged application
+or renewed activation; it never reopens old approval or clears pause.
+
 ## Explicit prerequisites
 
 Use the same effective Azure CLI operator/tenant/subscription and `gh`
