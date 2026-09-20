@@ -824,6 +824,10 @@ Promoted decision admission detects the actual default branch changing. Ordinary
 decisions, including scheduled invocations, now drive CODE's existing complete
 tree acquisition and full inference/checking without a human `source` or `infer`
 command for each commit. Status and current-context routes remain read-only.
+An empty commit or no-change merge is still a new pinned snapshot: it follows
+the complete refresh/qualification path even when the Merkle tree is identical.
+Only the exact original adopted snapshot (including its reconciled charter-only
+merge) can continue using the original approval evidence without that refresh.
 Direct operator `source --new-snapshot` / `infer --new-analysis` cannot create
 unindexed work once promotion history exists, or while deliberately paused;
 they return `PromotedSourceWorkRequiresIndexedDecision` or the stop blocker.
@@ -853,6 +857,8 @@ process restart or forced retry.
 | `Pending` | Full current acquisition, analysis or compatibility checking is still underway; no publication. |
 | `ReviewRequired` | Material conflict, necessary unread content, unbounded semantic impact or a changed charter/snapshot requires deliberate review. |
 | `KnownNoModelDispatch` | The original process confirmed failure before the model POST; a new invocation may continue only after fresh dependency checks. |
+| `KnownTransientSourceRead` | The original acquisition recorded a transient HTTP failure of a read, with no necessary gap or uncertain write; a new admitted invocation can continue the same pinned progress after current checks. |
+| `KnownTransientModelRejection` | The model host acknowledged native HTTP 429 as `RateLimited`; the original dispatch/failure remains retained, and a new admitted attempt may continue after current checks. |
 | `Unknown` | Original issued CODE/model outcome remains unconfirmed; retain its native identity, never replay. |
 | `CompleteSourceCompatibleWithUnchangedAdoption` | Complete descriptive compatibility retained; the worker must still qualify current inputs and finish the real council evaluation before publication. |
 
@@ -865,6 +871,17 @@ retained before capture through the existing native retention interlock.
 Audit requires the original receipts, checkpoints and compatibility steps;
 surviving native work references prevent recreating an erased refresh namespace.
 Temporary raw source is disposed rather than archived.
+These recovery paths require typed evidence in the original durable checkpoint,
+not a generic `Partial`, `Blocked` or `ReviewRequired` state. Other provider
+rejections, material conflicts, malformed acknowledgements, unbounded impact,
+moving snapshots and unknown issued work are not automatically reopened.
+An older model host that reports only `UnsupportedTarget` cannot retroactively
+prove a rate-limit rejection. Neither transient recovery nor a healthy provider
+clears an operator pause.
+Inference retains its existing attempt ceiling; compatibility now journals each
+attempt and uses the same 16-additional-attempt allowance beyond complete chunk
+coverage. Exhaustion requires review rather than repeatedly rediscovering an old
+retryable failure or growing an unbounded rejection history.
 
 This is descriptive refresh, not runtime approval: manifest, adoption, approval
 and original preview are never rewritten. CODE rereads the complete immutable

@@ -10,6 +10,7 @@ namespace Dsf.Runtime;
 internal class SourceAcquisitionException(SourceState state, string reason) : Exception(reason)
 {
     internal SourceState State { get; } = state;
+    internal SourceReadFailure? ReadFailure { get; init; }
 }
 
 internal sealed class FactorySourceAccess(FactoryHostSettings settings, TokenCredential credential, HttpClient http, TimeProvider clock)
@@ -190,7 +191,8 @@ internal sealed class FactorySourceAccess(FactoryHostSettings settings, TokenCre
         using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token);
         if (response.StatusCode != HttpStatusCode.OK)
             throw new SourceAcquisitionException(response.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.Unauthorized
-                ? SourceState.Blocked : SourceState.Partial, response.StatusCode == HttpStatusCode.NotFound ? "Unavailable" : "ProviderAccessDeniedOrUnavailable");
+                ? SourceState.Blocked : SourceState.Partial, response.StatusCode == HttpStatusCode.NotFound ? "Unavailable" : "ProviderAccessDeniedOrUnavailable")
+            { ReadFailure = request.Method == HttpMethod.Get ? new((int)response.StatusCode) : null };
         if (response.Content.Headers.ContentLength > maximumBytes) throw new SourceAcquisitionException(SourceState.Partial, "ResponseLimit");
         await using var stream = await response.Content.ReadAsStreamAsync(token);
         using var buffer = new MemoryStream();

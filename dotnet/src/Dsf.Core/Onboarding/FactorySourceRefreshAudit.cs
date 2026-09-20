@@ -17,6 +17,8 @@ internal static class FactorySourceRefreshAudit
         {
             var progress = Parse<SourceRefreshProgress>(record);
             if (progress.Protocol != 1 || progress.Id == Guid.Empty || progress.Binding.Snapshot.FactoryId != factory
+                || progress.Recovery is not null && !FactorySourceRefreshValidation.HasConfirmedRecovery(progress)
+                || !FactorySourceRefreshValidation.HasBoundedCompatibilityAttempts(progress)
                 || !Enum.IsDefined(progress.State) || !Enum.IsDefined(progress.Phase)
                 || progress.CheckedChunks < 0 || progress.Chunks > FactoryIntentLimits.MaximumChunks || progress.CheckedChunks > progress.Chunks)
                 throw new JsonException("Invalid descriptive source refresh.");

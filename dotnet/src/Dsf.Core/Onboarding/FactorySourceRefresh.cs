@@ -2,6 +2,7 @@ namespace Dsf.Core.Onboarding;
 
 public enum SourceRefreshState { Current, Pending, Compatible, ReviewRequired, Partial, Blocked, Failed, Canceled, Unknown }
 public enum SourceRefreshPhase { Acquisition, Analysis, Compatibility, Complete }
+public enum SourceRefreshRecovery { KnownNoModelDispatch, TransientSourceRead, RejectedModel }
 public enum SourceCompatibilityVerdict { Compatible, Irrelevant, Conflict, Unknown }
 public sealed record SourceCompatibilityJudgment(string Target, SourceCompatibilityVerdict Verdict, string Reason, string Excerpt);
 public sealed record SourceCompatibilityResult(bool Complete, IReadOnlyList<SourceCompatibilityJudgment> Judgments);
@@ -28,9 +29,15 @@ public sealed record SourceRefreshProgress(int Protocol, Guid Id, SourceRefreshB
     public int Chunks { get; init; }
     public int CheckedChunks { get; init; }
     public string? CompatibilityChain { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public int? CompatibilityAttempts { get; init; }
     public IReadOnlyList<string> AddressedTargets { get; init; } = [];
     public IntentDispatch? Dispatch { get; init; }
     public IntentFailure? LastFailure { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public SourceRefreshRecovery? Recovery { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public SourceReadFailure? ReadFailure { get; init; }
     public bool Governs => false;
     public string DeployedSourceCorrelation => "Unknown";
 }

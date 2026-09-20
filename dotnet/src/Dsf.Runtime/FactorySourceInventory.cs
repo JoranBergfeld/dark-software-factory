@@ -152,7 +152,7 @@ internal sealed class FactorySourceInventory(FactorySourceAccess access, HttpCli
         {
             progress = progress with { State = e.State, Reason = e.Message, Worker = null, LeaseUntil = null };
             await SaveAsync(token);
-            return await ReportAsync(request.Page, e.Message, token);
+            return (await ReportAsync(request.Page, e.Message, token)) with { ReadFailure = e.ReadFailure };
         }
     }
 

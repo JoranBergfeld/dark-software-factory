@@ -10,6 +10,7 @@ namespace Dsf.Runtime;
 internal sealed class IntentException(IntentState state, string reason) : Exception(reason)
 {
     internal IntentState State { get; } = state;
+    internal ModelCapabilityReason? ModelRejection { get; init; }
 }
 
 internal sealed class FactoryIntentAccess(FactorySourceAccess source, HttpClient http, TimeProvider clock)
@@ -125,7 +126,8 @@ internal sealed class FactoryIntentAccess(FactorySourceAccess source, HttpClient
                     && reason.ValueKind == JsonValueKind.String && Enum.TryParse<ModelCapabilityReason>(reason.GetString(), out var known)
                     && Enum.IsDefined(known) && known != ModelCapabilityReason.None)
                     throw new IntentException(known == ModelCapabilityReason.MalformedResponse ? IntentState.Failed
-                        : known == ModelCapabilityReason.NetworkUnavailable ? IntentState.Unknown : IntentState.Blocked, "Model" + known);
+                        : known == ModelCapabilityReason.NetworkUnavailable ? IntentState.Unknown : IntentState.Blocked, "Model" + known)
+                    { ModelRejection = path == "/synthesis" && known == ModelCapabilityReason.RateLimited ? known : null };
             }
             catch (JsonException) { throw new IntentException(IntentState.Unknown, "MalformedModelFailureEnvelope"); }
             throw new IntentException(IntentState.Unknown, "ModelOutcomeUnconfirmed");

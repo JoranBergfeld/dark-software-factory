@@ -9,7 +9,7 @@ public enum ModelCapabilityState { Verified, Partial, Blocked, Failed, Canceled,
 public enum ModelCapabilityReason
 {
     None, MissingDeployment, IdentityMismatch, FamilyDiversity, MalformedResponse, PermissionDenied,
-    NetworkUnavailable, UnsupportedTarget, AuthorityChanged, Expired,
+    NetworkUnavailable, UnsupportedTarget, AuthorityChanged, Expired, RateLimited,
 }
 
 public sealed record ModelRouteSelection(

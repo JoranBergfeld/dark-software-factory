@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Dsf.Core.Onboarding;
@@ -12,6 +13,7 @@ internal sealed partial class PreviewPreparationTransport
     internal List<string> EvaluationInference = [];
     internal List<string> SourceInferenceInputs = [];
     internal Func<string, string, string>? AlterCompletion { get; set; }
+    internal Func<string, HttpStatusCode?>? EvaluationResponseStatus { get; set; }
     internal Action<JsonNode>? AfterEvaluationWrite { get; set; }
     internal Func<JsonNode, JsonNode>? AlterApplication { get; set; }
     internal HttpStatusCode ApplicationQueryStatus { get; set; } = HttpStatusCode.OK;
@@ -71,6 +73,11 @@ internal sealed partial class PreviewPreparationTransport
             var text = Completion(prompt ?? throw new JsonException());
             text = AlterCompletion?.Invoke(prompt!, text) ?? text;
             response = Reply(new { model = route.Model, choices = new[] { new { finish_reason = "stop", message = new { content = text } } } });
+        }
+        if (EvaluationResponseStatus?.Invoke(prompt ?? "") is { } rejected)
+        {
+            response.Dispose();
+            response = new(rejected) { Content = JsonContent.Create(new { error = new { code = "RateLimitExceeded" } }) };
         }
         response.Headers.Add("x-request-id", Guid.NewGuid().ToString());
         return response;

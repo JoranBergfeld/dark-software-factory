@@ -22,10 +22,12 @@ public static class FactorySourceRefreshValidation
         var binding = progress.Binding;
         if (proof.Protocol != 1 || progress.Protocol != 1 || progress.Id == Guid.Empty
             || progress.State != SourceRefreshState.Compatible || progress.Phase != SourceRefreshPhase.Complete
-            || progress.Work is not null || progress.Dispatch is not null || progress.LastRequest is not { } request
+            || progress.Work is not null || progress.Dispatch is not null || progress.Recovery is not null
+            || progress.LastRequest is not { } request
             || progress.AnalysisRevision != analysis.Revision || progress.AnalysisChain != analysis.ChainSha256
             || progress.SourceIntegrity != analysis.SourceIntegritySha256 || progress.Chunks != analysis.AvailableChunks
             || progress.CheckedChunks != progress.Chunks || !FactorySourceValidation.Hash(progress.CompatibilityChain)
+            || !HasBoundedCompatibilityAttempts(progress)
             || binding.Snapshot with { ObservedAt = analysis.Snapshot.ObservedAt } != analysis.Snapshot
             || binding.AdoptionRevision != retained.Adoption.Revision
             || binding.AdoptionETag != retained.Revision || binding.AdoptionOperationETag != retained.OperationRevision
@@ -55,4 +57,19 @@ public static class FactorySourceRefreshValidation
         new[] { "Purpose", "Users", "Goals", "NonGoals", "SuccessMeasures" }
             .Concat(current.Claims.Select(c => "current:" + c.Index))
             .Concat(original.Claims.Select(c => "approved:" + c.Index)).ToArray();
+
+    public static bool HasConfirmedRecovery(SourceRefreshProgress progress) =>
+        progress.State == SourceRefreshState.Blocked && progress.Work is null && progress.Dispatch is null
+        && progress.Recovery switch
+        {
+            SourceRefreshRecovery.KnownNoModelDispatch => progress.Reason.StartsWith("KnownNoModelDispatch;", StringComparison.Ordinal),
+            SourceRefreshRecovery.TransientSourceRead => progress.Phase == SourceRefreshPhase.Acquisition && progress.ReadFailure?.IsTransient() == true,
+            SourceRefreshRecovery.RejectedModel => progress.Phase is SourceRefreshPhase.Analysis or SourceRefreshPhase.Compatibility
+                && progress.LastFailure is { State: IntentState.Blocked, ModelRejection: ModelCapabilityReason.RateLimited },
+            _ => false,
+        };
+
+    public static bool HasBoundedCompatibilityAttempts(SourceRefreshProgress progress) =>
+        progress.CompatibilityAttempts is not { } attempts
+        || attempts >= progress.CheckedChunks && attempts <= progress.Chunks + FactoryIntentLimits.MaximumAdditionalAttempts;
 }

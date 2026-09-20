@@ -3,6 +3,10 @@ namespace Dsf.Core.Onboarding;
 public enum SourceState { Acquired, Partial, Blocked, Failed, Canceled, Unknown }
 public enum SourcePathState { Pending, Acquired, Excluded, Failed }
 public enum SourceExclusion { None, Generated, Vendor, Binary, Sensitive, Unavailable, External }
+public sealed record SourceReadFailure(int StatusCode)
+{
+    public bool IsTransient() => StatusCode is 408 or 429 or 500 or 502 or 503 or 504;
+}
 
 public sealed record SourceSelection(string RuntimeImage, string AudienceClientId);
 public sealed record SourceInfrastructureBinding(FoundationOperation Receipt, string Incarnation);
@@ -58,6 +62,8 @@ public sealed record SourcePathCoverage(SourceNode Node, SourcePathResult? Resul
 public sealed record SourceInventoryResult(SourceState State, string Detail, SourceProgress? Progress,
     IReadOnlyList<SourcePathCoverage> Paths, int? NextPage)
 {
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public SourceReadFailure? ReadFailure { get; init; }
     public string Analysis { get; init; } = "NotYetAnalyzed";
     public string DeployedSourceCorrelation { get; init; } = "Unknown";
     public bool RawSourceRetained { get; init; }

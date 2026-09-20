@@ -11,6 +11,203 @@ namespace Dsf.Cli.Tests;
 public sealed class FactoryEvidenceRefreshTests(ActivatedFactoryFixture fixture) : IClassFixture<ActivatedFactoryFixture>
 {
     [Fact]
+    public async Task Same_tree_new_commit_qualifies_current_native_evidence_and_later_changed_tree_without_reapproval()
+    {
+        var transport = fixture.Reset();
+        var source = transport.Scenario.Source.Source!;
+        var governing = transport.Scenario.Arm.Product.Export();
+        var tree = source.RootTree;
+        var retained = source.Progress.ToDictionary();
+        source.Head = new string('e', 40);
+        var status = await transport.Scenario.Machine.InvokeAsync("activate", "--status");
+        Assert.False((bool)status.Result["currentReady"]!);
+        Assert.Equal(retained, source.Progress);
+        var completed = await RefreshAsync(transport, new FactoryDecisionRequest(Guid.NewGuid()));
+        Assert.True((string?)completed["readiness"] == "ReadyAwaitingActivation", completed.ToJsonString());
+        Assert.Equal(tree, source.RootTree);
+        Assert.Equal(source.Head, (string?)completed["evaluation"]!["inputs"]!["source"]!["context"]!["current"]!["source"]!["snapshot"]!["commit"]);
+        Assert.NotNull(completed["evaluation"]!["inputs"]!["source"]!["context"]!["refresh"]);
+        Assert.Equal(6, transport.SourceInferenceInputs.Count);
+        Assert.Equal(1, transport.IssuePosts);
+        Assert.Equal(governing, transport.Scenario.Arm.Product.Export());
+        transport.Restart();
+        FactoryActivationTests.ConnectAudit(transport);
+        var current = await transport.Scenario.Machine.InvokeAsync("activate", "--status");
+        Assert.True((bool)current.Result["currentReady"]!, current.Terminal.Output);
+        transport.Scenario.Source.Source!.Head = new string('f', 40);
+        var identicalSuccessor = await fixture.DecideAsync(transport, new FactoryDecisionRequest(Guid.NewGuid()));
+        Assert.Equal("ReadyAwaitingActivation", (string?)identicalSuccessor["readiness"]);
+        Assert.Equal(new string('f', 40), (string?)identicalSuccessor["evaluation"]!["inputs"]!["source"]!["context"]!["current"]!["source"]!["snapshot"]!["commit"]);
+        Assert.Equal(12, transport.SourceInferenceInputs.Count);
+        Assert.Equal(1, transport.IssuePosts);
+        AdvanceDefaultBranch(transport, commit: 'd');
+        var changed = await fixture.DecideAsync(transport, new FactoryDecisionRequest(Guid.NewGuid()));
+        Assert.Equal("ReadyAwaitingActivation", (string?)changed["readiness"]);
+        Assert.Equal(new string('d', 40), (string?)changed["evaluation"]!["inputs"]!["source"]!["context"]!["current"]!["source"]!["snapshot"]!["commit"]);
+        Assert.Equal(18, transport.SourceInferenceInputs.Count);
+        Assert.Equal(1, transport.IssuePosts);
+        Assert.Equal(governing, transport.Scenario.Arm.Product.Export());
+        var audit = await transport.Scenario.Machine.InvokeAsync("audit");
+        Assert.True(audit.Exit == 0, audit.Terminal.Output);
+    }
+
+    [Theory]
+    [InlineData("acquisition", false)]
+    [InlineData("inference", false)]
+    [InlineData("compatibility", false)]
+    [InlineData("acquisition", true)]
+    [InlineData("inference", true)]
+    [InlineData("compatibility", true)]
+    public async Task Confirmed_transient_refresh_failure_recovers_original_progress_after_current_checks_and_restart(string phase, bool pause)
+    {
+        var transport = fixture.Reset();
+        AdvanceDefaultBranch(transport);
+        var source = transport.Scenario.Source.Source!;
+        var governing = transport.Scenario.Arm.Product.Export();
+        var failed = false;
+        source.OnRequest = request =>
+        {
+            source.GitHubStatus = 200;
+            if (phase == "acquisition" && !failed && request.RequestUri!.AbsolutePath.Contains("/git/trees/", StringComparison.Ordinal)
+                && source.Progress.TryGetValue(FactorySourceRefresh.CurrentKey, out var root)
+                && JsonSerializer.Deserialize<SourceRefreshProgress>(root.Value, FactorySourceValidation.RecordJson)!.Work is not null)
+            {
+                failed = true;
+                source.GitHubStatus = 503;
+            }
+        };
+        transport.EvaluationResponseStatus = prompt =>
+        {
+            if (failed || !(phase == "inference" && prompt.Contains("INFER_INTENT", StringComparison.Ordinal)
+                || phase == "compatibility" && prompt.StartsWith("CHECK_UNCHANGED_GOVERNING_INTENT", StringComparison.Ordinal))) return null;
+            failed = true;
+            return HttpStatusCode.TooManyRequests;
+        };
+        var stopped = await RefreshAsync(transport, new FactoryDecisionRequest(Guid.NewGuid()));
+        Assert.True(failed, "The selected native failure was not injected.");
+        Assert.Contains((string?)stopped["readiness"], new[] { "Blocked", "Partial" });
+        var original = JsonSerializer.Deserialize<SourceRefreshProgress>(
+            source.Progress[FactorySourceRefresh.CurrentKey].Value, FactorySourceValidation.RecordJson)!;
+        Assert.Null(original.Work);
+        Assert.Null(original.Dispatch);
+        Assert.Equal(phase == "acquisition" ? SourceRefreshRecovery.TransientSourceRead : SourceRefreshRecovery.RejectedModel, original.Recovery);
+        if (phase == "acquisition") Assert.Equal(503, original.ReadFailure!.StatusCode);
+        else Assert.Equal(ModelCapabilityReason.RateLimited, original.LastFailure!.ModelRejection);
+        Assert.Equal(0, transport.IssuePosts);
+        var confirmed = source.Progress.Where(p => p.Key.StartsWith(FactorySourceRefresh.Prefix, StringComparison.Ordinal)
+            && p.Key != FactorySourceRefresh.CurrentKey).ToDictionary();
+        var calls = transport.EvaluationInference.Count;
+        source.OnRequest = null;
+        source.GitHubStatus = 200;
+        transport.EvaluationResponseStatus = null;
+        transport.Restart();
+        FactoryActivationTests.ConnectAudit(transport);
+        if (pause)
+        {
+            var stoppedByOperator = await transport.Scenario.Machine.InvokeAsync("pause", "--request", "--operation", Guid.NewGuid().ToString());
+            Assert.True((bool)stoppedByOperator.Result["admissionClosed"]!);
+            var pausedGovernance = transport.Scenario.Arm.Product.Export();
+            var pausedSource = transport.Scenario.Source.Source!.Progress.ToDictionary();
+            using var stoppedClient = new HttpClient(transport, false) { Timeout = Timeout.InfiniteTimeSpan };
+            using var denied = await stoppedClient.PostAsJsonAsync(fixture.LiveEndpoint(transport) + "/decide",
+                new FactoryDecisionRequest(Guid.NewGuid()), FactorySourceValidation.RecordJson);
+            Assert.Equal(HttpStatusCode.Forbidden, denied.StatusCode);
+            Assert.Equal(calls, transport.EvaluationInference.Count);
+            Assert.Equal(pausedSource, transport.Scenario.Source.Source.Progress);
+            Assert.Equal(pausedGovernance, transport.Scenario.Arm.Product.Export());
+            Assert.Equal(0, transport.IssuePosts);
+            return;
+        }
+        transport.ApplicationQueryStatus = HttpStatusCode.ServiceUnavailable;
+        using var http = new HttpClient(transport, false) { Timeout = Timeout.InfiniteTimeSpan };
+        using (var denied = await http.PostAsJsonAsync(fixture.LiveEndpoint(transport) + "/decide",
+            new FactoryDecisionRequest(Guid.NewGuid()), FactorySourceValidation.RecordJson))
+            Assert.Equal(HttpStatusCode.Forbidden, denied.StatusCode);
+        Assert.Equal(calls, transport.EvaluationInference.Count);
+        transport.ApplicationQueryStatus = HttpStatusCode.OK;
+        var recovered = await RefreshAsync(transport, new FactoryDecisionRequest(Guid.NewGuid()));
+        Assert.True((string?)recovered["readiness"] == "ReadyAwaitingActivation", recovered.ToJsonString());
+        var complete = JsonSerializer.Deserialize<SourceRefreshProgress>(
+            transport.Scenario.Source.Source!.Progress[FactorySourceRefresh.CurrentKey].Value, FactorySourceValidation.RecordJson)!;
+        Assert.Equal(original.Id, complete.Id);
+        foreach (var entry in confirmed) Assert.Equal(entry.Value, transport.Scenario.Source.Source.Progress[entry.Key]);
+        Assert.Equal(phase == "acquisition" ? 6 : 7, transport.SourceInferenceInputs.Count);
+        Assert.Equal(1, transport.IssuePosts);
+        Assert.Equal(governing, transport.Scenario.Arm.Product.Export());
+        var audit = await transport.Scenario.Machine.InvokeAsync("audit");
+        Assert.True(audit.Exit == 0, audit.Terminal.Output);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.BadRequest)]
+    [InlineData(HttpStatusCode.Forbidden)]
+    [InlineData(HttpStatusCode.ServiceUnavailable)]
+    public async Task Other_model_failure_responses_never_become_confirmed_transient_refresh_recovery(HttpStatusCode status)
+    {
+        var transport = fixture.Reset();
+        AdvanceDefaultBranch(transport);
+        transport.EvaluationResponseStatus = prompt => prompt.Contains("INFER_INTENT", StringComparison.Ordinal) ? status : null;
+        var stopped = await RefreshAsync(transport, new FactoryDecisionRequest(Guid.NewGuid()));
+        Assert.Equal("Blocked", (string?)stopped["readiness"]);
+        var source = transport.Scenario.Source.Source!;
+        var original = JsonSerializer.Deserialize<SourceRefreshProgress>(source.Progress[FactorySourceRefresh.CurrentKey].Value,
+            FactorySourceValidation.RecordJson)!;
+        Assert.Equal(SourceRefreshState.ReviewRequired, original.State);
+        Assert.Null(original.Recovery);
+        var recorded = source.Progress.ToDictionary();
+        var calls = transport.EvaluationInference.Count;
+        transport.EvaluationResponseStatus = null;
+        transport.Restart();
+        FactoryActivationTests.ConnectAudit(transport);
+        using var http = new HttpClient(transport, false) { Timeout = Timeout.InfiniteTimeSpan };
+        using var denied = await http.PostAsJsonAsync(fixture.LiveEndpoint(transport) + "/decide",
+            new FactoryDecisionRequest(Guid.NewGuid()), FactorySourceValidation.RecordJson);
+        Assert.Equal(HttpStatusCode.Forbidden, denied.StatusCode);
+        Assert.Equal(calls, transport.EvaluationInference.Count);
+        Assert.Equal(recorded, transport.Scenario.Source.Source!.Progress);
+        Assert.Equal(0, transport.IssuePosts);
+    }
+
+    [Theory]
+    [InlineData("inference")]
+    [InlineData("compatibility")]
+    public async Task Confirmed_model_rejections_stop_at_the_existing_bounded_attempt_policy(string phase)
+    {
+        var transport = fixture.Reset();
+        AdvanceDefaultBranch(transport);
+        var chunks = JsonSerializer.Deserialize<IntentProgress>(
+            transport.Scenario.Source.Source!.Progress["intent/current"].Value, FactorySourceValidation.RecordJson)!.AvailableChunks;
+        var maximum = (phase == "inference" ? 2 * chunks : chunks) + FactoryIntentLimits.MaximumAdditionalAttempts;
+        transport.EvaluationResponseStatus = prompt => phase == "inference"
+            ? prompt.Contains("INFER_INTENT", StringComparison.Ordinal) ? HttpStatusCode.TooManyRequests : null
+            : prompt.StartsWith("CHECK_UNCHANGED_GOVERNING_INTENT", StringComparison.Ordinal) ? HttpStatusCode.TooManyRequests : null;
+        for (var attempt = 0; attempt <= maximum; attempt++)
+        {
+            var stopped = await RefreshAsync(transport, new FactoryDecisionRequest(Guid.NewGuid()));
+            Assert.Equal("Blocked", (string?)stopped["readiness"]);
+            var progress = JsonSerializer.Deserialize<SourceRefreshProgress>(
+                transport.Scenario.Source.Source!.Progress[FactorySourceRefresh.CurrentKey].Value, FactorySourceValidation.RecordJson)!;
+            Assert.Equal(attempt < maximum ? SourceRefreshState.Blocked : SourceRefreshState.ReviewRequired, progress.State);
+            if (attempt == maximum)
+            {
+                Assert.Null(progress.Recovery);
+                Assert.Contains("AttemptLimit", progress.Reason);
+            }
+        }
+        Assert.Equal(maximum + (phase == "compatibility" ? 2 * chunks : 0), transport.SourceInferenceInputs.Count);
+        var calls = transport.EvaluationInference.Count;
+        transport.EvaluationResponseStatus = null;
+        transport.Restart();
+        FactoryActivationTests.ConnectAudit(transport);
+        using var http = new HttpClient(transport, false) { Timeout = Timeout.InfiniteTimeSpan };
+        using var denied = await http.PostAsJsonAsync(fixture.LiveEndpoint(transport) + "/decide",
+            new FactoryDecisionRequest(Guid.NewGuid()), FactorySourceValidation.RecordJson);
+        Assert.Equal(HttpStatusCode.Forbidden, denied.StatusCode);
+        Assert.Equal(calls, transport.EvaluationInference.Count);
+        Assert.Equal(0, transport.IssuePosts);
+    }
+
+    [Fact]
     public async Task Complete_compatible_refresh_qualifies_actual_council_and_create_once_without_reapproval()
     {
         var transport = fixture.Reset();

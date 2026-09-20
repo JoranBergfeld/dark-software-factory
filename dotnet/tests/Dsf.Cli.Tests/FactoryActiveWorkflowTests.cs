@@ -872,8 +872,11 @@ public class ActivatedFactoryFixture : IAsyncLifetime
         source.RootTree = sourceTree;
         source.Head = sourceHead;
         source.Branch = sourceBranch;
+        source.OnRequest = null;
+        source.GitHubStatus = 200;
         transport.SourceInferenceInputs.Clear();
         transport.AlterCompletion = null;
+        transport.EvaluationResponseStatus = null;
         transport.BeforeEvaluationResponse = null;
         transport.EvaluationModelDelay = null;
         transport.IngressLimit = null;

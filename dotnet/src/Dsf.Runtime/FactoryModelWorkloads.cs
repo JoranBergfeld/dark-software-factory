@@ -168,8 +168,9 @@ internal sealed class FactoryModelWorkloads(
             {
                 HttpStatusCode.Forbidden or HttpStatusCode.Unauthorized => ModelCapabilityReason.PermissionDenied,
                 HttpStatusCode.NotFound => ModelCapabilityReason.MissingDeployment,
+                HttpStatusCode.TooManyRequests => ModelCapabilityReason.RateLimited,
                 _ => ModelCapabilityReason.UnsupportedTarget,
-            }, route, "Actual workload native request failed; provider body withheld, no retry or fallback.");
+            }, route, "Actual workload native request failed; provider body withheld, no inline retry or fallback.");
         var limit = route == "embedding" ? 4 * 1024 * 1024 : 1024 * 1024;
         var requestId = response.Headers.TryGetValues("x-request-id", out var values) && Guid.TryParse(values.Single(), out var id) ? id.ToString() : null;
         JsonDocument body;

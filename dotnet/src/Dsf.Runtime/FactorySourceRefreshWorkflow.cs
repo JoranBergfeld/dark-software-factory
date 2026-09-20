@@ -34,7 +34,8 @@ internal sealed partial class FactorySourceRefreshWorkflow(FactoryHostSettings s
             if (progress.Binding.Snapshot.Id == binding.Snapshot.Id)
             {
                 binding = progress.Binding;
-                return Observation(progress.State == SourceRefreshState.Blocked ? SourceRefreshState.Pending : progress.State, progress.Reason);
+                return Observation(FactorySourceRefreshValidation.HasConfirmedRecovery(progress)
+                    ? SourceRefreshState.Pending : progress.State, progress.Reason);
             }
             if (progress.State != SourceRefreshState.Compatible)
                 return Observation(SourceRefreshState.ReviewRequired, "SourceMovedDuringRefresh; original partial evidence is historical.");
@@ -43,15 +44,13 @@ internal sealed partial class FactorySourceRefreshWorkflow(FactoryHostSettings s
             ?? throw Denied(SourceRefreshState.Unknown, "OriginalAnalysisCheckpointRequired"));
         if (analysis.Dispatch is not null || analysis.PendingSelection is not null)
             return Observation(SourceRefreshState.Unknown, "OriginalAnalysisDispatchOrSelectionUnconfirmed");
-        try
+        var adoptedSnapshot = analysis.Snapshot with { Commit = adoption.Adoption.SourceCommit,
+            RootTree = adoption.Adoption.SourceTree, ObservedAt = binding.Snapshot.ObservedAt, Id = binding.Snapshot.Id };
+        if (analysis.Revision == adoption.Adoption.AnalysisRevision && binding.Snapshot == adoptedSnapshot)
         {
             await github.CheckSnapshotAsync(analysis.Snapshot, token);
-            if (analysis.Revision == adoption.Adoption.AnalysisRevision)
-                return Observation(SourceRefreshState.Current, "OriginalSourceOrExactlyReconciledCharterOnlyMerge");
-            if (root is not null && progress.State == SourceRefreshState.Compatible)
-                return Observation(SourceRefreshState.Compatible, "CompleteSourceCompatibleWithUnchangedAdoption");
+            return Observation(SourceRefreshState.Current, "OriginalSourceOrExactlyReconciledCharterOnlyMerge");
         }
-        catch (SourceAcquisitionException e) when (e.Message.StartsWith("MaterialSourceChanged;", StringComparison.Ordinal)) { }
         return Observation(SourceRefreshState.Pending, "CompleteCurrentSourceRefreshRequired");
 
         SourceRefreshObservation Observation(SourceRefreshState state, string reason) =>
@@ -98,7 +97,7 @@ internal sealed partial class FactorySourceRefreshWorkflow(FactoryHostSettings s
                 await store.WriteAsync(FactorySourceRefresh.InitialKey(progress.Id), progress, null, token);
                 root = await store.WriteAsync(FactorySourceRefresh.CurrentKey, progress, root?.ETag, token);
             }
-            progress = progress with { Work = request, State = SourceRefreshState.Pending };
+            progress = progress with { Work = request, State = SourceRefreshState.Pending, Recovery = null, ReadFailure = null };
             root = await store.WriteAsync(FactorySourceRefresh.CurrentKey, progress, root!.ETag, token);
             await github.CheckExactSnapshotAsync(progress.Binding.Snapshot, token);
             if (progress.Phase == SourceRefreshPhase.Acquisition)
@@ -111,6 +110,9 @@ internal sealed partial class FactorySourceRefreshWorkflow(FactoryHostSettings s
                     progress = progress with { Phase = SourceRefreshPhase.Analysis, Reason = "CompleteTreeAcquired; full analysis required." };
                 else if (acquired.Progress is { NecessaryGaps: > 0 } || acquired.State is SourceState.Blocked or SourceState.Failed)
                     progress = progress with { State = SourceRefreshState.ReviewRequired, Reason = "NecessaryCurrentSourceUnavailable:" + acquired.Detail };
+                else if (acquired.ReadFailure?.IsTransient() == true)
+                    progress = progress with { State = SourceRefreshState.Blocked, Reason = "KnownTransientSourceRead; " + acquired.Detail,
+                        Recovery = SourceRefreshRecovery.TransientSourceRead, ReadFailure = acquired.ReadFailure };
                 else if (acquired.Progress?.Reason is not ("Pending" or "BoundedProgress"))
                     progress = progress with { State = SourceRefreshState.Partial, Reason = acquired.Detail };
                 return await FinishAsync(request, token);
@@ -138,9 +140,18 @@ internal sealed partial class FactorySourceRefreshWorkflow(FactoryHostSettings s
                 }
                 else if (result.State == IntentState.Unknown)
                     progress = progress with { State = SourceRefreshState.Unknown, Reason = "OriginalAnalysisModelDispatchUnconfirmedNoReplay" };
-                else if (result.Progress.LastFailure?.Reason.StartsWith("KnownNoModelDispatch;", StringComparison.Ordinal) == true
-                    && result.Progress.ModelOutcome == IntentModelOutcome.KnownFailure && result.Progress.Dispatch is null)
-                    progress = progress with { State = SourceRefreshState.Blocked, Reason = result.Progress.LastFailure.Reason };
+                else if (result.State == IntentState.Blocked
+                    && result.Progress.LastFailure?.Reason.StartsWith("KnownNoModelDispatch;", StringComparison.Ordinal) == true
+                    && result.Progress.ModelOutcome == IntentModelOutcome.KnownFailure && result.Progress.Dispatch is null
+                    && result.Progress.Reason == result.Progress.LastFailure.Reason)
+                    progress = progress with { State = SourceRefreshState.Blocked, Reason = result.Progress.LastFailure.Reason,
+                        Recovery = SourceRefreshRecovery.KnownNoModelDispatch };
+                else if (result.State == IntentState.Blocked
+                    && result.Progress.ModelOutcome == IntentModelOutcome.KnownFailure && result.Progress.Dispatch is null
+                    && result.Progress.LastFailure is { State: IntentState.Blocked, ModelRejection: ModelCapabilityReason.RateLimited } rejected
+                    && result.Progress.Reason == rejected.Reason)
+                    progress = progress with { State = SourceRefreshState.Blocked, Reason = "KnownTransientModelRejection; " + rejected.Reason,
+                        Recovery = SourceRefreshRecovery.RejectedModel, LastFailure = rejected };
                 else if (result.State is IntentState.Blocked or IntentState.Failed || result.Progress?.ModelOutcome == IntentModelOutcome.KnownFailure)
                     progress = progress with { State = SourceRefreshState.ReviewRequired, Reason = "AnalysisRequiresReview:" + result.Detail };
                 return await FinishAsync(request, token);
@@ -154,6 +165,12 @@ internal sealed partial class FactorySourceRefreshWorkflow(FactoryHostSettings s
             await RetainAsync(review.Progress, request, token);
             var targets = FactorySourceCompatibility.Targets(review, adoption.Original.Evidence.Analysis);
             await ReadCompatibilityChainAsync(targets, token);
+            var attempts = progress.CompatibilityAttempts ?? progress.CheckedChunks;
+            if (attempts >= progress.Chunks + FactoryIntentLimits.MaximumAdditionalAttempts)
+            {
+                progress = progress with { State = SourceRefreshState.ReviewRequired, Reason = "CompatibilityAttemptLimit" };
+                return await FinishAsync(request, token);
+            }
             var chunk = await workflow.ReadReviewedChunkAsync(progress.CheckedChunks, token);
             var input = FactorySourceCompatibility.Prompt(adoption, review, chunk.Source, chunk.Content, chunk.Dependencies);
             if (input.Length > 32768)
@@ -164,7 +181,7 @@ internal sealed partial class FactorySourceRefreshWorkflow(FactoryHostSettings s
             var models = new FactoryIntentAccess(source, http, clock);
             await models.CheckAsync(token);
             var dispatch = new IntentDispatch(Guid.NewGuid(), progress.CheckedChunks, true, FactoryModelsValidation.Hash(input), models.Capability);
-            progress = progress with { Dispatch = dispatch };
+            progress = progress with { Dispatch = dispatch, CompatibilityAttempts = attempts + 1 };
             await SaveAsync(token);
             var response = await models.CompleteAsync(input, token);
             await workflow.RevalidateCharterReviewAsync(review, token);
@@ -188,16 +205,27 @@ internal sealed partial class FactorySourceRefreshWorkflow(FactoryHostSettings s
         }
         catch (IntentException e) when (source.ModelRequestIssued && progress.Dispatch is not null && e.State != IntentState.Unknown)
         {
-            progress = progress with { State = e.State == IntentState.Failed ? SourceRefreshState.Failed : SourceRefreshState.ReviewRequired,
-                Reason = e.Message, LastFailure = new(progress.Dispatch, e.State, e.Message), Dispatch = null };
+            var retryable = e.State == IntentState.Blocked && e.ModelRejection == ModelCapabilityReason.RateLimited;
+            progress = progress with { State = retryable ? SourceRefreshState.Blocked
+                    : e.State == IntentState.Failed ? SourceRefreshState.Failed : SourceRefreshState.ReviewRequired,
+                Reason = retryable ? "KnownTransientModelRejection; " + e.Message : e.Message,
+                LastFailure = new(progress.Dispatch, e.State, e.Message) { ModelRejection = e.ModelRejection }, Dispatch = null,
+                Recovery = retryable ? SourceRefreshRecovery.RejectedModel : null };
             return await FinishAsync(request, token);
         }
         catch (IntentException e) when (!source.ModelRequestIssued)
         {
             var analysis = await store.ReadAsync("intent/current", token);
             if (analysis is not null && SourceProgressStore.Parse<IntentProgress>(analysis).Dispatch is not null) throw;
+            if (e.State is IntentState.Partial or IntentState.Failed)
+            {
+                progress = progress with { State = e.State == IntentState.Failed ? SourceRefreshState.Failed : SourceRefreshState.ReviewRequired,
+                    Reason = e.Message, Dispatch = null };
+                return await FinishAsync(request, token);
+            }
             progress = progress with { State = SourceRefreshState.Blocked,
                 Reason = "KnownNoModelDispatch; " + e.Message,
+                Recovery = SourceRefreshRecovery.KnownNoModelDispatch,
                 LastFailure = progress.Dispatch is { } unsent
                     ? new(unsent, IntentState.Blocked, "KnownNoModelDispatch") : progress.LastFailure, Dispatch = null };
             return await FinishAsync(request, token);
@@ -250,6 +278,8 @@ internal sealed partial class FactorySourceRefreshWorkflow(FactoryHostSettings s
     private void ValidateProgress(IReadOnlyDictionary<string, ConfigurationSetting> records)
     {
         if (progress.Protocol != 1 || progress.Id == Guid.Empty || !Enum.IsDefined(progress.State) || !Enum.IsDefined(progress.Phase)
+            || progress.Recovery is not null && !FactorySourceRefreshValidation.HasConfirmedRecovery(progress)
+            || !FactorySourceRefreshValidation.HasBoundedCompatibilityAttempts(progress)
             || progress.CheckedChunks < 0 || progress.CheckedChunks > progress.Chunks || progress.Chunks > FactoryIntentLimits.MaximumChunks
             || !records.TryGetValue(FactorySourceRefresh.InitialKey(progress.Id), out var initial)
             || SourceProgressStore.Parse<SourceRefreshProgress>(initial) is not { } original

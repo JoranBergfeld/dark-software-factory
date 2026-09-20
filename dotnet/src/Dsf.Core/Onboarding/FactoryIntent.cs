@@ -16,7 +16,11 @@ public sealed record IntentCandidate(bool Complete, string Findings, IReadOnlyLi
 public sealed record IntentClaimCheck(int Claim, IntentSupportVerdict Verdict, string Explanation, string Excerpt);
 public sealed record IntentVerification(bool Complete, IReadOnlyList<IntentClaimCheck> Checks, IReadOnlyList<string> Limitations);
 public sealed record IntentDispatch(Guid Id, int Index, bool Checking, string InputSha256, ModelCapabilityReference Capability);
-public sealed record IntentFailure(IntentDispatch Dispatch, IntentState State, string Reason);
+public sealed record IntentFailure(IntentDispatch Dispatch, IntentState State, string Reason)
+{
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public ModelCapabilityReason? ModelRejection { get; init; }
+}
 public sealed record IntentSelection(Guid Revision, SourceSnapshot Snapshot, string SourceIntegritySha256,
     string ModelConfigurationRevision, int AvailableChunks);
 public sealed record IntentProgress(int Protocol, Guid Revision, int RevisionNumber, SourceSnapshot Snapshot,

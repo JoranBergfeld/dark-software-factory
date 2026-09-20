@@ -173,7 +173,8 @@ internal sealed class FactoryIntentWorkflow(FactorySourceAccess source, HttpClie
         {
             progress = progress with { State = e.State, Reason = e.Message, Dispatch = null,
                 ModelOutcome = IntentModelOutcome.KnownFailure,
-                LastFailure = progress.Dispatch is { } dispatched ? new(dispatched, e.State, e.Message) : progress.LastFailure };
+                LastFailure = progress.Dispatch is { } dispatched
+                    ? new(dispatched, e.State, e.Message) { ModelRejection = e.ModelRejection } : progress.LastFailure };
             await SaveAsync(token);
         }
         catch (SourceAcquisitionException e) when (progress.Dispatch is null && e is not SourceProgressException)
