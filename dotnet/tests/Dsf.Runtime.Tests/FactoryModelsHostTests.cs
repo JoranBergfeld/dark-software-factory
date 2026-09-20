@@ -180,7 +180,7 @@ public sealed class FactoryModelsHostTests
             TestDependencies.Build(webHostRunner: runner) with
             { ModelHttp = http, ModelCredential = new ModelCredential(transport), ModelClock = transport.Clock }, CancellationToken.None);
         Assert.Equal(HttpStatusCode.Conflict, runner.Status);
-        Assert.Equal("UnsupportedTarget", (string?)JsonNode.Parse(runner.Body)!["observations"]![0]!["reason"]);
+        Assert.Equal("InferenceOutcomeUnconfirmed", (string?)JsonNode.Parse(runner.Body)!["observations"]![0]!["reason"]);
         Assert.Single(transport.Inference);
     }
 
@@ -593,6 +593,7 @@ public sealed class FactoryModelsHostTests
             var body = JsonNode.Parse(await request.Content!.ReadAsStringAsync(token))!;
             Inference.Add(body);
             OnInference?.Invoke();
+            if (Scenario == "rate-limited") return new(HttpStatusCode.TooManyRequests) { Content = new StringContent("unrelated-secret") };
             var route = Authority.Routes!.Single(r => r.Selection.Deployment == (string?)body["model"]).Selection;
             if (route.Name == "juror-2" && Scenario == "network") throw new HttpRequestException("unrelated-secret");
             if (route.Name == "juror-2" && Scenario == "timeout") throw new TaskCanceledException("unrelated-secret");

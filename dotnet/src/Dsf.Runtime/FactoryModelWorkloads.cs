@@ -39,7 +39,7 @@ internal sealed class FactoryModelWorkloads(
             + "Answer GO or NO-GO followed by a colon and a substantive rationale. Package:\n" + input : input;
         using var response = await SendAsync(selection.Endpoint + "/openai/v1/chat/completions",
             new { model = selection.Deployment, messages = new[] { new { role = "user", content = prompt } }, store = false }, name, token);
-        var (body, requestId) = await ResponseAsync(response, name, token);
+        var (body, requestId) = await ResponseAsync(response, name, FactoryModelsValidation.Hash(input), token);
         using (body)
         {
             var responseModel = ReadModel(body.RootElement, selection);
@@ -49,7 +49,7 @@ internal sealed class FactoryModelWorkloads(
             var meaningful = judgment ? ParseJudgment(answer, name) : answer.Trim();
             if (meaningful.Length is < 40 or > 8192 || meaningful.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length < 8)
                 throw FactoryModelsValidation.Failure(ModelCapabilityReason.MalformedResponse, name, "Substantive complete model response required, not an empty or token-only answer.");
-            await CheckRouteAsync(route, token);
+            await RecheckAfterInferenceAsync(route, token);
             return new(answer, Observation(name, responseModel, requestId, answer, 0, []));
         }
     }
@@ -75,7 +75,7 @@ internal sealed class FactoryModelWorkloads(
         var selection = route.Selection;
         using var response = await SendAsync(selection.Endpoint + "/openai/v1/embeddings",
             new { model = selection.Deployment, input = input.Select(i => i.Text).ToArray(), encoding_format = "float" }, "embedding", token);
-        var (body, requestId) = await ResponseAsync(response, "embedding", token);
+        var (body, requestId) = await ResponseAsync(response, "embedding", FactoryModelsValidation.Hash(input), token);
         using (body)
         {
             var responseModel = ReadModel(body.RootElement, selection);
@@ -100,12 +100,25 @@ internal sealed class FactoryModelWorkloads(
                 else match.Add(i);
             }
             IReadOnlyList<IReadOnlyList<string>> result = groups.Select(group => (IReadOnlyList<string>)group.Select(i => input[i].Id).ToArray()).ToArray();
-            await CheckRouteAsync(route, token);
+            await RecheckAfterInferenceAsync(route, token);
             return new(result, Observation("embedding", responseModel, requestId, JsonSerializer.Serialize(result), selection.Dimensions, result));
         }
         static double Cosine(double[] left, double[] right) => left.Zip(right, (a, b) => a * b).Sum();
         static ModelCapabilityException Malformed() => FactoryModelsValidation.Failure(ModelCapabilityReason.MalformedResponse, "embedding",
             "Finite nonzero complete embeddings of the reviewed dimensions required; no lexical or synthetic fallback.");
+    }
+
+    private async Task RecheckAfterInferenceAsync(ReviewedModelRoute route, CancellationToken token)
+    {
+        try { await CheckRouteAsync(route, token); }
+        catch (Exception e) when (e is ModelCapabilityException or JsonException or InvalidOperationException
+            or ArgumentException or KeyNotFoundException or FormatException or Azure.RequestFailedException
+            or Azure.Identity.AuthenticationFailedException or HttpRequestException or IOException)
+        {
+            var reason = e is ModelCapabilityException capability ? capability.Reason.ToString() : "NativeAuthorityReadUnconfirmed";
+            throw FactoryModelsValidation.Failure(ModelCapabilityReason.InferenceOutcomeUnconfirmed, route.Selection.Name,
+                $"Native inference responded, but post-inference authority is unconfirmed ({reason}); no result released or replay authorized.");
+        }
     }
 
     internal async Task<ModelRouteAuthority> CheckRouteAsync(ReviewedModelRoute route, CancellationToken token)
@@ -145,7 +158,7 @@ internal sealed class FactoryModelWorkloads(
     private async Task<JsonDocument> ReadArmAsync(string target, string api, string route, CancellationToken token)
     {
         using var response = await SendAsync("https://management.azure.com" + target + "?api-version=" + api, null, route, token);
-        var (body, _) = await ResponseAsync(response, route, token);
+        var (body, _) = await ResponseAsync(response, route, null, token);
         return body;
     }
     private async Task<HttpResponseMessage> SendAsync(string uri, object? body, string route, CancellationToken token)
@@ -161,16 +174,22 @@ internal sealed class FactoryModelWorkloads(
         catch (OperationCanceledException) when (!token.IsCancellationRequested)
         { throw FactoryModelsValidation.Failure(ModelCapabilityReason.NetworkUnavailable, route, "Native workload request timed out; no retry or substitute result."); }
     }
-    private static async Task<(JsonDocument Body, string? RequestId)> ResponseAsync(HttpResponseMessage response, string route, CancellationToken token)
+    private static async Task<(JsonDocument Body, string? RequestId)> ResponseAsync(HttpResponseMessage response, string route,
+        string? inferenceInputSha256, CancellationToken token)
     {
         if (!response.IsSuccessStatusCode)
-            throw FactoryModelsValidation.Failure(response.StatusCode switch
+        {
+            var rejection = response.StatusCode == HttpStatusCode.TooManyRequests && inferenceInputSha256 is not null
+                ? new ModelInferenceRejection(1, route, 429, inferenceInputSha256) : null;
+            throw new ModelCapabilityException(response.StatusCode switch
             {
                 HttpStatusCode.Forbidden or HttpStatusCode.Unauthorized => ModelCapabilityReason.PermissionDenied,
                 HttpStatusCode.NotFound => ModelCapabilityReason.MissingDeployment,
-                HttpStatusCode.TooManyRequests => ModelCapabilityReason.RateLimited,
+                HttpStatusCode.TooManyRequests => rejection is not null ? ModelCapabilityReason.RateLimited : ModelCapabilityReason.NetworkUnavailable,
                 _ => ModelCapabilityReason.UnsupportedTarget,
-            }, route, "Actual workload native request failed; provider body withheld, no inline retry or fallback.");
+            }, route, "Actual workload native request failed; provider body withheld, no inline retry or fallback.")
+            { Rejection = rejection };
+        }
         var limit = route == "embedding" ? 4 * 1024 * 1024 : 1024 * 1024;
         var requestId = response.Headers.TryGetValues("x-request-id", out var values) && Guid.TryParse(values.Single(), out var id) ? id.ToString() : null;
         JsonDocument body;

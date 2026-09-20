@@ -148,7 +148,7 @@ internal sealed partial class FactorySourceRefreshWorkflow(FactoryHostSettings s
                         Recovery = SourceRefreshRecovery.KnownNoModelDispatch };
                 else if (result.State == IntentState.Blocked
                     && result.Progress.ModelOutcome == IntentModelOutcome.KnownFailure && result.Progress.Dispatch is null
-                    && result.Progress.LastFailure is { State: IntentState.Blocked, ModelRejection: ModelCapabilityReason.RateLimited } rejected
+                    && result.Progress.LastFailure is { } rejected && FactorySourceRefreshValidation.HasConfirmedModelRejection(rejected)
                     && result.Progress.Reason == rejected.Reason)
                     progress = progress with { State = SourceRefreshState.Blocked, Reason = "KnownTransientModelRejection; " + rejected.Reason,
                         Recovery = SourceRefreshRecovery.RejectedModel, LastFailure = rejected };
@@ -205,11 +205,13 @@ internal sealed partial class FactorySourceRefreshWorkflow(FactoryHostSettings s
         }
         catch (IntentException e) when (source.ModelRequestIssued && progress.Dispatch is not null && e.State != IntentState.Unknown)
         {
-            var retryable = e.State == IntentState.Blocked && e.ModelRejection == ModelCapabilityReason.RateLimited;
+            var failure = new IntentFailure(progress.Dispatch, e.State, e.Message)
+            { ModelRejection = e.ModelRejection, ModelRejectionProof = e.ModelRejectionProof };
+            var retryable = FactorySourceRefreshValidation.HasConfirmedModelRejection(failure);
             progress = progress with { State = retryable ? SourceRefreshState.Blocked
                     : e.State == IntentState.Failed ? SourceRefreshState.Failed : SourceRefreshState.ReviewRequired,
                 Reason = retryable ? "KnownTransientModelRejection; " + e.Message : e.Message,
-                LastFailure = new(progress.Dispatch, e.State, e.Message) { ModelRejection = e.ModelRejection }, Dispatch = null,
+                LastFailure = failure, Dispatch = null,
                 Recovery = retryable ? SourceRefreshRecovery.RejectedModel : null };
             return await FinishAsync(request, token);
         }
@@ -228,6 +230,16 @@ internal sealed partial class FactorySourceRefreshWorkflow(FactoryHostSettings s
                 Recovery = SourceRefreshRecovery.KnownNoModelDispatch,
                 LastFailure = progress.Dispatch is { } unsent
                     ? new(unsent, IntentState.Blocked, "KnownNoModelDispatch") : progress.LastFailure, Dispatch = null };
+            return await FinishAsync(request, token);
+        }
+        catch (SourceAcquisitionException e) when (e is not SourceProgressException && e.ReadFailure?.IsTransient() == true
+            && !source.ModelRequestIssued && progress.Work == request && progress.Dispatch is null)
+        {
+            var analysis = await store.ReadAsync("intent/current", token);
+            if (analysis is null || SourceProgressStore.Parse<IntentProgress>(analysis) is { Dispatch: not null } or { PendingSelection: not null })
+                throw;
+            progress = progress with { State = SourceRefreshState.Blocked, Reason = "KnownPreModelSourceRead; " + e.Message,
+                Recovery = SourceRefreshRecovery.PreModelSourceRead, ReadFailure = e.ReadFailure };
             return await FinishAsync(request, token);
         }
         catch (SourceAcquisitionException e) when (e is not SourceProgressException
@@ -277,6 +289,9 @@ internal sealed partial class FactorySourceRefreshWorkflow(FactoryHostSettings s
 
     private void ValidateProgress(IReadOnlyDictionary<string, ConfigurationSetting> records)
     {
+        if (progress.Recovery == SourceRefreshRecovery.RejectedModel
+            && !FactorySourceRefreshValidation.HasConfirmedModelRejection(progress.LastFailure))
+            throw Denied(SourceRefreshState.Unknown, "OriginalModelRejectionProvenanceUnconfirmedNoReplay");
         if (progress.Protocol != 1 || progress.Id == Guid.Empty || !Enum.IsDefined(progress.State) || !Enum.IsDefined(progress.Phase)
             || progress.Recovery is not null && !FactorySourceRefreshValidation.HasConfirmedRecovery(progress)
             || !FactorySourceRefreshValidation.HasBoundedCompatibilityAttempts(progress)

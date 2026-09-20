@@ -20,6 +20,8 @@ public sealed record IntentFailure(IntentDispatch Dispatch, IntentState State, s
 {
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public ModelCapabilityReason? ModelRejection { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public ModelInferenceRejection? ModelRejectionProof { get; init; }
 }
 public sealed record IntentSelection(Guid Revision, SourceSnapshot Snapshot, string SourceIntegritySha256,
     string ModelConfigurationRevision, int AvailableChunks);

@@ -2,7 +2,7 @@ namespace Dsf.Core.Onboarding;
 
 public enum SourceRefreshState { Current, Pending, Compatible, ReviewRequired, Partial, Blocked, Failed, Canceled, Unknown }
 public enum SourceRefreshPhase { Acquisition, Analysis, Compatibility, Complete }
-public enum SourceRefreshRecovery { KnownNoModelDispatch, TransientSourceRead, RejectedModel }
+public enum SourceRefreshRecovery { KnownNoModelDispatch, TransientSourceRead, RejectedModel, PreModelSourceRead }
 public enum SourceCompatibilityVerdict { Compatible, Irrelevant, Conflict, Unknown }
 public sealed record SourceCompatibilityJudgment(string Target, SourceCompatibilityVerdict Verdict, string Reason, string Excerpt);
 public sealed record SourceCompatibilityResult(bool Complete, IReadOnlyList<SourceCompatibilityJudgment> Judgments);

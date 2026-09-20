@@ -11,6 +11,7 @@ internal sealed class IntentException(IntentState state, string reason) : Except
 {
     internal IntentState State { get; } = state;
     internal ModelCapabilityReason? ModelRejection { get; init; }
+    internal ModelInferenceRejection? ModelRejectionProof { get; init; }
 }
 
 internal sealed class FactoryIntentAccess(FactorySourceAccess source, HttpClient http, TimeProvider clock)
@@ -125,9 +126,21 @@ internal sealed class FactoryIntentAccess(FactorySourceAccess source, HttpClient
                 if (failure.RootElement.TryGetProperty("reason", out var reason)
                     && reason.ValueKind == JsonValueKind.String && Enum.TryParse<ModelCapabilityReason>(reason.GetString(), out var known)
                     && Enum.IsDefined(known) && known != ModelCapabilityReason.None)
+                {
+                    ModelInferenceRejection? rejection = null;
+                    if (path == "/synthesis" && known == ModelCapabilityReason.RateLimited)
+                    {
+                        if (failure.RootElement.TryGetProperty("rejection", out var proof))
+                            rejection = proof.Deserialize<ModelInferenceRejection>(FactorySourceValidation.RecordJson);
+                        if (body is not ModelWorkloadRequest completion
+                            || !FactoryModelsValidation.IsConfirmedInferenceRejection(rejection, "synthesis", FactoryModelsValidation.Hash(completion.Input)))
+                            throw new IntentException(IntentState.Unknown, "NativeModelRejectionProvenanceUnconfirmed; compatible model-host evidence required.");
+                    }
                     throw new IntentException(known == ModelCapabilityReason.MalformedResponse ? IntentState.Failed
-                        : known == ModelCapabilityReason.NetworkUnavailable ? IntentState.Unknown : IntentState.Blocked, "Model" + known)
-                    { ModelRejection = path == "/synthesis" && known == ModelCapabilityReason.RateLimited ? known : null };
+                        : known is ModelCapabilityReason.NetworkUnavailable or ModelCapabilityReason.InferenceOutcomeUnconfirmed
+                            ? IntentState.Unknown : IntentState.Blocked, "Model" + known)
+                    { ModelRejection = rejection is not null ? known : null, ModelRejectionProof = rejection };
+                }
             }
             catch (JsonException) { throw new IntentException(IntentState.Unknown, "MalformedModelFailureEnvelope"); }
             throw new IntentException(IntentState.Unknown, "ModelOutcomeUnconfirmed");

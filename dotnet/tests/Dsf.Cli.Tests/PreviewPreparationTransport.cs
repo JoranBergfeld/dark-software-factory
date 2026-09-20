@@ -23,6 +23,7 @@ internal sealed partial class PreviewPreparationTransport(CharterScenario scenar
     internal int TelemetryQueries;
     internal string? DeniedAction { get; set; }
     internal bool DenyNativeReads { get; set; }
+    internal Func<Uri, HttpStatusCode?>? ArmReadStatus { get; set; }
     internal JsonNode Selection = JsonSerializer.SerializeToNode(new PreviewPreparationSelection(
         Guid.Parse("ab000000-0000-0000-0000-000000000214"), FactoryTelemetryWorkflowTests.Image,
         "ab111111-1111-1111-1111-111111111111", CouncilRole,
@@ -113,6 +114,7 @@ internal sealed partial class PreviewPreparationTransport(CharterScenario scenar
             return await ApplicationQueryAsync(request, token);
         if (uri.Host == "management.azure.com" && request.Method == HttpMethod.Get)
         {
+            if (ArmReadStatus?.Invoke(uri) is { } status) return new(status);
             if (DenyNativeReads) return new(HttpStatusCode.Forbidden);
             if (path.EndsWith("/sqlroleassignments", StringComparison.Ordinal))
                 return Reply(new { value = Resources.Where(p => p.Key.StartsWith(path + "/", StringComparison.Ordinal)).Select(p => p.Value).ToArray() });

@@ -12,6 +12,56 @@ namespace Dsf.Runtime.Tests;
 public sealed class FactoryIntentWorkflowTests
 {
     [Theory]
+    [InlineData("current", "Blocked")]
+    [InlineData("legacy", "Unknown")]
+    [InlineData("route", "Unknown")]
+    [InlineData("status", "Unknown")]
+    [InlineData("input", "Unknown")]
+    public async Task Native_inference_rejection_requires_original_operation_and_input_bound_proof(string change, string state)
+    {
+        using var transport = await IntentWorkflowTransport.CreateAsync();
+        await transport.RunAsync("/acquire");
+        var before = transport.Models.Inference.Count;
+        transport.Models.Scenario = "rate-limited";
+        transport.ModelResponse = body =>
+        {
+            Assert.Equal("RateLimited", (string?)body["reason"]);
+            Assert.NotNull(body["rejection"]);
+            switch (change)
+            {
+                case "legacy": body.AsObject().Remove("rejection"); break;
+                case "route": body["rejection"]!["route"] = "embedding"; break;
+                case "status": body["rejection"]!["statusCode"] = 503; break;
+                case "input": body["rejection"]!["inputSha256"] = new string('f', 64); break;
+            }
+            return body;
+        };
+        var result = await transport.RunAsync("/infer");
+        Assert.Equal(state, (string?)JsonNode.Parse(result.Body)!["state"]);
+        Assert.Equal(before + 1, transport.Models.Inference.Count);
+        Assert.DoesNotContain("unrelated-secret", result.Body);
+        var original = JsonSerializer.Deserialize<IntentProgress>(
+            transport.Source.Progress["intent/current"].Value, FactorySourceValidation.RecordJson)!;
+        if (change == "current")
+        {
+            Assert.Null(original.Dispatch);
+            Assert.True(FactorySourceRefreshValidation.HasConfirmedModelRejection(original.LastFailure));
+            Assert.Equal(FactoryModelsValidation.Hash(transport.Models.Inference.Last()["messages"]![0]!["content"]!.GetValue<string>()),
+                original.LastFailure!.ModelRejectionProof!.InputSha256);
+            return;
+        }
+        Assert.NotNull(original.Dispatch);
+        Assert.Null(original.LastFailure);
+        transport.Models.Scenario = "";
+        transport.ModelResponse = null;
+        var persisted = transport.Source.Progress.ToDictionary();
+        foreach (var route in new[] { "/intent-status", "/infer" })
+            Assert.Equal("Unknown", (string?)JsonNode.Parse((await transport.RunAsync(route)).Body)!["state"]);
+        Assert.Equal(before + 1, transport.Models.Inference.Count);
+        Assert.Equal(persisted, transport.Source.Progress);
+    }
+
+    [Theory]
     [InlineData("Unknown")]
     [InlineData("Canceled")]
     public async Task Source_uncertainty_after_model_response_preserves_dispatch_and_cannot_enable_replay(string state)
@@ -834,6 +884,7 @@ internal sealed class IntentWorkflowTransport : HttpMessageHandler
     internal Func<Task>? BeforeModelResponse { get; set; }
     internal Action? AfterAuthorityResponse { get; set; }
     internal Func<JsonNode, JsonNode>? AuthorityResponse { get; set; }
+    internal Func<JsonNode, JsonNode>? ModelResponse { get; set; }
     internal bool AuthorityUnavailable { get; set; }
     private HttpMessageInvoker? source;
     private HttpMessageInvoker? models;
@@ -946,6 +997,9 @@ internal sealed class IntentWorkflowTransport : HttpMessageHandler
             {
                 if (BeforeModelResponse is not null) await BeforeModelResponse();
                 if (LoseModelResponse) throw new HttpRequestException("private-provider-secret");
+                if (ModelResponse is not null)
+                    return new(runner.Status) { Content = new StringContent(ModelResponse(JsonNode.Parse(runner.Body)!).ToJsonString(),
+                        System.Text.Encoding.UTF8, "application/json") };
             }
             if (request.RequestUri.AbsolutePath == "/authority")
             {

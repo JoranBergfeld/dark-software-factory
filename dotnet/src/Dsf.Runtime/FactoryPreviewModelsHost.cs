@@ -66,7 +66,8 @@ public static partial class RuntimeVerbs
             catch (ModelCapabilityException e)
             {
                 return Failure(evaluated ? FactoryCharterState.Unknown : e.Reason == ModelCapabilityReason.MalformedResponse ? FactoryCharterState.Failed
-                    : e.Reason == ModelCapabilityReason.NetworkUnavailable ? FactoryCharterState.Unknown : FactoryCharterState.Blocked,
+                    : e.Reason is ModelCapabilityReason.NetworkUnavailable or ModelCapabilityReason.InferenceOutcomeUnconfirmed
+                        ? FactoryCharterState.Unknown : FactoryCharterState.Blocked,
                     "NativeModel" + e.Reason, 409);
             }
             catch (OperationCanceledException)

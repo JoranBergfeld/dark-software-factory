@@ -8,7 +8,7 @@ using Xunit;
 
 namespace Dsf.Cli.Tests;
 
-public sealed class FactoryEvidenceRefreshTests(ActivatedFactoryFixture fixture) : IClassFixture<ActivatedFactoryFixture>
+public sealed partial class FactoryEvidenceRefreshTests(ActivatedFactoryFixture fixture) : IClassFixture<ActivatedFactoryFixture>
 {
     [Fact]
     public async Task Same_tree_new_commit_qualifies_current_native_evidence_and_later_changed_tree_without_reapproval()
@@ -92,7 +92,17 @@ public sealed class FactoryEvidenceRefreshTests(ActivatedFactoryFixture fixture)
         Assert.Null(original.Dispatch);
         Assert.Equal(phase == "acquisition" ? SourceRefreshRecovery.TransientSourceRead : SourceRefreshRecovery.RejectedModel, original.Recovery);
         if (phase == "acquisition") Assert.Equal(503, original.ReadFailure!.StatusCode);
-        else Assert.Equal(ModelCapabilityReason.RateLimited, original.LastFailure!.ModelRejection);
+        else
+        {
+            Assert.Equal(ModelCapabilityReason.RateLimited, original.LastFailure!.ModelRejection);
+            Assert.Equal(new ModelInferenceRejection(1, "synthesis", 429, original.LastFailure.Dispatch.InputSha256),
+                original.LastFailure.ModelRejectionProof);
+            var legacy = original with { LastFailure = original.LastFailure with { ModelRejectionProof = null } };
+            Assert.False(FactorySourceRefreshValidation.HasConfirmedRecovery(legacy));
+            var unrelated = original with { LastFailure = original.LastFailure with
+                { ModelRejectionProof = original.LastFailure.ModelRejectionProof! with { InputSha256 = new string('f', 64) } } };
+            Assert.False(FactorySourceRefreshValidation.HasConfirmedRecovery(unrelated));
+        }
         Assert.Equal(0, transport.IssuePosts);
         var confirmed = source.Progress.Where(p => p.Key.StartsWith(FactorySourceRefresh.Prefix, StringComparison.Ordinal)
             && p.Key != FactorySourceRefresh.CurrentKey).ToDictionary();

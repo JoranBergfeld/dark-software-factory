@@ -64,10 +64,17 @@ public static class FactorySourceRefreshValidation
         {
             SourceRefreshRecovery.KnownNoModelDispatch => progress.Reason.StartsWith("KnownNoModelDispatch;", StringComparison.Ordinal),
             SourceRefreshRecovery.TransientSourceRead => progress.Phase == SourceRefreshPhase.Acquisition && progress.ReadFailure?.IsTransient() == true,
+            SourceRefreshRecovery.PreModelSourceRead => progress.Phase != SourceRefreshPhase.Complete
+                && progress.Reason.StartsWith("KnownPreModelSourceRead;", StringComparison.Ordinal)
+                && progress.ReadFailure?.IsTransient() == true,
             SourceRefreshRecovery.RejectedModel => progress.Phase is SourceRefreshPhase.Analysis or SourceRefreshPhase.Compatibility
-                && progress.LastFailure is { State: IntentState.Blocked, ModelRejection: ModelCapabilityReason.RateLimited },
+                && HasConfirmedModelRejection(progress.LastFailure),
             _ => false,
         };
+
+    public static bool HasConfirmedModelRejection(IntentFailure? failure) =>
+        failure is { State: IntentState.Blocked, ModelRejection: ModelCapabilityReason.RateLimited }
+        && FactoryModelsValidation.IsConfirmedInferenceRejection(failure.ModelRejectionProof, "synthesis", failure.Dispatch.InputSha256);
 
     public static bool HasBoundedCompatibilityAttempts(SourceRefreshProgress progress) =>
         progress.CompatibilityAttempts is not { } attempts

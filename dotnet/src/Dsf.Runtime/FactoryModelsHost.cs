@@ -143,7 +143,8 @@ public static partial class RuntimeVerbs
                 return Results.Json(result, FactoryGitHubJson.Options);
             }
             catch (ModelCapabilityException e)
-            { return Results.Json(new { state = "Blocked", route = e.Route, reason = e.Reason.ToString(), detail = e.Message }, statusCode: 409); }
+            { return Results.Json(new { state = e.Reason is ModelCapabilityReason.NetworkUnavailable or ModelCapabilityReason.InferenceOutcomeUnconfirmed
+                    ? "Unknown" : "Blocked", route = e.Route, reason = e.Reason.ToString(), detail = e.Message, rejection = e.Rejection }, statusCode: 409); }
             catch (PreviewCapabilityException e)
             { return Results.Json(new { state = e.State.ToString(), reason = e.Message }, statusCode: 409); }
             catch (OperationCanceledException)

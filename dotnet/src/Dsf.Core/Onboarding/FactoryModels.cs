@@ -9,7 +9,7 @@ public enum ModelCapabilityState { Verified, Partial, Blocked, Failed, Canceled,
 public enum ModelCapabilityReason
 {
     None, MissingDeployment, IdentityMismatch, FamilyDiversity, MalformedResponse, PermissionDenied,
-    NetworkUnavailable, UnsupportedTarget, AuthorityChanged, Expired, RateLimited,
+    NetworkUnavailable, UnsupportedTarget, AuthorityChanged, Expired, RateLimited, InferenceOutcomeUnconfirmed,
 }
 
 public sealed record ModelRouteSelection(
@@ -85,10 +85,13 @@ public interface IFactoryModelWorkloads
     Task<ModelDeduplicationResult> DeduplicateAsync(IReadOnlyList<ModelText> input, CancellationToken token);
 }
 
+public sealed record ModelInferenceRejection(int Protocol, string Route, int StatusCode, string InputSha256);
+
 public sealed class ModelCapabilityException(ModelCapabilityReason reason, string route, string detail) : Exception(detail)
 {
     public ModelCapabilityReason Reason { get; } = reason;
     public string Route { get; } = route;
+    public ModelInferenceRejection? Rejection { get; init; }
 }
 
 public static partial class FactoryModelsValidation
@@ -199,5 +202,8 @@ public static partial class FactoryModelsValidation
     }
 
     public static ModelCapabilityException Failure(ModelCapabilityReason reason, string route, string detail) => new(reason, route, detail);
+    public static bool IsConfirmedInferenceRejection(ModelInferenceRejection? rejection, string route, string inputSha256) =>
+        rejection is { Protocol: 1, StatusCode: 429 } && rejection.Route == route
+        && FactorySourceValidation.Hash(rejection.InputSha256) && rejection.InputSha256 == inputSha256;
     private static bool Same(string? left, string right) => string.Equals(left, right, StringComparison.OrdinalIgnoreCase);
 }

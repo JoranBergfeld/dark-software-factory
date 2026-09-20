@@ -875,9 +875,19 @@ These recovery paths require typed evidence in the original durable checkpoint,
 not a generic `Partial`, `Blocked` or `ReviewRequired` state. Other provider
 rejections, material conflicts, malformed acknowledgements, unbounded impact,
 moving snapshots and unknown issued work are not automatically reopened.
-An older model host that reports only `UnsupportedTarget` cannot retroactively
-prove a rate-limit rejection. Neither transient recovery nor a healthy provider
-clears an operator pause.
+Model rejection evidence identifies the actual inference POST, synthesis route,
+HTTP 429 and original input hash. An ARM metadata 429 is not an inference rejection.
+Successful inference followed by an unconfirmed native authority check retains
+the original dispatch as `Unknown`; restored health never authorizes replay.
+Older host responses or checkpoints containing only `UnsupportedTarget` or
+`RateLimited` cannot retroactively prove an inference rejection.
+The original CODE process may also close a transient snapshot GET failure before
+any model request, including the initial fence in acquisition, analysis or
+compatibility. This requires no pending model dispatch or analysis selection,
+the original native root CAS, and acknowledged immutable checkpoint and receipt.
+A post-model read failure, unconfirmed progress write or pause interrupting
+closeout remains quarantined. Restart cannot infer no effect from current objects.
+Neither transient recovery nor a healthy provider clears an operator pause.
 Inference retains its existing attempt ceiling; compatibility now journals each
 attempt and uses the same 16-additional-attempt allowance beyond complete chunk
 coverage. Exhaustion requires review rather than repeatedly rediscovering an old
