@@ -85,7 +85,15 @@ internal sealed class FactoryIntentAccess(FactorySourceAccess source, HttpClient
         var result = await RequestAsync<ModelTextResult>("/synthesis", new ModelWorkloadRequest(Capability, input), token);
         try { FactoryModelsValidation.ValidateTextResult(Models, "synthesis", result); }
         catch (ModelCapabilityException) { throw new IntentException(IntentState.Failed, "InvalidModelObservation"); }
-        await CheckAsync(token);
+        try { await CheckAsync(token); }
+        catch (Exception e) when (e is IntentException or SourceAcquisitionException or ModelCapabilityException
+            or PreviewCapabilityException or JsonException or InvalidOperationException or ArgumentException
+            or KeyNotFoundException or FormatException or Azure.RequestFailedException or HttpRequestException
+            or IOException or Azure.Identity.AuthenticationFailedException or OperationCanceledException)
+        {
+            var cause = e is IntentException intent ? intent.Message : "CurrentNativeAuthorityReadOrValidationFailed";
+            throw new IntentException(IntentState.Unknown, "PostInferenceAuthorityUnconfirmed; " + cause);
+        }
         return result;
     }
 
@@ -105,7 +113,9 @@ internal sealed class FactoryIntentAccess(FactorySourceAccess source, HttpClient
         if (path == "/authority" && response.StatusCode == HttpStatusCode.NotFound)
             throw new IntentException(IntentState.Blocked, "NativeModelAuthorityUnavailable; compatible model-host image required.");
         if (response.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.Unauthorized)
-            throw new IntentException(IntentState.Blocked, "ModelAccessOrCapabilityRejected");
+            throw path == "/synthesis"
+                ? new IntentException(IntentState.Unknown, "ModelDispatchUnconfirmed; access response is not inference rejection evidence.")
+                : new IntentException(IntentState.Blocked, "ModelAccessOrCapabilityRejected");
         if (response.StatusCode is not (HttpStatusCode.OK or HttpStatusCode.Conflict))
             throw new IntentException(IntentState.Unknown, "ModelDispatchUnconfirmed");
         await using var stream = await response.Content.ReadAsStreamAsync(token);

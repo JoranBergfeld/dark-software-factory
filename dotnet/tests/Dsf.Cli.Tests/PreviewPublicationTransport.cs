@@ -112,6 +112,7 @@ internal sealed partial class PreviewPreparationTransport
             binding = scenario.Arm.CreatedResources.Values.Concat(Telemetry.Resources.Values).Concat(supplemental?.Resources.Values ?? Enumerable.Empty<JsonNode>())
                 .Single(r => string.Equals((string?)r["id"], identity, StringComparison.OrdinalIgnoreCase));
         }
+        http.DefaultRequestHeaders.Add("X-Dsf-Test-Host", verb);
         scenario.Source.Source!.Values = Values();
         var credential = new PreviewCredential(this, binding);
         var error = new StringWriter();

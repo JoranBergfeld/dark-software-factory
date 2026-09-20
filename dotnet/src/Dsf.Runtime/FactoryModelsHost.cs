@@ -92,6 +92,7 @@ public static partial class RuntimeVerbs
         async Task<IResult> ConsumeAsync(HttpContext context, string route, bool authorityOnly = false)
         {
             context.Response.Headers.CacheControl = "no-store";
+            var inferenceCompleted = false;
             try
             {
                 if (!authorityOnly && !FactoryModelsValidation.RouteNames.Contains(route) || !Guid.TryParse(settings.ManagedIdentityClientId, out var id)
@@ -134,6 +135,7 @@ public static partial class RuntimeVerbs
                 else result = route == "embedding" ? await workloads.DeduplicateAsync(deduplication!.Items, context.RequestAborted)
                     : route == "synthesis" ? await workloads.SynthesizeAsync(completion!.Input, context.RequestAborted)
                     : await workloads.JudgeAsync(route, completion!.Input, context.RequestAborted);
+                inferenceCompleted = native is null;
                 var (latestManifest, _, latestValues) = await ReadAsync(configuration, context.RequestAborted);
                 var latest = await FactoryRuntimeModels.ReadAsync(latestManifest, latestValues, reference, dependencies.ModelClock.GetUtcNow(),
                     credential, dependencies.ModelHttp ?? ModelHttp, context.RequestAborted);
@@ -141,6 +143,22 @@ public static partial class RuntimeVerbs
                     || FactoryModelsValidation.Hash(latest) != FactoryModelsValidation.Hash(authority)) throw new JsonException();
                 context.Response.Headers.CacheControl = "no-store";
                 return Results.Json(result, FactoryGitHubJson.Options);
+            }
+            catch (Exception e) when (inferenceCompleted && e is ModelCapabilityException or PreviewCapabilityException
+                or OperationCanceledException or JsonException or InvalidOperationException or ArgumentException
+                or KeyNotFoundException or FormatException or Azure.RequestFailedException or HttpRequestException
+                or IOException or AuthenticationFailedException)
+            {
+                var cause = e switch
+                {
+                    ModelCapabilityException model => model.Reason.ToString(),
+                    PreviewCapabilityException governance => governance.Message,
+                    Azure.RequestFailedException native => "NativeGovernanceReadFailed:" + native.Status,
+                    OperationCanceledException => "Canceled",
+                    _ => "CurrentGovernanceReadOrValidationFailed",
+                };
+                return Results.Json(new { state = "Unknown", route, reason = ModelCapabilityReason.InferenceOutcomeUnconfirmed.ToString(),
+                    detail = $"PostInferenceGovernanceUnconfirmed; {cause}; no result released or replay authorized." }, statusCode: 409);
             }
             catch (ModelCapabilityException e)
             { return Results.Json(new { state = e.Reason is ModelCapabilityReason.NetworkUnavailable or ModelCapabilityReason.InferenceOutcomeUnconfirmed

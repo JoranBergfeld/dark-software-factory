@@ -11,6 +11,53 @@ namespace Dsf.Runtime.Tests;
 
 public sealed class FactoryIntentWorkflowTests
 {
+    [Fact]
+    public async Task CODE_post_completion_authority_check_cannot_reclassify_accepted_inference_as_rejected()
+    {
+        using var transport = await IntentWorkflowTransport.CreateAsync();
+        await transport.RunAsync("/acquire");
+        var before = transport.Models.Inference.Count;
+        transport.BeforeModelResponse = () =>
+        {
+            transport.AuthorityUnavailable = true;
+            return Task.CompletedTask;
+        };
+        var result = await transport.RunAsync("/infer");
+        Assert.Equal("Unknown", (string?)JsonNode.Parse(result.Body)!["state"]);
+        Assert.Contains("PostInferenceAuthorityUnconfirmed", result.Body);
+        var original = transport.Source.Progress.ToDictionary();
+        Assert.NotNull(JsonNode.Parse(original["intent/current"].Value)!["dispatch"]);
+        transport.BeforeModelResponse = null;
+        transport.AuthorityUnavailable = false;
+        Assert.Equal("Unknown", (string?)JsonNode.Parse((await transport.RunAsync("/infer")).Body)!["state"]);
+        Assert.Equal(original, transport.Source.Progress);
+        Assert.Equal(before + 1, transport.Models.Inference.Count);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.Forbidden)]
+    [InlineData(HttpStatusCode.Unauthorized)]
+    public async Task Legacy_unproven_access_response_after_accepted_model_request_never_clears_original_dispatch(HttpStatusCode status)
+    {
+        using var transport = await IntentWorkflowTransport.CreateAsync();
+        await transport.RunAsync("/acquire");
+        var before = transport.Models.Inference.Count;
+        transport.ModelResponseStatus = status;
+        var result = await transport.RunAsync("/infer");
+        Assert.Equal("Unknown", (string?)JsonNode.Parse(result.Body)!["state"]);
+        var progress = JsonSerializer.Deserialize<IntentProgress>(
+            transport.Source.Progress["intent/current"].Value, FactorySourceValidation.RecordJson)!;
+        Assert.NotNull(progress.Dispatch);
+        Assert.Null(progress.LastFailure);
+        Assert.Equal(before + 1, transport.Models.Inference.Count);
+        transport.ModelResponseStatus = null;
+        var original = transport.Source.Progress.ToDictionary();
+        foreach (var route in new[] { "/intent-status", "/infer" })
+            Assert.Equal("Unknown", (string?)JsonNode.Parse((await transport.RunAsync(route)).Body)!["state"]);
+        Assert.Equal(original, transport.Source.Progress);
+        Assert.Equal(before + 1, transport.Models.Inference.Count);
+    }
+
     [Theory]
     [InlineData("current", "Blocked")]
     [InlineData("legacy", "Unknown")]
@@ -161,11 +208,14 @@ public sealed class FactoryIntentWorkflowTests
         if (duringModel) second.BeforeModelResponse = () => { second.Models.Resources.Remove(grant.Target); return Task.CompletedTask; };
         else second.AfterAuthorityResponse = () => second.Models.Resources.Remove(grant.Target);
         var result = await second.RunAsync(duringModel ? "/infer" : "/intent-status");
-        Assert.Equal("Blocked", (string?)JsonNode.Parse(result.Body)!["state"]);
+        Assert.Equal(duringModel ? "Unknown" : "Blocked", (string?)JsonNode.Parse(result.Body)!["state"]);
         Assert.Null(JsonNode.Parse(result.Body)!["draft"]);
         Assert.Equal(calls + (duringModel ? 1 : 0), second.Models.Inference.Count);
         if (duringModel)
+        {
             Assert.Equal(0, (int?)JsonNode.Parse(second.Source.Progress["intent/current"].Value)!["checkedChunks"]);
+            Assert.NotNull(JsonNode.Parse(second.Source.Progress["intent/current"].Value)!["dispatch"]);
+        }
         else Assert.Equal(before, second.Source.Progress);
     }
 
@@ -885,6 +935,7 @@ internal sealed class IntentWorkflowTransport : HttpMessageHandler
     internal Action? AfterAuthorityResponse { get; set; }
     internal Func<JsonNode, JsonNode>? AuthorityResponse { get; set; }
     internal Func<JsonNode, JsonNode>? ModelResponse { get; set; }
+    internal HttpStatusCode? ModelResponseStatus { get; set; }
     internal bool AuthorityUnavailable { get; set; }
     private HttpMessageInvoker? source;
     private HttpMessageInvoker? models;
@@ -997,6 +1048,8 @@ internal sealed class IntentWorkflowTransport : HttpMessageHandler
             {
                 if (BeforeModelResponse is not null) await BeforeModelResponse();
                 if (LoseModelResponse) throw new HttpRequestException("private-provider-secret");
+                if (ModelResponseStatus is { } status)
+                    return new(status) { Content = JsonContent.Create(new { state = "Blocked", detail = "Current model capability required." }) };
                 if (ModelResponse is not null)
                     return new(runner.Status) { Content = new StringContent(ModelResponse(JsonNode.Parse(runner.Body)!).ToJsonString(),
                         System.Text.Encoding.UTF8, "application/json") };

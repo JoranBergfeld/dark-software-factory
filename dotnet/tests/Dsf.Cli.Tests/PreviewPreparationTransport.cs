@@ -24,6 +24,7 @@ internal sealed partial class PreviewPreparationTransport(CharterScenario scenar
     internal string? DeniedAction { get; set; }
     internal bool DenyNativeReads { get; set; }
     internal Func<Uri, HttpStatusCode?>? ArmReadStatus { get; set; }
+    internal Func<string, HttpResponseMessage, Task<HttpResponseMessage>>? ConfigurationResponse { get; set; }
     internal JsonNode Selection = JsonSerializer.SerializeToNode(new PreviewPreparationSelection(
         Guid.Parse("ab000000-0000-0000-0000-000000000214"), FactoryTelemetryWorkflowTests.Image,
         "ab111111-1111-1111-1111-111111111111", CouncilRole,
@@ -172,7 +173,14 @@ internal sealed partial class PreviewPreparationTransport(CharterScenario scenar
                 return Reply(new { id = path, name = path.Split('/').Last(), properties = new { plan = "Analytics", protectionLevel = "General" } });
         }
         if (uri.Host.EndsWith(".azconfig.io", StringComparison.Ordinal) && uri.Host != new Uri(scenario.Source.Source!.ProgressEndpoint).Host)
-            return await source.SendAsync(request, token);
+        {
+            var response = await source.SendAsync(request, token);
+            if (request.Method != HttpMethod.Get || ConfigurationResponse is null) return response;
+            var host = request.Headers.TryGetValues("X-Dsf-Test-Host", out var origins) ? origins.Single() : "";
+            var replacement = await ConfigurationResponse(host, response);
+            if (!ReferenceEquals(response, replacement)) response.Dispose();
+            return replacement;
+        }
         if (uri.Host == "management.azure.com") return await telemetry!.SendAsync(request, token);
         using var backend = new HttpMessageInvoker(scenario.Source.WorkloadTransport!(scenario.Source.Source!), true);
         return await backend.SendAsync(request, token);

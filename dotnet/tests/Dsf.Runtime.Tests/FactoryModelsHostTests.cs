@@ -13,6 +13,33 @@ namespace Dsf.Runtime.Tests;
 public sealed class FactoryModelsHostTests
 {
     [Theory]
+    [InlineData("synthesis")]
+    [InlineData("deduplicate")]
+    [InlineData("jurors/juror-1")]
+    [InlineData("jurors/juror-2")]
+    [InlineData("jurors/juror-3")]
+    public async Task Post_inference_governance_validation_cannot_be_a_pre_dispatch_rejection(string route)
+    {
+        using var transport = new ModelHostTransport();
+        using var http = new HttpClient(transport);
+        var runner = new ModelHostRunner(transport)
+        {
+            Consume = true, ConsumerRoute = route,
+            BeforeConsume = _ => transport.OnInference = () => transport.Values.Remove(ProductConfigurationKeys.FactoryProfile),
+        };
+        await RuntimeCliApplication.InvokeAsync(["serve-models"], transport.Environment, new StringWriter(), new StringWriter(),
+            RuntimeDependencies.Production() with { WebHostRunner = runner, ModelHttp = http,
+                ModelCredential = new ModelCredential(transport), ModelClock = transport.Clock }, CancellationToken.None);
+        Assert.Equal(HttpStatusCode.Conflict, runner.ConsumerStatus);
+        var failure = JsonNode.Parse(runner.ConsumerBody)!;
+        Assert.Equal("Unknown", (string?)failure["state"]);
+        Assert.Equal("InferenceOutcomeUnconfirmed", (string?)failure["reason"]);
+        Assert.Contains("PostInferenceGovernanceUnconfirmed", (string?)failure["detail"]);
+        Assert.Null(failure["rejection"]);
+        Assert.Equal(6, transport.Inference.Count);
+    }
+
+    [Theory]
     [InlineData("single", 200, 1)]
     [InlineData("empty", 409, 0)]
     [InlineData("embedding-dimensions", 409, 1)]
@@ -282,7 +309,7 @@ public sealed class FactoryModelsHostTests
     [InlineData("null-capability", 403)]
     [InlineData("expired", 403)]
     [InlineData("stale-reference", 403)]
-    [InlineData("changed-during-inference", 403)]
+    [InlineData("changed-during-inference", 409)]
     public async Task Consumers_reject_missing_input_or_stale_authority_without_releasing_results(string scenario, int status)
     {
         using var transport = new ModelHostTransport();
@@ -305,7 +332,7 @@ public sealed class FactoryModelsHostTests
             TestDependencies.Build(webHostRunner: runner) with
             { ModelHttp = http, ModelCredential = new ModelCredential(transport), ModelClock = transport.Clock }, CancellationToken.None);
         Assert.Equal((HttpStatusCode)status, runner.ConsumerStatus);
-        Assert.Equal("Blocked", (string?)JsonNode.Parse(runner.ConsumerBody)!["state"]);
+        Assert.Equal(scenario == "changed-during-inference" ? "Unknown" : "Blocked", (string?)JsonNode.Parse(runner.ConsumerBody)!["state"]);
         Assert.DoesNotContain("existing-problem", runner.ConsumerBody);
         Assert.Equal(scenario == "changed-during-inference" ? 6 : 5, transport.Inference.Count);
     }

@@ -879,6 +879,11 @@ Model rejection evidence identifies the actual inference POST, synthesis route,
 HTTP 429 and original input hash. An ARM metadata 429 is not an inference rejection.
 Successful inference followed by an unconfirmed native authority check retains
 the original dispatch as `Unknown`; restored health never authorizes replay.
+This includes the model host's final App Configuration/governance reread and
+CODE's post-response authority check. An unavailable or malformed final
+governance response is not a pre-dispatch rejection. Plain legacy HTTP 401/403
+responses to an issued synthesis request likewise cannot prove no inference
+occurred; the original work stays quarantined and visible to pause/draining.
 Older host responses or checkpoints containing only `UnsupportedTarget` or
 `RateLimited` cannot retroactively prove an inference rejection.
 The original CODE process may also close a transient snapshot GET failure before

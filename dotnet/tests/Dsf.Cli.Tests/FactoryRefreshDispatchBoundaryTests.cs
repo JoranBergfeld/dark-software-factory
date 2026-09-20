@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Dsf.Core.Onboarding;
 using Dsf.Core.Runtime;
 using Xunit;
@@ -9,6 +10,83 @@ namespace Dsf.Cli.Tests;
 
 public sealed partial class FactoryEvidenceRefreshTests
 {
+    [Theory]
+    [InlineData("INFER_INTENT", false)]
+    [InlineData("CHECK_EVERY_CLAIM", false)]
+    [InlineData("CHECK_UNCHANGED_GOVERNING_INTENT", false)]
+    [InlineData("INFER_INTENT", true)]
+    public async Task Accepted_model_work_with_failed_outer_governance_read_remains_unknown_after_restart_and_pause(string stage, bool malformed)
+    {
+        var transport = fixture.Reset();
+        AdvanceDefaultBranch(transport);
+        var source = transport.Scenario.Source.Source!;
+        var governing = transport.Scenario.Arm.Product.Export();
+        var armed = false;
+        var failed = false;
+        JsonNode? envelope = null;
+        transport.BeforeEvaluationResponse = (_, _) =>
+        {
+            if (transport.SourceInferenceInputs.LastOrDefault()?.Contains(stage, StringComparison.Ordinal) == true) armed = true;
+            return Task.CompletedTask;
+        };
+        transport.ConfigurationResponse = async (host, response) =>
+        {
+            if (!armed || host != "serve-models") return response;
+            failed = true;
+            if (!malformed) return new(HttpStatusCode.ServiceUnavailable) { Content = new StringContent("private-provider-detail") };
+            var body = JsonNode.Parse(await response.Content.ReadAsStringAsync())!;
+            var manifest = body["items"]!.AsArray().Single(p => (string?)p!["key"] == ProductConfigurationKeys.FactoryManifest)!;
+            manifest["value"] = "invalid-native-governance";
+            return new(HttpStatusCode.OK) { Content = JsonContent.Create(body) };
+        };
+        transport.AfterHostResponse = (path, body) =>
+        {
+            if (path == "/synthesis" && failed) envelope = JsonNode.Parse(body);
+        };
+        try
+        {
+            var invocation = new FactoryDecisionRequest(Guid.NewGuid());
+            var stopped = await RefreshAsync(transport, invocation);
+            Assert.True(failed, "The MODEL host's native AppConfig GET after successful inference was not failed.");
+            Assert.Contains(stage, transport.SourceInferenceInputs.Last(), StringComparison.Ordinal);
+            Assert.Equal("Unknown", (string?)stopped["readiness"]);
+            Assert.Equal("Unknown", (string?)envelope!["state"]);
+            Assert.Equal("InferenceOutcomeUnconfirmed", (string?)envelope["reason"]);
+            Assert.Contains("PostInferenceGovernance", (string?)envelope["detail"]);
+            Assert.DoesNotContain("private-provider-detail", envelope.ToJsonString());
+            var refresh = JsonSerializer.Deserialize<SourceRefreshProgress>(
+                source.Progress[FactorySourceRefresh.CurrentKey].Value, FactorySourceValidation.RecordJson)!;
+            var analysis = JsonSerializer.Deserialize<IntentProgress>(source.Progress["intent/current"].Value, FactorySourceValidation.RecordJson)!;
+            Assert.True(refresh.Dispatch is not null || analysis.Dispatch is not null);
+            Assert.NotNull(refresh.Work);
+            Assert.Null(refresh.Recovery);
+            var original = source.Progress.ToDictionary();
+            var calls = transport.EvaluationInference.Count;
+            transport.BeforeEvaluationResponse = null;
+            transport.ConfigurationResponse = null;
+            transport.AfterHostResponse = null;
+            transport.Restart();
+            FactoryActivationTests.ConnectAudit(transport);
+            Assert.Equal("Unknown", (string?)(await PollRefreshAsync(transport, invocation))["readiness"]);
+            using var http = new HttpClient(transport, false) { Timeout = Timeout.InfiniteTimeSpan };
+            using (var denied = await http.PostAsJsonAsync(fixture.LiveEndpoint(transport) + "/decide",
+                new FactoryDecisionRequest(Guid.NewGuid()), FactorySourceValidation.RecordJson))
+                Assert.Equal(HttpStatusCode.Forbidden, denied.StatusCode);
+            Assert.Equal(original, transport.Scenario.Source.Source!.Progress);
+            Assert.Equal(governing, transport.Scenario.Arm.Product.Export());
+            var pause = await transport.Scenario.Machine.InvokeAsync("pause", "--request", "--operation", Guid.NewGuid().ToString());
+            Assert.Equal("DrainingUnknown", (string?)pause.Result["state"]);
+            Assert.Equal(calls, transport.EvaluationInference.Count);
+            Assert.Equal(0, transport.IssuePosts);
+        }
+        finally
+        {
+            transport.BeforeEvaluationResponse = null;
+            transport.ConfigurationResponse = null;
+            transport.AfterHostResponse = null;
+        }
+    }
+
     [Theory]
     [InlineData("before-inference")]
     [InlineData("INFER_INTENT")]
