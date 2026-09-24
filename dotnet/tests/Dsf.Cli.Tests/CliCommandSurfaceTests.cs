@@ -220,5 +220,12 @@ command <root> desc="Dark Software Factory — factory CLI (create product insta
       option --product type=String arity=1..1 required desc="product key"
       option --file type=String arity=1..1 desc="path to a local charter file"
       option --ref type=String arity=1..1 desc="read the charter from this repo ref via the GitHub App"
+  command onboard desc="Decide onboarding for an existing GitHub repository/application"
+    command decide desc="attach an isolated, proposal-only Feature Council to an existing repository"
+      command review-repository desc="real, read-only attachment assessment of an existing GitHub repository (no remote writes)"
+        option --repo type=String arity=1..1 desc="existing GitHub repository to review, as owner/name"
+        option --owner-keyvault-uri type=String arity=1..1 default="" desc="owner Key Vault URI"
+        option --owner-appconfig-endpoint type=String arity=1..1 desc="owner App Configuration endpoint"
+        option --automation-declaration type=String arity=1..1 desc="operator's stated (non-technical) declaration about external automation on this repository"
 """;
 }

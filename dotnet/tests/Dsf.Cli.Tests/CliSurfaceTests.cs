@@ -36,6 +36,7 @@ public sealed class CliSurfaceTests
               serve-agent            serve a source agent over A2A (runtime)
               poll-outcomes          poll human outcome labels and record audited learning data (runtime)
               charter                manage the product charter (.dsf/charter.md)
+              onboard                Decide onboarding for an existing GitHub repository/application
 
 
             """.Replace("\r\n", "\n"),

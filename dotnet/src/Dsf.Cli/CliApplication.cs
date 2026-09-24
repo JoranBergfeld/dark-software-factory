@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using Dsf.Core.Charters;
 using Dsf.Core.Instances;
+using Dsf.Core.Onboarding;
 using Dsf.Core.Products;
 using Dsf.Core.Runtime;
 
@@ -131,7 +132,8 @@ public static class CliApplication
         IAzureProvisioningClient azure,
         IAppConfigurationClient appConfig,
         ICharterRepositoryClient charterRepository,
-        ICharterStore charterStore)
+        ICharterStore charterStore,
+        IRepositoryAttachmentReviewer? repositoryAttachmentReviewer = null)
     {
         if (cancellationToken.IsCancellationRequested)
         {
@@ -143,10 +145,35 @@ public static class CliApplication
             .Select(arg => arg.Split('=', 2)[0])
             .ToHashSet();
         var root = BuildRootCommand(
-            terminal, providedOptions, github, azure, appConfig, charterRepository, charterStore);
+            terminal,
+            providedOptions,
+            github,
+            azure,
+            appConfig,
+            charterRepository,
+            charterStore,
+            repositoryAttachmentReviewer ?? GitHubRepositoryAttachmentReviewer.FromEnvironment(
+                new AzureCliOwnerBootstrapClient(new SystemAzureCliRunner())));
         var parseResult = root.Parse(args);
         return await InvokeAsync(parseResult, terminal, cancellationToken);
     }
+
+    /// <summary>Test seam for the <c>onboard decide review-repository</c> command with an injected reviewer.</summary>
+    internal static async Task<int> InvokeAsync(
+        string[] args,
+        CancellationToken cancellationToken,
+        ICliTerminal terminal,
+        IRepositoryAttachmentReviewer reviewer)
+        => await InvokeAsync(
+            args,
+            cancellationToken,
+            terminal,
+            GitHubRestProvisioningClient.FromEnvironment(),
+            AzureCliProvisioningClient.FromEnvironment(),
+            new AzureCliAppConfigurationClient(new SystemAzureCliRunner()),
+            GitHubCharterRepositoryClient.FromEnvironment(),
+            CosmosCharterStore.FromEnvironment(),
+            reviewer);
 
     internal static async Task<int> InvokeAsync(
         ParseResult parseResult,
@@ -187,7 +214,8 @@ public static class CliApplication
         IAzureProvisioningClient azure,
         IAppConfigurationClient appConfig,
         ICharterRepositoryClient charterRepository,
-        ICharterStore charterStore)
+        ICharterStore charterStore,
+        IRepositoryAttachmentReviewer? repositoryAttachmentReviewer = null)
     {
         var root = new RootCommand("Dark Software Factory — factory CLI (create product instances)");
         root.Options.Remove(root.Options.Single(option => option.Name == "--version"));
@@ -208,6 +236,10 @@ public static class CliApplication
         root.Subcommands.Add(BuildServeAgentCommand());
         root.Subcommands.Add(BuildPollOutcomesCommand());
         root.Subcommands.Add(BuildCharterCommand(terminal, appConfig, charterRepository, charterStore));
+        root.Subcommands.Add(BuildOnboardCommand(
+            terminal,
+            repositoryAttachmentReviewer ?? GitHubRepositoryAttachmentReviewer.FromEnvironment(
+                new AzureCliOwnerBootstrapClient(new SystemAzureCliRunner()))));
 
         return root;
     }
@@ -1135,6 +1167,135 @@ public static class CliApplication
 
     private static IReadOnlyList<string> Value(string name, string? value) =>
         string.IsNullOrWhiteSpace(value) ? [] : [name, value];
+
+    private static Command BuildOnboardCommand(ICliTerminal terminal, IRepositoryAttachmentReviewer reviewer)
+    {
+        var command = new Command("onboard", "Decide onboarding for an existing GitHub repository/application");
+        var decide = new Command("decide", "attach an isolated, proposal-only Feature Council to an existing repository");
+        decide.Subcommands.Add(BuildReviewRepositoryCommand(terminal, reviewer));
+        command.Subcommands.Add(decide);
+        return command;
+    }
+
+    private static Command BuildReviewRepositoryCommand(ICliTerminal terminal, IRepositoryAttachmentReviewer reviewer)
+    {
+        var repo = StringOption("--repo", "existing GitHub repository to review, as owner/name");
+        var ownerKeyVaultUri = StringOption("--owner-keyvault-uri", "owner Key Vault URI", string.Empty);
+        var ownerAppConfigEndpoint = StringOption("--owner-appconfig-endpoint", "owner App Configuration endpoint");
+        var automationDeclaration = StringOption(
+            "--automation-declaration",
+            "operator's stated (non-technical) declaration about external automation on this repository");
+        var command = new Command(
+            "review-repository",
+            "real, read-only attachment assessment of an existing GitHub repository (no remote writes)");
+        AddOptions(command, repo, ownerKeyVaultUri, ownerAppConfigEndpoint, automationDeclaration);
+        command.SetAction(async (parseResult, cancellationToken) =>
+        {
+            var repoValue = parseResult.GetValue(repo);
+            if (string.IsNullOrWhiteSpace(repoValue) && terminal.Capabilities.IsInteractive)
+            {
+                repoValue = terminal.Prompt("Repository to review (owner/name)");
+            }
+
+            if (string.IsNullOrWhiteSpace(repoValue))
+            {
+                terminal.WriteErrorLine(
+                    "[dsf] error: --repo owner/name is required to select the repository to review.");
+                return Failure;
+            }
+
+            var parts = repoValue.Trim().Split('/', 2);
+            if (parts.Length != 2 || parts[0].Length == 0 || parts[1].Length == 0)
+            {
+                terminal.WriteErrorLine($"[dsf] error: --repo '{repoValue}' must be 'owner/name'.");
+                return Failure;
+            }
+
+            RepositoryAttachmentReview review;
+            try
+            {
+                review = await reviewer.ReviewAsync(
+                    new RepositoryAttachmentReviewRequest(
+                        parts[0],
+                        parts[1],
+                        NullIfEmpty(parseResult.GetValue(ownerKeyVaultUri)),
+                        NullIfEmpty(parseResult.GetValue(ownerAppConfigEndpoint)),
+                        NullIfEmpty(parseResult.GetValue(automationDeclaration))),
+                    cancellationToken);
+            }
+            catch (InvalidOperationException exception)
+            {
+                terminal.WriteErrorLine($"[dsf] error: {exception.Message}");
+                return Failure;
+            }
+
+            PrintRepositoryAttachmentReview(terminal, review);
+            return Success;
+        });
+        return command;
+    }
+
+    private static string? NullIfEmpty(string? value) => string.IsNullOrWhiteSpace(value) ? null : value;
+
+    private static void PrintRepositoryAttachmentReview(ICliTerminal terminal, RepositoryAttachmentReview review)
+    {
+        terminal.WriteLine("[dsf] Repository attachment review (read-only; no writes were made).");
+        if (review.Repository is { } repository)
+        {
+            terminal.WriteLine(
+                $"[dsf]   repository: {repository.Owner}/{repository.Name} (id {repository.RepositoryId}), "
+                + $"default branch '{repository.DefaultBranch}', visibility {repository.Visibility}, "
+                + $"archived={repository.Archived}, issues_enabled={repository.IssuesEnabled}");
+        }
+        else
+        {
+            terminal.WriteLine("[dsf]   repository: could not be identified (see prerequisites below).");
+        }
+
+        terminal.WriteLine("[dsf]   prerequisites:");
+        foreach (var prerequisite in review.Prerequisites)
+        {
+            var actor = prerequisite.ResponsibleActor is { Length: > 0 } responsible
+                ? $" (next actor: {responsible})"
+                : string.Empty;
+            terminal.WriteLine(
+                $"[dsf]     - {prerequisite.Name}: {prerequisite.State}: {prerequisite.Detail}{actor}");
+        }
+
+        if (review.Labels.Count > 0)
+        {
+            terminal.WriteLine("[dsf]   permitted labels (reviewed, never created/altered by this command):");
+            foreach (var label in review.Labels)
+            {
+                var state = label.Exists
+                    ? $"exists (color {label.ExistingColor}, description '{label.ExistingDescription}')"
+                        + (label.ConflictsWithExpectedMeaning ? " — possible semantic conflict" : string.Empty)
+                    : "does not exist yet";
+                terminal.WriteLine($"[dsf]     - {label.Name}: {state}");
+            }
+        }
+
+        if (review.Automation.Count > 0)
+        {
+            terminal.WriteLine("[dsf]   automation review:");
+            foreach (var finding in review.Automation)
+            {
+                terminal.WriteLine(
+                    $"[dsf]     - {finding.MutationClass}: blocks={finding.Blocks}, evidence={finding.Evidence}: "
+                    + finding.Detail);
+            }
+        }
+
+        terminal.WriteLine($"[dsf]   eligibility: {review.Eligibility}");
+        if (review.BlockingReasons.Count > 0)
+        {
+            terminal.WriteLine("[dsf]   blocking reasons:");
+            foreach (var reason in review.BlockingReasons)
+            {
+                terminal.WriteLine($"[dsf]     - {reason}");
+            }
+        }
+    }
 
     private static Command BuildCharterCommand(
         ICliTerminal terminal,
