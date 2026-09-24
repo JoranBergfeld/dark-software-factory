@@ -131,7 +131,8 @@ public static class CliApplication
         IAzureProvisioningClient azure,
         IAppConfigurationClient appConfig,
         ICharterRepositoryClient charterRepository,
-        ICharterStore charterStore)
+        ICharterStore charterStore,
+        IAzureApplicationDiscoveryClient? discovery = null)
     {
         if (cancellationToken.IsCancellationRequested)
         {
@@ -143,7 +144,7 @@ public static class CliApplication
             .Select(arg => arg.Split('=', 2)[0])
             .ToHashSet();
         var root = BuildRootCommand(
-            terminal, providedOptions, github, azure, appConfig, charterRepository, charterStore);
+            terminal, providedOptions, github, azure, appConfig, charterRepository, charterStore, discovery);
         var parseResult = root.Parse(args);
         return await InvokeAsync(parseResult, terminal, cancellationToken);
     }
@@ -171,6 +172,22 @@ public static class CliApplication
         }
     }
 
+    internal static async Task<int> InvokeAsync(
+        string[] args,
+        CancellationToken cancellationToken,
+        ICliTerminal terminal,
+        IAzureApplicationDiscoveryClient discovery)
+        => await InvokeAsync(
+            args,
+            cancellationToken,
+            terminal,
+            GitHubRestProvisioningClient.FromEnvironment(),
+            AzureCliProvisioningClient.FromEnvironment(),
+            new AzureCliAppConfigurationClient(new SystemAzureCliRunner()),
+            GitHubCharterRepositoryClient.FromEnvironment(),
+            CosmosCharterStore.FromEnvironment(),
+            discovery);
+
     internal static RootCommand BuildRootCommand() => BuildRootCommand(
         SystemCliTerminal.Detect(),
         new HashSet<string>(),
@@ -187,7 +204,8 @@ public static class CliApplication
         IAzureProvisioningClient azure,
         IAppConfigurationClient appConfig,
         ICharterRepositoryClient charterRepository,
-        ICharterStore charterStore)
+        ICharterStore charterStore,
+        IAzureApplicationDiscoveryClient? discovery = null)
     {
         var root = new RootCommand("Dark Software Factory — factory CLI (create product instances)");
         root.Options.Remove(root.Options.Single(option => option.Name == "--version"));
@@ -197,6 +215,10 @@ public static class CliApplication
         helpOption.Aliases.Remove("/h");
 
         root.Subcommands.Add(BuildNewCommand(terminal, providedOptions, github, azure, appConfig));
+        root.Subcommands.Add(OnboardCommand.Build(
+            terminal,
+            discovery ?? AzureCliApplicationDiscoveryClient.FromEnvironment(),
+            FirstConfiguredValue));
         root.Subcommands.Add(BuildListCommand(terminal, appConfig));
         root.Subcommands.Add(BuildOffboardCommand());
         root.Subcommands.Add(BuildBootstrapCommand(terminal));

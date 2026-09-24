@@ -25,6 +25,7 @@ public sealed class CliSurfaceTests
 
             Commands:
               new                    create a new isolated product factory instance
+              onboard                onboard an existing application into a DSF phase
               list, ls               list provisioned product factories from the owner App Config index
               offboard <product>     remove Azure/runtime artifacts for a product
               bootstrap              one-time: create the DSF GitHub App and store it in the owner Key Vault
