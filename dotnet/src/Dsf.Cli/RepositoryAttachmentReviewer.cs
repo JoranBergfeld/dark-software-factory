@@ -41,6 +41,10 @@ internal sealed class GitHubRepositoryAttachmentReviewer : IRepositoryAttachment
         @"(?im)^\s*(""?issues""?|""?issue_comment""?|""?pull_request""?|""?pull_request_target""?)\s*:",
         RegexOptions.Compiled);
 
+    private static readonly Regex OnKeyPattern = new(@"(?im)^on\s*:.*$", RegexOptions.Compiled);
+
+    private static readonly Regex Base64Whitespace = new(@"\s+", RegexOptions.Compiled);
+
     private static readonly IReadOnlyDictionary<string, string> RequiredInstallationPermissions =
         new Dictionary<string, string>(StringComparer.Ordinal)
         {
@@ -301,8 +305,10 @@ internal sealed class GitHubRepositoryAttachmentReviewer : IRepositoryAttachment
             var description = document.RootElement.TryGetProperty("description", out var descriptionElement)
                 ? descriptionElement.GetString()
                 : null;
-            var conflicts = string.IsNullOrWhiteSpace(description)
-                || !description.Contains("dsf", StringComparison.OrdinalIgnoreCase);
+            // An empty/missing description is unknown provenance, not proven conflicting; only a
+            // description that positively omits "dsf" is treated as a semantic conflict.
+            var conflicts = !string.IsNullOrWhiteSpace(description)
+                && !description.Contains("dsf", StringComparison.OrdinalIgnoreCase);
             reviews.Add(new RepositoryLabelReview(name, Exists: true, color, description, conflicts));
         }
 
@@ -344,8 +350,9 @@ internal sealed class GitHubRepositoryAttachmentReviewer : IRepositoryAttachment
 
                     using var contentDocument = await ReadJsonAsync(contentResponse, cancellationToken);
                     var encoded = contentDocument.RootElement.GetProperty("content").GetString() ?? string.Empty;
-                    var text = Encoding.UTF8.GetString(Convert.FromBase64String(encoded.Replace("\n", string.Empty)));
-                    if (AutomationTriggerPattern.IsMatch(text))
+                    var text = Encoding.UTF8.GetString(
+                        Convert.FromBase64String(Base64Whitespace.Replace(encoded, string.Empty)));
+                    if (AutomationTriggerPattern.IsMatch(ExtractOnSection(text)))
                     {
                         findings.Add(
                             new RepositoryAutomationFinding(
@@ -394,6 +401,36 @@ internal sealed class GitHubRepositoryAttachmentReviewer : IRepositoryAttachment
         }
 
         return findings;
+    }
+
+    /// <summary>
+    /// Returns only the text of the workflow's top-level <c>on:</c> trigger block (its own line
+    /// plus any more-indented continuation lines), so trigger-key detection cannot false-positive
+    /// on an unrelated key such as a job/step/env value that happens to be named "issues".
+    /// </summary>
+    private static string ExtractOnSection(string workflowYaml)
+    {
+        var match = OnKeyPattern.Match(workflowYaml);
+        if (!match.Success)
+        {
+            return string.Empty;
+        }
+
+        var lines = workflowYaml[match.Index..].Split('\n');
+        var section = new StringBuilder(lines[0]);
+        for (var i = 1; i < lines.Length; i++)
+        {
+            var line = lines[i];
+            if (line.Length == 0 || char.IsWhiteSpace(line[0]))
+            {
+                section.Append('\n').Append(line);
+                continue;
+            }
+
+            break;
+        }
+
+        return section.ToString();
     }
 
     private async Task<IReadOnlyList<RepositoryAttachmentPrerequisite>> ReviewInstallationAsync(
@@ -571,7 +608,7 @@ internal sealed class GitHubRepositoryAttachmentReviewer : IRepositoryAttachment
                 && permissions.TryGetProperty(permission, out var grantedElement)
                 ? grantedElement.GetString()
                 : null;
-            if (granted is null || (requiredLevel == "write" && granted != "write" && granted != "admin"))
+            if (PermissionRank(granted) < PermissionRank(requiredLevel))
             {
                 missingPermissions.Add(permission);
             }
@@ -592,6 +629,18 @@ internal sealed class GitHubRepositoryAttachmentReviewer : IRepositoryAttachment
 
         return results;
     }
+
+    /// <summary>
+    /// Ranks a GitHub App installation permission level so a required level (e.g. "write") can be
+    /// compared against a granted level (e.g. "admin") without special-casing individual values.
+    /// </summary>
+    private static int PermissionRank(string? level) => level switch
+    {
+        "admin" => 3,
+        "write" => 2,
+        "read" => 1,
+        _ => 0,
+    };
 
     private async Task<bool> IsRepositorySelectedAsync(
         string installationId, string repositoryId, CancellationToken cancellationToken)
