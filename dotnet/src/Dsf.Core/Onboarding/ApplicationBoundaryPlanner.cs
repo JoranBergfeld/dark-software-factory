@@ -53,12 +53,13 @@ public static class ApplicationBoundaryPlanner
                 $"discovery ran in {inventory.TenantId}/{inventory.SubscriptionId} but the selection names {selection.TenantId}/{selection.SubscriptionId}; cross-tenant and cross-subscription footprints are rejected."));
         }
 
+        var discoveredResources = Index(inventory.Resources, resource => resource.ResourceId);
+        var discoveredBackends = Index(inventory.EvidenceBackends, backend => backend.ResourceId);
+
         var selectedResources = new List<ApplicationResourceCandidate>();
         foreach (var resourceId in resourceIds)
         {
-            var candidate = inventory.Resources.FirstOrDefault(
-                resource => Same(resource.ResourceId, resourceId));
-            if (candidate is null)
+            if (!discoveredResources.TryGetValue(resourceId, out var candidate))
             {
                 rejections.Add(new BoundaryRejection(
                     resourceId,
@@ -93,9 +94,7 @@ public static class ApplicationBoundaryPlanner
         var selectedBackends = new List<EvidenceBackendCandidate>();
         foreach (var backendId in backendIds)
         {
-            var candidate = inventory.EvidenceBackends.FirstOrDefault(
-                backend => Same(backend.ResourceId, backendId));
-            if (candidate is null)
+            if (!discoveredBackends.TryGetValue(backendId, out var candidate))
             {
                 rejections.Add(new BoundaryRejection(
                     backendId,
@@ -369,4 +368,15 @@ public static class ApplicationBoundaryPlanner
 
     private static bool Same(string left, string right) =>
         string.Equals(left, right, StringComparison.OrdinalIgnoreCase);
+
+    private static Dictionary<string, T> Index<T>(IEnumerable<T> values, Func<T, string> key)
+    {
+        var index = new Dictionary<string, T>(StringComparer.OrdinalIgnoreCase);
+        foreach (var value in values)
+        {
+            index.TryAdd(key(value), value);
+        }
+
+        return index;
+    }
 }

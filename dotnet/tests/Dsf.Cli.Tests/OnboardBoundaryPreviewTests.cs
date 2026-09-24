@@ -200,22 +200,35 @@ public sealed class OnboardBoundaryPreviewTests
     {
         var discovery = Discovery();
         var terminal = Redirected();
+        var priorEndpoint = Environment.GetEnvironmentVariable("DSF_OWNER_APPCONFIG_ENDPOINT");
+        var priorVault = Environment.GetEnvironmentVariable("DSF_OWNER_KEYVAULT_URI");
+        Environment.SetEnvironmentVariable("DSF_OWNER_APPCONFIG_ENDPOINT", null);
+        Environment.SetEnvironmentVariable("DSF_OWNER_KEYVAULT_URI", null);
 
-        var exitCode = await CliApplication.InvokeAsync(
-            [
-                "onboard", "decide", "preview",
-                "--product", "shop",
-                "--tenant", Tenant,
-                "--subscription", Subscription,
-                "--app-environment", "production",
-                "--application-resource", ApiId,
-                "--evidence-backend", WorkspaceId,
-                "--dedicated",
-                "--cross-owner-reviewed",
-            ],
-            CancellationToken.None,
-            terminal,
-            discovery);
+        int exitCode;
+        try
+        {
+            exitCode = await CliApplication.InvokeAsync(
+                [
+                    "onboard", "decide", "preview",
+                    "--product", "shop",
+                    "--tenant", Tenant,
+                    "--subscription", Subscription,
+                    "--app-environment", "production",
+                    "--application-resource", ApiId,
+                    "--evidence-backend", WorkspaceId,
+                    "--dedicated",
+                    "--cross-owner-reviewed",
+                ],
+                CancellationToken.None,
+                terminal,
+                discovery);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("DSF_OWNER_APPCONFIG_ENDPOINT", priorEndpoint);
+            Environment.SetEnvironmentVariable("DSF_OWNER_KEYVAULT_URI", priorVault);
+        }
 
         Assert.Equal(1, exitCode);
         Assert.Contains("blocked administrator prerequisites: 2", terminal.Output, StringComparison.Ordinal);
@@ -405,11 +418,12 @@ public sealed class OnboardBoundaryPreviewTests
         return [.. arguments];
     }
 
+    private const string FingerprintPrefix = "[dsf] plan fingerprint: ";
+
     private static string Fingerprint(string output) => output
         .Split('\n')
         .Select(line => line.Trim())
-        .First(line => line.StartsWith("[dsf] plan fingerprint:", StringComparison.Ordinal))
-        .Split(' ')[3];
+        .First(line => line.StartsWith(FingerprintPrefix, StringComparison.Ordinal))[FingerprintPrefix.Length..];
 
     private static ScriptedTerminal Redirected() => new(
         new TerminalCapabilities(IsInteractive: false, SupportsAnsi: false, SupportsEmoji: false),

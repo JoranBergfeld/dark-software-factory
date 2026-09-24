@@ -233,7 +233,12 @@ internal static class OnboardCommand
 
                 backendIds = selectedBackendIds;
             }
+        }
 
+        // The declarations are reviewed per exact selection, so an interactive operator is
+        // always asked for the ones they did not already pass as flags.
+        if (interactive)
+        {
             dedicated = dedicated || Confirm(
                 terminal,
                 "Declare this exact selection dedicated to the application? [y/N]: ");
