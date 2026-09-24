@@ -259,6 +259,53 @@ public sealed class OnboardBoundaryPreviewTests
     }
 
     [Fact]
+    public async Task Interactive_selection_of_an_unlisted_number_fails_with_only_that_reason()
+    {
+        var terminal = new ScriptedTerminal(
+            new TerminalCapabilities(IsInteractive: true, SupportsAnsi: false, SupportsEmoji: false),
+            ["production", "1,99"]);
+
+        var exitCode = await CliApplication.InvokeAsync(
+            [
+                "onboard", "decide", "preview",
+                "--product", "shop",
+                "--tenant", Tenant,
+                "--subscription", Subscription,
+            ],
+            CancellationToken.None,
+            terminal,
+            Discovery());
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("'99' is not one of the listed application resources", terminal.Error, StringComparison.Ordinal);
+        Assert.DoesNotContain("no application resource was selected", terminal.Error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Interactive_declarations_accept_mixed_case_confirmations()
+    {
+        var terminal = new ScriptedTerminal(
+            new TerminalCapabilities(IsInteractive: true, SupportsAnsi: false, SupportsEmoji: false),
+            ["production", "1", "1", "Yes", "Y"]);
+
+        var exitCode = await CliApplication.InvokeAsync(
+            [
+                "onboard", "decide", "preview",
+                "--product", "shop",
+                "--tenant", Tenant,
+                "--subscription", Subscription,
+                "--owner-appconfig-endpoint", "https://appcs-dsf-owner.azconfig.io",
+                "--owner-keyvault-uri", "https://kv-dsf-owner.vault.azure.net/",
+            ],
+            CancellationToken.None,
+            terminal,
+            Discovery());
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("--dedicated --cross-owner-reviewed", terminal.Output, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Redirected_preview_rejects_incomplete_input_without_inventing_a_selection()
     {
         var discovery = Discovery();

@@ -188,36 +188,50 @@ internal static class OnboardCommand
 
             if (resourceIds.Count == 0)
             {
-                resourceIds = SelectIds(
+                var selectedResourceIds = SelectIds(
                     terminal,
                     "application resources",
                     inventory.Resources.Select(resource => (
                         resource.ResourceId,
                         $"{resource.Name} ({resource.Type}) rg={resource.ResourceGroup} environment={Describe(resource.Environment)}")).ToList(),
                     "Application resource numbers (comma-separated): ");
-                if (resourceIds.Count == 0)
+                if (selectedResourceIds is null)
+                {
+                    return Failure;
+                }
+
+                if (selectedResourceIds.Count == 0)
                 {
                     terminal.WriteErrorLine(
                         "[dsf] error: no application resource was selected; group siblings, parents, children, and dependencies are never added implicitly.");
                     return Failure;
                 }
+
+                resourceIds = selectedResourceIds;
             }
 
             if (backendIds.Count == 0)
             {
-                backendIds = SelectIds(
+                var selectedBackendIds = SelectIds(
                     terminal,
                     "evidence backends",
                     inventory.EvidenceBackends.Select(backend => (
                         backend.ResourceId,
                         $"{backend.Name} ({backend.Kind}) environment={Describe(backend.Environment)}")).ToList(),
                     "Evidence backend numbers (comma-separated): ");
-                if (backendIds.Count == 0)
+                if (selectedBackendIds is null)
+                {
+                    return Failure;
+                }
+
+                if (selectedBackendIds.Count == 0)
                 {
                     terminal.WriteErrorLine(
                         "[dsf] error: no evidence backend was selected; application membership never authorizes a telemetry backend.");
                     return Failure;
                 }
+
+                backendIds = selectedBackendIds;
             }
 
             dedicated = dedicated || Confirm(
@@ -307,7 +321,8 @@ internal static class OnboardCommand
         }
     }
 
-    private static List<string> SelectIds(
+    /// <summary>Returns the selected ids, or <c>null</c> when the answer named something unlisted.</summary>
+    private static List<string>? SelectIds(
         ICliTerminal terminal,
         string title,
         IReadOnlyList<(string Id, string Label)> candidates,
@@ -333,7 +348,7 @@ internal static class OnboardCommand
             }
 
             terminal.WriteErrorLine($"[dsf] error: '{token}' is not one of the listed {title}.");
-            return [];
+            return null;
         }
 
         return selected;
@@ -342,7 +357,9 @@ internal static class OnboardCommand
     private static bool Confirm(ICliTerminal terminal, string prompt)
     {
         var answer = terminal.Prompt(prompt) ?? string.Empty;
-        return answer.Trim() is "y" or "Y" or "yes" or "YES";
+        var normalized = answer.Trim();
+        return string.Equals(normalized, "y", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(normalized, "yes", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string Replay(ApplicationBoundarySelection selection)
