@@ -209,6 +209,22 @@ public sealed class LivingDocumentationTests
     }
 
     [Fact]
+    public void Onboarding_preview_guide_describes_the_shipped_read_only_boundary_preview()
+    {
+        var onboarding = ReadRepoFile("docs/site/get-started/onboard-existing-application.md");
+        var navigation = ReadRepoFile("mkdocs.yml");
+
+        Assert.Contains("dsf onboard decide preview", onboarding, StringComparison.Ordinal);
+        Assert.Contains("--application-resource", onboarding, StringComparison.Ordinal);
+        Assert.Contains("--evidence-backend", onboarding, StringComparison.Ordinal);
+        Assert.Contains("--expect-fingerprint", onboarding, StringComparison.Ordinal);
+        Assert.Contains("writes no Azure tag", onboarding, StringComparison.Ordinal);
+        Assert.Contains("not a global technical lock", onboarding, StringComparison.Ordinal);
+        Assert.Contains("get-started/onboard-existing-application.md", navigation, StringComparison.Ordinal);
+        Assert.DoesNotContain("not implemented", onboarding, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void Release_verification_guide_covers_public_artifact_verification()
     {
         var content = ReadRepoFile("docs/site/get-started/verify-release.md");

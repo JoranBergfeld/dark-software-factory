@@ -64,6 +64,7 @@ Deterministic doubles belong in `Dsf.Testing` or test projects.
 
 - `dsf new` — provision an isolated product factory.
 - `dsf bootstrap` — create the owner App Configuration, Key Vault, and DSF GitHub App control plane.
+- `dsf onboard decide preview` — read-only preview of the dedicated application boundary for an existing app.
 - `dsf charter ...` — manage product intent.
 - `dsf run|sweep|serve-orchestrator|serve-agent|poll-outcomes` — forwarded runtime verbs.
 - `dsf-control-center` — governance web process.
