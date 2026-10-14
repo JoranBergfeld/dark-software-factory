@@ -2,6 +2,7 @@ using System.Text.Json.Nodes;
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using Dsf.Core.Onboarding;
 using Dsf.Core.Runtime;
 using Xunit;
 
@@ -9,6 +10,21 @@ namespace Dsf.Cli.Tests;
 
 public sealed class FactoryReconfigurationReviewTests
 {
+    [Fact]
+    public async Task Offboarding_factory_remains_read_only_inspectable_and_discloses_closed_admission()
+    {
+        using var transport = await FactoryActivationTests.ReadyAsync();
+        transport.Scenario.Arm.Product.Seed(FactoryOffboarding.Key, "{}");
+
+        var result = await transport.Scenario.Machine.InvokeAsync("reconfigure", "--inspect");
+
+        Assert.Equal("Inspected", (string?)result.Result["state"]);
+        Assert.True((bool)result.Result["offboardingOrDetached"]!);
+        Assert.Contains("closes admission", (string?)result.Result["detail"], StringComparison.OrdinalIgnoreCase);
+        Assert.False((bool)result.Result["hasRemoteEffects"]!);
+        Assert.False((bool)result.Result["canApply"]!);
+    }
+
     [Fact]
     public async Task Current_input_export_and_exact_diff_are_read_only_across_reconstructed_clients()
     {
