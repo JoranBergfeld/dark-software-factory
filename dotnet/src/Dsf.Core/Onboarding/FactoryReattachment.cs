@@ -19,6 +19,15 @@ public sealed record FactoryReattachmentRequest(
     int Protocol, string Kind, Guid OperationId, Guid FactoryId, string PlanFingerprint,
     string AuthorityRevision, string ApprovedBy, DateTimeOffset RequestedAt);
 
+public sealed record FactoryReattachmentRetirementProgress(
+    int Protocol, Guid OperationId, string PlanFingerprint, int Records, int Applied);
+
+public sealed record FactoryReattachmentRetiredRecord(
+    int Protocol, Guid OperationId, int Index, string Key, string ETag, string Sha256, int Bytes, int Chunks);
+
+public sealed record FactoryReattachmentRetiredChunk(
+    int Protocol, Guid OperationId, int Record, int Index, string Data);
+
 public sealed record FactoryReattachmentPointer(
     Guid OperationId, FactoryReattachmentState State, string PlanFingerprint,
     string AuthorityRevision, DateTimeOffset RequestedAt);
@@ -49,9 +58,16 @@ public static class FactoryReattachment
     public const string Kind = "decide-reattachment-request";
     public static string HistoryKey(Guid operation) => HistoryPrefix + operation.ToString("N") + "/request";
     public static string PlanKey(Guid operation) => HistoryPrefix + operation.ToString("N") + "/plan";
+    public static string RetirementProgressKey(Guid operation) =>
+        HistoryPrefix + operation.ToString("N") + "/retirement/current";
+    public static string RetiredKey(Guid operation, int index) =>
+        HistoryPrefix + operation.ToString("N") + "/retired/" + index.ToString("D4") + "/current";
+    public static string RetiredChunkKey(Guid operation, int record, int index) =>
+        HistoryPrefix + operation.ToString("N") + "/retired/" + record.ToString("D4") + "/chunks/" + index.ToString("D4");
     public static string AccessKey(Guid operation, int index) =>
         AccessPrefix + operation.ToString("N") + "/" + index.ToString("D4");
     public static string RetirementKey(Guid factory) => "dsf/onboarding/retired/" + factory.ToString("N");
+    public static bool IsStopRecord(string key) => key == Key;
 
     public static string Fingerprint(FactoryReattachmentPlan plan)
     {

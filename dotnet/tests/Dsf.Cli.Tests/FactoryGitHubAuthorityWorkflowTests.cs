@@ -918,7 +918,8 @@ public sealed class FactoryGitHubAuthorityWorkflowTests
                 if (request.Method == HttpMethod.Get)
                     return DeletedKeyVersions.Contains(version)
                         ? new(HttpStatusCode.NotFound)
-                        : Reply(new JsonObject { ["id"] = version, ["attributes"] = new JsonObject
+                        : Reply(new JsonObject { ["id"] = Fault == "key-custody-conflict" ? version + "-changed" : version,
+                            ["attributes"] = new JsonObject
                         { ["enabled"] = true, ["created"] = DateTimeOffset.Parse("2026-09-15T23:00:00Z").ToUnixTimeSeconds() } });
                 Assert.Equal(HttpMethod.Delete, request.Method);
                 if (CleanupDenied) return new(HttpStatusCode.Forbidden);

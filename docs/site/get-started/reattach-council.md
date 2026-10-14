@@ -38,13 +38,25 @@ changed immutable identity, missing retained authority, retired identity, and
 concurrent lifecycle changes remain `Blocked`, `Partial`, or `Unknown`.
 Application resources, repository content/settings, shared owner assets,
 factory ID, and historical audit/publication provenance remain preserved.
+Before approval, DSF live-checks retained infrastructure incarnations, exact
+grant and key custody, the GitHub App installation/permissions, repository
+source access, and the private verification path. The reviewed fingerprint
+binds those observations.
 
 `AwaitingReadiness` is not activation. Reverify GitHub/source access,
 telemetry, models, and every selected supplemental source; reconcile any
-reviewed drift; refresh/adopt the charter as needed; run a fully evaluated
+reviewed drift; refresh and explicitly re-adopt the charter; run a fully evaluated
 supervised preview; then use a separate `dsf onboard decide activate` review
 and approval bound to the new current revisions. Retained compute, old
 readiness, and old approval never resurrect publication automatically.
+All runtime entry paths remain closed while the protected reattachment request
+is awaiting this evidence and activation.
+
+Stale preview, activation, live, publisher, promotion, offboarding, and current
+charter-adoption roots are retired only after their complete values are
+durably chunked with original key, ETag, and SHA-256. Conditional deletion
+progress resumes under the original operation after lost responses; changed
+records are never deleted.
 
 Redirected and `--json` use never prompts. Missing exact locators or operation
 ID fails closed. Keep the structured outcome for recovery; it contains no

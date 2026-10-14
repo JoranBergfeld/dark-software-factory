@@ -1,7 +1,7 @@
-using System.Text;
-using System.Text.Json;
 using System.Net;
 using System.Net.Http.Headers;
+using System.Text;
+using System.Text.Json;
 using Azure.Core;
 using Azure.Data.AppConfiguration;
 using Dsf.Core.Onboarding;
@@ -39,9 +39,7 @@ internal sealed class FactoryReattachmentService(
 
         var product = new OwnerReservationStore(endpoint, identity.TenantId, identity.SubscriptionId,
             azure, http, identity.AzureActorId);
-        var authority = (await product.ReadFactoryAuthorityAsync(token))
-            .Concat(await product.ReadNamespaceAsync(FactoryOffboarding.HistoryPrefix, token, maximumRecords: 128))
-            .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+        var authority = await ReadAuthorityAsync(product, token);
         if (!authority.TryGetValue(ProductConfigurationKeys.FactoryManifest, out var manifestRecord)
             || FactoryReservationRecords.Parse<FactoryManifest>(manifestRecord.Value).Identity != identity)
             return Result(FactoryReattachmentState.Blocked,
@@ -101,11 +99,14 @@ internal sealed class FactoryReattachmentService(
             request = new FactoryReattachmentRequest(1, FactoryReattachment.Kind, operation,
                 identity.FactoryId, plan.Fingerprint, plan.AuthorityRevision, identity.AzureActorId, clock.GetUtcNow());
         }
-        if (!authority.TryGetValue(FactoryOffboarding.Key, out var offboardingRoot))
+        authority.TryGetValue(FactoryOffboarding.Key, out var offboardingRoot);
+        var offboardingValue = offboardingRoot?.Value
+            ?? await ReadRetiredValueAsync(product, operation, FactoryOffboarding.Key, token);
+        if (offboardingValue is null)
             return Result(FactoryReattachmentState.Unknown,
                 "Detached owner registration lacks exact product offboarding authority; absence cannot authorize recovery.")
             with { Plan = plan, Request = request };
-        var offboarding = FactoryOffboarding.Read(offboardingRoot.Value, identity);
+        var offboarding = FactoryOffboarding.Read(offboardingValue, identity);
         if (anchor.Offboarding is null || offboarding.OperationId != anchor.Offboarding.OperationId
             || offboarding.PlanFingerprint != anchor.Offboarding.PlanFingerprint)
             throw new JsonException();
@@ -152,34 +153,7 @@ internal sealed class FactoryReattachmentService(
                     BlockedActions = blockedAccess, AdmissionOpen = false,
                 };
 
-            var staleGeneration = authority.Values.Where(record =>
-                    record.Key.StartsWith(ProductConfigurationKeys.FactoryPreview, StringComparison.Ordinal)
-                    || record.Key.StartsWith(FactoryPreviewPreparation.Namespace, StringComparison.Ordinal)
-                    || record.Key.StartsWith(FactoryPreviewPublication.Namespace, StringComparison.Ordinal)
-                    || record.Key.StartsWith(FactoryActivation.Prefix, StringComparison.Ordinal)
-                    || record.Key.StartsWith(FactoryLive.Prefix, StringComparison.Ordinal)
-                    || record.Key.StartsWith(FactoryPublisher.Prefix, StringComparison.Ordinal)
-                    || record.Key.StartsWith(FactoryPromotion.Prefix, StringComparison.Ordinal)
-                    || record.Key.StartsWith(FactoryOffboarding.HistoryPrefix, StringComparison.Ordinal))
-                .OrderBy(record => record.Key, StringComparer.Ordinal).ToArray();
-            for (var index = 0; index < staleGeneration.Length; index++)
-            {
-                var record = staleGeneration[index];
-                var archived = FactoryReservationRecords.Serialize(new
-                {
-                    protocol = 1,
-                    kind = "decide-reattachment-retired-authority",
-                    operationId = operation,
-                    index,
-                    record.Key,
-                    revision = record.ETag.ToString(),
-                    sha256 = FactoryReservationRecords.Hash(record.Value),
-                });
-                await product.WriteAsync(
-                    FactoryReattachment.HistoryKey(operation) + "/retired/" + index.ToString("D4"),
-                    archived, null, token);
-                await product.DeleteReattachmentGenerationAsync(record, token);
-            }
+            await RetireStaleGenerationAsync(product, request, authority, token);
             var currentManifestRecord = await product.ReadAsync(ProductConfigurationKeys.FactoryManifest, token)
                 ?? throw new JsonException();
             var currentManifest = FactoryReservationRecords.Parse<FactoryManifest>(currentManifestRecord.Value);
@@ -193,7 +167,6 @@ internal sealed class FactoryReattachmentService(
             await InvalidateReadinessAsync(product, identity, token);
             completed.Add("Retired stale preview and activation authority while preserving audit hashes.");
 
-            await product.DeleteReattachedOffboardingRootAsync(offboardingRoot, offboarding, identity, token);
             var currentRoot = await owner.ReadAsync(ownerRoot.Key, token)
                 ?? throw new ReservationStoreException(FactoryReservationState.Unknown,
                     "Owner registration disappeared during reattachment.");
@@ -264,6 +237,7 @@ internal sealed class FactoryReattachmentService(
                 findings.Add("Competing owner claim: " + step.Key + ".");
             claims.Add(step.Key);
         }
+        var probes = await ProbeCurrentAuthorityAsync(admission, authority, findings, token);
         var access = authority.Values.Select(record =>
         {
             try { return JsonSerializer.Deserialize<FoundationOperation>(record.Value, FactoryGitHubJson.Options); }
@@ -274,7 +248,7 @@ internal sealed class FactoryReattachmentService(
             Disposition: FoundationResourceDisposition.Created,
             RoleDefinitionId: not null,
         }).Select(effect => effect!.Target).Distinct(StringComparer.OrdinalIgnoreCase)
-            .Order(StringComparer.OrdinalIgnoreCase).ToArray();
+            .Order(StringComparer.OrdinalIgnoreCase).Concat(probes).ToArray();
         var revision = FactoryModelsValidation.Hash(new
         {
             Owner = ownerRoot.ETag.ToString(),
@@ -291,6 +265,295 @@ internal sealed class FactoryReattachmentService(
                 "shared owner assets and GitHub App installation",
             ], "");
         return plan with { Fingerprint = FactoryReattachment.Fingerprint(plan) };
+    }
+
+    private async Task<IReadOnlyList<string>> ProbeCurrentAuthorityAsync(
+        FactoryReservationResult admission, IReadOnlyDictionary<string, ConfigurationSetting> authority,
+        ICollection<string> findings, CancellationToken token)
+    {
+        var observations = new List<string>();
+        var identity = admission.Identity!;
+        if (admission.Foundation is not { State: FactoryFoundationState.Inactive } foundation)
+            findings.Add("RetainedInfrastructure: provisioned inactive foundation is not current.");
+        else
+        foreach (var operation in foundation.Operations.Where(operation =>
+                     operation.Disposition == FoundationResourceDisposition.Created))
+            if (operation.State != FoundationOperationState.Completed)
+                findings.Add("RetainedInfrastructure: current incarnation unconfirmed for " + operation.Target + ".");
+
+        if (!authority.TryGetValue(ProductConfigurationKeys.FactoryGitHubAuthority, out var record))
+        {
+            findings.Add("AppSourceAccess: retained GitHub App authority is missing.");
+            return observations;
+        }
+        try
+        {
+            var github = JsonSerializer.Deserialize<FactoryGitHubAuthority>(
+                record.Value, FactoryGitHubJson.Options) ?? throw new JsonException();
+            var effects = FactoryGitHubAuthorityValidation.ReadCompletedEffects(github,
+                authority.ToDictionary(pair => pair.Key, pair => pair.Value.Value, StringComparer.Ordinal));
+            var arm = new FactoryPreparationArm(azure, http, identity);
+            foreach (var grant in effects.Where(effect => effect.RoleDefinitionId is not null))
+            {
+                using var response = await arm.SendAsync(HttpMethod.Get, grant.Target, grant.ApiVersion, token);
+                if (response.StatusCode == HttpStatusCode.NotFound)
+                    observations.Add("grant:" + grant.Target + ":missing-recoverable");
+                else if (response.StatusCode != HttpStatusCode.OK)
+                    findings.Add("GrantCustody: exact retained assignment is unreadable: " + grant.Target + ".");
+                else if (!(await ReadGrantAsync(response, grant, token)).Matches)
+                    findings.Add("GrantCustody: exact retained assignment conflicts: " + grant.Target + ".");
+                else observations.Add("grant:" + grant.Target + ":exact");
+            }
+            if (github.DestinationSecretUri is { } key)
+            {
+                var credential = new OwnerReservationStore.OperatorCredential(
+                    azure, identity.TenantId, identity.SubscriptionId, identity.AzureActorId,
+                    "https://vault.azure.net");
+                var access = await credential.GetTokenAsync(
+                    new TokenRequestContext(["https://vault.azure.net/.default"]), token);
+                using var request = new HttpRequestMessage(HttpMethod.Get, key + "?api-version=7.5");
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", access.Token);
+                using var response = await (http ?? ProviderHttp).SendAsync(request, token);
+                if (response.StatusCode == HttpStatusCode.OK)
+                {
+                    using var document = JsonDocument.Parse(await response.Content.ReadAsStreamAsync(token));
+                    var root = document.RootElement;
+                    if (root.GetProperty("id").GetString() != key
+                        || !root.GetProperty("attributes").GetProperty("enabled").GetBoolean())
+                        findings.Add("KeyCustody: retained destination key version conflicts with exact custody.");
+                    else observations.Add("key:" + key + ":exact");
+                }
+                else if (response.StatusCode == HttpStatusCode.NotFound) observations.Add("key:" + key + ":missing-recoverable");
+                else findings.Add("KeyCustody: exact retained destination key version is unreadable.");
+            }
+            else findings.Add("KeyCustody: retained destination key version identity is missing.");
+            var hostEffect = effects.SingleOrDefault(effect =>
+                string.Equals(effect.ResourceId, github.HostResourceId, StringComparison.OrdinalIgnoreCase));
+            if (hostEffect is null)
+                findings.Add("RetainedInfrastructure: GitHub App host creation receipt is missing.");
+            else
+            {
+                using var response = await arm.SendAsync(HttpMethod.Get, hostEffect.ResourceId!, hostEffect.ApiVersion, token);
+                if (response.StatusCode != HttpStatusCode.OK)
+                    findings.Add("RetainedInfrastructure: GitHub App host is missing or unreadable.");
+                else
+                {
+                    using var document = JsonDocument.Parse(await response.Content.ReadAsStreamAsync(token));
+                    var created = document.RootElement.GetProperty("systemData").GetProperty("createdAt")
+                        .GetDateTimeOffset().ToString("O");
+                    var endpoint = "https://" + document.RootElement.GetProperty("properties")
+                        .GetProperty("configuration").GetProperty("ingress").GetProperty("fqdn").GetString();
+                    if (created != hostEffect.Incarnation || endpoint != github.HostEndpoint)
+                        findings.Add("RetainedInfrastructure: GitHub App host incarnation changed.");
+                    else observations.Add("host:" + hostEffect.ResourceId + ":" + created);
+                }
+            }
+
+            if (github.HostEndpoint is null || string.IsNullOrWhiteSpace(github.AudienceClientId))
+                findings.Add("AppSourceAccess: retained GitHub App verification endpoint is incomplete.");
+            else
+            {
+                var credential = new OwnerReservationStore.OperatorCredential(
+                    azure, identity.TenantId, identity.SubscriptionId, identity.AzureActorId,
+                    "api://" + github.AudienceClientId);
+                var access = await credential.GetTokenAsync(
+                    new TokenRequestContext(["api://" + github.AudienceClientId + "/.default"]), token);
+                using var request = new HttpRequestMessage(HttpMethod.Post, github.HostEndpoint + "/verify");
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", access.Token);
+                using var response = await (http ?? ProviderHttp).SendAsync(request, token);
+                if (response.StatusCode != HttpStatusCode.OK)
+                    findings.Add("AppSourceAccess: GitHub App installation, permissions, repository source access or network path is revoked.");
+                else
+                {
+                    var proof = JsonSerializer.Deserialize<GitHubAuthorityProof>(
+                        await response.Content.ReadAsStringAsync(token), FactoryGitHubJson.Options);
+                    if (proof is null || !FactoryGitHubAuthorityValidation.HasVerifiedScope(github, proof))
+                        findings.Add("AppSourceAccess: GitHub App installation, permissions or repository source scope changed.");
+                    else observations.Add("app-source:" + FactoryModelsValidation.Hash(proof));
+                }
+            }
+        }
+        catch (Exception e) when (e is JsonException or HttpRequestException or IOException
+            or InvalidOperationException or KeyNotFoundException
+            or OwnerReservationStore.AuthenticationFailedException)
+        {
+            findings.Add("AppSourceAccess: current GitHub App/source/network proof is unavailable.");
+        }
+        return observations.Order(StringComparer.Ordinal).ToArray();
+    }
+
+    private static async Task<IReadOnlyDictionary<string, ConfigurationSetting>> ReadAuthorityAsync(
+        OwnerReservationStore product, CancellationToken token)
+    {
+        var records = new Dictionary<string, ConfigurationSetting>(
+            await product.ReadFactoryAuthorityAsync(token), StringComparer.Ordinal);
+        foreach (var prefix in new[]
+                 {
+                     FactoryActivation.Prefix, FactoryLive.Prefix, FactoryPublisher.Prefix,
+                     FactoryPromotion.Prefix, FactoryOffboarding.HistoryPrefix,
+                 })
+        foreach (var pair in await product.ReadNamespaceAsync(
+                     prefix, token, maximumRecords: FactoryAudit.GovernanceHistoryRecords))
+            records[pair.Key] = pair.Value;
+        return records;
+    }
+
+    private static async Task RetireStaleGenerationAsync(
+        OwnerReservationStore product, FactoryReattachmentRequest request,
+        IReadOnlyDictionary<string, ConfigurationSetting> authority, CancellationToken token)
+    {
+        const int chunkBytes = FactoryReconfigurationOperationRecords.ChunkBytes;
+        var stale = authority.Values.Where(IsStaleGeneration)
+            .OrderBy(record => record.Key, StringComparer.Ordinal).ToArray();
+        var progressKey = FactoryReattachment.RetirementProgressKey(request.OperationId);
+        var progressRecord = await product.ReadAsync(progressKey, token);
+        FactoryReattachmentRetirementProgress progress;
+        if (progressRecord is null)
+        {
+            for (var index = 0; index < stale.Length; index++)
+                await ArchiveAsync(stale[index], index);
+            progress = new(1, request.OperationId, request.PlanFingerprint, stale.Length, 0);
+            progressRecord = await product.WriteAsync(progressKey,
+                FactoryReservationRecords.Serialize(progress), null, token);
+        }
+        else
+        {
+            progress = FactoryReservationRecords.Parse<FactoryReattachmentRetirementProgress>(progressRecord.Value);
+            if (progress.Protocol != 1 || progress.OperationId != request.OperationId
+                || progress.PlanFingerprint != request.PlanFingerprint || progress.Records < 0
+                || progress.Applied < 0 || progress.Applied > progress.Records)
+                throw new JsonException();
+        }
+
+        for (var index = progress.Applied; index < progress.Records; index++)
+        {
+            var retired = await ReadArchivedAsync(index);
+            var current = await product.ReadAsync(retired.Record.Key, token);
+            if (current is not null)
+            {
+                if (current.ETag.ToString() != retired.Record.ETag
+                    || FactoryReservationRecords.Hash(current.Value) != retired.Record.Sha256
+                    || current.Value != retired.Value)
+                    throw new ReservationStoreException(FactoryReservationState.Blocked,
+                        "ConcurrentGenerationChange: stale authority changed; no deletion.");
+                await product.DeleteReattachmentGenerationAsync(current, token);
+            }
+            progress = progress with { Applied = index + 1 };
+            progressRecord = await product.WriteAsync(progressKey,
+                FactoryReservationRecords.Serialize(progress), progressRecord.ETag, token);
+        }
+        return;
+
+        async Task ArchiveAsync(ConfigurationSetting record, int index)
+        {
+            var bytes = Encoding.UTF8.GetBytes(record.Value);
+            var descriptor = new FactoryReattachmentRetiredRecord(
+                1, request.OperationId, index, record.Key, record.ETag.ToString(),
+                FactoryReservationRecords.Hash(record.Value), bytes.Length,
+                (bytes.Length + chunkBytes - 1) / chunkBytes);
+            await EnsureAsync(FactoryReattachment.RetiredKey(request.OperationId, index),
+                FactoryReservationRecords.Serialize(descriptor));
+            for (var chunk = 0; chunk < descriptor.Chunks; chunk++)
+            {
+                var value = new FactoryReattachmentRetiredChunk(
+                    1, request.OperationId, index, chunk,
+                    Convert.ToBase64String(bytes.AsSpan(chunk * chunkBytes,
+                        Math.Min(chunkBytes, bytes.Length - chunk * chunkBytes))));
+                await EnsureAsync(FactoryReattachment.RetiredChunkKey(request.OperationId, index, chunk),
+                    FactoryReservationRecords.Serialize(value));
+            }
+        }
+
+        async Task EnsureAsync(string key, string value)
+        {
+            var existing = await product.ReadAsync(key, token);
+            if (existing is null) await product.WriteAsync(key, value, null, token);
+            else if (existing.Value != value) throw new JsonException();
+        }
+
+        async Task<(FactoryReattachmentRetiredRecord Record, string Value)> ReadArchivedAsync(int index)
+        {
+            var descriptor = FactoryReservationRecords.Parse<FactoryReattachmentRetiredRecord>(
+                (await product.ReadAsync(FactoryReattachment.RetiredKey(request.OperationId, index), token))?.Value
+                ?? throw new JsonException());
+            if (descriptor.Protocol != 1 || descriptor.OperationId != request.OperationId
+                || descriptor.Index != index || descriptor.Bytes < 0
+                || descriptor.Chunks != (descriptor.Bytes + chunkBytes - 1) / chunkBytes)
+                throw new JsonException();
+            using var content = new MemoryStream();
+            for (var chunk = 0; chunk < descriptor.Chunks; chunk++)
+            {
+                var archived = FactoryReservationRecords.Parse<FactoryReattachmentRetiredChunk>(
+                    (await product.ReadAsync(
+                        FactoryReattachment.RetiredChunkKey(request.OperationId, index, chunk), token))?.Value
+                    ?? throw new JsonException());
+                var bytes = Convert.FromBase64String(archived.Data);
+                if (archived.Protocol != 1 || archived.OperationId != request.OperationId
+                    || archived.Record != index || archived.Index != chunk
+                    || bytes.Length != Math.Min(chunkBytes, descriptor.Bytes - chunk * chunkBytes))
+                    throw new JsonException();
+                content.Write(bytes);
+            }
+            var value = Encoding.UTF8.GetString(content.ToArray());
+            if (content.Length != descriptor.Bytes
+                || FactoryReservationRecords.Hash(value) != descriptor.Sha256)
+                throw new JsonException();
+            return (descriptor, value);
+        }
+
+        static bool IsStaleGeneration(ConfigurationSetting record) =>
+            record.Key.StartsWith(ProductConfigurationKeys.FactoryPreview, StringComparison.Ordinal)
+            || record.Key.StartsWith(FactoryPreviewPreparation.Namespace, StringComparison.Ordinal)
+            || record.Key.StartsWith(FactoryPreviewPublication.Namespace, StringComparison.Ordinal)
+            || record.Key.StartsWith(FactoryActivation.Prefix, StringComparison.Ordinal)
+            || record.Key.StartsWith(FactoryLive.Prefix, StringComparison.Ordinal)
+            || record.Key.StartsWith(FactoryPublisher.Prefix, StringComparison.Ordinal)
+            || record.Key.StartsWith(FactoryPromotion.Prefix, StringComparison.Ordinal)
+            || record.Key == FactoryOffboarding.Key
+            || record.Key.StartsWith(FactoryOffboarding.HistoryPrefix, StringComparison.Ordinal)
+            || record.Key == ProductConfigurationKeys.CharterAdopted
+            || record.Key == ProductConfigurationKeys.CharterAdoptionOperation;
+    }
+
+    private static async Task<string?> ReadRetiredValueAsync(
+        OwnerReservationStore product, Guid operation, string expectedKey, CancellationToken token)
+    {
+        const int chunkBytes = FactoryReconfigurationOperationRecords.ChunkBytes;
+        var progressRecord = await product.ReadAsync(
+            FactoryReattachment.RetirementProgressKey(operation), token);
+        if (progressRecord is null) return null;
+        var progress = FactoryReservationRecords.Parse<FactoryReattachmentRetirementProgress>(progressRecord.Value);
+        if (progress.Protocol != 1 || progress.OperationId != operation
+            || progress.Records < 0 || progress.Applied < 0 || progress.Applied > progress.Records)
+            throw new JsonException();
+        for (var index = 0; index < progress.Records; index++)
+        {
+            var descriptor = FactoryReservationRecords.Parse<FactoryReattachmentRetiredRecord>(
+                (await product.ReadAsync(FactoryReattachment.RetiredKey(operation, index), token))?.Value
+                ?? throw new JsonException());
+            if (descriptor.Key != expectedKey) continue;
+            using var content = new MemoryStream();
+            for (var chunk = 0; chunk < descriptor.Chunks; chunk++)
+            {
+                var archived = FactoryReservationRecords.Parse<FactoryReattachmentRetiredChunk>(
+                    (await product.ReadAsync(FactoryReattachment.RetiredChunkKey(operation, index, chunk), token))?.Value
+                    ?? throw new JsonException());
+                var bytes = Convert.FromBase64String(archived.Data);
+                if (archived.Protocol != 1 || archived.OperationId != operation
+                    || archived.Record != index || archived.Index != chunk
+                    || bytes.Length != Math.Min(chunkBytes, descriptor.Bytes - chunk * chunkBytes))
+                    throw new JsonException();
+                content.Write(bytes);
+            }
+            var value = Encoding.UTF8.GetString(content.ToArray());
+            if (descriptor.Protocol != 1 || descriptor.OperationId != operation
+                || descriptor.Index != index || descriptor.Bytes != content.Length
+                || descriptor.Chunks != (descriptor.Bytes + chunkBytes - 1) / chunkBytes
+                || FactoryReservationRecords.Hash(value) != descriptor.Sha256)
+                throw new JsonException();
+            return value;
+        }
+        return null;
     }
 
     private async Task<(IReadOnlyList<string> Completed, IReadOnlyList<string> Blocked)> RestoreOwnedAccessAsync(

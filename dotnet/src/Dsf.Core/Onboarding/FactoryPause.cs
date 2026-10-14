@@ -50,6 +50,9 @@ public static class FactoryPause
     public static void RequireAdmissionOpen(IEnumerable<string> keys)
     {
         var records = keys.ToArray();
+        if (records.Any(FactoryReattachment.IsStopRecord))
+            throw new PreviewCapabilityException(FactoryCharterState.Blocked,
+                "ReattachmentAwaitingReadiness: council admission closed until renewed evidence, supervised preview and separate activation.");
         if (records.Any(FactoryOffboarding.IsStopRecord))
             throw new PreviewCapabilityException(FactoryCharterState.Blocked,
                 "OffboardingOrDetached: council admission closed; retained infrastructure and residual effects grant no runtime authority.");

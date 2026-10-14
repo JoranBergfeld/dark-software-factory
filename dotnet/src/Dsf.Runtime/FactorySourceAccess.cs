@@ -31,7 +31,8 @@ internal sealed class FactorySourceAccess(FactoryHostSettings settings, TokenCre
     internal async Task RequireOperatorWorkAsync(CancellationToken token)
     {
         var gateway = new AzureConfigurationSettingsGateway(Credential, http);
-        foreach (var prefix in new[] { FactoryPause.Key, FactoryPause.HistoryPrefix, FactoryPromotion.Prefix, FactoryReconfigurationOperationRecords.Prefix })
+        foreach (var prefix in new[] { FactoryPause.Key, FactoryPause.HistoryPrefix, FactoryReattachment.Key,
+                     FactoryPromotion.Prefix, FactoryReconfigurationOperationRecords.Prefix })
         {
             var transition = new Dictionary<string, string>(StringComparer.Ordinal);
             await foreach (var record in gateway.ListRecordsAsync(settings.ProductEndpoint, "*", token, prefix + "*"))
@@ -42,9 +43,14 @@ internal sealed class FactorySourceAccess(FactoryHostSettings settings, TokenCre
                     transition.Add(record.Key, record.Value);
                     continue;
                 }
-                throw new SourceAcquisitionException(SourceState.Blocked, prefix == FactoryPromotion.Prefix
-                    ? "PromotedSourceWorkRequiresIndexedDecision; use the admitted run/sweep workflow, not unindexed acquire/infer."
-                    : "DeliberateSourceAdmissionClosed; retained evidence is read-only, not work authorization.");
+                throw new SourceAcquisitionException(SourceState.Blocked, prefix switch
+                {
+                    FactoryPromotion.Prefix =>
+                        "PromotedSourceWorkRequiresIndexedDecision; use the admitted run/sweep workflow, not unindexed acquire/infer.",
+                    FactoryReattachment.Key =>
+                        "ReattachmentAwaitingReadiness; retained evidence is read-only, not work authorization.",
+                    _ => "DeliberateSourceAdmissionClosed; retained evidence is read-only, not work authorization.",
+                });
             }
             if (transition.Count != 0)
                 try { FactoryReconfigurationOperationRecords.RequireAdmissionOpen(transition, clock.GetUtcNow(),
