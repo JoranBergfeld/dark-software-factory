@@ -687,8 +687,12 @@ public sealed class FactoryAuditTests
         private readonly HttpMessageInvoker product = new(outer ?? scenario.Source, false);
         internal List<(string Key, string ETag)> Deletes { get; } = [];
         internal string? DeleteFailure { get; init; }
+        internal bool FailDataPlaneReads { get; set; }
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
         {
+            if (FailDataPlaneReads && request.RequestUri!.Host != "owner.azconfig.io"
+                && request.RequestUri.Host != "management.azure.com")
+                return new(System.Net.HttpStatusCode.ServiceUnavailable);
             if (request.RequestUri!.Host == new Uri(scenario.Source.Source!.ProgressEndpoint).Host)
             {
                 if (request.Method == HttpMethod.Delete)

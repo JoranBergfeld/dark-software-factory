@@ -11,7 +11,7 @@ public enum FactoryPurgeState
 public sealed record FactoryPurgeResource(
     string AuthorityKey, string ResourceId, string ResourceType, string ApiVersion,
     Guid FactoryId, Guid CreationOperationId, Guid ClientRequestId, DateTimeOffset CreatedAt,
-    string Incarnation, string? ParentResourceId);
+    string Incarnation, string? ParentResourceId, bool AuditBacking);
 
 public sealed record FactoryPurgePlan(
     int Protocol, string Kind, Guid OperationId, Guid FactoryId, string ProductKey,
@@ -27,6 +27,11 @@ public sealed record FactoryPurgeRequest(
 public sealed record FactoryPurgeDeleteEffect(
     int Protocol, Guid FactoryId, Guid OperationId, int Index, FactoryPurgeResource Target,
     AuditDeleteState State, DateTimeOffset UpdatedAt, string? Detail = null);
+
+public sealed record FactoryPurgeBoundary(
+    int Protocol, Guid FactoryId, Guid OperationId, string PlanFingerprint,
+    string AuthorityRevision, string AuditRevision, string AuditDisposition,
+    DateTimeOffset VerifiedAt);
 
 public sealed record FactoryPurgePointer(
     Guid OperationId, FactoryPurgeState State, string PlanFingerprint, string AuthorityRevision,
@@ -66,6 +71,10 @@ public static class FactoryPurge
     public static string PlanKey(Guid operation) => HistoryPrefix + operation.ToString("N") + "/plan";
     public static string EffectKey(Guid operation, int index) =>
         HistoryPrefix + operation.ToString("N") + "/effects/" + index.ToString("D4");
+    public static string BoundaryKey(Guid operation) =>
+        HistoryPrefix + operation.ToString("N") + "/boundary";
+    public static string RetirementKey(Guid factory) =>
+        HistoryPrefix + "retired/" + factory.ToString("N") + "/pointer";
 
     public static string Fingerprint(FactoryPurgePlan plan)
     {

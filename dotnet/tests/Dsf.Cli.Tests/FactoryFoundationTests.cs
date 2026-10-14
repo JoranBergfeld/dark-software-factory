@@ -835,6 +835,7 @@ public sealed class FactoryFoundationTests
         public string? CosmosRidTarget { get; init; }
         public string? CosmosRidValue { get; init; }
         public string? LoseDeleteResponseFor { get; set; }
+        public Action<string>? OnDelete { get; set; }
         public bool DeploymentFails { get; init; }
         public bool DeploymentCanceled { get; init; }
         public string? InsightsDamage { get; init; }
@@ -878,6 +879,7 @@ public sealed class FactoryFoundationTests
             Assert.Equal("management.azure.com", request.RequestUri.Host);
             if (request.Method == HttpMethod.Delete)
             {
+                OnDelete?.Invoke(request.RequestUri.AbsolutePath);
                 var removed = created.Remove(request.RequestUri.AbsolutePath);
                 if (removed) DeletedResources.Add(request.RequestUri.AbsolutePath);
                 if (removed && request.RequestUri.AbsolutePath == LoseDeleteResponseFor)

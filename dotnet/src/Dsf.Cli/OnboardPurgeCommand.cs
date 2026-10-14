@@ -39,10 +39,17 @@ public static partial class CliApplication
                     .ExecuteAsync(admission, id, parse.GetValue(approve)?.Trim(),
                         parse.GetValue(auditExport)?.Trim(), token);
             }
-            catch (ArgumentException)
+            catch (PurgeInputException)
             {
                 result = new(FactoryPurgeState.Blocked,
                     "Complete exact owner/product/tenant/subscription locators and nonempty --operation required; no provider writes.");
+            }
+            catch (FactoryAuditException e)
+            {
+                result = new(e.State == FactoryAuditState.Blocked
+                        ? FactoryPurgeState.Blocked : FactoryPurgeState.Unknown,
+                    "Current audit disposition is not deletion-authoritative (" + e.State
+                    + "); no forced retry or success claim.");
             }
             catch (OperationCanceledException)
             {
@@ -51,7 +58,7 @@ public static partial class CliApplication
             }
             catch (Exception e) when (e is JsonException or FormatException or InvalidOperationException
                 or KeyNotFoundException or HttpRequestException or IOException or ReservationStoreException
-                or OwnerReservationStore.AuthenticationFailedException)
+                or OwnerReservationStore.AuthenticationFailedException or ArgumentException)
             {
                 result = new(FactoryPurgeState.Unknown,
                     "Current ownership, audit disposition or deletion outcome unconfirmed (" + e.GetType().Name
@@ -65,11 +72,13 @@ public static partial class CliApplication
             {
                 var value = parse.GetValue(option)?.Trim();
                 if (string.IsNullOrEmpty(value) && interactive) value = terminal.Prompt(option.Name + ": ")?.Trim();
-                return !string.IsNullOrEmpty(value) ? value : throw new ArgumentException();
+                return !string.IsNullOrEmpty(value) ? value : throw new PurgeInputException();
             }
             static Guid Identifier(string value) =>
-                Guid.TryParse(value, out var id) && id != Guid.Empty ? id : throw new ArgumentException();
+                Guid.TryParse(value, out var id) && id != Guid.Empty ? id : throw new PurgeInputException();
         });
         return command;
     }
+
+    private sealed class PurgeInputException : Exception;
 }

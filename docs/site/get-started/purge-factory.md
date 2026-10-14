@@ -61,6 +61,11 @@ path, and approval is explicit.
 - Recovery uses the same operation ID and reviewed fingerprint. Durable owner-side
   request/effect records reconcile confirmed absence, preserve recreated objects,
   and block competing operations; they never repeat an uncertain dispatch.
+- Audit-backing App Configuration and Cosmos resources are ordered last. Immediately
+  before their first deletion, purge retains the final verified authority, audit-root,
+  export/disposition, plan, and lifecycle boundary owner-side. Recovery then checks
+  only that exact boundary, effect journal, ownership, and remote incarnation; it does
+  not require data-plane reads from stores already deleted by the reviewed operation.
 - Provider soft delete, recoverable vault custody, backups, and issued tokens are
   reported honestly; purge does not promise cryptographic invalidation or
   physical erasure.
@@ -71,6 +76,12 @@ fingerprint, audit revision/disposition, actor, and time—never credentials, ra
 source, export path, or secret values. The old factory ID cannot resume or be
 reattached. A later onboarding must use a new identity and cannot bypass unresolved
 old claims or effects.
+
+Fresh onboarding must perform a new complete owner-admission review that observes the
+exact retirement pointer. Only after the old plan, request, final boundary, confirmed
+effects, and released repository/resource claims are verified is the product key
+conditionally assigned a new factory ID. Permanent retirement history remains under
+the old factory ID; any race, unreadable record, or unresolved effect blocks replacement.
 
 ## Outcomes
 

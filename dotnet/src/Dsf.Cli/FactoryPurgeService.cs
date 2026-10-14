@@ -100,7 +100,7 @@ internal sealed class FactoryPurgeService(IAzureCliRunner azure, HttpClient? htt
         var uncertain = false;
         var arm = new FactoryPreparationArm(azure, http, identity);
         var ordered = plan.ProposedDeletions
-            .OrderBy(resource => IsProductConfiguration(resource) ? 1 : 0)
+            .OrderBy(resource => resource.AuditBacking ? 1 : 0)
             .ThenByDescending(resource => resource.ResourceId.Count(character => character == '/'))
             .ToArray();
         for (var index = 0; index < ordered.Length; index++)
@@ -113,8 +113,11 @@ internal sealed class FactoryPurgeService(IAzureCliRunner azure, HttpClient? htt
                     == AuditDeleteState.Intended;
             if (requiresDispatchBoundary)
             {
-                var boundary = await ValidateBoundaryAsync(owner, product, admission, anchor, plan,
-                    auditExport, audit, token);
+                var boundary = resource.AuditBacking
+                    ? await RequireFinalBoundaryAsync(owner, product, admission, anchor, plan,
+                        request, auditExport, audit, token)
+                    : await ValidateBoundaryAsync(owner, product, admission, anchor, plan,
+                        auditExport, audit, token);
                 if (boundary is not null)
                 {
                     blocked.Add(boundary);
@@ -138,7 +141,7 @@ internal sealed class FactoryPurgeService(IAzureCliRunner azure, HttpClient? htt
                 Preserved = plan.PreservedAssets.Concat(blocked).Distinct(StringComparer.Ordinal).ToArray(),
             };
 
-        if (!ordered.Any(IsProductConfiguration))
+        if (!ordered.Any(resource => resource.AuditBacking))
         {
             var boundary = await ValidateBoundaryAsync(owner, product, admission, anchor, plan,
                 auditExport, audit, token);
@@ -147,6 +150,13 @@ internal sealed class FactoryPurgeService(IAzureCliRunner azure, HttpClient? htt
                     "All planned effects completed, but current authority or audit roots changed before retirement.",
                     plan, request, false) with { Deleted = deleted, Blocked = [boundary] };
         }
+
+        var completion = await ValidateCompletionAsync(
+            owner, identity, anchor, plan, request, ordered, token);
+        if (completion is not null)
+            return Result(FactoryPurgeState.Blocked,
+                "Deletion completion or retirement authority changed; identity remains non-retired for original-operation recovery.",
+                plan, request, false) with { Deleted = deleted, Blocked = [completion] };
 
         var retirement = new FactoryRetirementPointer(1, FactoryPurge.RetirementKind, identity.FactoryId,
             operation, identity.ProductKey, plan.Fingerprint, auditDisposition.Description,
@@ -164,12 +174,84 @@ internal sealed class FactoryPurgeService(IAzureCliRunner azure, HttpClient? htt
             plan, request, true) with { Deleted = deleted };
     }
 
+    private static async Task<string?> ValidateCompletionAsync(
+        OwnerReservationStore owner, FactoryReservationIdentity identity,
+        FactoryReservationAnchor expectedAnchor, FactoryPurgePlan plan, FactoryPurgeRequest request,
+        IReadOnlyList<FactoryPurgeResource> ordered, CancellationToken token)
+    {
+        var lifecycle = await ValidateOwnerLifecycleAsync(owner, expectedAnchor, token);
+        if (lifecycle is not null) return lifecycle;
+        var retainedRequest = await owner.ReadAsync(FactoryPurge.HistoryKey(request.OperationId), token);
+        if (retainedRequest is null
+            || retainedRequest.Value != JsonSerializer.Serialize(request, FactoryGitHubJson.Options))
+            return "Approved purge request changed or became unreadable before retirement.";
+        if (ordered.Any(resource => resource.AuditBacking))
+        {
+            var retainedBoundary = await owner.ReadAsync(FactoryPurge.BoundaryKey(request.OperationId), token);
+            if (retainedBoundary is null) return "Final audit-store boundary is missing before retirement.";
+            FactoryPurgeBoundary boundary;
+            try
+            {
+                boundary = JsonSerializer.Deserialize<FactoryPurgeBoundary>(
+                    retainedBoundary.Value, FactoryGitHubJson.Options) ?? throw new JsonException();
+            }
+            catch (JsonException)
+            {
+                return "Final audit-store boundary is unreadable before retirement.";
+            }
+            if (boundary.Protocol != 1 || boundary.FactoryId != identity.FactoryId
+                || boundary.OperationId != request.OperationId
+                || boundary.PlanFingerprint != plan.Fingerprint
+                || boundary.AuthorityRevision != plan.AuthorityRevision
+                || boundary.AuditRevision != plan.AuditRevision
+                || boundary.AuditDisposition != request.AuditDisposition
+                || boundary.VerifiedAt < request.RequestedAt)
+                return "Final audit-store boundary changed before retirement.";
+        }
+        var effects = await owner.ReadNamespaceAsync(
+            FactoryPurge.HistoryPrefix + request.OperationId.ToString("N") + "/effects/", token,
+            maximumRecords: ordered.Count + 1);
+        if (effects.Count != ordered.Count)
+            return "Purge effect set is incomplete or contains an unrecognized effect before retirement.";
+        for (var index = 0; index < ordered.Count; index++)
+        {
+            var key = FactoryPurge.EffectKey(request.OperationId, index);
+            if (!effects.TryGetValue(key, out var record))
+                return "Purge effect is missing before retirement: " + key + ".";
+            FactoryPurgeDeleteEffect effect;
+            try
+            {
+                effect = JsonSerializer.Deserialize<FactoryPurgeDeleteEffect>(
+                    record.Value, FactoryGitHubJson.Options) ?? throw new JsonException();
+            }
+            catch (JsonException)
+            {
+                return "Purge effect is unreadable before retirement: " + key + ".";
+            }
+            if (effect.Protocol != 1 || effect.FactoryId != identity.FactoryId
+                || effect.OperationId != request.OperationId || effect.Index != index
+                || effect.Target != ordered[index] || effect.State != AuditDeleteState.Confirmed)
+                return "Purge effect is unresolved or changed before retirement: " + key + ".";
+        }
+        var claims = await owner.ReadNamespaceAsync(ProductConfigurationKeys.OwnerOnboardingPrefix, token);
+        if (claims.Values.Any(record =>
+                (record.Key.StartsWith(ProductConfigurationKeys.OwnerOnboardingPrefix + "repositories/",
+                     StringComparison.Ordinal)
+                 || record.Key.StartsWith(ProductConfigurationKeys.OwnerOnboardingPrefix + "resources/",
+                     StringComparison.Ordinal))
+                && FactoryReservationRecords.TryIdentify(record.Key, record.Label, record.Value, out var claim)
+                && claim == identity))
+            return "An owner repository or resource claim reappeared before retirement.";
+        return null;
+    }
+
     private async Task<FactoryPurgePlan> BuildPlanAsync(
         OwnerReservationStore owner, OwnerReservationStore product, FactoryReservationIdentity identity,
         Guid operation, IReadOnlyDictionary<string, ConfigurationSetting> authority, AuditGraph? graph,
         AuditDisposition auditDisposition, FactoryReservationResult admission, CancellationToken token)
     {
         var records = new Dictionary<string, ConfigurationSetting>(StringComparer.Ordinal);
+        var unreadable = new List<string>();
         foreach (var pair in await owner.ReadNamespaceAsync("dsf/foundation/", token, 256, FactoryAudit.MaximumBytes, 1024))
             records[pair.Key] = pair.Value;
         foreach (var pair in authority) records[pair.Key] = pair.Value;
@@ -191,11 +273,29 @@ internal sealed class FactoryPurgeService(IAzureCliRunner azure, HttpClient? htt
                     && !effect.ResourceId.Contains("/secrets/", StringComparison.OrdinalIgnoreCase))
                     candidates.Add((record.Key, effect));
             }
-            catch (JsonException) { }
+            catch (JsonException)
+            {
+                try
+                {
+                    using var document = JsonDocument.Parse(record.Value);
+                    if (document.RootElement.ValueKind == JsonValueKind.Object
+                        && document.RootElement.TryGetProperty("kind", out var kind)
+                        && kind.ValueKind == JsonValueKind.String
+                        && kind.GetString() is { } value
+                        && value.StartsWith("decide-", StringComparison.Ordinal)
+                        && (record.Key.EndsWith("-operation", StringComparison.Ordinal)
+                            || record.Key.Contains("/operations/", StringComparison.Ordinal)
+                            || record.Key.Contains("/effects/", StringComparison.Ordinal))
+                        && !KnownAuthorityKinds.Contains(value))
+                        unreadable.Add("Unrecognized authority record blocks purge: " + record.Key + ".");
+                }
+                catch (JsonException) { unreadable.Add("Unreadable authority record blocks purge: " + record.Key + "."); }
+            }
         }
 
         var proposed = new List<FactoryPurgeResource>();
         var blocked = new List<string>(auditDisposition.Blockers);
+        blocked.AddRange(unreadable);
         blocked.AddRange(PendingEffects(authority));
         var ownerClaims = await owner.ReadNamespaceAsync(ProductConfigurationKeys.OwnerOnboardingPrefix, token);
         foreach (var claim in ownerClaims.Values.Where(record =>
@@ -227,7 +327,8 @@ internal sealed class FactoryPurgeService(IAzureCliRunner azure, HttpClient? htt
             var effect = candidate.Operation;
             var resource = new FactoryPurgeResource(candidate.Key, effect.ResourceId!, ResourceType(effect.ResourceId!),
                 effect.ApiVersion, identity.FactoryId, effect.OperationId, effect.ClientRequestId,
-                effect.StartedAt, effect.Incarnation!, Parent(effect.ResourceId!));
+                effect.StartedAt, effect.Incarnation!, Parent(effect.ResourceId!),
+                IsAuditBacking(effect.ResourceId!, graph));
             if (resource.ResourceType.Equals("Microsoft.Resources/resourceGroups", StringComparison.OrdinalIgnoreCase))
             {
                 blocked.Add("Broad resource-group deletion is forbidden; preserved: " + resource.ResourceId + ".");
@@ -332,10 +433,9 @@ internal sealed class FactoryPurgeService(IAzureCliRunner azure, HttpClient? htt
             {
                 var policy = JsonSerializer.Deserialize<AuditRetentionApproval>(
                     policyRecord.Value, FactorySourceValidation.RecordJson) ?? throw new JsonException();
-                if (policy.FactoryId == graph.FactoryId && policy.Policy == graph.Policy
-                    && policy.Days == 90 && policy.ApprovedAt.AddDays(policy.Days) <= clock.GetUtcNow()
-                    && graph.Records.All(record => record.Status == AuditRetentionStatus.Eligible))
-                    return new("reached approved retention expiry", []);
+                var expiry = FactoryPurgeAuditDisposition.Evaluate(graph, policy, clock.GetUtcNow());
+                if (expiry.Eligible) return new(expiry.Detail, []);
+                return new("retained audit", [expiry.Detail]);
             }
             catch (JsonException) { }
         }
@@ -366,7 +466,59 @@ internal sealed class FactoryPurgeService(IAzureCliRunner azure, HttpClient? htt
             : "Current audit disposition is no longer deletion-eligible: " + string.Join(" ", disposition.Blockers);
     }
 
-    private static async Task<FactoryPurgePlan> ReadPlanAsync(
+    private async Task<string?> RequireFinalBoundaryAsync(
+        OwnerReservationStore owner, OwnerReservationStore product, FactoryReservationResult admission,
+        FactoryReservationAnchor expectedAnchor, FactoryPurgePlan plan, FactoryPurgeRequest request,
+        string? auditExport, FactoryAuditService audit, CancellationToken token)
+    {
+        var key = FactoryPurge.BoundaryKey(request.OperationId);
+        var retained = await owner.ReadAsync(key, token);
+        if (retained is not null)
+        {
+            var boundary = JsonSerializer.Deserialize<FactoryPurgeBoundary>(
+                retained.Value, FactoryGitHubJson.Options) ?? throw new JsonException();
+            if (boundary.Protocol != 1 || boundary.FactoryId != expectedAnchor.Identity.FactoryId
+                || boundary.OperationId != request.OperationId
+                || boundary.PlanFingerprint != plan.Fingerprint
+                || boundary.AuthorityRevision != plan.AuthorityRevision
+                || boundary.AuditRevision != plan.AuditRevision
+                || boundary.AuditDisposition != request.AuditDisposition
+                || boundary.VerifiedAt < request.RequestedAt
+                || boundary.VerifiedAt > clock.GetUtcNow())
+                return "Retained final audit-store boundary differs from the approved purge.";
+            return await ValidateOwnerLifecycleAsync(owner, expectedAnchor, token);
+        }
+        var current = await ValidateBoundaryAsync(owner, product, admission, expectedAnchor, plan,
+            auditExport, audit, token);
+        if (current is not null) return current;
+        var value = new FactoryPurgeBoundary(1, expectedAnchor.Identity.FactoryId,
+            request.OperationId, plan.Fingerprint, plan.AuthorityRevision, plan.AuditRevision,
+            request.AuditDisposition, clock.GetUtcNow());
+        await CreateExactAsync(owner, key, JsonSerializer.Serialize(value, FactoryGitHubJson.Options), token);
+        return null;
+    }
+
+    private static async Task<string?> ValidateOwnerLifecycleAsync(
+        OwnerReservationStore owner, FactoryReservationAnchor expected, CancellationToken token)
+    {
+        var root = await owner.ReadAsync(
+            ProductConfigurationKeys.OwnerProductClaim(expected.Identity.ProductKey), token);
+        if (root is null) return "Owner purge lifecycle authority is missing.";
+        try
+        {
+            var current = FactoryReservationRecords.Parse<FactoryReservationAnchor>(root.Value);
+            return current.Identity == expected.Identity
+                && current.Offboarding?.State == FactoryOffboardingState.Detached
+                && current.Purge == expected.Purge
+                ? null : "Owner purge lifecycle authority changed; no further effect dispatched.";
+        }
+        catch (JsonException)
+        {
+            return "Owner purge lifecycle authority is unreadable or retired unexpectedly.";
+        }
+    }
+
+    internal static async Task<FactoryPurgePlan> ReadPlanAsync(
         OwnerReservationStore owner, FactoryReservationIdentity identity,
         FactoryPurgePointer pointer, CancellationToken token)
     {
@@ -403,7 +555,7 @@ internal sealed class FactoryPurgeService(IAzureCliRunner azure, HttpClient? htt
             1, FactoryPurge.PlanKind, Convert.ToBase64String(output.ToArray())), FactoryGitHubJson.Options);
     }
 
-    private static async Task<FactoryPurgeRequest> ReadRequestAsync(
+    internal static async Task<FactoryPurgeRequest> ReadRequestAsync(
         OwnerReservationStore owner, FactoryReservationIdentity identity,
         FactoryPurgePointer pointer, CancellationToken token)
     {
@@ -699,6 +851,15 @@ internal sealed class FactoryPurgeService(IAzureCliRunner azure, HttpClient? htt
         resource.ResourceType.Equals("Microsoft.AppConfiguration/configurationStores",
             StringComparison.OrdinalIgnoreCase);
 
+    private static bool IsAuditBacking(string resourceId, AuditGraph? graph)
+    {
+        if (graph?.Records.Any(record => Same(record.Identity.NativeResourceId, resourceId)) == true)
+            return true;
+        var type = ResourceType(resourceId);
+        return type.Equals("Microsoft.AppConfiguration/configurationStores", StringComparison.OrdinalIgnoreCase)
+            || type.Equals("Microsoft.DocumentDB/databaseAccounts", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static IReadOnlyList<string> PendingEffects(
         IReadOnlyDictionary<string, ConfigurationSetting> authority)
     {
@@ -761,6 +922,20 @@ internal sealed class FactoryPurgeService(IAzureCliRunner azure, HttpClient? htt
     private static bool Same(string? left, string? right) =>
         string.Equals(left?.TrimEnd('/'), right?.TrimEnd('/'), StringComparison.OrdinalIgnoreCase);
 
+    private static readonly HashSet<string> KnownAuthorityKinds = new(StringComparer.Ordinal)
+    {
+        "decide-foundation-operation",
+        "decide-github-operation",
+        "decide-model-operation",
+        "decide-offboarding-request",
+        "decide-pause-request",
+        "decide-preview-capability",
+        "decide-preview-operation",
+        "decide-source-operation",
+        "decide-supplemental-operation",
+        "decide-telemetry-operation",
+    };
+
     private static FactoryPurgeResult Result(
         FactoryPurgeState state, string detail, FactoryPurgePlan plan,
         FactoryPurgeRequest? request, bool retired) =>
@@ -777,4 +952,28 @@ internal sealed class FactoryPurgeService(IAzureCliRunner azure, HttpClient? htt
     private sealed record AuditDisposition(string Description, IReadOnlyList<string> Blockers);
     private sealed record Inspection(bool Eligible, bool Absent, string Detail);
     private sealed record PurgePlanEnvelope(int Protocol, string Kind, string Data);
+}
+
+internal sealed record FactoryPurgeAuditDispositionResult(bool Eligible, string Detail);
+
+internal static class FactoryPurgeAuditDisposition
+{
+    internal static FactoryPurgeAuditDispositionResult Evaluate(
+        AuditGraph graph, AuditRetentionApproval policy, DateTimeOffset now)
+    {
+        if (policy.Protocol != 1 || policy.FactoryId != graph.FactoryId
+            || policy.Policy != graph.Policy || policy.Days != 90
+            || policy.ApprovedAt.Offset != TimeSpan.Zero)
+            return new(false, "Approved expiry policy is invalid or belongs to different audit roots.");
+        if (policy.ApprovedAt.AddDays(policy.Days) > now)
+            return new(false, "Approved audit expiry is unreached; evidence remains retained.");
+        if (graph.Records.Any(record => record.Status == AuditRetentionStatus.Protected))
+            return new(false,
+                "Protected or referenced evidence remains; ordinary 90-day policy never authorizes its disposal.");
+        if (graph.Records.Count == 0
+            || graph.Records.Any(record => record.Status != AuditRetentionStatus.Eligible))
+            return new(false,
+                "Ordinary 90-day policy alone cannot dispose retained or younger evidence; exact expiry effects must complete first.");
+        return new(true, "Reached approved retention expiry for fully eligible disposed records.");
+    }
 }

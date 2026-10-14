@@ -889,6 +889,7 @@ public sealed class FactoryGitHubAuthorityWorkflowTests
         public string? LoseFactoryDeleteResponseFor { get; set; }
         public string? RejectFactoryDeleteFor { get; set; }
         public Action<string>? OnFactoryDelete { get; set; }
+        public bool ThrowArgumentOnResourceRead { get; set; }
         public List<string> GrantReads { get; } = [];
         public Action? OnGrantRead { get; set; }
         public string? GrantConditionVersion { get; init; }
@@ -900,6 +901,9 @@ public sealed class FactoryGitHubAuthorityWorkflowTests
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
         {
             var path = request.RequestUri!.AbsolutePath;
+            if (ThrowArgumentOnResourceRead && request.Method == HttpMethod.Get
+                && request.RequestUri.Host == "management.azure.com")
+                throw new ArgumentException("synthetic provider argument failure");
             if (request.Method == HttpMethod.Delete
                 && path.Contains("/providers/microsoft.authorization/roleassignments/", StringComparison.OrdinalIgnoreCase))
             {
