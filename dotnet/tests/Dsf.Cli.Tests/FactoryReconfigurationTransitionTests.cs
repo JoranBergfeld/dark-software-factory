@@ -170,6 +170,52 @@ public sealed class FactoryReconfigurationTransitionTests
         Assert.Equal(before, transport.Scenario.Arm.Product.Export());
     }
 
+    [Theory]
+    [InlineData("automation-owner")]
+    [InlineData("automation-declarations")]
+    [InlineData("boundary-review")]
+    [InlineData("model-resources")]
+    public async Task Application_blocks_unapplied_boundary_resident_categories_without_closing_admission(string category)
+    {
+        using var transport = await PreviewEvaluationTests.ConfiguredAsync();
+        FactoryActivationTests.ConnectAudit(transport);
+        var machine = transport.Scenario.Machine;
+        var inspected = await machine.InvokeAsync("reconfigure", "--inspect");
+        var desired = inspected.Result["currentInputs"]!.DeepClone();
+        if (category == "automation-owner")
+            desired["boundary"]!["automationOwner"] = "acme/security";
+        else if (category == "automation-declarations")
+            desired["boundary"]!["automationDeclarations"]!["ProposalIssue"] = "Conflict";
+        else if (category == "boundary-review")
+            desired["boundary"]!["boundaryReview"]!["accountableOwner"] = "acme/security";
+        else
+        {
+            const string model = BoundaryPlanFixture.Root
+                + "/resourceGroups/models/providers/Microsoft.CognitiveServices/accounts/shared";
+            machine.Boundary.Resources[model] = BoundaryPlanFixture.Resource(
+                model, "Microsoft.CognitiveServices/accounts");
+            desired["boundary"]!["modelResourceIds"]!.AsArray().Add(model);
+        }
+        desired["boundary"]!["boundaryReview"] = null;
+        var draft = await InvokeAsync(machine, desired);
+        desired["boundary"]!["boundaryReview"] = new JsonObject
+        {
+            ["selectionFingerprint"] = (string)draft.Result["selectionFingerprint"]!,
+            ["accountableOwner"] = category == "boundary-review" ? "acme/security" : "acme/platform",
+            ["dedicated"] = true,
+            ["crossOwnerExclusive"] = true,
+        };
+        var reviewed = await InvokeAsync(machine, desired);
+        var before = transport.Scenario.Arm.Product.Export();
+
+        var applied = await InvokeAsync(machine, desired, "--apply", "--operation", Guid.NewGuid().ToString(),
+            "--approve", (string)reviewed.Result["fingerprint"]!);
+
+        Assert.Equal("Blocked", (string?)applied.Result["state"]);
+        Assert.Contains("UnsupportedReconfigurationCategory", (string?)applied.Result["detail"]);
+        Assert.Equal(before, transport.Scenario.Arm.Product.Export());
+    }
+
     [Fact]
     public async Task Resume_conditionally_applies_configuration_and_invalidates_old_evidence_and_activation()
     {

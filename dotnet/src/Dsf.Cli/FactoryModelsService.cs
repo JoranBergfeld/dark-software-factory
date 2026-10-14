@@ -14,8 +14,9 @@ internal sealed partial class FactoryModelsService(IAzureCliRunner azure, HttpCl
             || admission.Plan is null || admission.Identity is null)
             throw new ReservationStoreException(FactoryReservationState.Blocked, "Current provenance-proven inactive foundation required for model preparation.");
         FactoryModelsValidation.ValidateSelection(selection, admission.Identity);
-        var applicationScopes = admission.Plan.Selection.ApplicationResourceIds
-            .Concat(admission.Plan.Selection.EvidenceBackends.Select(b => b.ResourceId)).ToArray();
+        var boundary = admission.ReconfiguredPlan ?? admission.Plan;
+        var applicationScopes = boundary.Selection.ApplicationResourceIds
+            .Concat(boundary.Selection.EvidenceBackends.Select(b => b.ResourceId)).ToArray();
         if (selection.Routes.Any(r => applicationScopes.Any(id => id.Equals(r.AccountResourceId, StringComparison.OrdinalIgnoreCase)
             || id.StartsWith(r.AccountResourceId + "/", StringComparison.OrdinalIgnoreCase)
             || r.AccountResourceId.StartsWith(id + "/", StringComparison.OrdinalIgnoreCase))))

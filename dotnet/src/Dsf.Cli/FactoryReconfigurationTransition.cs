@@ -147,7 +147,7 @@ internal sealed partial class FactoryReconfigurationTransition(
             if (input is null || approval is null || !FactorySourceValidation.Hash(approval))
                 return Result(FactoryReconfigurationState.Blocked, "Exact current review approval and complete desired input required; generic yes is not approval.");
             var review = await new FactoryReconfigurationService(reviewer, azure, http, clock).ReviewAsync(admission, input, approval, token);
-            if (review.State != FactoryReconfigurationState.Reviewed || review.Fingerprint != approval)
+            if (review.Fingerprint != approval)
                 return review with { State = FactoryReconfigurationState.Blocked, Detail = "Exact current reviewed change required. " + review.Detail };
             if (review.CurrentInputs is { } currentInputs && review.DesiredInputs is { } desired)
             {
@@ -156,6 +156,13 @@ internal sealed partial class FactoryReconfigurationTransition(
                     (Category: "source", Changed: FactoryModelsValidation.Hash(currentInputs.Source) != FactoryModelsValidation.Hash(desired.Source)),
                     (Category: "model", Changed: FactoryModelsValidation.Hash(currentInputs.Models) != FactoryModelsValidation.Hash(desired.Models)),
                     (Category: "supplemental", Changed: FactoryModelsValidation.Hash(currentInputs.Supplemental) != FactoryModelsValidation.Hash(desired.Supplemental)),
+                    (Category: "automation-owner", Changed: currentInputs.Boundary.AutomationOwner != desired.Boundary.AutomationOwner),
+                    (Category: "automation-declarations", Changed: FactoryModelsValidation.Hash(currentInputs.Boundary.AutomationDeclarations)
+                        != FactoryModelsValidation.Hash(desired.Boundary.AutomationDeclarations)),
+                    (Category: "boundary-review", Changed: FactoryModelsValidation.Hash(ReviewBasis(currentInputs.Boundary.BoundaryReview))
+                        != FactoryModelsValidation.Hash(ReviewBasis(desired.Boundary.BoundaryReview))),
+                    (Category: "model-resources", Changed: FactoryModelsValidation.Hash(currentInputs.Boundary.ModelResourceIds)
+                        != FactoryModelsValidation.Hash(desired.Boundary.ModelResourceIds)),
                 }.Where(item => item.Changed).Select(item => item.Category).ToArray();
                 if (unsupported.Length != 0)
                     return review with
@@ -165,6 +172,8 @@ internal sealed partial class FactoryReconfigurationTransition(
                             + " desired-state replacement and exact grant reconciliation are not implemented; no transition admitted.",
                     };
             }
+            if (review.State != FactoryReconfigurationState.Reviewed)
+                return review with { State = FactoryReconfigurationState.Blocked, Detail = "Exact current reviewed change required. " + review.Detail };
             if (!review.RenewedApprovalRequired)
                 return review with { State = FactoryReconfigurationState.Blocked,
                     Detail = "No governing change to apply; unchanged configuration or repository metadata does not invalidate activation." };
@@ -262,6 +271,13 @@ internal sealed partial class FactoryReconfigurationTransition(
     }
 
     private static string Serialize<T>(T value) => JsonSerializer.Serialize(value, FactorySourceValidation.RecordJson);
+
+    private static object? ReviewBasis(BoundaryDedicationReview? review) => review is null ? null : new
+    {
+        review.AccountableOwner,
+        review.Dedicated,
+        review.CrossOwnerExclusive,
+    };
 
     private static bool EvidenceReady(FactoryReconfigurationOperation operation, FactoryReservationResult admission)
         => !operation.RequiredEvidence.Contains("telemetry", StringComparer.Ordinal)

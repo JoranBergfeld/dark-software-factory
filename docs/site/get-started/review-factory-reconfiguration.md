@@ -77,15 +77,24 @@ The result distinguishes additions, removals, replacements and repository
 metadata-only changes. It includes exact telemetry/model/supplemental grant
 differences, preserved application assets, reused prerequisites, original
 ownership/grant history, source/destination key-version custody, and affected
-protected evidence references. Original historical receipts are not fresh
+protected evidence references.
 
-Apply support is deliberately narrower than read-only review. Any CODE
-source, model topology/host, or supplemental selection change is `Blocked`
-with `UnsupportedReconfigurationCategory` before admission closes. DSF never
-reports those differences as applied or reconciles only part of their records
-or grants. Original historical receipts are not fresh
-provider ownership or cleanup authorization. In particular, an associated
-hosting resource group is not a provenance-proven owned generation.
+Apply support is deliberately narrower than read-only review. Changes to any
+of these categories are `Blocked` with
+`UnsupportedReconfigurationCategory` before admission closes:
+
+- CODE source selection;
+- model topology, model host, or model account/deployment prerequisites;
+- supplemental selection or host;
+- repository automation owner or declarations;
+- boundary accountable owner, dedication, or cross-owner exclusivity;
+- boundary `modelResourceIds`.
+
+Application membership and evidence backends remain supported reviewed
+changes. DSF never reports blocked differences as applied or reconciles only
+part of their records or grants. Original historical receipts are not fresh
+provider ownership or cleanup authorization. An associated hosting resource
+group is not a provenance-proven owned generation.
 
 To reject stale review replay, repeat the complete input with:
 
@@ -192,6 +201,11 @@ no longer pause current-generation runtime admission.
 Never delete transition records manually. Their input, configuration,
 claim, retirement, evidence, and activation linkage is the recovery and
 audit authority.
+
+Only one reconfiguration operation is currently supported per retained
+factory. A completed coordinator remains protected history and blocks a new
+operation ID. Use new onboarding for another governing reconfiguration;
+manual deletion or replacement of the completed coordinator is unsupported.
 
 ## Identity and operational limits
 
