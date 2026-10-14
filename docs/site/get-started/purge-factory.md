@@ -61,11 +61,16 @@ path, and approval is explicit.
 - Recovery uses the same operation ID and reviewed fingerprint. Durable owner-side
   request/effect records reconcile confirmed absence, preserve recreated objects,
   and block competing operations; they never repeat an uncertain dispatch.
+- A confirmed authorization denial records `KnownNoEffect`. The same operation may
+  retry only after authority restoration, renewed exact-plan approval, and fresh
+  boundary plus incarnation checks. `Unknown` outcomes remain quarantined.
 - Audit-backing App Configuration and Cosmos resources are ordered last. Immediately
   before their first deletion, purge retains the final verified authority, audit-root,
   export/disposition, plan, and lifecycle boundary owner-side. Recovery then checks
   only that exact boundary, effect journal, ownership, and remote incarnation; it does
   not require data-plane reads from stores already deleted by the reviewed operation.
+  Surviving owner-side foundation authority is revision-checked before every later
+  audit-backed deletion and again before retirement.
 - Provider soft delete, recoverable vault custody, backups, and issued tokens are
   reported honestly; purge does not promise cryptographic invalidation or
   physical erasure.

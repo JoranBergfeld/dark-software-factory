@@ -15,22 +15,28 @@ public sealed record FactoryPurgeResource(
 
 public sealed record FactoryPurgePlan(
     int Protocol, string Kind, Guid OperationId, Guid FactoryId, string ProductKey,
-    string AuthorityRevision, string AuditRevision, IReadOnlyList<string> PreservedAssets,
+    string AuthorityRevision, string OwnerAuthorityRevision, string ProductAuthorityRevision,
+    string AuditRevision, IReadOnlyList<string> PreservedAssets,
     IReadOnlyList<FactoryPurgeResource> ProposedDeletions, IReadOnlyList<string> BlockedDeletions,
     IReadOnlyList<string> ResidualEffects, string Fingerprint);
 
 public sealed record FactoryPurgeRequest(
     int Protocol, string Kind, Guid OperationId, Guid FactoryId, string PlanFingerprint,
-    string AuthorityRevision, string AuditRevision, string AuditDisposition,
+    string AuthorityRevision, string OwnerAuthorityRevision, string ProductAuthorityRevision,
+    string AuditRevision, string AuditDisposition,
     string ApprovedBy, DateTimeOffset RequestedAt);
 
 public sealed record FactoryPurgeDeleteEffect(
     int Protocol, Guid FactoryId, Guid OperationId, int Index, FactoryPurgeResource Target,
-    AuditDeleteState State, DateTimeOffset UpdatedAt, string? Detail = null);
+    AuditDeleteState State, DateTimeOffset UpdatedAt, string? Detail = null)
+{
+    public bool Retryable { get; init; }
+}
 
 public sealed record FactoryPurgeBoundary(
     int Protocol, Guid FactoryId, Guid OperationId, string PlanFingerprint,
-    string AuthorityRevision, string AuditRevision, string AuditDisposition,
+    string AuthorityRevision, string OwnerAuthorityRevision, string ProductAuthorityRevision,
+    string AuditRevision, string AuditDisposition,
     DateTimeOffset VerifiedAt);
 
 public sealed record FactoryPurgePointer(

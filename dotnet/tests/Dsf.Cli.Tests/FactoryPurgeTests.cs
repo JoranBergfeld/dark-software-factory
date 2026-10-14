@@ -357,6 +357,29 @@ public sealed class FactoryPurgeTests
     }
 
     [Fact]
+    public async Task Denied_delete_can_retry_same_operation_after_authority_restoration_and_renewed_approval()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+        using var scenario = await CharterScenario.ReadyAsync(CharterScenario.ExistingCharter);
+        using var export = await PurgeExport.CreateAsync(scenario);
+        var operation = Guid.NewGuid();
+        var review = await scenario.Machine.InvokeAsync("purge", "--operation", operation.ToString(),
+            "--audit-export", export.Path);
+        scenario.Previous.CleanupDenied = true;
+        var denied = await scenario.Machine.InvokeAsync("purge", "--operation", operation.ToString(),
+            "--audit-export", export.Path, "--approve", (string)review.Result["plan"]!["fingerprint"]!);
+        Assert.Equal("Partial", (string?)denied.Result["state"]);
+        scenario.Previous.CleanupDenied = false;
+        scenario.Reconstruct();
+
+        var recovered = await scenario.Machine.InvokeAsync("purge", "--operation", operation.ToString(),
+            "--audit-export", export.Path, "--approve", (string)review.Result["plan"]!["fingerprint"]!);
+
+        Assert.Equal("Purged", (string?)recovered.Result["state"]);
+        Assert.True((bool)recovered.Result["identityRetired"]!);
+    }
+
+    [Fact]
     public async Task Unresolved_foundation_effect_blocks_purge_review()
     {
         using var scenario = await CharterScenario.ReadyAsync();
@@ -441,6 +464,39 @@ public sealed class FactoryPurgeTests
 
         Assert.Equal("Purged", (string?)recovered.Result["state"]);
         Assert.True((bool)recovered.Result["identityRetired"]!);
+    }
+
+    [Fact]
+    public async Task Owner_authority_change_after_first_audit_delete_blocks_later_deletion_and_retirement()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+        using var scenario = await CharterScenario.ReadyAsync(CharterScenario.ExistingCharter);
+        using var export = await PurgeExport.CreateAsync(scenario);
+        var operation = Guid.NewGuid();
+        var review = await scenario.Machine.InvokeAsync("purge", "--operation", operation.ToString(),
+            "--audit-export", export.Path);
+        Assert.True(review.Result["plan"]!["proposedDeletions"]!.AsArray()
+            .Count(item => (bool)item!["auditBacking"]!) > 1);
+        var ownerAuthority = scenario.Machine.Store.Values().Keys.First(key =>
+            key.StartsWith("dsf/foundation/", StringComparison.Ordinal));
+        var changed = false;
+        scenario.Arm.OnDelete = resource =>
+        {
+            if (changed || !review.Result["plan"]!["proposedDeletions"]!.AsArray().Any(item =>
+                    (bool)item!["auditBacking"]!
+                    && string.Equals((string)item["resourceId"]!, resource,
+                        StringComparison.OrdinalIgnoreCase))) return;
+            changed = true;
+            scenario.Machine.Store.Change(ownerAuthority, value => value);
+        };
+
+        var result = await scenario.Machine.InvokeAsync("purge", "--operation", operation.ToString(),
+            "--audit-export", export.Path, "--approve", (string)review.Result["plan"]!["fingerprint"]!);
+
+        Assert.Equal("Partial", (string?)result.Result["state"]);
+        Assert.False((bool)result.Result["identityRetired"]!);
+        Assert.Contains("authority", result.Result["blocked"]!.ToJsonString(),
+            StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

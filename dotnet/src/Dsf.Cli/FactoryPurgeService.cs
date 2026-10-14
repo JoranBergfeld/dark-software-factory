@@ -42,6 +42,9 @@ internal sealed class FactoryPurgeService(IAzureCliRunner azure, HttpClient? htt
                     "Another durable purge operation already owns this retired-lifecycle transition; no replacement.");
             plan = await ReadPlanAsync(owner, identity, retained, token);
             request = await ReadRequestAsync(owner, identity, retained, token);
+            if (request.OwnerAuthorityRevision != plan.OwnerAuthorityRevision
+                || request.ProductAuthorityRevision != plan.ProductAuthorityRevision)
+                throw new JsonException();
             auditDisposition = new(request.AuditDisposition, []);
             if (string.IsNullOrWhiteSpace(approval))
                 return Result(FactoryPurgeState.ReviewRequired,
@@ -74,7 +77,8 @@ internal sealed class FactoryPurgeService(IAzureCliRunner azure, HttpClient? htt
                     plan, null, false);
 
             request = new FactoryPurgeRequest(1, FactoryPurge.Kind, operation, identity.FactoryId,
-                plan.Fingerprint, plan.AuthorityRevision, plan.AuditRevision,
+                plan.Fingerprint, plan.AuthorityRevision, plan.OwnerAuthorityRevision,
+                plan.ProductAuthorityRevision, plan.AuditRevision,
                 auditDisposition.Description, identity.AzureActorId, clock.GetUtcNow());
             await CreateExactAsync(owner, FactoryPurge.PlanKey(operation),
                 SerializePlan(plan), token);
@@ -107,10 +111,12 @@ internal sealed class FactoryPurgeService(IAzureCliRunner azure, HttpClient? htt
         {
             var resource = ordered[index];
             var recorded = await owner.ReadAsync(FactoryPurge.EffectKey(operation, index), token);
-            var requiresDispatchBoundary = recorded is null
-                || (JsonSerializer.Deserialize<FactoryPurgeDeleteEffect>(
-                    recorded.Value, FactoryGitHubJson.Options) ?? throw new JsonException()).State
-                    == AuditDeleteState.Intended;
+            var recordedEffect = recorded is null ? null
+                : JsonSerializer.Deserialize<FactoryPurgeDeleteEffect>(
+                    recorded.Value, FactoryGitHubJson.Options) ?? throw new JsonException();
+            var requiresDispatchBoundary = recordedEffect is null
+                || recordedEffect.State == AuditDeleteState.Intended
+                || recordedEffect is { State: AuditDeleteState.KnownNoEffect, Retryable: true };
             if (requiresDispatchBoundary)
             {
                 var boundary = resource.AuditBacking
@@ -181,6 +187,8 @@ internal sealed class FactoryPurgeService(IAzureCliRunner azure, HttpClient? htt
     {
         var lifecycle = await ValidateOwnerLifecycleAsync(owner, expectedAnchor, token);
         if (lifecycle is not null) return lifecycle;
+        if (await CurrentOwnerAuthorityRevisionAsync(owner, token) != plan.OwnerAuthorityRevision)
+            return "Current owner-side foundation authority revision changed before retirement.";
         var retainedRequest = await owner.ReadAsync(FactoryPurge.HistoryKey(request.OperationId), token);
         if (retainedRequest is null
             || retainedRequest.Value != JsonSerializer.Serialize(request, FactoryGitHubJson.Options))
@@ -203,6 +211,8 @@ internal sealed class FactoryPurgeService(IAzureCliRunner azure, HttpClient? htt
                 || boundary.OperationId != request.OperationId
                 || boundary.PlanFingerprint != plan.Fingerprint
                 || boundary.AuthorityRevision != plan.AuthorityRevision
+                || boundary.OwnerAuthorityRevision != plan.OwnerAuthorityRevision
+                || boundary.ProductAuthorityRevision != plan.ProductAuthorityRevision
                 || boundary.AuditRevision != plan.AuditRevision
                 || boundary.AuditDisposition != request.AuditDisposition
                 || boundary.VerifiedAt < request.RequestedAt)
@@ -252,7 +262,9 @@ internal sealed class FactoryPurgeService(IAzureCliRunner azure, HttpClient? htt
     {
         var records = new Dictionary<string, ConfigurationSetting>(StringComparer.Ordinal);
         var unreadable = new List<string>();
-        foreach (var pair in await owner.ReadNamespaceAsync("dsf/foundation/", token, 256, FactoryAudit.MaximumBytes, 1024))
+        var ownerAuthority = await owner.ReadNamespaceAsync(
+            "dsf/foundation/", token, 256, FactoryAudit.MaximumBytes, 1024);
+        foreach (var pair in ownerAuthority)
             records[pair.Key] = pair.Value;
         foreach (var pair in authority) records[pair.Key] = pair.Value;
         var candidates = new List<(string Key, FoundationOperation Operation)>();
@@ -379,8 +391,11 @@ internal sealed class FactoryPurgeService(IAzureCliRunner azure, HttpClient? htt
             "parent/resource groups unless every current child is independently proven and removed",
         };
         var revision = Revision(records.Values);
+        var ownerRevision = Revision(ownerAuthority.Values);
+        var productRevision = Revision(authority.Values);
         var draft = new FactoryPurgePlan(1, FactoryPurge.PlanKind, operation, identity.FactoryId,
-            identity.ProductKey, revision, graph?.Revision ?? "unverified", preserved,
+            identity.ProductKey, revision, ownerRevision, productRevision,
+            graph?.Revision ?? "unverified", preserved,
             proposed.OrderBy(resource => resource.ResourceId, StringComparer.OrdinalIgnoreCase).ToArray(),
             blocked.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),
             ["provider soft-delete/recoverable custody and already-issued tokens are not physical erasure guarantees"], "");
@@ -481,18 +496,24 @@ internal sealed class FactoryPurgeService(IAzureCliRunner azure, HttpClient? htt
                 || boundary.OperationId != request.OperationId
                 || boundary.PlanFingerprint != plan.Fingerprint
                 || boundary.AuthorityRevision != plan.AuthorityRevision
+                || boundary.OwnerAuthorityRevision != plan.OwnerAuthorityRevision
+                || boundary.ProductAuthorityRevision != plan.ProductAuthorityRevision
                 || boundary.AuditRevision != plan.AuditRevision
                 || boundary.AuditDisposition != request.AuditDisposition
                 || boundary.VerifiedAt < request.RequestedAt
                 || boundary.VerifiedAt > clock.GetUtcNow())
                 return "Retained final audit-store boundary differs from the approved purge.";
-            return await ValidateOwnerLifecycleAsync(owner, expectedAnchor, token);
+            var lifecycle = await ValidateOwnerLifecycleAsync(owner, expectedAnchor, token);
+            if (lifecycle is not null) return lifecycle;
+            return await CurrentOwnerAuthorityRevisionAsync(owner, token) == plan.OwnerAuthorityRevision
+                ? null : "Current owner-side foundation authority revision changed; no further effect dispatched.";
         }
         var current = await ValidateBoundaryAsync(owner, product, admission, expectedAnchor, plan,
             auditExport, audit, token);
         if (current is not null) return current;
         var value = new FactoryPurgeBoundary(1, expectedAnchor.Identity.FactoryId,
-            request.OperationId, plan.Fingerprint, plan.AuthorityRevision, plan.AuditRevision,
+            request.OperationId, plan.Fingerprint, plan.AuthorityRevision,
+            plan.OwnerAuthorityRevision, plan.ProductAuthorityRevision, plan.AuditRevision,
             request.AuditDisposition, clock.GetUtcNow());
         await CreateExactAsync(owner, key, JsonSerializer.Serialize(value, FactoryGitHubJson.Options), token);
         return null;
@@ -540,6 +561,8 @@ internal sealed class FactoryPurgeService(IAzureCliRunner azure, HttpClient? htt
             || plan.OperationId != pointer.OperationId || plan.FactoryId != identity.FactoryId
             || plan.ProductKey != identity.ProductKey || plan.Fingerprint != pointer.PlanFingerprint
             || plan.AuthorityRevision != pointer.AuthorityRevision || plan.AuditRevision != pointer.AuditRevision
+            || string.IsNullOrWhiteSpace(plan.OwnerAuthorityRevision)
+            || string.IsNullOrWhiteSpace(plan.ProductAuthorityRevision)
             || FactoryPurge.Fingerprint(plan) != plan.Fingerprint)
             throw new JsonException();
         return plan;
@@ -568,6 +591,8 @@ internal sealed class FactoryPurgeService(IAzureCliRunner azure, HttpClient? htt
             || request.PlanFingerprint != pointer.PlanFingerprint
             || request.AuthorityRevision != pointer.AuthorityRevision
             || request.AuditRevision != pointer.AuditRevision
+            || string.IsNullOrWhiteSpace(request.OwnerAuthorityRevision)
+            || string.IsNullOrWhiteSpace(request.ProductAuthorityRevision)
             || string.IsNullOrWhiteSpace(request.AuditDisposition)
             || request.ApprovedBy != identity.AzureActorId
             || request.RequestedAt != pointer.RequestedAt)
@@ -610,6 +635,11 @@ internal sealed class FactoryPurgeService(IAzureCliRunner azure, HttpClient? htt
         return Revision(records.Values);
     }
 
+    private static async Task<string> CurrentOwnerAuthorityRevisionAsync(
+        OwnerReservationStore owner, CancellationToken token) =>
+        Revision((await owner.ReadNamespaceAsync(
+            "dsf/foundation/", token, 256, FactoryAudit.MaximumBytes, 1024)).Values);
+
     private async Task<(AuditDeleteState State, string Detail)> ApplyEffectAsync(
         OwnerReservationStore owner, FactoryPreparationArm arm, FactoryReservationIdentity identity,
         Guid operation, int index, FactoryPurgeResource resource, FactoryPurgePlan plan,
@@ -627,7 +657,7 @@ internal sealed class FactoryPurgeService(IAzureCliRunner azure, HttpClient? htt
                 throw new JsonException();
             if (effect.State == AuditDeleteState.Confirmed)
                 return (effect.State, effect.Detail ?? "Previously confirmed deletion " + resource.ResourceId + ".");
-            if (effect.State == AuditDeleteState.KnownNoEffect)
+            if (effect is { State: AuditDeleteState.KnownNoEffect, Retryable: false })
                 return (effect.State, effect.Detail ?? "Previously preserved " + resource.ResourceId + ".");
             if (effect.State is AuditDeleteState.Dispatched or AuditDeleteState.Unknown)
             {
@@ -662,7 +692,12 @@ internal sealed class FactoryPurgeService(IAzureCliRunner azure, HttpClient? htt
         if (cascade is not null)
             return await CloseEffectAsync(owner, effectRecord, effect, AuditDeleteState.KnownNoEffect, cascade);
 
-        effect = effect with { State = AuditDeleteState.Dispatched, UpdatedAt = clock.GetUtcNow() };
+        effect = effect with
+        {
+            State = AuditDeleteState.Dispatched,
+            UpdatedAt = clock.GetUtcNow(),
+            Retryable = false,
+        };
         effectRecord = await SetExactAsync(owner, effectRecord,
             JsonSerializer.Serialize(effect, FactoryGitHubJson.Options), token);
         try
@@ -671,7 +706,8 @@ internal sealed class FactoryPurgeService(IAzureCliRunner azure, HttpClient? htt
                 HttpMethod.Delete, resource.ResourceId, resource.ApiVersion, token);
             if (deletedResponse.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
                 return await CloseEffectAsync(owner, effectRecord, effect, AuditDeleteState.KnownNoEffect,
-                    "Deletion denied; preserved exact owned resource " + resource.ResourceId + ".");
+                    "Deletion denied; preserved exact owned resource " + resource.ResourceId + ".",
+                    retryable: true);
             if (deletedResponse.StatusCode is not (HttpStatusCode.OK or HttpStatusCode.Accepted
                 or HttpStatusCode.NoContent or HttpStatusCode.NotFound))
                 return await CloseEffectAsync(owner, effectRecord, effect, AuditDeleteState.Unknown,
@@ -697,9 +733,15 @@ internal sealed class FactoryPurgeService(IAzureCliRunner azure, HttpClient? htt
 
     private async Task<(AuditDeleteState State, string Detail)> CloseEffectAsync(
         OwnerReservationStore owner, ConfigurationSetting record, FactoryPurgeDeleteEffect effect,
-        AuditDeleteState state, string detail, CancellationToken token = default)
+        AuditDeleteState state, string detail, CancellationToken token = default, bool retryable = false)
     {
-        var closed = effect with { State = state, UpdatedAt = clock.GetUtcNow(), Detail = detail };
+        var closed = effect with
+        {
+            State = state,
+            UpdatedAt = clock.GetUtcNow(),
+            Detail = detail,
+            Retryable = retryable,
+        };
         await SetExactAsync(owner, record, JsonSerializer.Serialize(closed, FactoryGitHubJson.Options), token);
         return (state, detail);
     }

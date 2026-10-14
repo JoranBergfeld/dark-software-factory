@@ -79,6 +79,8 @@ internal sealed class FactoryReservationService(
                 || request.FactoryId != retirement.FactoryId
                 || request.PlanFingerprint != retirement.PlanFingerprint
                 || request.AuditRevision != retirement.AuditRevision
+                || string.IsNullOrWhiteSpace(request.OwnerAuthorityRevision)
+                || string.IsNullOrWhiteSpace(request.ProductAuthorityRevision)
                 || request.AuditDisposition != retirement.AuditDisposition
                 || request.ApprovedBy != retirement.ApprovedBy
                 || request.RequestedAt > retirement.RetiredAt)
@@ -123,6 +125,8 @@ internal sealed class FactoryReservationService(
                 || boundary.OperationId != retirement.PurgeOperationId
                 || boundary.PlanFingerprint != retirement.PlanFingerprint
                 || boundary.AuthorityRevision != request.AuthorityRevision
+                || boundary.OwnerAuthorityRevision != request.OwnerAuthorityRevision
+                || boundary.ProductAuthorityRevision != request.ProductAuthorityRevision
                 || boundary.AuditRevision != retirement.AuditRevision
                 || boundary.AuditDisposition != retirement.AuditDisposition
                 || boundary.VerifiedAt < request.RequestedAt
