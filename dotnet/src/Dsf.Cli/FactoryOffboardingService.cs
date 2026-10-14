@@ -42,7 +42,11 @@ internal sealed class FactoryOffboardingService(IAzureCliRunner azure, HttpClien
             if (existing.Request.OperationId != operation)
                 return Result(FactoryOffboardingState.Blocked, "Another protected detach operation already closes admission; no replacement.",
                     existing.Plan, existing.Request, true, anchor.Offboarding is not null);
-            if (approval is not null && approval != existing.Plan.Fingerprint)
+            if (string.IsNullOrWhiteSpace(approval))
+                return Result(FactoryOffboardingState.ReviewRequired,
+                    "Cleanup resume requires renewed approval of the retained exact detach plan; no cleanup replay.",
+                    existing.Plan, existing.Request, true, anchor.Offboarding is not null);
+            if (approval != existing.Plan.Fingerprint)
                 return Result(FactoryOffboardingState.Blocked, "Approval differs from the retained detach plan; no cleanup replay.",
                     existing.Plan, existing.Request, true, anchor.Offboarding is not null);
             return await CompleteAsync(owner, ownerRecord, anchor, product, authority, existing.Request, existing.Plan, token);
@@ -107,23 +111,27 @@ internal sealed class FactoryOffboardingService(IAzureCliRunner azure, HttpClien
             var cleanup = await CleanupOwnedAccessAsync(anchor.Identity, authority, token);
             removals.AddRange(cleanup.Completed);
             blocked.AddRange(cleanup.Blocked);
+            var unreconciled = PlannedGrantTargets(authority)
+                .Except(cleanup.ReconciledGrantTargets, StringComparer.OrdinalIgnoreCase).ToArray();
+            if (unreconciled.Length != 0)
+                blocked.Add("Approved grant removals were not all reconciled as completed or blocked: "
+                    + string.Join(", ", unreconciled.Order(StringComparer.OrdinalIgnoreCase)) + ".");
         }
 
         var current = FactoryReservationRecords.Parse<FactoryReservationAnchor>(ownerRecord.Value);
         if (current.Offboarding is null)
         {
-            var state = product is null && blocked.Count == 0
-                ? FactoryOffboardingState.Detached : FactoryOffboardingState.Partial;
+            const FactoryOffboardingState state = FactoryOffboardingState.Partial;
             current = current with
             {
                 Offboarding = new(request.OperationId, state, plan.Fingerprint, plan.AuthorityRevision, request.RequestedAt,
-                    state == FactoryOffboardingState.Detached ? clock.GetUtcNow() : null),
+                    null),
             };
             try
             {
                 ownerRecord = await owner.WriteAsync(ownerRecord.Key, FactoryReservationRecords.Serialize(current),
                     ownerRecord.ETag, token);
-                removals.Add("live owner registration replaced by retained detached registration");
+                removals.Add("live owner registration replaced by retained offboarding registration");
             }
             catch (ReservationStoreException)
             {
@@ -298,12 +306,13 @@ internal sealed class FactoryOffboardingService(IAzureCliRunner azure, HttpClien
         return draft with { Fingerprint = FactoryOffboarding.Fingerprint(draft) };
     }
 
-    private async Task<(IReadOnlyList<string> Completed, IReadOnlyList<string> Blocked)> CleanupOwnedAccessAsync(
+    private async Task<(IReadOnlyList<string> Completed, IReadOnlyList<string> Blocked,
+        IReadOnlySet<string> ReconciledGrantTargets)> CleanupOwnedAccessAsync(
         FactoryReservationIdentity identity, IReadOnlyDictionary<string, ConfigurationSetting> authority,
         CancellationToken token)
     {
         if (!authority.TryGetValue(ProductConfigurationKeys.FactoryGitHubAuthority, out var record))
-            return ([], []);
+            return ([], [], new HashSet<string>(StringComparer.OrdinalIgnoreCase));
         try
         {
             var values = authority.ToDictionary(pair => pair.Key, pair => pair.Value.Value, StringComparer.Ordinal);
@@ -329,22 +338,46 @@ internal sealed class FactoryOffboardingService(IAzureCliRunner azure, HttpClien
             }
             var completed = new List<string>();
             var blocked = new List<string>();
+            var reconciled = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var arm = new FactoryPreparationArm(azure, http, identity);
-            foreach (var grant in effects.Where(effect => effect.RoleDefinitionId is not null)
+            foreach (var grant in effects.Where(effect => effect.RoleDefinitionId is not null
+                                                          && effect.State == FoundationOperationState.Completed
+                                                          && effect.Disposition == FoundationResourceDisposition.Created)
                          .DistinctBy(effect => effect.Target, StringComparer.OrdinalIgnoreCase))
             {
                 var result = await RemoveGrantAsync(arm, grant, token);
+                reconciled.Add(grant.Target);
                 (result.Completed ? completed : blocked).Add(result.Detail);
             }
             var key = await RemoveKeyVersionAsync(identity, githubEffects[0], token);
             (key.Completed ? completed : blocked).Add(key.Detail);
-            return (completed, blocked);
+            return (completed, blocked, reconciled);
         }
         catch (Exception e) when (e is JsonException or KeyNotFoundException or InvalidOperationException
             or ArgumentException or FormatException)
         {
-            return ([], ["Factory access cleanup ownership is invalid or changed; preserve grants and key custody for administrator review."]);
+            return ([], ["Factory access cleanup ownership is invalid or changed; preserve grants and key custody for administrator review."],
+                new HashSet<string>(StringComparer.OrdinalIgnoreCase));
         }
+    }
+
+    private static IReadOnlySet<string> PlannedGrantTargets(
+        IReadOnlyDictionary<string, ConfigurationSetting> authority)
+    {
+        var targets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var record in authority.Values)
+        {
+            try
+            {
+                var effect = JsonSerializer.Deserialize<FoundationOperation>(record.Value, FactoryGitHubJson.Options);
+                if (effect is { State: FoundationOperationState.Completed,
+                        Disposition: FoundationResourceDisposition.Created, RoleDefinitionId: not null,
+                        PrincipalId: not null, RoleScope: not null })
+                    targets.Add(effect.Target);
+            }
+            catch (JsonException) { }
+        }
+        return targets;
     }
 
     private static async Task<(bool Completed, string Detail)> RemoveGrantAsync(

@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using Dsf.Core.Onboarding;
 using Dsf.Core.Runtime;
 using Xunit;
 
@@ -6,6 +7,23 @@ namespace Dsf.Cli.Tests;
 
 public sealed class PreviewPreparationFreshnessTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Offboarding_root_or_history_blocks_preview_preparation(bool history)
+    {
+        using var transport = await PreviewPreparationTransport.CreateAsync();
+        transport.Scenario.Arm.Product.Seed(
+            history ? FactoryOffboarding.HistoryKey(Guid.NewGuid()) : FactoryOffboarding.Key, "{}");
+
+        var result = await transport.Scenario.Machine.InvokeAsync(
+            "preview", "--preview-config", transport.Selection.ToJsonString());
+
+        Assert.NotEqual(0, result.Exit);
+        Assert.Contains("OffboardingOrDetached", (string?)result.Result["detail"]);
+        Assert.Empty(transport.NativeWrites);
+    }
+
     [Fact]
     public async Task Expiring_telemetry_during_native_preparation_requires_fresh_observation_before_configuration()
     {

@@ -14,6 +14,7 @@ public sealed class FactoryPublisherTests(PublisherFixture fixture) : IClassFixt
     [InlineData("canceled", "Unknown")]
     [InlineData("denied", "Failed")]
     [InlineData("pause", "Unknown")]
+    [InlineData("offboarding", "Unknown")]
     [InlineData("config", "Unknown")]
     public async Task Original_native_publication_rollout_cannot_replay_after_uncertainty_or_governance_race(string failure, string expected)
     {
@@ -27,6 +28,8 @@ public sealed class FactoryPublisherTests(PublisherFixture fixture) : IClassFixt
             if (key != FactoryPublisher.EffectKey((Guid)selection["operationId"]!, 0)) return;
             transport.Scenario.Arm.Product.BeforePut = null;
             if (failure == "pause") await transport.Scenario.Machine.InvokeAsync("pause", "--request", "--operation", Guid.NewGuid().ToString());
+            else if (failure == "offboarding")
+                transport.Scenario.Arm.Product.Seed(FactoryOffboarding.HistoryKey(Guid.NewGuid()), "{}");
             else transport.Scenario.Arm.Product.Change(ProductConfigurationKeys.FactoryManifest, original => original);
         };
         var result = await transport.Scenario.Machine.InvokeAsync("live", "--publication", "--selection", selection.ToJsonString(),
@@ -44,7 +47,7 @@ public sealed class FactoryPublisherTests(PublisherFixture fixture) : IClassFixt
         Assert.Equal(expected, (string?)status.Result["state"]);
         Assert.Equal(records, transport.Scenario.Arm.Product.Export());
         Assert.Equal(effects, transport.NativeWrites);
-        if (failure is "pause" or "config" or "denied") Assert.Empty(effects);
+        if (failure is "pause" or "offboarding" or "config" or "denied") Assert.Empty(effects);
         else Assert.Single(effects);
         Assert.Empty(transport.PublisherTokenRequests);
     }

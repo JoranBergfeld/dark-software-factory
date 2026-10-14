@@ -1,4 +1,6 @@
 using System.Text.Json.Nodes;
+using System.Text.Json;
+using Dsf.Core.Onboarding;
 using Dsf.Core.Runtime;
 using Xunit;
 
@@ -138,6 +140,117 @@ public sealed class FactoryOffboardingTests
         Assert.DoesNotContain(machine.Store.Values(), pair =>
             pair.Key.StartsWith(ProductConfigurationKeys.OwnerOnboardingPrefix + "repositories/", StringComparison.Ordinal)
             || pair.Key.StartsWith(ProductConfigurationKeys.OwnerOnboardingPrefix + "resources/", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Partial_factory_remains_partial_until_owner_claim_release_is_confirmed()
+    {
+        var machine = new ReservationMachine(new ReservationTestStore());
+        var reviewedBoundary = await machine.Boundary.ReviewAsync();
+        await machine.ReserveAsync((string)reviewedBoundary.Plan["fingerprint"]!);
+        machine.Store.RejectDeleteKey = machine.Store.Values().Keys.Single(key =>
+            key.StartsWith(ProductConfigurationKeys.OwnerOnboardingPrefix + "repositories/", StringComparison.Ordinal));
+        var operation = Guid.NewGuid();
+        var reviewed = await machine.InvokeAsync("offboard", "--operation", operation.ToString());
+
+        var result = await machine.InvokeAsync("offboard", "--operation", operation.ToString(),
+            "--approve", (string)reviewed.Result["plan"]!["fingerprint"]!);
+
+        Assert.Equal("Partial", (string?)result.Result["state"]);
+        var anchor = JsonNode.Parse(machine.Store.Values()[ProductConfigurationKeys.OwnerProductClaim("widget")])!;
+        Assert.Equal("Partial", (string?)anchor["offboarding"]!["state"]);
+        Assert.Null(anchor["offboarding"]!["completedAt"]);
+    }
+
+    [Fact]
+    public async Task Existing_partial_detach_requires_the_same_reviewed_approval_before_cleanup_resumes()
+    {
+        using var scenario = await CharterScenario.ReadyAsync();
+        scenario.Previous.CleanupDenied = true;
+        var operation = Guid.NewGuid();
+        var reviewed = await scenario.Machine.InvokeAsync("offboard", "--operation", operation.ToString());
+        var fingerprint = (string)reviewed.Result["plan"]!["fingerprint"]!;
+        Assert.Equal("Partial", (string?)(await scenario.Machine.InvokeAsync("offboard", "--operation", operation.ToString(),
+            "--approve", fingerprint)).Result["state"]);
+        scenario.Previous.CleanupDenied = false;
+        var before = scenario.Previous.DeletedGrants.Count;
+
+        var resumed = await scenario.Machine.InvokeAsync("offboard", "--operation", operation.ToString());
+
+        Assert.Equal("ReviewRequired", (string?)resumed.Result["state"]);
+        Assert.True((bool)resumed.Result["admissionClosed"]!);
+        Assert.Equal(before, scenario.Previous.DeletedGrants.Count);
+    }
+
+    [Fact]
+    public async Task Competing_detach_operation_cannot_replace_the_admission_closing_operation()
+    {
+        using var scenario = await CharterScenario.ReadyAsync();
+        scenario.Previous.CleanupDenied = true;
+        var original = Guid.NewGuid();
+        var reviewed = await scenario.Machine.InvokeAsync("offboard", "--operation", original.ToString());
+        await scenario.Machine.InvokeAsync("offboard", "--operation", original.ToString(),
+            "--approve", (string)reviewed.Result["plan"]!["fingerprint"]!);
+
+        var competing = await scenario.Machine.InvokeAsync("offboard", "--operation", Guid.NewGuid().ToString());
+
+        Assert.Equal("Blocked", (string?)competing.Result["state"]);
+        Assert.Equal(original.ToString(), (string?)competing.Result["request"]!["operationId"]);
+    }
+
+    [Fact]
+    public async Task Reused_grants_are_preserved_and_excluded_from_approved_removals()
+    {
+        using var scenario = await CharterScenario.ReadyAsync();
+        var manifest = JsonSerializer.Deserialize<FactoryManifest>(
+            scenario.Arm.Product.Values()[ProductConfigurationKeys.FactoryManifest], FactoryGitHubJson.Options)!;
+        const string grant = "/subscriptions/shared/providers/Microsoft.Authorization/roleAssignments/reused";
+        var reused = new FoundationOperation(1, "test-reused", manifest.Identity.FactoryId, Guid.NewGuid(), 0,
+            grant, "2022-04-01", new string('b', 64), Guid.NewGuid(), DateTimeOffset.Parse("2026-09-15T22:00:00Z"),
+            FoundationOperationState.Completed, FoundationResourceDisposition.Reused)
+        {
+            PrincipalId = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+            RoleDefinitionId = "/subscriptions/shared/providers/Microsoft.Authorization/roleDefinitions/role",
+            RoleScope = "/subscriptions/shared",
+            Incarnation = "2026-09-15T22:00:00Z",
+        };
+        scenario.Arm.Product.Seed("dsf/factory/reused-grant", JsonSerializer.Serialize(reused, FactoryGitHubJson.Options));
+        var operation = Guid.NewGuid();
+        var reviewed = await scenario.Machine.InvokeAsync("offboard", "--operation", operation.ToString());
+
+        Assert.DoesNotContain(grant, reviewed.Result["plan"]!["proposedRemovals"]!.ToJsonString(), StringComparison.OrdinalIgnoreCase);
+        var result = await scenario.Machine.InvokeAsync("offboard", "--operation", operation.ToString(),
+            "--approve", (string)reviewed.Result["plan"]!["fingerprint"]!);
+        Assert.DoesNotContain(grant, scenario.Previous.DeletedGrants);
+        Assert.Equal("Detached", (string?)result.Result["state"]);
+    }
+
+    [Fact]
+    public async Task Every_approved_grant_removal_must_be_reconciled_before_detached()
+    {
+        using var scenario = await CharterScenario.ReadyAsync();
+        var operation = Guid.NewGuid();
+        var manifest = JsonSerializer.Deserialize<FactoryManifest>(
+            scenario.Arm.Product.Values()[ProductConfigurationKeys.FactoryManifest], FactoryGitHubJson.Options)!;
+        var orphan = new FoundationOperation(1, "test-orphan", manifest.Identity.FactoryId,
+            Guid.NewGuid(), 0, "/subscriptions/orphan/providers/Microsoft.Authorization/roleAssignments/orphan",
+            "2022-04-01", new string('a', 64), Guid.NewGuid(), DateTimeOffset.Parse("2026-09-15T22:00:00Z"),
+            FoundationOperationState.Completed, FoundationResourceDisposition.Created)
+        {
+            PrincipalId = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            RoleDefinitionId = "/subscriptions/orphan/providers/Microsoft.Authorization/roleDefinitions/role",
+            RoleScope = "/subscriptions/orphan",
+            Incarnation = "2026-09-15T22:00:00Z",
+        };
+        scenario.Arm.Product.Seed("dsf/factory/orphan-grant", JsonSerializer.Serialize(orphan, FactoryGitHubJson.Options));
+        var reviewed = await scenario.Machine.InvokeAsync("offboard", "--operation", operation.ToString());
+
+        var result = await scenario.Machine.InvokeAsync("offboard", "--operation", operation.ToString(),
+            "--approve", (string)reviewed.Result["plan"]!["fingerprint"]!);
+
+        Assert.Equal("Partial", (string?)result.Result["state"]);
+        Assert.Contains(result.Result["blockedRemovals"]!.AsArray(),
+            item => ((string)item!).Contains("approved grant", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]

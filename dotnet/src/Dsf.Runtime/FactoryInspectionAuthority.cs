@@ -9,7 +9,7 @@ internal sealed class FactoryInspectionAuthority
 
     internal bool Include(string key)
     {
-        if (!FactoryPause.IsStopRecord(key)) return true;
+        if (!FactoryPause.IsStopRecord(key) && !FactoryOffboarding.IsStopRecord(key)) return true;
         AdmissionClosed = true;
         return false;
     }

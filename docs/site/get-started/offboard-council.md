@@ -50,7 +50,10 @@ The first confirmed product offboarding record closes runtime admission across
 manual runs, sweeps, HTTP hosts, source agents, loops, resumed work, and outcome
 polling. A durable owner pointer keeps the detached factory discoverable.
 Repeated calls from another machine use the same operation and plan; a competing
-operation cannot replace it.
+operation cannot replace it. Every cleanup or recovery invocation, including a
+resume of an existing partial detach, requires `--approve` with that retained
+plan fingerprint. Omitting approval returns `ReviewRequired` and performs no
+cleanup.
 
 Completion requires confirmed admission closure, consistent audit readback, and
 no unresolved issued publication effects. Lost responses, delayed writes,

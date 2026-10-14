@@ -94,8 +94,7 @@ internal sealed partial class FactoryPreviewPreparationService
         bool readOnly, CancellationToken token)
     {
         var store = Store(admission);
-        FactoryPause.RequireAdmissionOpen((await store.ReadNamespaceAsync(FactoryPause.Key, token)).Keys);
-        FactoryPause.RequireAdmissionOpen((await store.ReadNamespaceAsync(FactoryPause.HistoryPrefix, token, maximumRecords: 128)).Keys);
+        await store.RequireAdmissionOpenAsync(token);
         var preparation = await ReadJournalAsync(admission, store, token) ?? throw Unknown("ConfirmedNativePreparationRequired");
         var values = (await store.ReadFactoryAuthorityAsync(token)).ToDictionary(p => p.Key, p => p.Value.Value);
         var manifest = Parse<FactoryManifest>(values[ProductConfigurationKeys.FactoryManifest]);

@@ -175,6 +175,7 @@ internal sealed partial class FactoryPreviewPreparationService
     {
         // Only a retained, integrity-checked approval supplies historical proof time.
         // Native authority stays current; refreshed observations must pass current checks.
+        await store.RequireAdmissionOpenAsync(token);
         var current = await ReadPlanAsync(admission, plan.Selection, store, token, approvedPreparation: approvedPreparation);
         if (approvedPreparation is null ? current.Fingerprint != plan.Fingerprint : !SameReviewedInputs(plan, current))
             throw Failure("PreviewPreparationInputsOrNativeAuthorityChanged");

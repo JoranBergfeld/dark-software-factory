@@ -122,11 +122,16 @@ public static partial class CliApplication
                 result = new(e.State == FactoryReservationState.Unknown ? PreviewPreparationState.Unknown
                     : e.State == FactoryReservationState.Canceled ? PreviewPreparationState.Canceled : PreviewPreparationState.Blocked, e.Message);
             }
+            catch (PreviewCapabilityException e)
+            {
+                result = new(e.State == FactoryCharterState.Unknown
+                    ? PreviewPreparationState.Unknown : PreviewPreparationState.Blocked, e.Message);
+            }
             catch (OperationCanceledException)
             { result = new(PreviewPreparationState.Canceled, "Preparation canceled; inspect retained native history before any continuation."); }
             catch (Exception e) when (e is JsonException or FormatException or ArgumentException or InvalidOperationException
                 or KeyNotFoundException or HttpRequestException or IOException or OwnerReservationStore.AuthenticationFailedException
-                or CharterAdoptionEvidenceException or CharterOperationException or PreviewCapabilityException or ModelCapabilityException)
+                or CharterAdoptionEvidenceException or CharterOperationException or ModelCapabilityException)
             { result = new(PreviewPreparationState.Blocked, "Complete explicit preview selection and current adopted/source/model/telemetry/selected-source authority required. Provider details withheld."); }
             terminal.WriteLine(JsonSerializer.Serialize(result, ReviewJson));
             return result.State is PreviewPreparationState.Reviewed or PreviewPreparationState.ConfirmedNotReady

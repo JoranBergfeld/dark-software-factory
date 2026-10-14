@@ -14,6 +14,17 @@ namespace Dsf.Runtime.Tests;
 
 public sealed class RuntimeAdmissionTests
 {
+    [Theory]
+    [InlineData("dsf/factory/offboarding")]
+    [InlineData("dsf/factory/audit/offboarding/retained/request")]
+    public void Retained_inspection_degrades_offboarding_to_closed_admission(string key)
+    {
+        var inspection = new FactoryInspectionAuthority();
+
+        Assert.False(inspection.Include(key));
+        Assert.True(inspection.AdmissionClosed);
+    }
+
     private static readonly RuntimeSettings Settings = new(
         "acme", "https://dsfo-11111111111111111111111111111111.azconfig.io.", "", "",
         "https://cosmos.example", "https://openai.example", "gpt-deploy", "embed-deploy", "", "", "", "acme/acme");

@@ -1091,6 +1091,7 @@ internal sealed class ReservationTestStore
     public Func<string, string, bool>? LoseResponseWhen { get; set; }
     public bool LoseBeforeCommit { get; set; }
     public string? RejectKey { get; set; }
+    public string? RejectDeleteKey { get; set; }
     public string? RejectReadKey { get; set; }
     public Func<string, bool, Task>? BeforePut { get; set; }
     public Action<string, string>? AfterPut { get; set; }
@@ -1099,6 +1100,24 @@ internal sealed class ReservationTestStore
     public HttpMessageHandler Client() => new ClientHandler(this);
     public string Export() { lock (gate) return JsonSerializer.Serialize(records); }
     public void Remove(string key) { lock (gate) { records.Remove(key); valueSnapshot = null; } }
+    public void Seed(string key, string value)
+    {
+        lock (gate)
+        {
+            records[key] = new JsonObject
+            {
+                ["key"] = key,
+                ["label"] = null,
+                ["value"] = value,
+                ["content_type"] = OwnerReservationStore.ContentType,
+                ["etag"] = "revision-" + ++revision,
+                ["locked"] = false,
+                ["last_modified"] = "2026-09-15T23:00:00Z",
+                ["tags"] = new JsonObject(),
+            }.ToJsonString();
+            valueSnapshot = null;
+        }
+    }
     public Dictionary<string, string> Values()
     {
         lock (gate)
@@ -1168,6 +1187,7 @@ internal sealed class ReservationTestStore
                 }
                 if (request.Method == HttpMethod.Delete)
                 {
+                    if (key == store.RejectDeleteKey) return Reply(HttpStatusCode.Forbidden, null);
                     var deleteMatch = request.Headers.TryGetValues("If-Match", out var deleteMatches) ? deleteMatches.Single() : null;
                     if (current is null) return Reply(HttpStatusCode.NotFound, null);
                     if (deleteMatch != "\"" + (string?)current["etag"] + "\"")

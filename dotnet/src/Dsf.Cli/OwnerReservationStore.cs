@@ -86,6 +86,16 @@ internal sealed class OwnerReservationStore : IFactoryCharterEvidenceReader
     internal Task<IReadOnlyDictionary<string, ConfigurationSetting>> ReadFactoryAuthorityAsync(CancellationToken token) =>
         ReadNamespaceAsync("dsf/factory/", token, maximumPages: 1024, excludeAudit: true);
 
+    internal async Task RequireAdmissionOpenAsync(CancellationToken token)
+    {
+        foreach (var prefix in new[]
+                 {
+                     FactoryPause.Key, FactoryPause.HistoryPrefix,
+                     FactoryOffboarding.Key, FactoryOffboarding.HistoryPrefix,
+                 })
+            FactoryPause.RequireAdmissionOpen((await ReadNamespaceAsync(prefix, token, maximumRecords: 128)).Keys);
+    }
+
     internal async Task<IReadOnlyDictionary<string, ConfigurationSetting>> ReadNamespaceAsync(string prefix, CancellationToken token,
         int maximumRecords = 1024, long maximumBytes = 4 * 1024 * 1024, int maximumPages = 64, bool excludeAudit = false)
     {
