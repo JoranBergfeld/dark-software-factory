@@ -48,6 +48,7 @@ public static partial class CliApplication
                 var runner = azure ?? new SystemAzureCliRunner();
                 var time = clock ?? TimeProvider.System;
                 var admission = await new FactoryReservationService(reviewer, runner, http, time).StatusAsync(owner, tenantId, subscriptionId, productKey, token);
+                await FactoryReconfigurationGate.RequireCapabilityAsync(admission);
                 var service = new FactorySourceService(runner, http, time);
                 if (parse.GetValue(prepare))
                 {

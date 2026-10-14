@@ -39,6 +39,7 @@ public static partial class CliApplication
                 var subscriptionId = Guid.Parse(Input(subscription)).ToString();
                 result = await new FactoryReservationService(reviewer, azure ?? new SystemAzureCliRunner(), http, clock ?? TimeProvider.System)
                     .StatusAsync(owner, tenantId, subscriptionId, key, token);
+                await FactoryReconfigurationGate.RequireCapabilityAsync(result);
                 if (result.State != FactoryReservationState.Reserved || result.Foundation?.State != FactoryFoundationState.Inactive)
                     throw new ReservationStoreException(result.State == FactoryReservationState.Reserved ? FactoryReservationState.Blocked : result.State,
                         "Proven current inactive foundation and intact selected-source authority required; no Azure-only downgrade.");

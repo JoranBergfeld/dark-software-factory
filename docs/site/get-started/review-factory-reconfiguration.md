@@ -78,6 +78,12 @@ metadata-only changes. It includes exact telemetry/model/supplemental grant
 differences, preserved application assets, reused prerequisites, original
 ownership/grant history, source/destination key-version custody, and affected
 protected evidence references. Original historical receipts are not fresh
+
+Apply support is deliberately narrower than read-only review. Any CODE
+source, model topology/host, or supplemental selection change is `Blocked`
+with `UnsupportedReconfigurationCategory` before admission closes. DSF never
+reports those differences as applied or reconciles only part of their records
+or grants. Original historical receipts are not fresh
 provider ownership or cleanup authorization. In particular, an associated
 hosting resource group is not a provenance-proven owned generation.
 
@@ -113,6 +119,9 @@ closes old council admission. The result is deliberately `Partial` and
 `Quiescing`: admission closure is not a completed stop or configuration
 application.
 
+`Partial`, `Blocked`, `Failed`, `Canceled`, and `Unknown` use a nonzero CLI
+exit. Automation must inspect serialized state and durable progress fields.
+
 Inspect the retained operation without dispatch:
 
 ```bash
@@ -146,7 +155,11 @@ Application tags are never written. A response loss leaves `Reconciling`;
 repeat the same resume. Concurrent edits are `Blocked` or `Unknown`, never
 overwritten or rolled back.
 
-After `AwaitingEvidence`, run only checks affected by the reviewed change.
+Capability commands are blocked during `Quiescing` and `Reconciling`. At
+`AwaitingEvidence`, run only checks affected by the reviewed supported change.
+Application/backend/query/telemetry changes require renewed telemetry proof;
+judgment-only changes proceed to a new fully evaluated preview without
+pretending unrelated capability evidence changed.
 For example, a freshness/query/backend change uses:
 
 ```bash

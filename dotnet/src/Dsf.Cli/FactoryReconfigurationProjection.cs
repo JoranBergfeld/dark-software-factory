@@ -18,7 +18,8 @@ internal static class FactoryReconfigurationProjection
             FactoryReconfigurationOperationRecords.MaximumRecords);
         if (!records.TryGetValue(FactoryReconfigurationOperationRecords.RootKey, out var root)) return admission;
         var operation = FactoryReconfigurationOperationRecords.Read(root.Value, identity, clock.GetUtcNow());
-        if (operation.Phase < FactoryReconfigurationPhase.AwaitingEvidence) return admission;
+        if (operation.Phase < FactoryReconfigurationPhase.AwaitingEvidence)
+            return admission with { ReconfigurationPhase = operation.Phase };
         var input = FactoryReconfigurationOperationRecords.ReadInputArchive(operation,
             records.ToDictionary(p => p.Key, p => p.Value.Value, StringComparer.Ordinal)).Input;
         var owner = new OwnerReservationStore(identity.OwnerEndpoint, identity.TenantId, identity.SubscriptionId,
@@ -31,6 +32,6 @@ internal static class FactoryReconfigurationProjection
         if (plan.State != BoundaryPlanState.Reviewed || plan.RepositoryReview.Repository?.Id != identity.RepositoryId)
             throw new ReservationStoreException(FactoryReservationState.Blocked,
                 "Applied reconfiguration boundary no longer has current exact authority.");
-        return admission with { ReconfiguredPlan = plan };
+        return admission with { ReconfiguredPlan = plan, ReconfigurationPhase = operation.Phase };
     }
 }

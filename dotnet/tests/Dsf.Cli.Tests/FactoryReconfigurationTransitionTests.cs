@@ -144,6 +144,32 @@ public sealed class FactoryReconfigurationTransitionTests
         Assert.Equal(before, transport.Scenario.Arm.Product.Export());
     }
 
+    [Theory]
+    [InlineData("source")]
+    [InlineData("model")]
+    public async Task Application_blocks_reviewed_categories_without_complete_desired_state_reconciliation(string category)
+    {
+        using var transport = await PreviewEvaluationTests.ConfiguredAsync();
+        FactoryActivationTests.ConnectAudit(transport);
+        var machine = transport.Scenario.Machine;
+        var inspected = await machine.InvokeAsync("reconfigure", "--inspect");
+        var desired = inspected.Result["currentInputs"]!.DeepClone();
+        if (category == "source")
+            desired["source"]!["runtimeImage"] = "ghcr.io/example/source@sha256:" + new string('b', 64);
+        else if (category == "model")
+            desired["models"]!["validForSeconds"] = (int)desired["models"]!["validForSeconds"]! + 60;
+        var reviewed = await InvokeAsync(machine, desired);
+        Assert.Equal("Reviewed", (string?)reviewed.Result["state"]);
+        var before = transport.Scenario.Arm.Product.Export();
+
+        var applied = await InvokeAsync(machine, desired, "--apply", "--operation", Guid.NewGuid().ToString(),
+            "--approve", (string)reviewed.Result["fingerprint"]!);
+
+        Assert.Equal("Blocked", (string?)applied.Result["state"]);
+        Assert.Contains("UnsupportedReconfigurationCategory", (string?)applied.Result["detail"]);
+        Assert.Equal(before, transport.Scenario.Arm.Product.Export());
+    }
+
     [Fact]
     public async Task Resume_conditionally_applies_configuration_and_invalidates_old_evidence_and_activation()
     {
@@ -157,9 +183,23 @@ public sealed class FactoryReconfigurationTransitionTests
         var operation = Guid.NewGuid();
         var admitted = await InvokeAsync(machine, desired, "--apply", "--operation", operation.ToString(),
             "--approve", (string)reviewed.Result["fingerprint"]!);
+        Assert.NotEqual(0, admitted.Exit);
         Assert.Equal("Quiescing", (string?)admitted.Result["operation"]?["phase"]);
+        foreach (var command in new[]
+        {
+            new[] { "telemetry", "--verify-only" },
+            new[] { "models", "--verify-only" },
+            new[] { "source", "--status-only" },
+            new[] { "supplemental", "--verify-only" },
+        })
+        {
+            var blocked = await machine.InvokeAsync(command[0], command[1..]);
+            Assert.NotEqual(0, blocked.Exit);
+            Assert.Contains("Quiescing", blocked.Terminal.Output + blocked.Terminal.Error);
+        }
 
         var resumed = await InvokeAsync(machine, desired, "--resume", "--operation", operation.ToString());
+        Assert.NotEqual(0, resumed.Exit);
         Assert.True((bool?)resumed.Result["configurationApplied"] == true, resumed.Terminal.Output + resumed.Terminal.Error);
         Assert.True((string?)resumed.Result["operation"]?["phase"] == "AwaitingEvidence",
             resumed.Terminal.Output + resumed.Terminal.Error);
@@ -198,6 +238,7 @@ public sealed class FactoryReconfigurationTransitionTests
             "--approve", (string)seeded.Result["approvalFingerprint"]!);
         Assert.True(configured.Exit == 0, configured.Terminal.Output + configured.Terminal.Error);
         var capability = JsonNode.Parse(transport.Values()[ProductConfigurationKeys.FactoryPreview])!;
+        Assert.Equal(0.7, (double?)capability["configuration"]?["inputs"]?["judgment"]?["threshold"]);
         var evaluated = await machine.InvokeAsync("preview", "--evaluate",
             "--operation", (string)capability["operationId"]!,
             "--approve", (string)capability["approvalFingerprint"]!);

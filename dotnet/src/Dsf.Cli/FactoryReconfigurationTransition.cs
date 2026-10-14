@@ -67,7 +67,7 @@ internal sealed partial class FactoryReconfigurationTransition(
                     }
                     if (operation.Phase == FactoryReconfigurationPhase.AwaitingEvidence)
                     {
-                        if (!EvidenceReady(admission))
+                        if (!EvidenceReady(operation, admission))
                             return Result(FactoryReconfigurationState.Partial,
                                 "Changed capability evidence is not current. Complete only the affected source, model, supplemental and telemetry checks.");
                         var previewService = new FactoryPreviewPreparationService(reviewer!, azure, http, clock);
@@ -149,6 +149,22 @@ internal sealed partial class FactoryReconfigurationTransition(
             var review = await new FactoryReconfigurationService(reviewer, azure, http, clock).ReviewAsync(admission, input, approval, token);
             if (review.State != FactoryReconfigurationState.Reviewed || review.Fingerprint != approval)
                 return review with { State = FactoryReconfigurationState.Blocked, Detail = "Exact current reviewed change required. " + review.Detail };
+            if (review.CurrentInputs is { } currentInputs && review.DesiredInputs is { } desired)
+            {
+                var unsupported = new[]
+                {
+                    (Category: "source", Changed: FactoryModelsValidation.Hash(currentInputs.Source) != FactoryModelsValidation.Hash(desired.Source)),
+                    (Category: "model", Changed: FactoryModelsValidation.Hash(currentInputs.Models) != FactoryModelsValidation.Hash(desired.Models)),
+                    (Category: "supplemental", Changed: FactoryModelsValidation.Hash(currentInputs.Supplemental) != FactoryModelsValidation.Hash(desired.Supplemental)),
+                }.Where(item => item.Changed).Select(item => item.Category).ToArray();
+                if (unsupported.Length != 0)
+                    return review with
+                    {
+                        State = FactoryReconfigurationState.Blocked,
+                        Detail = "UnsupportedReconfigurationCategory: " + string.Join(", ", unsupported)
+                            + " desired-state replacement and exact grant reconciliation are not implemented; no transition admitted.",
+                    };
+            }
             if (!review.RenewedApprovalRequired)
                 return review with { State = FactoryReconfigurationState.Blocked,
                     Detail = "No governing change to apply; unchanged configuration or repository metadata does not invalidate activation." };
@@ -164,7 +180,12 @@ internal sealed partial class FactoryReconfigurationTransition(
             operation = new(1, operationId, identity, approval, review.CurrentRevision!, manifestRecord.ETag.ToString(), manifest,
                 FactoryReservationRecords.Hash(bytes), bytes.Length,
                 (bytes.Length + FactoryReconfigurationOperationRecords.ChunkBytes - 1) / FactoryReconfigurationOperationRecords.ChunkBytes,
-                identity.AzureActorId, clock.GetUtcNow(), FactoryReconfigurationPhase.Quiescing, operationId, 0);
+                identity.AzureActorId, clock.GetUtcNow(), FactoryReconfigurationPhase.Quiescing, operationId, 0)
+            {
+                RequiredEvidence = review.Changes.Any(c => c.Category is "application" or "backend" or "grant"
+                    or "telemetry" or "query" or "stale-query")
+                    ? ["analysis", "telemetry"] : ["analysis"],
+            };
             var initial = Serialize(operation);
             var chunks = Enumerable.Range(0, operation.InputChunks).Select(index =>
                 (Key: FactoryReconfigurationOperationRecords.InputKey(operationId, index),
@@ -242,6 +263,7 @@ internal sealed partial class FactoryReconfigurationTransition(
 
     private static string Serialize<T>(T value) => JsonSerializer.Serialize(value, FactorySourceValidation.RecordJson);
 
-    private static bool EvidenceReady(FactoryReservationResult admission)
-        => admission.Telemetry?.State == TelemetryState.Ready;
+    private static bool EvidenceReady(FactoryReconfigurationOperation operation, FactoryReservationResult admission)
+        => !operation.RequiredEvidence.Contains("telemetry", StringComparer.Ordinal)
+            || admission.Telemetry?.State == TelemetryState.Ready;
 }

@@ -105,7 +105,8 @@ internal sealed class FactoryActivationService(RepositoryAttachmentReviewer revi
                 }
                 catch (Exception rejection) when (rejection is ReservationStoreException or OperationCanceledException) { state = FactoryActivationState.Unknown; }
             }
-            return new(state, e is FactoryActivationException ? e.Message : e.ToString())
+            return new(state, e is FactoryActivationException ? e.Message
+                : "Current approval authority/effect unconfirmed; inspect original operation. No replay, activation or rollback.")
             { Review = reviewed, Approval = receipt };
         }
 

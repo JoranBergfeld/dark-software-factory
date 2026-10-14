@@ -46,6 +46,7 @@ public static partial class CliApplication
                 var productKey = Input(product) ?? "";
                 result = await new FactoryReservationService(reviewer, runner, http, time).StatusAsync(
                     owner, tenantId, subscriptionId, productKey, token);
+                await FactoryReconfigurationGate.RequireCapabilityAsync(result);
                 var service = new FactoryModelsService(runner, http, time, modelProofTransport);
                 if (parse.GetValue(verify)) result = await service.CheckAsync(result, token);
                 else if (result.Models is not null)

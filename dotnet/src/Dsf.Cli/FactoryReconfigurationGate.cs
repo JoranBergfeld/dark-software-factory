@@ -4,6 +4,15 @@ namespace Dsf.Cli;
 
 internal static class FactoryReconfigurationGate
 {
+    internal static Task RequireCapabilityAsync(FactoryReservationResult admission)
+    {
+        if (admission.ReconfigurationPhase is { } phase
+            && phase is not (FactoryReconfigurationPhase.AwaitingEvidence or FactoryReconfigurationPhase.Completed))
+            throw new PreviewCapabilityException(FactoryCharterState.Blocked,
+                "Reconfiguration phase " + phase + " does not authorize capability reconciliation.");
+        return Task.CompletedTask;
+    }
+
     internal static async Task RequireAsync(OwnerReservationStore store, FactoryReservationIdentity identity,
         TimeProvider clock, CancellationToken token, params FactoryReconfigurationPhase[] allowed)
     {

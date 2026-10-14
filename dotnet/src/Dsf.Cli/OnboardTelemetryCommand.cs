@@ -48,6 +48,7 @@ public static partial class CliApplication
                 }
                 result = await new FactoryReservationService(reviewer, azure ?? new SystemAzureCliRunner(), http, clock ?? TimeProvider.System)
                     .StatusAsync(owner, tenantId, subscriptionId, key, token);
+                await FactoryReconfigurationGate.RequireCapabilityAsync(result);
                 var service = new FactoryTelemetryService(azure ?? new SystemAzureCliRunner(), http, clock ?? TimeProvider.System);
                 if (parse.GetValue(verifyOnly)) result = await service.CheckAsync(result, token);
                 else if (result.Telemetry is null)

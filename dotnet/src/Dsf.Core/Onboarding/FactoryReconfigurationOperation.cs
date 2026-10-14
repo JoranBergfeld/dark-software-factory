@@ -16,6 +16,7 @@ public sealed record FactoryReconfigurationOperation(
     public string? AppliedManifestRevision { get; init; }
     public int RetiredRecords { get; init; }
     public int RetiredApplied { get; init; }
+    public IReadOnlyList<string> RequiredEvidence { get; init; } = [];
 }
 
 public sealed record FactoryReconfigurationInputChunk(int Protocol, Guid OperationId, int Index, string Data);
@@ -126,6 +127,8 @@ public static class FactoryReconfigurationOperationRecords
             || operation.AppliedRecords > operation.SnapshotRecords
             || operation.RetiredRecords is < 0 or > 1024 || operation.RetiredApplied < 0
             || operation.RetiredApplied > operation.RetiredRecords
+            || operation.RequiredEvidence.Any(value => value is not ("telemetry" or "analysis"))
+            || !operation.RequiredEvidence.SequenceEqual(operation.RequiredEvidence.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal))
             || operation.Phase == FactoryReconfigurationPhase.Quiescing
                 && (operation.SnapshotRecords != 0 || operation.AppliedRecords != 0 || operation.AppliedManifestRevision is not null
                     || operation.RetiredRecords != 0 || operation.RetiredApplied != 0)
