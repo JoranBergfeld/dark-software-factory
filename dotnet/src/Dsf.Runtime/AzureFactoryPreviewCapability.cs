@@ -97,7 +97,7 @@ internal sealed class AzureFactoryPreviewCapability(
 
     private async Task<ProtectedRecords> ReadAsync(TokenCredential currentCredential, CancellationToken token)
     {
-        foreach (var prefix in new[] { FactoryPause.Key, FactoryPause.HistoryPrefix })
+        foreach (var prefix in new[] { FactoryPause.Key, FactoryPause.HistoryPrefix, FactoryReconfigurationOperationRecords.Prefix })
             await foreach (var setting in new AzureConfigurationSettingsGateway(currentCredential, http)
                 .ListRecordsAsync(settings.ProductEndpoint, "*", token, prefix + "*"))
                 if (inspection is not null) _ = inspection.Include(setting.Key);

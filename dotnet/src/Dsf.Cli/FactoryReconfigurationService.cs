@@ -10,9 +10,9 @@ internal sealed partial class FactoryReconfigurationService(
     RepositoryAttachmentReviewer? reviewer, IAzureCliRunner azure, HttpClient? http, TimeProvider clock)
 {
     internal async Task<FactoryReconfigurationReview> ReviewAsync(FactoryReservationResult admission,
-        FactoryReconfigurationInputs? desired, string? reviewedFingerprint, CancellationToken token)
+        FactoryReconfigurationInputs? desired, string? reviewedFingerprint, CancellationToken token, Guid? originalTransition = null)
     {
-        try { return await ReviewCurrentAsync(admission, desired, reviewedFingerprint, token); }
+        try { return await ReviewCurrentAsync(admission, desired, reviewedFingerprint, token, originalTransition); }
         catch (Exception e) when (e is JsonException or KeyNotFoundException)
         {
             return new(FactoryReconfigurationState.Unknown,
@@ -23,7 +23,7 @@ internal sealed partial class FactoryReconfigurationService(
     }
 
     private async Task<FactoryReconfigurationReview> ReviewCurrentAsync(FactoryReservationResult admission,
-        FactoryReconfigurationInputs? desired, string? reviewedFingerprint, CancellationToken token)
+        FactoryReconfigurationInputs? desired, string? reviewedFingerprint, CancellationToken token, Guid? originalTransition)
     {
         if (admission.Identity is not { } identity || admission.Plan is null
             || admission.Foundation is not { State: FactoryFoundationState.Inactive, ProductEndpoint: { } endpoint }
@@ -48,6 +48,17 @@ internal sealed partial class FactoryReconfigurationService(
             proof.Add(record);
         }
         var graph = await new FactoryAuditService(azure, http, clock).ReadAsync(admission, token);
+        if (originalTransition is { } transition)
+        {
+            var retained = graph.Records.Single(r => r.Identity.Store == AuditStoreKind.Governance
+                && r.Identity.Key == FactoryReconfigurationOperationRecords.RootKey);
+            if (FactoryReconfigurationOperationRecords.Read(retained.Content, identity, clock.GetUtcNow()).OperationId != transition
+                || graph.Records.Any(r => r.Identity.Store == AuditStoreKind.Governance
+                    && FactoryReconfigurationOperationRecords.IsRecord(r.Identity.Key)
+                    && r.Identity.Key != FactoryReconfigurationOperationRecords.RootKey
+                    && !r.Identity.Key.StartsWith(FactoryReconfigurationOperationRecords.Prefix + transition.ToString("N") + "/", StringComparison.Ordinal)))
+                throw new JsonException();
+        }
         var values = graph.Records.Where(r => r.Identity.Store == AuditStoreKind.Governance)
             .ToDictionary(r => r.Identity.Key, r => r.Content, StringComparer.Ordinal);
         var manifest = FactoryGovernance.ReadInactiveManifest(values[ProductConfigurationKeys.FactoryManifest],
@@ -74,7 +85,9 @@ internal sealed partial class FactoryReconfigurationService(
                 models.Configuration.ValidForSeconds, models.Routes!.Select(r => r.Selection).ToArray()),
             supplemental?.Configuration?.Selection, preview.Configuration.Inputs.Judgment);
         var revisions = ownerRecords.Values.Select(r => new FactoryReconfigurationRevision("owner", r.Key, r.ETag.ToString(), FactoryAudit.TextHash(r.Value)))
-            .Concat(graph.Records.Select(r => new FactoryReconfigurationRevision(r.Identity.Store.ToString(), r.Identity.Key,
+            .Concat(graph.Records.Where(r => originalTransition is null || r.Identity.Store != AuditStoreKind.Governance
+                    || !FactoryReconfigurationOperationRecords.IsRecord(r.Identity.Key))
+                .Select(r => new FactoryReconfigurationRevision(r.Identity.Store.ToString(), r.Identity.Key,
                 r.Identity.NativeRevision, r.Identity.Sha256))).OrderBy(r => r.Store, StringComparer.Ordinal).ThenBy(r => r.Key, StringComparer.Ordinal).ToArray();
         var result = new FactoryReconfigurationReview(FactoryReconfigurationState.Inspected,
             "Authoritative current configuration and protected history, not current readiness or application approval.")

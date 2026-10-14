@@ -41,11 +41,15 @@ public sealed record FactoryReconfigurationReview(FactoryReconfigurationState St
     public FactoryKeyCustody? KeyCustody { get; init; }
     public bool DeliberatelyPaused { get; init; }
     public bool RenewedApprovalRequired { get; init; }
-    public bool HasRemoteEffects => false;
+    public bool HasRemoteEffects { get; init; }
+    public bool? AdmissionClosed { get; init; }
+    public FactoryReconfigurationOperation? Operation { get; init; }
+    public bool ConfigurationApplied => false;
+    public bool IsActivated => false;
     public bool CanApply => false;
     public string NextActor => "operator / eligible resource, source and model administrators";
-    public string NextAction => "This command only inspects and reviews; applying reconfiguration is not available. "
-        + "Do not edit retained governance, reset approvals, delete claims or replay provisioning. "
-        + "A future apply must quiesce old work, reconcile exact effects/access, retain claims without delete/recreate, "
-        + "and obtain renewed evidence, full preview and explicit activation without clearing deliberate pause.";
+    public string NextAction => Operation is not null
+        ? "Resume only this original operation with its exact complete input. Inspect admitted and issued work; old admission remains closed "
+            + "until exact effects, access and configuration are reconciled, renewed evidence and preview complete, and activation is explicitly approved."
+        : "Review the exact current fingerprint before --apply. Do not edit retained governance, reset approvals, delete claims or replay provisioning.";
 }

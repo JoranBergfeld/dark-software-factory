@@ -31,12 +31,14 @@ internal sealed class FactorySourceAccess(FactoryHostSettings settings, TokenCre
     internal async Task RequireOperatorWorkAsync(CancellationToken token)
     {
         var gateway = new AzureConfigurationSettingsGateway(Credential, http);
-        foreach (var prefix in new[] { FactoryPause.Key, FactoryPause.HistoryPrefix, FactoryPromotion.Prefix })
+        foreach (var prefix in new[] { FactoryPause.Key, FactoryPause.HistoryPrefix, FactoryPromotion.Prefix, FactoryReconfigurationOperationRecords.Prefix })
             await foreach (var record in gateway.ListRecordsAsync(settings.ProductEndpoint, "*", token, prefix + "*"))
             {
                 if (!record.Key.StartsWith(prefix, StringComparison.Ordinal)) throw new JsonException();
                 throw new SourceAcquisitionException(SourceState.Blocked, prefix == FactoryPromotion.Prefix
                     ? "PromotedSourceWorkRequiresIndexedDecision; use the admitted run/sweep workflow, not unindexed acquire/infer."
+                    : prefix == FactoryReconfigurationOperationRecords.Prefix
+                        ? "ReconfigurationAdmissionClosed; old source work is not authorized by a reviewed target generation."
                     : "DeliberateSourceAdmissionClosed; retained evidence is read-only, not work authorization.");
             }
     }

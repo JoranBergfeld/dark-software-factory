@@ -94,6 +94,33 @@ public static class FactoryAudit
             for (var i = 0; i < pause.ReviewedManifest.PlanChunks; i++)
                 Link(history, Require(AuditStoreKind.Governance, ProductConfigurationKeys.FactoryPlanChunk(i)));
         }
+        var reconfigurationValues = values.Where(p => FactoryReconfigurationOperationRecords.IsRecord(p.Key)).ToDictionary();
+        if (reconfigurationValues.Count != 0)
+        {
+            var root = Require(AuditStoreKind.Governance, FactoryReconfigurationOperationRecords.RootKey);
+            var operation = FactoryReconfigurationOperationRecords.Read(root.Content, manifest.Identity, now);
+            if (operation.ReviewedManifest != manifest || operation.ManifestRevision !=
+                Require(AuditStoreKind.Governance, ProductConfigurationKeys.FactoryManifest).Identity.NativeRevision)
+                throw new JsonException("Reviewed reconfiguration manifest differs.");
+            var manifestRecord = Require(AuditStoreKind.Governance, ProductConfigurationKeys.FactoryManifest);
+            Link(root, manifestRecord);
+            if (operation.ConfirmedChunks == operation.InputChunks)
+            {
+                var archive = FactoryReconfigurationOperationRecords.ValidateArchive(operation, reconfigurationValues);
+                if (reconfigurationValues.Count != archive.Count + 1)
+                    throw new JsonException("Unexpected reconfiguration operation record.");
+                foreach (var key in archive) Link(root, Require(AuditStoreKind.Governance, key));
+            }
+            else
+            {
+                var operationPrefix = FactoryReconfigurationOperationRecords.Prefix + operation.OperationId.ToString("N") + "/";
+                if (reconfigurationValues.Keys.Any(k => k != root.Identity.Key
+                    && !k.StartsWith(operationPrefix, StringComparison.Ordinal)))
+                    throw new JsonException("Unexpected reconfiguration operation record.");
+                foreach (var key in reconfigurationValues.Keys.Where(k => k != root.Identity.Key))
+                    Link(root, Require(AuditStoreKind.Governance, key));
+            }
+        }
         if (manifest.GitHubAuthorityOperationId is not null || values.ContainsKey(ProductConfigurationKeys.FactoryGitHubAuthority))
         {
             var github = FactoryGitHubAuthorityValidation.ReadPreparation(manifest, values);

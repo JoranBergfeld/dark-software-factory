@@ -1,10 +1,11 @@
 # Review changes to retained factory inputs
 
-`dsf onboard decide reconfigure` provides **read-only inspection and change
-review** for a retained Decide factory. Applying reconfiguration is **not yet
-available**. `Reviewed`, a matching fingerprint, and `canApply: false` do not
-close live admission, change configuration, release claims, replace grants,
-renew evidence, or approve activation.
+`dsf onboard decide reconfigure` provides read-only inspection and exact
+change review for a retained Decide factory. It can also conditionally admit
+the reviewed transition. Admission first closes old work and durably retains
+the original review and complete desired input. It does not claim that work
+has stopped, configuration changed, claims or grants were reconciled, renewed
+evidence passed, or activation was approved.
 
 The command reads the trusted owner reservation, product-native reviewed
 plan, retained capability records and protected audit reference graph. A
@@ -80,7 +81,7 @@ protected evidence references. Original historical receipts are not fresh
 provider ownership or cleanup authorization. In particular, an associated
 hosting resource group is not a provenance-proven owned generation.
 
-To reject stale replay, repeat the complete input with:
+To reject stale review replay, repeat the complete input with:
 
 ```text
 --reviewed-fingerprint EXACT_CURRENT_REVIEW_FINGERPRINT
@@ -88,10 +89,60 @@ To reject stale replay, repeat the complete input with:
 
 The fingerprint binds authoritative native revisions, desired inputs and
 observed prerequisites. Changed claims, approval/evidence, configuration or
-pause invalidate it. It is **not** application approval: there is no
-`--approve`, `--apply`, force, rollback or generic-yes path.
+pause invalidate it.
 Redirected input and `--json` never prompt; interactive terminals may prompt
 for missing locators but still require an explicit inspection/input mode.
+
+## Admit and recover the transition
+
+After reviewing the exact current result, choose a new operation GUID and
+pass the review fingerprint as explicit application approval:
+
+```bash
+dsf onboard decide reconfigure \
+  --owner-appconfig-endpoint https://OWNER.azconfig.io \
+  --product PRODUCT --tenant TENANT_GUID --subscription SUBSCRIPTION_GUID \
+  --input desired-inputs.json \
+  --apply --operation OPERATION_GUID --approve EXACT_CURRENT_REVIEW_FINGERPRINT \
+  --json
+```
+
+`--approve yes`, a stale fingerprint, incomplete input, or changed authority
+is blocked before admission closes. The first conditional coordinator write
+closes old council admission. The result is deliberately `Partial` and
+`Quiescing`: admission closure is not a completed stop or configuration
+application.
+
+Inspect the retained operation without dispatch:
+
+```bash
+dsf onboard decide reconfigure \
+  --owner-appconfig-endpoint https://OWNER.azconfig.io \
+  --product PRODUCT --tenant TENANT_GUID --subscription SUBSCRIPTION_GUID \
+  --status --operation OPERATION_GUID --json
+```
+
+If admission was interrupted while archiving input, recover only that
+operation:
+
+```bash
+dsf onboard decide reconfigure \
+  --owner-appconfig-endpoint https://OWNER.azconfig.io \
+  --product PRODUCT --tenant TENANT_GUID --subscription SUBSCRIPTION_GUID \
+  --input desired-inputs.json \
+  --resume --operation OPERATION_GUID --json
+```
+
+Omit `--input` only when the retained archive is already complete. Repair
+bytes must exactly match the admitted input hash and current review. A
+missing coordinator is `Unknown`; a competing operation is `Blocked`.
+Recovery never creates a replacement transition, reopens old work, rolls
+back, or silently resumes the previous configuration.
+
+While any transition record survives, CLI and hosted runtime admission,
+source acquisition, preview evaluation, publication, and activation reject
+old authority. Operators must inspect admitted and issued effects and
+reconcile the original operation. Do not delete transition records manually.
 
 ## Identity and operational limits
 
@@ -102,15 +153,12 @@ for missing locators but still require an explicit inspection/input mode.
 - Changed App/installation permissions, installation scope, account or
   operator require eligible GitHub administrator review. No old permission
   record is edited to simulate consent.
-- The review does not acquire claims, mutate tags, reconcile running work,
+- Read-only review does not acquire claims, mutate tags, reconcile running work,
   read supplemental secret values, query telemetry, call models or evaluate
   a new council preview. Source access, effective grants, provider mutation
   safety, renewed analysis and full evaluation are not proven by this diff.
-- Existing live admission is unchanged. Request [deliberate pause](prepare-council-preview.md)
-  separately when needed; inspection preserves it and never claims issued
-  work has drained.
+- Inspection leaves live admission unchanged. Applying creates a separate
+  durable admission-closing transition; it never claims issued work drained.
 - Original approvals, evidence and create-once publication records remain
-  unchanged. Do not manually delete claims or restart provisioning to apply
-  this plan. Safe staged application, retained claim generations, interrupted
-  transition recovery and explicit renewed activation remain required
-  before the full reconfiguration lifecycle can be used.
+  audit history, not authority for changed governing inputs. Do not manually
+  delete claims or restart provisioning.

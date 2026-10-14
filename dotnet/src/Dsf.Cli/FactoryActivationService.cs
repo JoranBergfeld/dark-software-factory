@@ -156,6 +156,8 @@ internal sealed class FactoryActivationService(RepositoryAttachmentReviewer revi
         {
             FactoryPause.RequireAdmissionOpen((await store.ReadNamespaceAsync(FactoryPause.Key, token)).Keys);
             FactoryPause.RequireAdmissionOpen((await store.ReadNamespaceAsync(FactoryPause.HistoryPrefix, token, maximumRecords: 128)).Keys);
+            FactoryPause.RequireAdmissionOpen((await store.ReadNamespaceAsync(FactoryReconfigurationOperationRecords.Prefix, token,
+                FactoryReconfigurationOperationRecords.MaximumRecords)).Keys);
         }
         catch (PreviewCapabilityException e)
         { throw new FactoryActivationException(FactoryActivationState.Blocked, e.Message + " Approval never clears pause."); }

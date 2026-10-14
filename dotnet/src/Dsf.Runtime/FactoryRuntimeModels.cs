@@ -38,7 +38,7 @@ internal static class FactoryRuntimeModels
                 || string.IsNullOrEmpty(record.ETag.ToString()) || !records.TryAdd(record.Key, record))
                 throw new JsonException("Bounded original model governance required.");
         }
-        foreach (var prefix in new[] { FactoryPause.Key, FactoryPause.HistoryPrefix, FactoryPromotion.Prefix })
+        foreach (var prefix in new[] { FactoryPause.Key, FactoryPause.HistoryPrefix, FactoryPromotion.Prefix, FactoryReconfigurationOperationRecords.Prefix })
         {
             var seen = new HashSet<string>(StringComparer.Ordinal);
             await foreach (var record in gateway.ListRecordsAsync(endpoint, "*", token, prefix + "*"))

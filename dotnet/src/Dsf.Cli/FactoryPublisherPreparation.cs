@@ -196,6 +196,8 @@ internal sealed partial class FactoryPreviewPreparationService
             {
                 FactoryPause.RequireAdmissionOpen((await store.ReadNamespaceAsync(FactoryPause.Key, token)).Keys);
                 FactoryPause.RequireAdmissionOpen((await store.ReadNamespaceAsync(FactoryPause.HistoryPrefix, token, maximumRecords: 128)).Keys);
+                FactoryPause.RequireAdmissionOpen((await store.ReadNamespaceAsync(FactoryReconfigurationOperationRecords.Prefix, token,
+                    FactoryReconfigurationOperationRecords.MaximumRecords)).Keys);
                 var currentAuthority = await store.ReadFactoryAuthorityAsync(token);
                 var revision = FactoryModelsValidation.Hash(currentAuthority.Values.OrderBy(r => r.Key, StringComparer.Ordinal)
                     .Select(r => new AuditRecordIdentity(plan!.Deployment.Manifest.Identity.FactoryId, AuditStoreKind.Governance,

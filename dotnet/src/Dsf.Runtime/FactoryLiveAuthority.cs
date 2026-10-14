@@ -118,7 +118,7 @@ internal sealed class FactoryLiveAuthority(FactoryHostSettings settings, Runtime
     {
         var result = new Dictionary<string, ConfigurationSetting>(StringComparer.Ordinal);
         var gateway = new AzureConfigurationSettingsGateway(credential, http);
-        foreach (var prefix in new[] { FactoryPause.Key, FactoryPause.HistoryPrefix })
+        foreach (var prefix in new[] { FactoryPause.Key, FactoryPause.HistoryPrefix, FactoryReconfigurationOperationRecords.Prefix })
             await foreach (var record in gateway.ListRecordsAsync(settings.ProductEndpoint, "*", token, prefix + "*"))
                 if (inspection is not null) _ = inspection.Include(record.Key);
                 else RuntimeWorkflow.EnsureCouncilAdmissionOpen([record.Key]);

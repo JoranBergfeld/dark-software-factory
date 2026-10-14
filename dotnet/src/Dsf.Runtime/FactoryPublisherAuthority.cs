@@ -149,7 +149,7 @@ internal sealed class FactoryPublisherAuthority(FactoryHostSettings settings, bo
     private async Task<Dictionary<string, ConfigurationSetting>> ReadAsync(CancellationToken token)
     {
         var gateway = new AzureConfigurationSettingsGateway(credential, http);
-        foreach (var prefix in new[] { FactoryPause.Key, FactoryPause.HistoryPrefix })
+        foreach (var prefix in new[] { FactoryPause.Key, FactoryPause.HistoryPrefix, FactoryReconfigurationOperationRecords.Prefix })
             await foreach (var record in gateway.ListRecordsAsync(settings.ProductEndpoint, "*", token, prefix + "*"))
                 if (inspection is not null) _ = inspection.Include(record.Key);
                 else FactoryPause.RequireAdmissionOpen([record.Key]);

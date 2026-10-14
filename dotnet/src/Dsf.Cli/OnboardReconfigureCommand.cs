@@ -9,7 +9,7 @@ public static partial class CliApplication
     private static Command BuildReconfigureCommand(ICliTerminal terminal, RepositoryAttachmentReviewer? reviewer,
         IAzureCliRunner? azure, HttpClient? http, TimeProvider? clock)
     {
-        var command = new Command("reconfigure", "read-only retained factory inputs and exact change diff; applying changes is not yet available");
+        var command = new Command("reconfigure", "review an exact retained-factory change and admit or recover its non-publishing transition");
         var endpoint = StringOption("--owner-appconfig-endpoint", "trusted owner endpoint");
         var product = StringOption("--product", "retained product");
         var tenant = StringOption("--tenant", "retained tenant");
@@ -17,8 +17,13 @@ public static partial class CliApplication
         var inspect = BoolOption("--inspect", "read complete authoritative current inputs, revisions and protected references");
         var input = StringOption("--input", "complete version-1 desired-input JSON file; explicit null removes all supplemental sources");
         var fingerprint = StringOption("--reviewed-fingerprint", "require this exact current read-only review; never approves application");
+        var apply = BoolOption("--apply", "conditionally admit the exact reviewed transition and close old work");
+        var status = BoolOption("--status", "inspect the original transition without dispatch");
+        var resume = BoolOption("--resume", "recover only the original reviewed transition; incomplete archives require exact original input");
+        var operation = StringOption("--operation", "explicit original reconfiguration operation GUID");
+        var approve = StringOption("--approve", "exact current change fingerprint; never yes");
         var json = BoolOption("--json", "structured nonsecret review; never prompt");
-        AddOptions(command, endpoint, product, tenant, subscription, inspect, input, fingerprint, json);
+        AddOptions(command, endpoint, product, tenant, subscription, inspect, input, fingerprint, apply, status, resume, operation, approve, json);
         command.SetAction(async (parse, token) =>
         {
             FactoryReconfigurationReview result;
@@ -27,7 +32,19 @@ public static partial class CliApplication
                 var inspection = parse.GetValue(inspect);
                 var path = parse.GetValue(input);
                 var pin = parse.GetValue(fingerprint);
-                if (inspection == !string.IsNullOrWhiteSpace(path) || inspection && pin is not null
+                var applying = parse.GetValue(apply);
+                var observing = parse.GetValue(status);
+                var resuming = parse.GetValue(resume);
+                var operationValue = parse.GetValue(operation);
+                var approval = parse.GetValue(approve);
+                var operationId = Guid.Empty;
+                if ((observing ? inspection || !string.IsNullOrWhiteSpace(path) || applying || resuming
+                        : resuming ? inspection || applying : inspection == !string.IsNullOrWhiteSpace(path))
+                    || inspection && pin is not null
+                    || (applying || observing || resuming) && (!Guid.TryParse(operationValue, out operationId) || operationId == Guid.Empty)
+                    || !applying && approval is not null || !applying && !observing && !resuming && operationValue is not null
+                    || applying && (inspection || approval is null || !FactorySourceValidation.Hash(approval) || pin is not null)
+                    || (resuming || observing) && pin is not null
                     || pin is not null && !FactorySourceValidation.Hash(pin))
                     throw new ReservationStoreException(FactoryReservationState.Blocked,
                         "Use exactly --inspect or --input FILE. Replay requires a complete exact --reviewed-fingerprint, never yes or approval.");
@@ -36,7 +53,7 @@ public static partial class CliApplication
                 var subscriptionId = BoundarySelectionInput.GuidValue(Required(subscription), "--subscription");
                 var productKey = BoundarySelectionInput.Name(Required(product), "--product");
                 FactoryReconfigurationInputs? desired = null;
-                if (!inspection)
+                if (!inspection && !observing && !string.IsNullOrWhiteSpace(path))
                 {
                     if (new FileInfo(path!).Length > FactoryReservationRecords.MaxPlanBytes)
                         throw new ReservationStoreException(FactoryReservationState.Blocked, "Complete desired input exceeds 1 MiB; no truncation.");
@@ -47,7 +64,10 @@ public static partial class CliApplication
                 var time = clock ?? TimeProvider.System;
                 var admission = await new FactoryReservationService(reviewer, runner, http, time)
                     .StatusAsync(owner, tenantId, subscriptionId, productKey, token);
-                result = await new FactoryReconfigurationService(reviewer, runner, http, time).ReviewAsync(admission, desired, pin, token);
+                result = applying || observing || resuming
+                    ? await new FactoryReconfigurationTransition(reviewer, runner, http, time)
+                        .ExecuteAsync(admission, desired, operationId, approval, observing, resuming, token)
+                    : await new FactoryReconfigurationService(reviewer, runner, http, time).ReviewAsync(admission, desired, pin, token);
             }
             catch (ReservationStoreException e) { result = new(Enum.Parse<FactoryReconfigurationState>(e.State.ToString()), e.Message); }
             catch (FactoryAuditException e) { result = new(FactoryReconfigurationState.Unknown, "Protected evidence closure unavailable: " + e.Message); }
@@ -62,7 +82,9 @@ public static partial class CliApplication
             catch (Exception e) when (e is HttpRequestException or OwnerReservationStore.AuthenticationFailedException)
             { result = new(FactoryReconfigurationState.Unknown, "Current authority unavailable; no fallback, changes or release."); }
             if (!parse.GetValue(json))
-                terminal.WriteLine("[dsf] Read-only reconfiguration review. No application, claim, grant, approval or workload changes.");
+                terminal.WriteLine(result.HasRemoteEffects
+                    ? "[dsf] Reconfiguration transition dispatched. Old admission remains closed; inspect the original operation."
+                    : "[dsf] Reconfiguration inspection/review. No application, claim, grant, approval or workload changes.");
             terminal.WriteLine(JsonSerializer.Serialize(result, ReviewJson));
             return result.State is FactoryReconfigurationState.Inspected or FactoryReconfigurationState.Reviewed ? Success
                 : result.State == FactoryReconfigurationState.Canceled ? CanceledExitCode : Failure;
