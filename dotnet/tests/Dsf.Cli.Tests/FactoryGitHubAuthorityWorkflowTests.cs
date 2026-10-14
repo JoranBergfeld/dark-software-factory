@@ -905,6 +905,13 @@ public sealed class FactoryGitHubAuthorityWorkflowTests
                 return new(HttpStatusCode.NoContent);
             }
             if (request.RequestUri.Host.EndsWith(".vault.azure.net", StringComparison.Ordinal)
+                && path == "/deletedsecrets/github-app-private-key/recover")
+            {
+                Assert.Equal(HttpMethod.Post, request.Method);
+                DeletedKeyVersions.Clear();
+                return Reply(new JsonObject { ["recovered"] = true });
+            }
+            if (request.RequestUri.Host.EndsWith(".vault.azure.net", StringComparison.Ordinal)
                 && path.StartsWith("/secrets/github-app-private-key/", StringComparison.Ordinal))
             {
                 var version = request.RequestUri.GetLeftPart(UriPartial.Path);

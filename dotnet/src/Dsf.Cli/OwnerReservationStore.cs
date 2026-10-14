@@ -268,6 +268,7 @@ internal sealed class OwnerReservationStore : IFactoryCharterEvidenceReader
                 throw new ReservationStoreException(FactoryReservationState.Unknown,
                     "Conditional claim deletion was not confirmed absent.");
         }
+
         catch (RequestFailedException e) when (e.Status is 401 or 403)
         {
             throw new ReservationStoreException(FactoryReservationState.Blocked,
@@ -286,6 +287,68 @@ internal sealed class OwnerReservationStore : IFactoryCharterEvidenceReader
         {
             throw new ReservationStoreException(FactoryReservationState.Unknown,
                 "Owner claim release response uncertain; inspect exact claim, never retry blindly.");
+        }
+    }
+
+    internal async Task DeleteReattachedOffboardingRootAsync(
+        ConfigurationSetting expected, FactoryOffboardingRequest request,
+        FactoryReservationIdentity identity, CancellationToken token)
+    {
+        if (expected.Key != FactoryOffboarding.Key || expected.Label is not null
+            || FactoryOffboarding.Read(expected.Value, identity) != request)
+            throw new ReservationStoreException(FactoryReservationState.Blocked,
+                "Only exact retained offboarding root may be superseded by reattachment.");
+        try
+        {
+            var response = await client.DeleteConfigurationSettingAsync(expected, onlyIfUnchanged: true,
+                cancellationToken: token);
+            if (response.Status is not (200 or 204) || await ReadAsync(expected.Key, token) is not null)
+                throw new ReservationStoreException(FactoryReservationState.Unknown,
+                    "Conditional offboarding-root retirement unconfirmed.");
+        }
+
+        catch (RequestFailedException e) when (e.Status is 401 or 403 or 409 or 412)
+        {
+            throw new ReservationStoreException(FactoryReservationState.Blocked,
+                "Exact offboarding root changed or cannot be conditionally superseded.");
+        }
+        catch (Exception e) when (e is RequestFailedException or HttpRequestException or OperationCanceledException)
+        {
+            throw new ReservationStoreException(FactoryReservationState.Unknown,
+                "Offboarding-root retirement response uncertain; inspect original reattachment.");
+        }
+    }
+
+    internal async Task DeleteReattachmentGenerationAsync(ConfigurationSetting expected, CancellationToken token)
+    {
+        var permitted = expected.Key.StartsWith(ProductConfigurationKeys.FactoryPreview, StringComparison.Ordinal)
+            || expected.Key.StartsWith(FactoryPreviewPreparation.Namespace, StringComparison.Ordinal)
+            || expected.Key.StartsWith(FactoryPreviewPublication.Namespace, StringComparison.Ordinal)
+            || expected.Key.StartsWith(FactoryActivation.Prefix, StringComparison.Ordinal)
+            || expected.Key.StartsWith(FactoryLive.Prefix, StringComparison.Ordinal)
+            || expected.Key.StartsWith(FactoryPublisher.Prefix, StringComparison.Ordinal)
+            || expected.Key.StartsWith(FactoryPromotion.Prefix, StringComparison.Ordinal)
+            || expected.Key.StartsWith(FactoryOffboarding.HistoryPrefix, StringComparison.Ordinal);
+        if (!permitted || expected.Label is not null || expected.ETag.ToString().Length == 0)
+            throw new ReservationStoreException(FactoryReservationState.Blocked,
+                "Only exact stale preview and activation-generation records may be retired for reattachment.");
+        try
+        {
+            var response = await client.DeleteConfigurationSettingAsync(expected, onlyIfUnchanged: true,
+                cancellationToken: token);
+            if (response.Status is not (200 or 204) || await ReadAsync(expected.Key, token) is not null)
+                throw new ReservationStoreException(FactoryReservationState.Unknown,
+                    "Conditional stale-generation retirement unconfirmed.");
+        }
+        catch (RequestFailedException e) when (e.Status is 401 or 403 or 409 or 412)
+        {
+            throw new ReservationStoreException(FactoryReservationState.Blocked,
+                "Stale preview or activation authority changed; no forced retirement.");
+        }
+        catch (Exception e) when (e is RequestFailedException or HttpRequestException or OperationCanceledException)
+        {
+            throw new ReservationStoreException(FactoryReservationState.Unknown,
+                "Stale-generation retirement response uncertain; inspect original reattachment.");
         }
     }
 

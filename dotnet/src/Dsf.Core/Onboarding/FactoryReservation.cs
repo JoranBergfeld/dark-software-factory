@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Dsf.Core.Onboarding;
 
 public enum FactoryReservationState { Reserved, Partial, Blocked, Failed, Canceled, Unknown }
@@ -20,6 +22,8 @@ public sealed record FactoryReservationAnchor(
     public FactoryReservationState State { get; init; } = FactoryReservationState.Partial;
     public FactoryFoundationPointer? Foundation { get; init; }
     public FactoryOffboardingPointer? Offboarding { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public FactoryReattachmentPointer? Reattachment { get; init; }
 }
 
 public sealed record FactoryReservationPlanChunk(

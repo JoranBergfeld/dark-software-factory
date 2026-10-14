@@ -64,7 +64,15 @@ internal static class FactoryReservationRecords
                                 || offboarding.RequestedAt < anchor.Identity.CreatedAt
                                 || offboarding.State == FactoryOffboardingState.Detached != (offboarding.CompletedAt is not null)
                                 || offboarding.CompletedAt is { } completed
-                                    && (completed.Offset != TimeSpan.Zero || completed < offboarding.RequestedAt)))
+                                    && (completed.Offset != TimeSpan.Zero || completed < offboarding.RequestedAt))
+                        || anchor.Reattachment is { } reattachment
+                            && (reattachment.OperationId == Guid.Empty
+                                || reattachment.State != FactoryReattachmentState.AwaitingReadiness
+                                || !IsHash(reattachment.PlanFingerprint)
+                                || string.IsNullOrWhiteSpace(reattachment.AuthorityRevision)
+                                || reattachment.RequestedAt.Offset != TimeSpan.Zero
+                                || reattachment.RequestedAt < anchor.Identity.CreatedAt)
+                        || anchor.Offboarding is not null && anchor.Reattachment is not null)
                         return false;
                     identity = anchor.Identity;
                     break;
