@@ -892,6 +892,7 @@ public sealed class FactoryGitHubAuthorityWorkflowTests
         private readonly Dictionary<string, JsonNode> resources = [];
         public void RemoveResource(string id) => Assert.True(resources.Remove(id));
         public void ChangeResource(string id, Action<JsonNode> change) => change(resources[id]);
+        public void SeedResource(string id, JsonNode resource) => resources.Add(id, resource);
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
         {
             var path = request.RequestUri!.AbsolutePath;

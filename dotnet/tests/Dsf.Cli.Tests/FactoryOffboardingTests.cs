@@ -242,8 +242,14 @@ public sealed class FactoryOffboardingTests
             RoleScope = "/subscriptions/orphan",
             Incarnation = "2026-09-15T22:00:00Z",
         };
-        scenario.Arm.Product.Seed("dsf/factory/orphan-grant", JsonSerializer.Serialize(orphan, FactoryGitHubJson.Options));
+        const string key = "dsf/factory/orphan-grant";
+        scenario.Arm.Product.Seed(key, JsonSerializer.Serialize(orphan, FactoryGitHubJson.Options));
         var reviewed = await scenario.Machine.InvokeAsync("offboard", "--operation", operation.ToString());
+        scenario.Arm.Product.BeforePut = (writeKey, _) =>
+        {
+            if (writeKey == FactoryOffboarding.Key) scenario.Arm.Product.Remove(key);
+            return Task.CompletedTask;
+        };
 
         var result = await scenario.Machine.InvokeAsync("offboard", "--operation", operation.ToString(),
             "--approve", (string)reviewed.Result["plan"]!["fingerprint"]!);
@@ -270,5 +276,114 @@ public sealed class FactoryOffboardingTests
         Assert.True((bool)result.Result["admissionClosed"]!);
         Assert.False((bool)result.Result["stopCompleted"]!);
         Assert.Contains("inspect", (string)result.Result["nextAction"]!, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Rejected_first_admission_close_write_never_reports_admission_closed()
+    {
+        using var scenario = await CharterScenario.ReadyAsync();
+        var operation = Guid.NewGuid();
+        var reviewed = await scenario.Machine.InvokeAsync("offboard", "--operation", operation.ToString());
+        scenario.Arm.Product.RejectKey = FactoryOffboarding.Key;
+
+        var result = await scenario.Machine.InvokeAsync("offboard", "--operation", operation.ToString(),
+            "--approve", (string)reviewed.Result["plan"]!["fingerprint"]!);
+
+        Assert.Equal("Unknown", (string?)result.Result["state"]);
+        Assert.False((bool)result.Result["admissionClosed"]!);
+        Assert.DoesNotContain(scenario.Arm.Product.Values(), pair => pair.Key == FactoryOffboarding.Key);
+    }
+
+    [Fact]
+    public async Task Pending_preparation_effect_blocks_detached_certification_after_admission_closes()
+    {
+        using var scenario = await CharterScenario.ReadyAsync();
+        var effect = RacingGrant(scenario, FoundationOperationState.InFlight, FoundationResourceDisposition.CreateRequested);
+        scenario.Arm.Product.Seed("dsf/factory/racing-grant", JsonSerializer.Serialize(effect, FactoryGitHubJson.Options));
+        var operation = Guid.NewGuid();
+        var reviewed = await scenario.Machine.InvokeAsync("offboard", "--operation", operation.ToString());
+
+        var result = await scenario.Machine.InvokeAsync("offboard", "--operation", operation.ToString(),
+            "--approve", (string)reviewed.Result["plan"]!["fingerprint"]!);
+
+        Assert.Equal("Partial", (string?)result.Result["state"]);
+        Assert.True((bool)result.Result["admissionClosed"]!);
+        Assert.Contains(result.Result["blockedRemovals"]!.AsArray(),
+            item => ((string)item!).Contains("pending", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(effect.Target, scenario.Previous.DeletedGrants);
+    }
+
+    [Fact]
+    public async Task Preparation_completing_during_admission_close_is_reconciled_before_detached()
+    {
+        using var scenario = await CharterScenario.ReadyAsync();
+        var effect = RacingGrant(scenario, FoundationOperationState.InFlight, FoundationResourceDisposition.CreateRequested);
+        const string key = "dsf/factory/racing-grant";
+        scenario.Arm.Product.Seed(key, JsonSerializer.Serialize(effect, FactoryGitHubJson.Options));
+        var operation = Guid.NewGuid();
+        var reviewed = await scenario.Machine.InvokeAsync("offboard", "--operation", operation.ToString());
+        Assert.Contains(effect.Target, reviewed.Result["plan"]!["proposedRemovals"]!.ToJsonString(), StringComparison.OrdinalIgnoreCase);
+        var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        scenario.Arm.Product.BeforePut = async (writeKey, _) =>
+        {
+            if (writeKey != FactoryOffboarding.Key) return;
+            scenario.Arm.Product.BeforePut = null;
+            reached.SetResult();
+            await release.Task;
+        };
+
+        var execution = scenario.Machine.InvokeAsync("offboard", "--operation", operation.ToString(),
+            "--approve", (string)reviewed.Result["plan"]!["fingerprint"]!);
+        await reached.Task;
+        var completed = effect with
+        {
+            State = FoundationOperationState.Completed,
+            Disposition = FoundationResourceDisposition.Created,
+            HttpStatus = 201,
+        };
+        scenario.Arm.Product.Change(key, _ => JsonSerializer.Serialize(completed, FactoryGitHubJson.Options));
+        scenario.Previous.SeedResource(effect.Target, new JsonObject
+        {
+            ["id"] = effect.Target,
+            ["properties"] = new JsonObject
+            {
+                ["principalId"] = effect.PrincipalId,
+                ["roleDefinitionId"] = effect.RoleDefinitionId,
+                ["scope"] = effect.RoleScope,
+                ["condition"] = null,
+                ["conditionVersion"] = null,
+                ["createdOn"] = effect.Incarnation,
+            },
+        });
+        release.SetResult();
+
+        var result = await execution;
+
+        Assert.Equal("Detached", (string?)result.Result["state"]);
+        Assert.Contains(effect.Target, scenario.Previous.DeletedGrants);
+        scenario.Reconstruct();
+        var repeated = await scenario.Machine.InvokeAsync("offboard", "--operation", operation.ToString(),
+            "--approve", (string)reviewed.Result["plan"]!["fingerprint"]!);
+        Assert.Equal("Detached", (string?)repeated.Result["state"]);
+    }
+
+    private static FoundationOperation RacingGrant(
+        CharterScenario scenario, FoundationOperationState state, FoundationResourceDisposition disposition)
+    {
+        var manifest = JsonSerializer.Deserialize<FactoryManifest>(
+            scenario.Arm.Product.Values()[ProductConfigurationKeys.FactoryManifest], FactoryGitHubJson.Options)!;
+        const string target = "/subscriptions/22222222-2222-2222-2222-222222222222/resourceGroups/widget-decide"
+            + "/providers/Microsoft.Authorization/roleAssignments/cccccccc-cccc-cccc-cccc-cccccccccccc";
+        return new(1, "racing-preparation-grant", manifest.Identity.FactoryId, Guid.NewGuid(), 0, target,
+            "2022-04-01", new string('c', 64), Guid.NewGuid(), DateTimeOffset.Parse("2026-09-15T22:00:00Z"),
+            state, disposition)
+        {
+            PrincipalId = "cccccccc-cccc-cccc-cccc-cccccccccccc",
+            RoleDefinitionId = "/subscriptions/22222222-2222-2222-2222-222222222222"
+                + "/providers/Microsoft.Authorization/roleDefinitions/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            RoleScope = "/subscriptions/22222222-2222-2222-2222-222222222222/resourceGroups/widget-decide",
+            Incarnation = "2026-09-15T22:00:00+00:00",
+        };
     }
 }

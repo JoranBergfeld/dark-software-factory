@@ -52,7 +52,7 @@ internal sealed class FactoryOffboardingService(IAzureCliRunner azure, HttpClien
             return await CompleteAsync(owner, ownerRecord, anchor, product, authority, existing.Request, existing.Plan, token);
         }
 
-        var plan = BuildPlan(identity, operation, ownerRecord.ETag.ToString(), admission, authority);
+        var plan = BuildPlan(identity, operation, AuthoritySnapshotRevision(ownerRecord.ETag.ToString(), authority), admission, authority);
         if (string.IsNullOrWhiteSpace(approval))
             return Result(FactoryOffboardingState.ReviewRequired,
                 "Scoped detach review required; no admission or cleanup effect dispatched.", plan, null, false, false);
@@ -74,12 +74,28 @@ internal sealed class FactoryOffboardingService(IAzureCliRunner azure, HttpClien
             try
             {
                 await product.WriteAsync(FactoryOffboarding.Key, value, null, token);
+            }
+            catch (ReservationStoreException)
+            {
+                var closed = await ConfirmAdmissionClosedAsync(product, value, request, identity, token);
+                return Result(FactoryOffboardingState.Unknown,
+                    closed
+                        ? "Detach admission-close response was lost but exact closure is confirmed; audit copy remains unconfirmed."
+                        : "Detach admission-close response is unconfirmed; runtime closure was not established.",
+                    plan, request, closed, false);
+            }
+            if (!await ConfirmAdmissionClosedAsync(product, value, request, identity, token))
+                return Result(FactoryOffboardingState.Unknown,
+                    "Detach admission-close readback did not confirm the exact request; runtime closure was not established.",
+                    plan, request, false, false);
+            try
+            {
                 await product.WriteAsync(FactoryOffboarding.HistoryKey(operation), value, null, token);
             }
             catch (ReservationStoreException)
             {
                 return Result(FactoryOffboardingState.Unknown,
-                    "Detach admission-close response or audit copy unconfirmed; inspect retained operation, never recreate it.",
+                    "Admission closure is confirmed but the protected detach audit copy is unconfirmed.",
                     plan, request, true, false);
             }
         }
@@ -96,6 +112,29 @@ internal sealed class FactoryOffboardingService(IAzureCliRunner azure, HttpClien
         var blocked = new List<string>();
         if (product is not null)
         {
+            IReadOnlyDictionary<string, ConfigurationSetting> postClose;
+            try
+            {
+                var first = await product.ReadFactoryAuthorityAsync(token);
+                var second = await product.ReadFactoryAuthorityAsync(token);
+                if (ExactAuthorityRevision(first) != ExactAuthorityRevision(second))
+                    return Result(FactoryOffboardingState.Unknown,
+                        "Admission is closed but product authority changed during post-close inspection; no completed detach claimed.",
+                        plan, request, true, true);
+                postClose = second;
+            }
+            catch (ReservationStoreException)
+            {
+                return Result(FactoryOffboardingState.Unknown,
+                    "Admission is closed but complete post-close product authority is unreadable.",
+                    plan, request, true, true);
+            }
+            var changed = UnapprovedAuthorityChanges(authority, postClose, plan);
+            if (changed.Count != 0)
+                blocked.AddRange(changed);
+            authority = postClose;
+            blocked.AddRange(PendingPreparationEffects(authority));
+
             var inventory = await new FactoryPauseService(azure, http, clock)
                 .InspectIssuedPublicationsAsync(new(FactoryReservationState.Reserved, "", anchor.Identity)
                 {
@@ -111,7 +150,7 @@ internal sealed class FactoryOffboardingService(IAzureCliRunner azure, HttpClien
             var cleanup = await CleanupOwnedAccessAsync(anchor.Identity, authority, token);
             removals.AddRange(cleanup.Completed);
             blocked.AddRange(cleanup.Blocked);
-            var unreconciled = PlannedGrantTargets(authority)
+            var unreconciled = PlannedGrantTargetsFromPlan(plan)
                 .Except(cleanup.ReconciledGrantTargets, StringComparer.OrdinalIgnoreCase).ToArray();
             if (unreconciled.Length != 0)
                 blocked.Add("Approved grant removals were not all reconciled as completed or blocked: "
@@ -225,6 +264,8 @@ internal sealed class FactoryOffboardingService(IAzureCliRunner azure, HttpClien
         if (product is not null && authority.TryGetValue(FactoryOffboarding.Key, out var root))
         {
             var retainedRequest = FactoryOffboarding.Read(root.Value, identity);
+            if (AuthoritySnapshotRevision("", authority) != retainedRequest.AuthorityRevision)
+                throw new JsonException("Reviewed product authority snapshot changed outside admitted effect progression.");
             var retainedPlan = BuildPlan(identity, retainedRequest.OperationId, retainedRequest.AuthorityRevision, admission, authority);
             if (retainedPlan.Fingerprint != retainedRequest.PlanFingerprint) throw new JsonException();
             return Task.FromResult<ExistingOffboarding?>(new(retainedRequest, retainedPlan));
@@ -267,10 +308,9 @@ internal sealed class FactoryOffboardingService(IAzureCliRunner azure, HttpClien
             try
             {
                 var effect = JsonSerializer.Deserialize<FoundationOperation>(record.Value, FactoryGitHubJson.Options);
-                if (effect is { State: FoundationOperationState.Completed, Disposition: FoundationResourceDisposition.Created,
-                        RoleDefinitionId: not null, PrincipalId: not null, RoleScope: not null })
-                    removals.Add($"sole-factory grant target={effect.Target}; principal={effect.PrincipalId}; "
-                        + $"role={effect.RoleDefinitionId}; scope={effect.RoleScope}; condition={effect.Condition ?? "(none)"}");
+                if (effect is { } planned && IsPlannedGrant(planned))
+                    removals.Add($"sole-factory grant target={planned.Target}; principal={planned.PrincipalId}; "
+                        + $"role={planned.RoleDefinitionId}; scope={planned.RoleScope}; condition={planned.Condition ?? "(none)"}");
             }
             catch (JsonException) { }
         }
@@ -336,6 +376,13 @@ internal sealed class FactoryOffboardingService(IAzureCliRunner azure, HttpClien
                     values, ProductConfigurationKeys.FactorySupplemental);
                 effects.AddRange(FactoryPreviewSupplementalValidation.ReadEffects(supplemental, values));
             }
+            foreach (var candidate in authority.Values)
+                try
+                {
+                    var effect = JsonSerializer.Deserialize<FoundationOperation>(candidate.Value, FactoryGitHubJson.Options);
+                    if (effect is not null) effects.Add(effect);
+                }
+                catch (JsonException) { }
             var completed = new List<string>();
             var blocked = new List<string>();
             var reconciled = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -361,23 +408,157 @@ internal sealed class FactoryOffboardingService(IAzureCliRunner azure, HttpClien
         }
     }
 
-    private static IReadOnlySet<string> PlannedGrantTargets(
+    private static bool IsPlannedGrant(FoundationOperation? effect) =>
+        effect is
+        {
+            State: FoundationOperationState.Intent or FoundationOperationState.InFlight or FoundationOperationState.Completed,
+            Disposition: FoundationResourceDisposition.CreateRequested or FoundationResourceDisposition.Created,
+            RoleDefinitionId: not null, PrincipalId: not null, RoleScope: not null,
+        };
+
+    private static IReadOnlyList<string> PendingPreparationEffects(
         IReadOnlyDictionary<string, ConfigurationSetting> authority)
     {
-        var targets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var record in authority.Values)
-        {
+        var pending = new List<string>();
+        foreach (var record in RelevantAuthority(authority).Values)
             try
             {
                 var effect = JsonSerializer.Deserialize<FoundationOperation>(record.Value, FactoryGitHubJson.Options);
-                if (effect is { State: FoundationOperationState.Completed,
-                        Disposition: FoundationResourceDisposition.Created, RoleDefinitionId: not null,
-                        PrincipalId: not null, RoleScope: not null })
-                    targets.Add(effect.Target);
+                if (effect is { State: FoundationOperationState.Intent or FoundationOperationState.InFlight }
+                    || effect is { Disposition: FoundationResourceDisposition.CreateRequested })
+                    pending.Add($"Pending or dispatched preparation effect remains unresolved at {effect.Target}.");
             }
             catch (JsonException) { }
+        return pending;
+    }
+
+    private static IReadOnlyList<string> UnapprovedAuthorityChanges(
+        IReadOnlyDictionary<string, ConfigurationSetting> reviewed,
+        IReadOnlyDictionary<string, ConfigurationSetting> postClose,
+        FactoryOffboardingPlan plan)
+    {
+        var before = RelevantAuthority(reviewed);
+        var after = RelevantAuthority(postClose);
+        var changes = new List<string>();
+        if (!before.Keys.Order(StringComparer.Ordinal).SequenceEqual(after.Keys.Order(StringComparer.Ordinal), StringComparer.Ordinal))
+            changes.Add("Product authority keys changed after detach review; new or removed preparation records require inspection.");
+        foreach (var key in before.Keys.Intersect(after.Keys, StringComparer.Ordinal))
+        {
+            if (before[key].Value == after[key].Value) continue;
+            try
+            {
+                var original = JsonSerializer.Deserialize<FoundationOperation>(before[key].Value, FactoryGitHubJson.Options);
+                var current = JsonSerializer.Deserialize<FoundationOperation>(after[key].Value, FactoryGitHubJson.Options);
+                if (original is not null && current is not null
+                    && SameOperationIdentity(original, current)
+                    && original.State is FoundationOperationState.Intent or FoundationOperationState.InFlight
+                    && current.State is FoundationOperationState.Completed or FoundationOperationState.Failed
+                        or FoundationOperationState.Canceled
+                    && (current.RoleDefinitionId is null || PlannedGrantTargetsFromPlan(plan).Contains(current.Target)))
+                    continue;
+            }
+            catch (JsonException) { }
+            changes.Add("Reviewed product authority record changed after admission closure: " + key + ".");
         }
-        return targets;
+        return changes;
+    }
+
+    private static bool SameOperationIdentity(FoundationOperation left, FoundationOperation right) =>
+        left.SchemaVersion == right.SchemaVersion && left.Kind == right.Kind && left.FactoryId == right.FactoryId
+        && left.OperationId == right.OperationId && left.Index == right.Index && Same(left.Target, right.Target)
+        && left.ApiVersion == right.ApiVersion && left.RequestSha256 == right.RequestSha256
+        && left.ClientRequestId == right.ClientRequestId && left.StartedAt == right.StartedAt
+        && left.PrincipalId == right.PrincipalId && left.RoleDefinitionId == right.RoleDefinitionId
+        && Same(left.RoleScope, right.RoleScope) && left.Condition == right.Condition
+        && left.ConditionVersion == right.ConditionVersion;
+
+    private static IReadOnlySet<string> PlannedGrantTargetsFromPlan(FactoryOffboardingPlan plan) =>
+        plan.ProposedRemovals
+            .Select(removal =>
+            {
+                var marker = "grant target=";
+                var start = removal.IndexOf(marker, StringComparison.Ordinal);
+                if (start < 0) return null;
+                start += marker.Length;
+                var end = removal.IndexOf(';', start);
+                return end < 0 ? null : removal[start..end];
+            })
+            .Where(target => target is not null)
+            .Select(target => target!)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+    private static string AuthoritySnapshotRevision(string ownerRevision,
+        IReadOnlyDictionary<string, ConfigurationSetting> authority) =>
+        authority.Count == 0 ? ownerRevision : FactoryModelsValidation.Hash(
+            RelevantAuthority(authority).Values.OrderBy(record => record.Key, StringComparer.Ordinal)
+                .Select(NormalizedAuthorityRecord).ToArray());
+
+    private static object NormalizedAuthorityRecord(ConfigurationSetting record)
+    {
+        try
+        {
+            var effect = JsonSerializer.Deserialize<FoundationOperation>(record.Value, FactoryGitHubJson.Options);
+            if (effect is not null)
+                return new
+                {
+                    record.Key,
+                    Operation = FactoryModelsValidation.Hash(effect with
+                    {
+                        State = FoundationOperationState.Intent,
+                        Disposition = FoundationResourceDisposition.CreateRequested,
+                        HttpStatus = null,
+                        ProviderRequestId = null,
+                        ProviderCorrelationId = null,
+                        ResponseDate = null,
+                        ResourceId = null,
+                        Incarnation = null,
+                        Endpoint = null,
+                        ProviderOperationId = null,
+                        NativeRevision = null,
+                        PreviousAttempts = null,
+                    }),
+                };
+        }
+        catch (JsonException) { }
+        return new
+        {
+            record.Key,
+            ETag = record.ETag.ToString(),
+            Value = FactoryAudit.TextHash(record.Value),
+            record.ContentType,
+        };
+    }
+
+    private static string ExactAuthorityRevision(IReadOnlyDictionary<string, ConfigurationSetting> authority) =>
+        FactoryModelsValidation.Hash(RelevantAuthority(authority).Values.OrderBy(record => record.Key, StringComparer.Ordinal)
+            .Select(record => new
+            {
+                record.Key,
+                ETag = record.ETag.ToString(),
+                Value = FactoryAudit.TextHash(record.Value),
+                record.ContentType,
+            }));
+
+    private static IReadOnlyDictionary<string, ConfigurationSetting> RelevantAuthority(
+        IReadOnlyDictionary<string, ConfigurationSetting> authority) =>
+        authority.Where(pair => !FactoryOffboarding.IsStopRecord(pair.Key))
+            .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+
+    private static async Task<bool> ConfirmAdmissionClosedAsync(
+        OwnerReservationStore product, string expectedValue, FactoryOffboardingRequest expected,
+        FactoryReservationIdentity identity, CancellationToken token)
+    {
+        try
+        {
+            var root = await product.ReadAsync(FactoryOffboarding.Key, token);
+            if (root?.Value != expectedValue) return false;
+            var retained = FactoryOffboarding.Read(root.Value, identity);
+            return retained == expected;
+        }
+        catch (Exception e) when (e is ReservationStoreException or JsonException)
+        {
+            return false;
+        }
     }
 
     private static async Task<(bool Completed, string Detail)> RemoveGrantAsync(
