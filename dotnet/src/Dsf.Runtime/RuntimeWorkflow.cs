@@ -88,8 +88,22 @@ internal static partial class RuntimeWorkflow
         var envPin = env?.GetValueOrDefault(RuntimeIntegrationSettings.FactoryProfilePin);
         if (values.Keys.Any(key => key.StartsWith("dsf/factory/", StringComparison.Ordinal)))
         {
-            try { EnsureCouncilAdmissionOpen(values.Keys); }
-            catch (PreviewCapabilityException e) { throw new RuntimeVerbException(e.Message); }
+            try
+            {
+                EnsureCouncilAdmissionOpen(values.Keys.Where(key =>
+                    !key.StartsWith(FactoryReconfigurationOperationRecords.Prefix, StringComparison.Ordinal)));
+                var transition = values
+                    .Where(pair => pair.Key.StartsWith(FactoryReconfigurationOperationRecords.Prefix, StringComparison.Ordinal))
+                    .ToDictionary();
+                if (onboardingForwarding)
+                    FactoryReconfigurationOperationRecords.RequireAdmissionOpen(transition, dependencies.PreviewClock.GetUtcNow(),
+                        FactoryReconfigurationPhase.AwaitingEvidence, FactoryReconfigurationPhase.AwaitingActivation,
+                        FactoryReconfigurationPhase.Completed);
+                else FactoryReconfigurationOperationRecords.RequireAdmissionOpen(
+                    transition, dependencies.PreviewClock.GetUtcNow());
+            }
+            catch (Exception e) when (e is PreviewCapabilityException or JsonException)
+            { throw new RuntimeVerbException(e.Message); }
             try
             {
                 var manifest = FactoryGovernance.ReadInactiveManifest(

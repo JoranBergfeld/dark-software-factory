@@ -96,8 +96,8 @@ internal sealed partial class FactoryPreviewPreparationService
         var store = Store(admission);
         FactoryPause.RequireAdmissionOpen((await store.ReadNamespaceAsync(FactoryPause.Key, token)).Keys);
         FactoryPause.RequireAdmissionOpen((await store.ReadNamespaceAsync(FactoryPause.HistoryPrefix, token, maximumRecords: 128)).Keys);
-        FactoryPause.RequireAdmissionOpen((await store.ReadNamespaceAsync(FactoryReconfigurationOperationRecords.Prefix, token,
-            FactoryReconfigurationOperationRecords.MaximumRecords)).Keys);
+        await FactoryReconfigurationGate.RequireAsync(store, admission.Identity!, clock, token,
+            FactoryReconfigurationPhase.AwaitingEvidence, FactoryReconfigurationPhase.AwaitingActivation);
         var preparation = await ReadJournalAsync(admission, store, token) ?? throw Unknown("ConfirmedNativePreparationRequired");
         var values = (await store.ReadFactoryAuthorityAsync(token)).ToDictionary(p => p.Key, p => p.Value.Value);
         var manifest = Parse<FactoryManifest>(values[ProductConfigurationKeys.FactoryManifest]);

@@ -33,6 +33,8 @@ public sealed record FactoryPreviewConfiguration(
     public string? ExecutionRevision { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? PreparationRevision { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? PreparationOperationId { get; init; }
 }
 
 public sealed record FactoryPreviewCapability(
@@ -157,17 +159,18 @@ public static class FactoryPreviewValidation
         var group = Group(models);
         var account = Account(group, manifest.Identity.FactoryId);
         var role = SqlRole(account, manifest.Identity.FactoryId);
+        var preparationOperation = configuration?.PreparationOperationId ?? operation;
         return new[] { (Container(account, manifest.Identity.ProductKey, PreviewContainer), "2024-11-15"), (role, "2024-11-15") }
             .Concat(new[] { "runs", PreviewContainer }.Select(name => (SqlAssignment(account, models.Bindings![0].PrincipalId!,
                 SqlScope(account, manifest.Identity.ProductKey, name), role), "2024-11-15")))
-            .Concat(MetadataScopes(manifest, models, github, operation, configuration).Select(scope =>
+            .Concat(MetadataScopes(manifest, models, github, preparationOperation, configuration).Select(scope =>
                 (FactoryModelsValidation.Grant(scope, metadataRole, models.Bindings![0].PrincipalId!, "").Target, "2022-04-01")))
             .Concat(HostKinds(configuration).SelectMany(kind =>
             {
                 var host = HostTarget(group, manifest.Identity.FactoryId, kind);
                 return new[] { (host, "2025-01-01"), (host + "/authconfigs/current", "2025-01-01") };
             })).Concat(configuration?.Telemetry is not { } telemetry ? [] :
-                FactoryPreviewTelemetryValidation.MetadataScopes(manifest, models, operation, telemetry).Select(scope =>
+                FactoryPreviewTelemetryValidation.MetadataScopes(manifest, models, preparationOperation, telemetry).Select(scope =>
                     (FactoryModelsValidation.Grant(scope, telemetry.MetadataRoleDefinitionId, telemetry.SourceIdentity.PrincipalId!, "").Target, "2022-04-01")))
             .Concat(configuration?.Supplemental?.Hosts.Select(h =>
                 (FactoryModelsValidation.Grant(h.MetadataScope, h.MetadataRoleDefinitionId, h.PrincipalId, "").Target, "2022-04-01")) ?? []).ToArray();

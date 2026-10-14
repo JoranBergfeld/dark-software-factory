@@ -268,7 +268,8 @@ internal sealed partial class FactorySourceRefreshWorkflow(FactoryHostSettings s
     private async Task ReadBasisAsync(CancellationToken token)
     {
         await source.CheckAsync(token);
-        var records = await FactoryRuntimeModels.ReadPromotionRecordsAsync(settings.ProductEndpoint, source.Credential, http, token);
+        var records = await FactoryRuntimeModels.ReadPromotionRecordsAsync(
+            settings.ProductEndpoint, source.Credential, http, clock.GetUtcNow(), token);
         _ = FactoryRuntimeModels.RequirePromotion(source.Manifest, settings.ProductEndpoint, records, clock.GetUtcNow());
         adoption = await FactoryCharterAdoptionReader.ReadAsync(source.Manifest.Identity.FactoryId,
             new AzureCharterEvidenceReader(settings.ProductEndpoint, source.Credential, http), token)
@@ -288,7 +289,8 @@ internal sealed partial class FactorySourceRefreshWorkflow(FactoryHostSettings s
 
     private async Task FenceWorkAsync(CancellationToken token)
     {
-        var records = await FactoryRuntimeModels.ReadPromotionRecordsAsync(settings.ProductEndpoint, source.Credential, http, token);
+        var records = await FactoryRuntimeModels.ReadPromotionRecordsAsync(
+            settings.ProductEndpoint, source.Credential, http, clock.GetUtcNow(), token);
         if (GovernanceRevision(records) != binding.GovernanceRevision)
             throw Denied(SourceRefreshState.Blocked, "CurrentSourceRefreshAdmissionClosedOrChanged");
         var current = await store.ReadAsync(FactorySourceRefresh.CurrentKey, token);

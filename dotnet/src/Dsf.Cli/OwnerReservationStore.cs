@@ -188,6 +188,57 @@ internal sealed class OwnerReservationStore : IFactoryCharterEvidenceReader
         { throw new FactoryAuditException(FactoryAuditState.Unknown, "Analysis deletion response unconfirmed; original dispatched effect retained, no replay."); }
     }
 
+    internal async Task DeleteRetiredFactoryAuthorityAsync(ConfigurationSetting expected,
+        FactoryReconfigurationRetiredRecord retired, CancellationToken token)
+    {
+        if (expected.Label is not null || expected.Key != retired.Key || expected.ETag.ToString() != retired.ETag
+            || FactoryReservationRecords.Hash(expected.Value) != retired.Sha256
+            || !(expected.Key.StartsWith(ProductConfigurationKeys.FactoryPreview, StringComparison.Ordinal)
+                || new[] { FactoryPreviewPreparation.Namespace,
+                FactoryPreviewPublication.Namespace, FactoryActivation.Prefix, FactoryLive.Prefix,
+                FactoryPublisher.Prefix, FactoryPromotion.Prefix }
+                .Any(prefix => expected.Key == prefix || expected.Key.StartsWith(prefix + (prefix.EndsWith('/') ? "" : "/"), StringComparison.Ordinal))))
+            throw new FactoryAuditException(FactoryAuditState.Blocked,
+                "Only exact archived preview and activation authority may be retired.");
+        try
+        {
+            var response = await client.DeleteConfigurationSettingAsync(expected, onlyIfUnchanged: true, cancellationToken: token);
+            if (response.Status is not (200 or 204) || await ReadAsync(expected.Key, token) is not null)
+                throw new FactoryAuditException(FactoryAuditState.Unknown,
+                    "Conditional authority retirement unconfirmed; publication remains closed.");
+        }
+        catch (RequestFailedException e) when (e.Status is 401 or 403 or 409 or 412)
+        { throw new FactoryAuditException(FactoryAuditState.Blocked,
+            "Exact archived authority could not be conditionally retired; no forced deletion."); }
+        catch (Exception e) when (e is RequestFailedException or HttpRequestException or OperationCanceledException)
+        { throw new FactoryAuditException(FactoryAuditState.Unknown,
+            "Authority retirement response unconfirmed; inspect the original reconfiguration."); }
+    }
+
+    internal async Task DeleteReconfiguredClaimAsync(ConfigurationSetting expected,
+        FactoryReconfigurationClaimChange change, CancellationToken token)
+    {
+        if (change.AfterValue is not null || expected.Label is not null || expected.Key != change.Key
+            || expected.ETag.ToString() != change.BeforeETag
+            || FactoryReservationRecords.Hash(expected.Value) != change.BeforeSha256
+            || !expected.Key.StartsWith(ProductConfigurationKeys.OwnerOnboardingPrefix, StringComparison.Ordinal))
+            throw new ReservationStoreException(FactoryReservationState.Blocked,
+                "Only the exact reviewed removed owner claim may be released.");
+        try
+        {
+            var response = await client.DeleteConfigurationSettingAsync(expected, onlyIfUnchanged: true, cancellationToken: token);
+            if (response.Status is not (200 or 204) || await ReadAsync(expected.Key, token) is not null)
+                throw new ReservationStoreException(FactoryReservationState.Unknown,
+                    "Conditional owner claim release unconfirmed; no retry or takeover.");
+        }
+        catch (RequestFailedException e) when (e.Status is 401 or 403 or 409 or 412)
+        { throw new ReservationStoreException(FactoryReservationState.Blocked,
+            "Exact reviewed owner claim could not be conditionally released."); }
+        catch (Exception e) when (e is RequestFailedException or HttpRequestException or OperationCanceledException)
+        { throw new ReservationStoreException(FactoryReservationState.Unknown,
+            "Owner claim release response unconfirmed; inspect the original reconfiguration."); }
+    }
+
     private static void VerifyRecord(ConfigurationSetting record, string key)
     {
         if (record.Key != key || record.Label is not null || string.IsNullOrEmpty(record.ETag.ToString()) || record.Value is null)

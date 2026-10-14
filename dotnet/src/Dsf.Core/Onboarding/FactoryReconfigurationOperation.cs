@@ -14,6 +14,8 @@ public sealed record FactoryReconfigurationOperation(
     public int SnapshotRecords { get; init; }
     public int AppliedRecords { get; init; }
     public string? AppliedManifestRevision { get; init; }
+    public int RetiredRecords { get; init; }
+    public int RetiredApplied { get; init; }
 }
 
 public sealed record FactoryReconfigurationInputChunk(int Protocol, Guid OperationId, int Index, string Data);
@@ -25,6 +27,10 @@ public sealed record FactoryReconfigurationSnapshotChunk(
 public sealed record FactoryReconfigurationClaimChange(
     int Protocol, Guid OperationId, int Index, string Key, string? BeforeETag,
     string? BeforeSha256, string? AfterValue, string? AfterSha256);
+public sealed record FactoryReconfigurationRetiredRecord(
+    int Protocol, Guid OperationId, int Index, string Key, string ETag, string Sha256, int Bytes, int Chunks);
+public sealed record FactoryReconfigurationRetiredChunk(
+    int Protocol, Guid OperationId, int Record, int Index, string Data);
 
 public static class FactoryReconfigurationOperationRecords
 {
@@ -32,7 +38,7 @@ public static class FactoryReconfigurationOperationRecords
     public const string RootKey = Prefix + "current";
     public const int ChunkBytes = 4000;
     public const int MaximumInputBytes = 1024 * 1024;
-    public const int MaximumRecords = 272;
+    public const int MaximumRecords = 4096;
     public static string RequestKey(Guid operation) => Prefix + operation.ToString("N") + "/request";
     public static string InputKey(Guid operation, int index) => Prefix + operation.ToString("N") + "/inputs/" + index.ToString("D4");
     public static string SnapshotKey(Guid operation, int index) =>
@@ -43,6 +49,10 @@ public static class FactoryReconfigurationOperationRecords
         Prefix + operation.ToString("N") + "/snapshots/" + snapshot.ToString("D4") + "/desired/" + index.ToString("D4");
     public static string ClaimChangeKey(Guid operation, int index) =>
         Prefix + operation.ToString("N") + "/claims/" + index.ToString("D4");
+    public static string RetiredKey(Guid operation, int index) =>
+        Prefix + operation.ToString("N") + "/retired/" + index.ToString("D4") + "/current";
+    public static string RetiredChunkKey(Guid operation, int record, int index) =>
+        Prefix + operation.ToString("N") + "/retired/" + record.ToString("D4") + "/chunks/" + index.ToString("D4");
     public static bool IsRecord(string key) => key.StartsWith(Prefix, StringComparison.Ordinal);
 
     public static IReadOnlyList<string> ValidateArchive(FactoryReconfigurationOperation operation,
@@ -93,6 +103,8 @@ public static class FactoryReconfigurationOperationRecords
             SnapshotRecords = 0,
             AppliedRecords = 0,
             AppliedManifestRevision = null,
+            RetiredRecords = 0,
+            RetiredApplied = 0,
         };
         if (request.ConfirmedChunks != 0 || request.CoordinatorId != operation.OperationId
             || FactoryModelsValidation.Hash(admitted) != FactoryModelsValidation.Hash(request))
@@ -112,8 +124,11 @@ public static class FactoryReconfigurationOperationRecords
             || operation.ConfirmedChunks < 0 || operation.ConfirmedChunks > operation.InputChunks
             || operation.SnapshotRecords is < 0 or > 4096 || operation.AppliedRecords < 0
             || operation.AppliedRecords > operation.SnapshotRecords
+            || operation.RetiredRecords is < 0 or > 1024 || operation.RetiredApplied < 0
+            || operation.RetiredApplied > operation.RetiredRecords
             || operation.Phase == FactoryReconfigurationPhase.Quiescing
-                && (operation.SnapshotRecords != 0 || operation.AppliedRecords != 0 || operation.AppliedManifestRevision is not null)
+                && (operation.SnapshotRecords != 0 || operation.AppliedRecords != 0 || operation.AppliedManifestRevision is not null
+                    || operation.RetiredRecords != 0 || operation.RetiredApplied != 0)
             || operation.Phase == FactoryReconfigurationPhase.Reconciling && operation.SnapshotRecords == 0
             || operation.Phase >= FactoryReconfigurationPhase.AwaitingEvidence
                 && (operation.SnapshotRecords == 0 || operation.AppliedRecords != operation.SnapshotRecords
@@ -123,5 +138,32 @@ public static class FactoryReconfigurationOperationRecords
             || operation.ApprovedAt > now || operation.ApprovedAt.Offset != TimeSpan.Zero || !Enum.IsDefined(operation.Phase))
             throw new JsonException("Invalid retained reconfiguration operation.");
         return operation;
+    }
+
+    public static void RequireAdmissionOpen(IReadOnlyDictionary<string, string> records, DateTimeOffset now,
+        params FactoryReconfigurationPhase[] allowed)
+    {
+        if (records.Count == 0) return;
+        if (!records.TryGetValue(RootKey, out var root)) throw new JsonException("Reconfiguration coordinator missing.");
+        var parsed = JsonSerializer.Deserialize<FactoryReconfigurationOperation>(root, FactorySourceValidation.RecordJson)
+            ?? throw new JsonException();
+        var operation = Read(root, parsed.Identity, now);
+        var prefix = Prefix + operation.OperationId.ToString("N") + "/";
+        if (!(allowed.Length == 0
+                ? operation.Phase == FactoryReconfigurationPhase.Completed
+                : allowed.Contains(operation.Phase))
+            || records.Keys.Any(key => key != RootKey && !key.StartsWith(prefix, StringComparison.Ordinal)))
+            throw new JsonException("Reconfiguration admission remains closed.");
+        _ = ReadInputArchive(operation, records);
+    }
+
+    public static void RequireAdmissionOpen(IReadOnlyDictionary<string, string> records,
+        params FactoryReconfigurationPhase[] allowed)
+    {
+        if (records.Count == 0) return;
+        if (!records.TryGetValue(RootKey, out var root)) throw new JsonException();
+        var parsed = JsonSerializer.Deserialize<FactoryReconfigurationOperation>(root, FactorySourceValidation.RecordJson)
+            ?? throw new JsonException();
+        RequireAdmissionOpen(records, parsed.ApprovedAt, allowed);
     }
 }

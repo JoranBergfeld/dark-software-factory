@@ -118,13 +118,18 @@ internal sealed class FactoryLiveAuthority(FactoryHostSettings settings, Runtime
     {
         var result = new Dictionary<string, ConfigurationSetting>(StringComparer.Ordinal);
         var gateway = new AzureConfigurationSettingsGateway(credential, http);
+        var transition = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var prefix in new[] { FactoryPause.Key, FactoryPause.HistoryPrefix, FactoryReconfigurationOperationRecords.Prefix })
             await foreach (var record in gateway.ListRecordsAsync(settings.ProductEndpoint, "*", token, prefix + "*"))
                 if (inspection is not null) _ = inspection.Include(record.Key);
+                else if (prefix == FactoryReconfigurationOperationRecords.Prefix) transition.Add(record.Key, record.Value);
                 else RuntimeWorkflow.EnsureCouncilAdmissionOpen([record.Key]);
+        if (inspection is null) FactoryReconfigurationOperationRecords.RequireAdmissionOpen(transition, Clock.GetUtcNow(),
+            FactoryReconfigurationPhase.AwaitingActivation, FactoryReconfigurationPhase.Completed);
         await foreach (var record in gateway.ListRecordsAsync(settings.ProductEndpoint, ProductConfigurationKeys.NoLabel, token))
         {
             if (inspection is not null && !inspection.Include(record.Key)) continue;
+            if (record.Key.StartsWith(FactoryReconfigurationOperationRecords.Prefix, StringComparison.Ordinal)) continue;
             RuntimeWorkflow.EnsureCouncilAdmissionOpen([record.Key]);
             if (result.Count >= FactoryPreviewPublication.Policy.MaximumRecords + FactoryAudit.GovernanceHistoryRecords
                 || System.Text.Encoding.UTF8.GetByteCount(record.Key + record.Value) + 512 > FactoryCharterLimits.RecordBytes

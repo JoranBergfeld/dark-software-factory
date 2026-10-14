@@ -59,7 +59,7 @@ internal sealed class FactoryActivationService(RepositoryAttachmentReviewer revi
                 clock.GetUtcNow(), FactoryActivationPhase.Intended);
             var reviewValue = Serialize(reviewed);
             OwnerReservationStore.CheckSize(FactoryActivation.ReviewKey(reviewed.OperationId), ProductConfigurationKeys.NoLabel, reviewValue);
-            await RequireUnpausedAsync(store, token);
+            await RequireUnpausedAsync(store, identity, token);
             dispatched = true;
             coordinator = await store.WriteAsync(FactoryActivation.RootKey, Serialize(intent), null, token);
             await store.WriteAsync(FactoryActivation.ReviewKey(reviewed.OperationId), reviewValue, null, token);
@@ -68,7 +68,7 @@ internal sealed class FactoryActivationService(RepositoryAttachmentReviewer revi
                 throw new FactoryActivationException(FactoryActivationState.Blocked, "Reviewed authority changed during conditional approval admission.");
             var intendedReceipt = new FactoryActivationApproval(1, identity.FactoryId, reviewed.OperationId, reviewed.Fingerprint, identity.AzureActorId,
                 clock.GetUtcNow(), observed.ObservedAt);
-            await RequireUnpausedAsync(store, token);
+            await RequireUnpausedAsync(store, identity, token);
             await store.WriteAsync(FactoryActivation.ApprovalKey(reviewed.OperationId), Serialize(intendedReceipt), null, token);
             receipt = intendedReceipt;
             intent = intent with { Phase = FactoryActivationPhase.ApprovalOnly, ApprovalSha256 = FactoryModelsValidation.Hash(receipt) };
@@ -78,7 +78,7 @@ internal sealed class FactoryActivationService(RepositoryAttachmentReviewer revi
             _ = FactoryActivation.Read(final.ToDictionary(p => p.Key, p => p.Value.Value), identity.FactoryId, clock.GetUtcNow());
             if (final[FactoryActivation.RootKey].ETag != coordinator.ETag || observed.Review.Fingerprint != reviewed.Fingerprint)
                 throw new FactoryActivationException(FactoryActivationState.Blocked, "Final approval or current authority changed; no current approval released.");
-            await RequireUnpausedAsync(store, token);
+            await RequireUnpausedAsync(store, identity, token);
             return Result(FactoryActivationState.ApprovalOnly, "Exact operator approval retained; live promotion blocked. Approval is not activation or historical completion.", observed, true);
         }
         catch (Exception e) when (e is FactoryActivationException or FactoryAuditException or ReservationStoreException
@@ -105,8 +105,7 @@ internal sealed class FactoryActivationService(RepositoryAttachmentReviewer revi
                 }
                 catch (Exception rejection) when (rejection is ReservationStoreException or OperationCanceledException) { state = FactoryActivationState.Unknown; }
             }
-            return new(state, e is FactoryActivationException ? e.Message
-                : "Current approval authority/effect unconfirmed; inspect original operation. No replay, activation or rollback.")
+            return new(state, e is FactoryActivationException ? e.Message : e.ToString())
             { Review = reviewed, Approval = receipt };
         }
 
@@ -119,7 +118,7 @@ internal sealed class FactoryActivationService(RepositoryAttachmentReviewer revi
         var identity = admission.Identity!;
         var endpoint = admission.Foundation!.ProductEndpoint!;
         var store = new OwnerReservationStore(endpoint, identity.TenantId, identity.SubscriptionId, azure, http, identity.AzureActorId);
-        await RequireUnpausedAsync(store, token);
+        await RequireUnpausedAsync(store, identity, token);
         var manifest = FactoryGovernance.ReadInactiveManifest((await store.ReadAsync(ProductConfigurationKeys.FactoryManifest, token))?.Value,
             (await store.ReadAsync(ProductConfigurationKeys.FactoryProfile, token))?.Value, identity.ProductKey, endpoint);
         if (manifest.Identity != identity || manifest.PreviewOperationId is not { } preview || manifest.PreviewApprovalFingerprint is not { } pin)
@@ -136,7 +135,7 @@ internal sealed class FactoryActivationService(RepositoryAttachmentReviewer revi
                 _ => FactoryActivationState.Blocked,
             }, "Current complete readiness required; retained evaluation is not authority. " + observation.Reason);
         var graph = await new FactoryAuditService(azure, http, clock).ReadAsync(admission, token);
-        await RequireUnpausedAsync(store, token);
+        await RequireUnpausedAsync(store, identity, token);
         var review = FactoryActivation.Review(graph, observation.Evaluation.Value, operation, identity.AzureActorId);
         using var nativePreview = JsonDocument.Parse(graph.Records.Single(r => r.Identity == review.References.Single(i => i.Store == AuditStoreKind.Preview)).Content);
         var retained = PreviewEvaluationDocument.ReadNative(nativePreview.RootElement);
@@ -150,14 +149,14 @@ internal sealed class FactoryActivationService(RepositoryAttachmentReviewer revi
         return new(review, evaluation, observation.ObservedAt.Value);
     }
 
-    private static async Task RequireUnpausedAsync(OwnerReservationStore store, CancellationToken token)
+    private async Task RequireUnpausedAsync(OwnerReservationStore store, FactoryReservationIdentity identity, CancellationToken token)
     {
         try
         {
             FactoryPause.RequireAdmissionOpen((await store.ReadNamespaceAsync(FactoryPause.Key, token)).Keys);
             FactoryPause.RequireAdmissionOpen((await store.ReadNamespaceAsync(FactoryPause.HistoryPrefix, token, maximumRecords: 128)).Keys);
-            FactoryPause.RequireAdmissionOpen((await store.ReadNamespaceAsync(FactoryReconfigurationOperationRecords.Prefix, token,
-                FactoryReconfigurationOperationRecords.MaximumRecords)).Keys);
+            await FactoryReconfigurationGate.RequireAsync(store, identity, clock, token,
+                FactoryReconfigurationPhase.AwaitingActivation);
         }
         catch (PreviewCapabilityException e)
         { throw new FactoryActivationException(FactoryActivationState.Blocked, e.Message + " Approval never clears pause."); }

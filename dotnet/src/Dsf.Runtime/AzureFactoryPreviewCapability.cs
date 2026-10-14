@@ -97,11 +97,16 @@ internal sealed class AzureFactoryPreviewCapability(
 
     private async Task<ProtectedRecords> ReadAsync(TokenCredential currentCredential, CancellationToken token)
     {
+        var transition = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var prefix in new[] { FactoryPause.Key, FactoryPause.HistoryPrefix, FactoryReconfigurationOperationRecords.Prefix })
             await foreach (var setting in new AzureConfigurationSettingsGateway(currentCredential, http)
                 .ListRecordsAsync(settings.ProductEndpoint, "*", token, prefix + "*"))
                 if (inspection is not null) _ = inspection.Include(setting.Key);
+                else if (prefix == FactoryReconfigurationOperationRecords.Prefix) transition.Add(setting.Key, setting.Value);
                 else RuntimeWorkflow.EnsureCouncilAdmissionOpen([setting.Key]);
+        if (inspection is null) FactoryReconfigurationOperationRecords.RequireAdmissionOpen(transition, clock.GetUtcNow(),
+            FactoryReconfigurationPhase.AwaitingEvidence, FactoryReconfigurationPhase.AwaitingActivation,
+            FactoryReconfigurationPhase.Completed);
         var values = new SortedDictionary<string, string>(StringComparer.Ordinal);
         var versions = new SortedDictionary<string, string>(StringComparer.Ordinal);
         var nativeVersions = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -114,6 +119,7 @@ internal sealed class AzureFactoryPreviewCapability(
         {
             var key = setting.Key;
             if (inspection is not null && !inspection.Include(key)) continue;
+            if (key.StartsWith(FactoryReconfigurationOperationRecords.Prefix, StringComparison.Ordinal)) continue;
             RuntimeWorkflow.EnsureCouncilAdmissionOpen([key]);
             var metadata = Metadata(setting);
             publicationGovernance.Add(key, setting);
@@ -299,7 +305,8 @@ internal sealed partial class NativePreviewBindings(
         foreach (var assignment in assigned)
             RequirePropertiesRevision(assignment, effects.Single(e => Same(e.Target, assignment.GetProperty("id").GetString())));
 
-        var scopes = FactoryPreviewValidation.MetadataScopes(manifest, models, github, capability.OperationId, capability.Configuration);
+        var scopes = FactoryPreviewValidation.MetadataScopes(manifest, models, github,
+            capability.Configuration.PreparationOperationId ?? capability.OperationId, capability.Configuration);
         for (var i = 0; i < scopes.Count; i++)
         {
             var effect = effects[4 + i];

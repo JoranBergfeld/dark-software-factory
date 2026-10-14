@@ -65,6 +65,71 @@ internal sealed partial class FactoryReconfigurationTransition(
                         return Result(FactoryReconfigurationState.Partial,
                             "Reviewed configuration applied conditionally. Previous evidence and activation are historical; renewed checks and preview required.");
                     }
+                    if (operation.Phase == FactoryReconfigurationPhase.AwaitingEvidence)
+                    {
+                        if (!EvidenceReady(admission))
+                            return Result(FactoryReconfigurationState.Partial,
+                                "Changed capability evidence is not current. Complete only the affected source, model, supplemental and telemetry checks.");
+                        var previewService = new FactoryPreviewPreparationService(reviewer!, azure, http, clock);
+                        PreviewPreparationResult? previousPreparation = null;
+                        if (await store.ReadAsync(FactoryPreviewPreparation.RootKey, token) is not null)
+                            previousPreparation = await previewService.InspectAsync(admission, token);
+                        (root, operation) = await RetireOldGenerationAsync(admission, store, root, operation,
+                            () => effects = true, token);
+                        if (await store.ReadAsync(FactoryPreviewPreparation.RootKey, token) is null)
+                        {
+                            previousPreparation ??= previewService.ReadRetiredPreparation(
+                                await ReadRetiredGenerationAsync(store, operation, token), identity.FactoryId);
+                            await previewService.SeedReconfiguredAsync(admission, previousPreparation,
+                                previousPreparation.Plan!.Selection with
+                                {
+                                    OperationId = operation.OperationId,
+                                    Judgment = input!.Judgment,
+                                }, token);
+                        }
+                        var currentManifest = FactoryGovernance.ReadInactiveManifest(
+                            (await store.ReadAsync(ProductConfigurationKeys.FactoryManifest, token))?.Value,
+                            (await store.ReadAsync(ProductConfigurationKeys.FactoryProfile, token))?.Value,
+                            identity.ProductKey, endpoint);
+                        if (currentManifest.PreviewOperationId is not { } preview || currentManifest.PreviewApprovalFingerprint is not { } pin)
+                            return Result(FactoryReconfigurationState.Partial,
+                                "Renewed evidence is current and the old preview/activation generation is durably retired. Prepare, configure, seed and fully evaluate a new preview.");
+                        var evaluation = await previewService.EvaluateAsync(admission, preview, pin, readOnly: true, token);
+                        if (!evaluation.CurrentReady)
+                            return Result(FactoryReconfigurationState.Partial,
+                                "Renewed preview is not fully evaluated and ready for activation. " + evaluation.Reason);
+                        operation = operation with
+                        {
+                            Phase = FactoryReconfigurationPhase.AwaitingActivation,
+                            CoordinatorId = Guid.NewGuid(),
+                        };
+                        root = await store.WriteAsync(root.Key, Serialize(operation), root.ETag, token);
+                        return Result(FactoryReconfigurationState.Partial,
+                            "Renewed fully evaluated preview is current. A separate exact activation approval and final promotion are required.");
+                    }
+                    if (operation.Phase == FactoryReconfigurationPhase.AwaitingActivation)
+                    {
+                        var promotion = await store.ReadAsync(FactoryPromotion.RootKey, token);
+                        if (promotion is null)
+                            return Result(FactoryReconfigurationState.Partial,
+                                "Renewed preview awaits separate exact activation approval and final promotion.");
+                        var approved = FactoryReservationRecords.Parse<FactoryPromotionApproval>(promotion.Value);
+                        if (approved.FactoryId != identity.FactoryId || approved.Phase != FactoryPromotionPhase.Active
+                            || await store.ReadAsync(FactoryPromotion.CompletionKey(approved.OperationId), token) is null)
+                            throw new ReservationStoreException(FactoryReservationState.Unknown,
+                                "Final promotion is incomplete or inconsistent; publication remains closed.");
+                        operation = operation with
+                        {
+                            Phase = FactoryReconfigurationPhase.Completed,
+                            CoordinatorId = Guid.NewGuid(),
+                        };
+                        await store.WriteAsync(root.Key, Serialize(operation), root.ETag, token);
+                        return Result(FactoryReconfigurationState.Reviewed,
+                            "Reconfiguration completed after renewed evidence, fully evaluated preview, explicit activation approval and final promotion.");
+                    }
+                    if (operation.Phase == FactoryReconfigurationPhase.Completed)
+                        return Result(FactoryReconfigurationState.Reviewed,
+                            "Reconfiguration completed; retained transition history is audit evidence, not an admission pause.");
                     return Result(FactoryReconfigurationState.Partial,
                         "Reviewed configuration remains applied under the original operation; continue only the required renewed evidence and activation stages.");
                 }
@@ -176,4 +241,7 @@ internal sealed partial class FactoryReconfigurationTransition(
     }
 
     private static string Serialize<T>(T value) => JsonSerializer.Serialize(value, FactorySourceValidation.RecordJson);
+
+    private static bool EvidenceReady(FactoryReservationResult admission)
+        => admission.Telemetry?.State == TelemetryState.Ready;
 }

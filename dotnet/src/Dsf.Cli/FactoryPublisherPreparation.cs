@@ -196,10 +196,12 @@ internal sealed partial class FactoryPreviewPreparationService
             {
                 FactoryPause.RequireAdmissionOpen((await store.ReadNamespaceAsync(FactoryPause.Key, token)).Keys);
                 FactoryPause.RequireAdmissionOpen((await store.ReadNamespaceAsync(FactoryPause.HistoryPrefix, token, maximumRecords: 128)).Keys);
-                FactoryPause.RequireAdmissionOpen((await store.ReadNamespaceAsync(FactoryReconfigurationOperationRecords.Prefix, token,
-                    FactoryReconfigurationOperationRecords.MaximumRecords)).Keys);
+                await FactoryReconfigurationGate.RequireAsync(store, plan!.Deployment.Manifest.Identity, clock, token,
+                    FactoryReconfigurationPhase.AwaitingEvidence, FactoryReconfigurationPhase.AwaitingActivation);
                 var currentAuthority = await store.ReadFactoryAuthorityAsync(token);
-                var revision = FactoryModelsValidation.Hash(currentAuthority.Values.OrderBy(r => r.Key, StringComparer.Ordinal)
+                var revision = FactoryModelsValidation.Hash(currentAuthority.Values
+                    .Where(r => !r.Key.StartsWith(FactoryReconfigurationOperationRecords.Prefix, StringComparison.Ordinal))
+                    .OrderBy(r => r.Key, StringComparer.Ordinal)
                     .Select(r => new AuditRecordIdentity(plan!.Deployment.Manifest.Identity.FactoryId, AuditStoreKind.Governance,
                         r.Key, r.ETag.ToString(), FactoryAudit.TextHash(r.Value))).ToArray());
                 if (revision != plan!.Activation.AuthorityRevision) throw Failure("ReviewedPublicationConfigurationChanged");

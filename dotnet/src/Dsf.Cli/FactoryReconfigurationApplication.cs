@@ -154,7 +154,7 @@ internal sealed partial class FactoryReconfigurationTransition
                     throw new ReservationStoreException(FactoryReservationState.Blocked,
                         "Removed owner claim changed after review; no release.");
                 beforeDispatch();
-                await owner.DeleteAsync(existing, token);
+                await owner.DeleteReconfiguredClaimAsync(existing, change, token);
             }
         }
     }

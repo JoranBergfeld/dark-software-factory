@@ -45,10 +45,12 @@ public sealed record FactoryReconfigurationReview(FactoryReconfigurationState St
     public bool? AdmissionClosed { get; init; }
     public FactoryReconfigurationOperation? Operation { get; init; }
     public bool ConfigurationApplied => Operation?.Phase >= FactoryReconfigurationPhase.AwaitingEvidence;
-    public bool IsActivated => false;
+    public bool IsActivated => Operation?.Phase == FactoryReconfigurationPhase.Completed;
     public bool CanApply => false;
     public string NextActor => "operator / eligible resource, source and model administrators";
-    public string NextAction => Operation is not null
+    public string NextAction => Operation?.Phase == FactoryReconfigurationPhase.Completed
+        ? "Transition complete. Retain protected history; normal current-generation runtime and publication admission is open."
+        : Operation is not null
         ? "Resume only this original operation with its exact complete input. Inspect admitted and issued work; old admission remains closed "
             + "until exact effects, access and configuration are reconciled, renewed evidence and preview complete, and activation is explicitly approved."
         : "Review the exact current fingerprint before --apply. Do not edit retained governance, reset approvals, delete claims or replay provisioning.";

@@ -137,11 +137,14 @@ internal sealed class FactoryPromotionService(IAzureCliRunner azure, HttpClient 
     private async Task<Captured> CaptureAsync(OwnerReservationStore store, Guid operation, CancellationToken token)
     {
         var records = await RecordsAsync(store, token);
-        FactoryPause.RequireAdmissionOpen(records.Keys);
         var values = records.ToDictionary(p => p.Key, p => p.Value.Value);
         var publisher = FactoryPublisher.ReadConfirmed(values.Where(p => p.Key.StartsWith(FactoryPublisher.Prefix, StringComparison.Ordinal)).ToDictionary(), clock.GetUtcNow());
         var plan = publisher.Plan;
         var factory = plan.Deployment.Manifest.Identity;
+        FactoryPause.RequireAdmissionOpen(records.Keys.Where(key =>
+            !key.StartsWith(FactoryReconfigurationOperationRecords.Prefix, StringComparison.Ordinal)));
+        await FactoryReconfigurationGate.RequireAsync(store, factory, clock, token,
+            FactoryReconfigurationPhase.AwaitingActivation);
         if (publisher.Coordinator.NativeProviderProof is null) throw Denied("Original authenticated native publisher readiness required.");
         var identities = records.ToDictionary(p => p.Key, p => Identity(p.Value, factory.FactoryId));
         var observation = await PostAsync<FactoryPromotionObservation>(publisher, "/activation-readiness",

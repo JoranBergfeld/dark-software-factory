@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using Dsf.Core.Onboarding;
 using Dsf.Core.Runtime;
 using Xunit;
 
@@ -146,7 +147,7 @@ public sealed class FactoryReconfigurationTransitionTests
     [Fact]
     public async Task Resume_conditionally_applies_configuration_and_invalidates_old_evidence_and_activation()
     {
-        using var transport = await FactoryActivationTests.ReadyAsync();
+        using var transport = await FactoryActivationTests.ReadyAsync(publisher: true);
         var machine = transport.Scenario.Machine;
         var inspected = await machine.InvokeAsync("reconfigure", "--inspect");
         var desired = inspected.Result["currentInputs"]!.DeepClone();
@@ -160,7 +161,8 @@ public sealed class FactoryReconfigurationTransitionTests
 
         var resumed = await InvokeAsync(machine, desired, "--resume", "--operation", operation.ToString());
         Assert.True((bool?)resumed.Result["configurationApplied"] == true, resumed.Terminal.Output + resumed.Terminal.Error);
-        Assert.Equal("AwaitingEvidence", (string?)resumed.Result["operation"]?["phase"]);
+        Assert.True((string?)resumed.Result["operation"]?["phase"] == "AwaitingEvidence",
+            resumed.Terminal.Output + resumed.Terminal.Error);
         Assert.False((bool)resumed.Result["isActivated"]!);
         var values = transport.Scenario.Arm.Product.Values();
         var telemetryRecord = JsonNode.Parse(values[ProductConfigurationKeys.FactoryTelemetry])!;
@@ -174,8 +176,62 @@ public sealed class FactoryReconfigurationTransitionTests
         var telemetry = await machine.InvokeAsync("telemetry", "--verify-only");
         Assert.True(telemetry.Exit == 0, telemetry.Terminal.Output + telemetry.Terminal.Error);
         Assert.Equal("Ready", (string?)telemetry.Result["telemetry"]?["state"]);
+        var retired = await InvokeAsync(machine, desired, "--resume", "--operation", operation.ToString());
+        Assert.True((string?)retired.Result["operation"]?["phase"] == "AwaitingEvidence",
+            retired.Terminal.Output + retired.Terminal.Error);
+        Assert.True((int?)retired.Result["operation"]?["retiredRecords"] > 0, retired.Terminal.Output);
+        Assert.Equal((int?)retired.Result["operation"]?["retiredRecords"], (int?)retired.Result["operation"]?["retiredApplied"]);
+        values = transport.Scenario.Arm.Product.Values();
+        Assert.DoesNotContain(ProductConfigurationKeys.FactoryPreview, values.Keys);
+        Assert.DoesNotContain(values.Keys, key => key.StartsWith(FactoryActivation.Prefix, StringComparison.Ordinal));
+        Assert.Contains(values.Keys, key => key.StartsWith(
+            $"dsf/factory/reconfiguration/{operation:N}/retired/", StringComparison.Ordinal));
         var activation = await machine.InvokeAsync("activate", "--operation", Guid.NewGuid().ToString());
         Assert.Equal("Blocked", (string?)activation.Result["state"]);
+
+        var configuration = await machine.InvokeAsync("preview", "--configure");
+        Assert.True(configuration.Exit == 0, configuration.Terminal.Output + configuration.Terminal.Error);
+        var seeded = await machine.InvokeAsync("preview", "--configure",
+            "--approve", (string)configuration.Result["approvalFingerprint"]!);
+        Assert.True(seeded.Exit == 0, seeded.Terminal.Output + seeded.Terminal.Error + transport.LastPreviewResponse);
+        var configured = await machine.InvokeAsync("preview", "--configure",
+            "--approve", (string)seeded.Result["approvalFingerprint"]!);
+        Assert.True(configured.Exit == 0, configured.Terminal.Output + configured.Terminal.Error);
+        var capability = JsonNode.Parse(transport.Values()[ProductConfigurationKeys.FactoryPreview])!;
+        var evaluated = await machine.InvokeAsync("preview", "--evaluate",
+            "--operation", (string)capability["operationId"]!,
+            "--approve", (string)capability["approvalFingerprint"]!);
+        Assert.True(evaluated.Exit == 0, evaluated.Terminal.Output + evaluated.Terminal.Error + "\n"
+            + string.Join("\n", transport.HostFailures));
+        var awaitingActivation = await InvokeAsync(machine, desired, "--resume", "--operation", operation.ToString());
+        Assert.True((string?)awaitingActivation.Result["operation"]?["phase"] == "AwaitingActivation",
+            awaitingActivation.Terminal.Output + awaitingActivation.Terminal.Error);
+
+        var activationOperation = Guid.NewGuid().ToString();
+        var activationReview = await machine.InvokeAsync("activate", "--operation", activationOperation);
+        Assert.True(activationReview.Exit == 0, activationReview.Terminal.Output + activationReview.Terminal.Error);
+        var activationApproval = await machine.InvokeAsync("activate", "--operation", activationOperation,
+            "--approve", (string)activationReview.Result["approvalFingerprint"]!);
+        Assert.Equal("ApprovalOnly", (string?)activationApproval.Result["state"]);
+        var liveSelection = FactoryPublisherTests.Selection().DeepClone();
+        liveSelection["operationId"] = Guid.NewGuid();
+        var liveReview = await machine.InvokeAsync("live", "--selection", liveSelection.ToJsonString());
+        var live = await machine.InvokeAsync("live", "--selection", liveSelection.ToJsonString(),
+            "--approve", (string)liveReview.Result["approvalFingerprint"]!);
+        Assert.True(live.Exit == 0, live.Terminal.Output + live.Terminal.Error + "\n"
+            + string.Join("\n", transport.HostFailures));
+        var publisherReview = await machine.InvokeAsync("live", "--publication", "--selection", liveSelection.ToJsonString());
+        var publisher = await machine.InvokeAsync("live", "--publication", "--selection", liveSelection.ToJsonString(),
+            "--approve", (string)publisherReview.Result["approvalFingerprint"]!);
+        Assert.True(publisher.Exit == 0, publisher.Terminal.Output + publisher.Terminal.Error);
+        var promotionOperation = Guid.NewGuid().ToString();
+        var promotionReview = await machine.InvokeAsync("activate", "--promote", "--operation", promotionOperation);
+        var promoted = await machine.InvokeAsync("activate", "--promote", "--operation", promotionOperation,
+            "--approve", (string)promotionReview.Result["approvalFingerprint"]!);
+        Assert.True(promoted.Exit == 0, promoted.Terminal.Output + promoted.Terminal.Error);
+        var completed = await InvokeAsync(machine, desired, "--resume", "--operation", operation.ToString());
+        Assert.Equal("Completed", (string?)completed.Result["operation"]?["phase"]);
+        Assert.True((bool?)completed.Result["isActivated"]);
     }
 
     [Fact]
@@ -210,6 +266,41 @@ public sealed class FactoryReconfigurationTransitionTests
         Assert.Contains(claim, machine.Store.Export());
         Assert.True(JsonNode.DeepEquals(beforeTags, machine.Boundary.Resources[added]["tags"]));
         Assert.True((bool?)resumed.Result["admissionClosed"]);
+    }
+
+    [Fact]
+    public async Task Application_releases_removed_claim_only_after_configuration_is_applied()
+    {
+        using var transport = await PreviewEvaluationTests.ConfiguredAsync();
+        FactoryActivationTests.ConnectAudit(transport);
+        var machine = transport.Scenario.Machine;
+        var inspected = await machine.InvokeAsync("reconfigure", "--inspect");
+        var desired = inspected.Result["currentInputs"]!.DeepClone();
+        var applications = desired["boundary"]!["applicationResourceIds"]!.AsArray();
+        var removed = (string)applications[^1]!;
+        applications.RemoveAt(applications.Count - 1);
+        desired["boundary"]!["boundaryReview"] = null;
+        var draft = await InvokeAsync(machine, desired);
+        desired["boundary"]!["boundaryReview"] = new JsonObject
+        {
+            ["selectionFingerprint"] = (string)draft.Result["selectionFingerprint"]!,
+            ["accountableOwner"] = "acme/platform",
+            ["dedicated"] = true,
+            ["crossOwnerExclusive"] = true,
+        };
+        var reviewed = await InvokeAsync(machine, desired);
+        var operation = Guid.NewGuid();
+        await InvokeAsync(machine, desired, "--apply", "--operation", operation.ToString(),
+            "--approve", (string)reviewed.Result["fingerprint"]!);
+        var claim = ProductConfigurationKeys.OwnerResourceClaim(removed.ToLowerInvariant());
+        Assert.Contains(claim, machine.Store.Export());
+
+        var resumed = await InvokeAsync(machine, desired, "--resume", "--operation", operation.ToString());
+
+        Assert.True((string?)resumed.Result["operation"]?["phase"] == "AwaitingEvidence",
+            resumed.Terminal.Output + resumed.Terminal.Error);
+        Assert.DoesNotContain(claim, machine.Store.Export());
+        Assert.True((int?)resumed.Result["operation"]?["appliedRecords"] > 0);
     }
 
     internal static async Task<(int Exit, JsonNode Result, ScriptedTerminal Terminal)> InvokeAsync(

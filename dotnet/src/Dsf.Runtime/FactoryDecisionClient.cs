@@ -21,9 +21,13 @@ internal sealed class FactoryDecisionClient(RuntimeSettings settings, RuntimeDep
         var values = new Dictionary<string, string>();
         await foreach (var (key, value) in dependencies.ConfigurationSettingsGateway.ListAsync(settings.AppConfigEndpoint, ProductConfigurationKeys.NoLabel, token))
         {
-            if (execute) FactoryPause.RequireAdmissionOpen([key]);
+            if (execute && !key.StartsWith(FactoryReconfigurationOperationRecords.Prefix, StringComparison.Ordinal))
+                FactoryPause.RequireAdmissionOpen([key]);
             if (values.Count >= FactoryAudit.MaximumRecords || !values.TryAdd(key, value)) throw new JsonException();
         }
+        if (execute) FactoryReconfigurationOperationRecords.RequireAdmissionOpen(values
+            .Where(pair => pair.Key.StartsWith(FactoryReconfigurationOperationRecords.Prefix, StringComparison.Ordinal))
+            .ToDictionary(), Clock.GetUtcNow());
         var live = FactoryLive.ReadConfirmed(values.Where(p => p.Key.StartsWith(FactoryLive.Prefix, StringComparison.Ordinal)).ToDictionary(), Clock.GetUtcNow());
         if (live.Plan.Deployment.Manifest.Identity != manifest.Identity || live.Plan.Deployment.Manifest.ProfilePin != manifest.ProfilePin)
             throw new RuntimeVerbException("Exact original reviewed factory decision host required.");

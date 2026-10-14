@@ -3,9 +3,9 @@
 `dsf onboard decide reconfigure` provides read-only inspection and exact
 change review for a retained Decide factory. It can also conditionally admit
 the reviewed transition. Admission first closes old work and durably retains
-the original review and complete desired input. It does not claim that work
-has stopped, configuration changed, claims or grants were reconciled, renewed
-evidence passed, or activation was approved.
+the original review and complete desired input. Later resumes report staged
+configuration, claim, evidence-retirement, preview, and activation progress;
+admission alone never claims that work stopped or any later stage completed.
 
 The command reads the trusted owner reservation, product-native reviewed
 plan, retained capability records and protected audit reference graph. A
@@ -139,10 +139,46 @@ missing coordinator is `Unknown`; a competing operation is `Blocked`.
 Recovery never creates a replacement transition, reopens old work, rolls
 back, or silently resumes the previous configuration.
 
-While any transition record survives, CLI and hosted runtime admission,
-source acquisition, preview evaluation, publication, and activation reject
-old authority. Operators must inspect admitted and issued effects and
-reconcile the original operation. Do not delete transition records manually.
+The first successful resume reserves additions, journals exact before/after
+configuration, applies each product record conditionally, then releases
+removed owner claims only against their retained ETag and value hash.
+Application tags are never written. A response loss leaves `Reconciling`;
+repeat the same resume. Concurrent edits are `Blocked` or `Unknown`, never
+overwritten or rolled back.
+
+After `AwaitingEvidence`, run only checks affected by the reviewed change.
+For example, a freshness/query/backend change uses:
+
+```bash
+dsf onboard decide telemetry \
+  --owner-appconfig-endpoint https://OWNER.azconfig.io \
+  --product PRODUCT --tenant TENANT_GUID --subscription SUBSCRIPTION_GUID \
+  --verify-only --json
+```
+
+Resume again after current evidence is ready. DSF archives every old
+preview, activation, live, publisher, and promotion record in chunked
+transition history before conditionally retiring the exact native revision.
+Interrupted retirement resumes by record index; a changed record is never
+deleted.
+
+Prepare, configure, seed, and fully evaluate a new preview through the
+ordinary `preview-prepare`, `preview-configure`, `preview-seed`, and
+`preview --evaluate` commands. These effects are admitted only while the
+original transition is `AwaitingEvidence`. Resume advances to
+`AwaitingActivation` only after the new durable preview is currently
+`ReadyAwaitingActivation`.
+
+Then perform a separate exact activation review/approval and final
+`activate --promote` operation. Resume the reconfiguration once more.
+Only a current active promotion and its completion receipt advances the
+transition to `Completed`. Before that phase, runtime work and publication
+remain closed. Completed transition records stay protected audit history but
+no longer pause current-generation runtime admission.
+
+Never delete transition records manually. Their input, configuration,
+claim, retirement, evidence, and activation linkage is the recovery and
+audit authority.
 
 ## Identity and operational limits
 
@@ -159,6 +195,9 @@ reconcile the original operation. Do not delete transition records manually.
   safety, renewed analysis and full evaluation are not proven by this diff.
 - Inspection leaves live admission unchanged. Applying creates a separate
   durable admission-closing transition; it never claims issued work drained.
+- App Configuration has no cross-key transaction. `snapshotRecords`,
+  `appliedRecords`, `retiredRecords`, and `retiredApplied` are truthful
+  durable progress, not an atomicity claim.
 - Original approvals, evidence and create-once publication records remain
   audit history, not authority for changed governing inputs. Do not manually
   delete claims or restart provisioning.

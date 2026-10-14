@@ -58,7 +58,8 @@ internal sealed partial class NativePreviewBindings
                 + configGrant.RoleDefinitionId.Split('/').Last(), "2022-04-01", token), configGrant.RoleDefinitionId,
                 selection.AccessRoleRevisions[configGrant.RoleDefinitionId]);
         }
-        var scopes = FactoryPreviewTelemetryValidation.MetadataScopes(manifest, models, capability.OperationId, selection);
+        var scopes = FactoryPreviewTelemetryValidation.MetadataScopes(manifest, models,
+            capability.Configuration.PreparationOperationId ?? capability.OperationId, selection);
         foreach (var scope in scopes.Where(scope => sourceOnly || !selection.Applications.Contains(scope)))
         {
             var grant = FactoryModelsValidation.Grant(scope, selection.MetadataRoleDefinitionId, config.SourceIdentity.PrincipalId!, "");

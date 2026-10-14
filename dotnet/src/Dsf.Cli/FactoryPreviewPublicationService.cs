@@ -191,10 +191,37 @@ internal sealed partial class FactoryPreviewPreparationService
         CancellationToken token, bool configuredEvaluation = false)
     {
         // After protected configuration, these proofs are reviewed provenance; the runtime re-observes every selected capability.
-        var current = await ReadPlanAsync(admission, preparation.Plan.Selection, store, token, preparation.Plan,
-            approvedPreparation: configuredEvaluation ? preparation : null);
-        if (!SameReviewedInputs(preparation.Plan, current))
-            throw Failure("PreviewPublicationPredecessorOrNativeAuthorityChanged");
+        if (preparation.Effects.Any(effect => effect.ReusedFromOperationId is not null))
+        {
+            var current = (await store.ReadFactoryAuthorityAsync(token))
+                .Where(pair => !pair.Key.StartsWith("dsf/factory/preview", StringComparison.Ordinal)
+                    && !pair.Key.StartsWith(FactoryAudit.Namespace, StringComparison.Ordinal)
+                    && !pair.Key.StartsWith(FactoryReconfigurationOperationRecords.Prefix, StringComparison.Ordinal))
+                .ToDictionary(pair => pair.Key, pair => pair.Value.Value, StringComparer.Ordinal);
+            if (current.TryGetValue(ProductConfigurationKeys.FactoryManifest, out var manifestValue))
+            {
+                var manifest = FactoryReservationRecords.Parse<FactoryManifest>(manifestValue);
+                if (FactoryPreviewValidation.ManifestBasis(manifest) !=
+                    FactoryPreviewValidation.ManifestBasis(preparation.Plan.Manifest))
+                    throw Failure("PreviewPublicationPredecessorOrNativeAuthorityChanged");
+                current[ProductConfigurationKeys.FactoryManifest] = Serialize(preparation.Plan.Manifest);
+            }
+            var values = current.ToDictionary(pair => pair.Key,
+                pair => FactoryReservationRecords.Hash(pair.Value), StringComparer.Ordinal);
+            var reviewed = preparation.Plan.RecordRevisions
+                .Where(pair => !pair.Key.StartsWith(FactoryReconfigurationOperationRecords.Prefix, StringComparison.Ordinal))
+                .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+            if (values.Count != reviewed.Count
+                || reviewed.Any(pair => values.GetValueOrDefault(pair.Key) != pair.Value))
+                throw Failure("PreviewPublicationPredecessorOrNativeAuthorityChanged");
+        }
+        else
+        {
+            var current = await ReadPlanAsync(admission, preparation.Plan.Selection, store, token, preparation.Plan,
+                approvedPreparation: configuredEvaluation ? preparation : null);
+            if (!SameReviewedInputs(preparation.Plan, current))
+                throw Failure("PreviewPublicationPredecessorOrNativeAuthorityChanged");
+        }
         await VerifyConfirmedAsync(preparation, token);
         var identity = preparation.Plan.Manifest.Identity;
         var owner = await new FactoryReservationService(reviewer, azure, http, clock)

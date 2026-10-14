@@ -52,6 +52,7 @@ public sealed record PreviewPreparationEffect(int Protocol, Guid FactoryId, Guid
     int Index, string Target, string BodySha256, Guid RequestId, DateTimeOffset IntendedAt,
     PreviewPreparationEffectState State, IReadOnlyList<string> ReceiptHashes, string? Reason)
 {
+    public Guid? ReusedFromOperationId { get; init; }
     public string? CouncilEndpoint { get; init; }
     public string? DeploymentOutputsSha256 { get; init; }
     public PreviewPreparationAcknowledgment? Acknowledgment { get; init; }

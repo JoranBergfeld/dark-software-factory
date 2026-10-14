@@ -32,15 +32,26 @@ internal sealed class FactorySourceAccess(FactoryHostSettings settings, TokenCre
     {
         var gateway = new AzureConfigurationSettingsGateway(Credential, http);
         foreach (var prefix in new[] { FactoryPause.Key, FactoryPause.HistoryPrefix, FactoryPromotion.Prefix, FactoryReconfigurationOperationRecords.Prefix })
+        {
+            var transition = new Dictionary<string, string>(StringComparer.Ordinal);
             await foreach (var record in gateway.ListRecordsAsync(settings.ProductEndpoint, "*", token, prefix + "*"))
             {
                 if (!record.Key.StartsWith(prefix, StringComparison.Ordinal)) throw new JsonException();
+                if (prefix == FactoryReconfigurationOperationRecords.Prefix)
+                {
+                    transition.Add(record.Key, record.Value);
+                    continue;
+                }
                 throw new SourceAcquisitionException(SourceState.Blocked, prefix == FactoryPromotion.Prefix
                     ? "PromotedSourceWorkRequiresIndexedDecision; use the admitted run/sweep workflow, not unindexed acquire/infer."
-                    : prefix == FactoryReconfigurationOperationRecords.Prefix
-                        ? "ReconfigurationAdmissionClosed; old source work is not authorized by a reviewed target generation."
                     : "DeliberateSourceAdmissionClosed; retained evidence is read-only, not work authorization.");
             }
+            if (transition.Count != 0)
+                try { FactoryReconfigurationOperationRecords.RequireAdmissionOpen(transition, clock.GetUtcNow(),
+                    FactoryReconfigurationPhase.AwaitingEvidence, FactoryReconfigurationPhase.Completed); }
+                catch (JsonException) { throw new SourceAcquisitionException(SourceState.Blocked,
+                    "ReconfigurationAdmissionClosed; old source work is not authorized by a reviewed target generation."); }
+        }
     }
 
     internal async Task CheckAsync(CancellationToken token)
@@ -140,6 +151,7 @@ internal sealed class FactorySourceAccess(FactoryHostSettings settings, TokenCre
         await foreach (var (key, value) in new AzureConfigurationSettingsGateway(currentCredential, http)
             .ListAsync(settings.ProductEndpoint, ProductConfigurationKeys.NoLabel, token))
         {
+            if (key.StartsWith(FactoryReconfigurationOperationRecords.Prefix, StringComparison.Ordinal)) continue;
             if (key.StartsWith(FactoryAudit.Namespace, StringComparison.Ordinal))
             {
                 if (!retention.Add(key) || retention.Count > FactoryAudit.GovernanceHistoryRecords

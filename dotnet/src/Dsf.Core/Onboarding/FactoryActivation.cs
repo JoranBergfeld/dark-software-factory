@@ -88,7 +88,8 @@ public static class FactoryActivation
         for (var i = 0; i < manifest.PlanChunks; i++) references.Add(Governance(ProductConfigurationKeys.FactoryPlanChunk(i)).Identity);
         return new(1, operation, graph.FactoryId, manifest.Identity.RepositoryId,
             FactoryModelsValidation.Hash(graph.Records.Where(r => r.Identity.Store == AuditStoreKind.Governance
-                && !r.Identity.Key.StartsWith(FactoryAudit.Namespace, StringComparison.Ordinal))
+                && !r.Identity.Key.StartsWith(FactoryAudit.Namespace, StringComparison.Ordinal)
+                && !r.Identity.Key.StartsWith(FactoryReconfigurationOperationRecords.Prefix, StringComparison.Ordinal))
                 .OrderBy(r => r.Identity.Key, StringComparer.Ordinal).Select(r => r.Identity).ToArray()),
             manifestRecord.Identity.NativeRevision, FactoryModelsValidation.Hash(manifest), manifest.ProfilePin,
             progress.Revision, progress.ChainSha256!, inputs.Revision, FactoryModelsValidation.Hash(proof), actor,
