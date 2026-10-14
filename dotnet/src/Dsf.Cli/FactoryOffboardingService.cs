@@ -32,7 +32,7 @@ internal sealed class FactoryOffboardingService(IAzureCliRunner azure, HttpClien
         if (admission.Foundation?.ProductEndpoint is { } endpoint)
         {
             product = new OwnerReservationStore(endpoint, identity.TenantId, identity.SubscriptionId, azure, http, identity.AzureActorId);
-            authority = await product.ReadFactoryAuthorityAsync(token);
+            authority = await ReadOffboardingAuthorityAsync(product, token);
         }
 
         var existing = await ExistingAsync(owner, product, identity, anchor, admission, authority, token);
@@ -115,8 +115,8 @@ internal sealed class FactoryOffboardingService(IAzureCliRunner azure, HttpClien
             IReadOnlyDictionary<string, ConfigurationSetting> postClose;
             try
             {
-                var first = await product.ReadFactoryAuthorityAsync(token);
-                var second = await product.ReadFactoryAuthorityAsync(token);
+                var first = await ReadOffboardingAuthorityAsync(product, token);
+                var second = await ReadOffboardingAuthorityAsync(product, token);
                 if (ExactAuthorityRevision(first) != ExactAuthorityRevision(second))
                     return Result(FactoryOffboardingState.Unknown,
                         "Admission is closed but product authority changed during post-close inspection; no completed detach claimed.",
@@ -147,7 +147,7 @@ internal sealed class FactoryOffboardingService(IAzureCliRunner azure, HttpClien
                 || inventory.IssuedPublications.Any(effect => effect.State is "Unknown" or "Dispatched"))
                 blocked.Add("issued GitHub publication outcomes remain unresolved");
 
-            var cleanup = await CleanupOwnedAccessAsync(anchor.Identity, authority, token);
+            var cleanup = await CleanupOwnedAccessAsync(anchor.Identity, authority, plan, token);
             removals.AddRange(cleanup.Completed);
             blocked.AddRange(cleanup.Blocked);
             var unreconciled = PlannedGrantTargetsFromPlan(plan)
@@ -303,14 +303,19 @@ internal sealed class FactoryOffboardingService(IAzureCliRunner azure, HttpClien
             removals.AddRange(ownerAdmission.ProposedClaims.Where(claim => claim.Kind != "product")
                 .OrderBy(claim => claim.Key, StringComparer.Ordinal)
                 .Select(claim => $"eligible owner {claim.Kind} claim {claim.Key}"));
+        var approvedGrants = new List<FactoryOffboardingGrant>();
         foreach (var record in authority.Values.OrderBy(record => record.Key, StringComparer.Ordinal))
         {
             try
             {
                 var effect = JsonSerializer.Deserialize<FoundationOperation>(record.Value, FactoryGitHubJson.Options);
                 if (effect is { } planned && IsPlannedGrant(planned))
+                {
+                    approvedGrants.Add(ApprovedGrant(record.Key, planned));
                     removals.Add($"sole-factory grant target={planned.Target}; principal={planned.PrincipalId}; "
-                        + $"role={planned.RoleDefinitionId}; scope={planned.RoleScope}; condition={planned.Condition ?? "(none)"}");
+                        + $"role={planned.RoleDefinitionId}; scope={planned.RoleScope}; condition={planned.Condition ?? "(none)"}; "
+                        + $"conditionVersion={planned.ConditionVersion ?? "(none)"}");
+                }
             }
             catch (JsonException) { }
         }
@@ -342,14 +347,17 @@ internal sealed class FactoryOffboardingService(IAzureCliRunner azure, HttpClien
             "shared GitHub App installation and repository selection remain unchanged",
         };
         var draft = new FactoryOffboardingPlan(1, "decide-offboarding-plan", operation, identity.FactoryId,
-            identity.ProductKey, authorityRevision, preserved, removals, blockers, costs, residual, "");
+            identity.ProductKey, authorityRevision, preserved, removals, blockers, costs, residual, "")
+        {
+            ApprovedGrantRemovals = approvedGrants,
+        };
         return draft with { Fingerprint = FactoryOffboarding.Fingerprint(draft) };
     }
 
     private async Task<(IReadOnlyList<string> Completed, IReadOnlyList<string> Blocked,
         IReadOnlySet<string> ReconciledGrantTargets)> CleanupOwnedAccessAsync(
         FactoryReservationIdentity identity, IReadOnlyDictionary<string, ConfigurationSetting> authority,
-        CancellationToken token)
+        FactoryOffboardingPlan plan, CancellationToken token)
     {
         if (!authority.TryGetValue(ProductConfigurationKeys.FactoryGitHubAuthority, out var record))
             return ([], [], new HashSet<string>(StringComparer.OrdinalIgnoreCase));
@@ -387,13 +395,25 @@ internal sealed class FactoryOffboardingService(IAzureCliRunner azure, HttpClien
             var blocked = new List<string>();
             var reconciled = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var arm = new FactoryPreparationArm(azure, http, identity);
+            var approved = plan.ApprovedGrantRemovals.ToDictionary(grant => grant.Target,
+                StringComparer.OrdinalIgnoreCase);
             foreach (var grant in effects.Where(effect => effect.RoleDefinitionId is not null
                                                           && effect.State == FoundationOperationState.Completed
                                                           && effect.Disposition == FoundationResourceDisposition.Created)
                          .DistinctBy(effect => effect.Target, StringComparer.OrdinalIgnoreCase))
             {
-                var result = await RemoveGrantAsync(arm, grant, token);
+                if (!approved.TryGetValue(grant.Target, out var reviewed))
+                {
+                    blocked.Add($"Sole-factory grant {grant.Target} was not in the approved cleanup set; preserved pending a newly reviewed plan.");
+                    continue;
+                }
                 reconciled.Add(grant.Target);
+                if (!Matches(reviewed, grant))
+                {
+                    blocked.Add($"Sole-factory grant {grant.Target} changed after review; preserved pending a newly reviewed plan.");
+                    continue;
+                }
+                var result = await RemoveGrantAsync(arm, grant, token);
                 (result.Completed ? completed : blocked).Add(result.Detail);
             }
             var key = await RemoveKeyVersionAsync(identity, githubEffects[0], token);
@@ -416,11 +436,86 @@ internal sealed class FactoryOffboardingService(IAzureCliRunner azure, HttpClien
             RoleDefinitionId: not null, PrincipalId: not null, RoleScope: not null,
         };
 
+    private static FactoryOffboardingGrant ApprovedGrant(string key, FoundationOperation effect) =>
+        new(key, effect.FactoryId, effect.OperationId, effect.Index, effect.Target, effect.ApiVersion,
+            effect.RequestSha256, effect.ClientRequestId, effect.StartedAt, effect.PrincipalId!,
+            effect.RoleDefinitionId!, effect.RoleScope!, effect.Condition, effect.ConditionVersion);
+
+    private static bool Matches(FactoryOffboardingGrant reviewed, FoundationOperation current) =>
+        reviewed.FactoryId == current.FactoryId && reviewed.OperationId == current.OperationId
+        && reviewed.Index == current.Index && Same(reviewed.Target, current.Target)
+        && reviewed.ApiVersion == current.ApiVersion && reviewed.RequestSha256 == current.RequestSha256
+        && reviewed.ClientRequestId == current.ClientRequestId && reviewed.StartedAt == current.StartedAt
+        && reviewed.PrincipalId == current.PrincipalId && Same(reviewed.RoleDefinitionId, current.RoleDefinitionId)
+        && Same(reviewed.Scope, current.RoleScope) && reviewed.Condition == current.Condition
+        && reviewed.ConditionVersion == current.ConditionVersion;
+
     private static IReadOnlyList<string> PendingPreparationEffects(
         IReadOnlyDictionary<string, ConfigurationSetting> authority)
     {
         var pending = new List<string>();
         foreach (var record in RelevantAuthority(authority).Values)
+        {
+            if (record.Key == FactoryPreviewPreparation.RootKey)
+            {
+                AddPendingCoordinator<PreviewPreparationCoordinator>(record, pending,
+                    coordinator => coordinator.State is PreviewPreparationState.Reviewed
+                        or PreviewPreparationState.Partial or PreviewPreparationState.Unknown);
+                continue;
+            }
+            if (record.Key == FactoryLive.RootKey)
+            {
+                AddPendingCoordinator<FactoryLiveCoordinator>(record, pending,
+                    coordinator => coordinator.State is FactoryLiveState.Reviewed
+                        or FactoryLiveState.Preparing or FactoryLiveState.Unknown);
+                continue;
+            }
+            if (record.Key == FactoryPublisher.RootKey)
+            {
+                AddPendingCoordinator<FactoryPublisherCoordinator>(record, pending,
+                    coordinator => coordinator.State is FactoryPublisherState.Reviewed
+                        or FactoryPublisherState.Preparing or FactoryPublisherState.Unknown);
+                continue;
+            }
+            if (record.Key == FactoryPreviewPublication.RootKey)
+            {
+                AddPendingCoordinator<PreviewPublicationJournal>(record, pending,
+                    journal => journal.Phase is PreviewPublicationPhase.PublishingSeedCapability
+                        or PreviewPublicationPhase.SeedDispatched
+                        or PreviewPublicationPhase.PublishingExecution
+                        or PreviewPublicationPhase.Unknown);
+                continue;
+            }
+            if (IsPreparationEffectKey(record.Key))
+            {
+                try
+                {
+                    var effect = JsonSerializer.Deserialize<PreviewPreparationEffect>(
+                        record.Value, FactoryGitHubJson.Options);
+                    if (effect?.State is PreviewPreparationEffectState.Intended
+                        or PreviewPreparationEffectState.Dispatched
+                        or PreviewPreparationEffectState.Unknown)
+                        pending.Add($"Pending or dispatched preparation effect remains unresolved at {effect.Target}.");
+                }
+                catch (JsonException)
+                {
+                    pending.Add($"Pending preparation effect record is unreadable at {record.Key}.");
+                }
+                continue;
+            }
+            if (IsPublicationStepKey(record.Key))
+            {
+                try
+                {
+                    var step = JsonSerializer.Deserialize<PreviewPublicationStep>(record.Value, FactoryGitHubJson.Options);
+                    if (step?.State is PreviewPreparationEffectState.Intended
+                        or PreviewPreparationEffectState.Dispatched
+                        or PreviewPreparationEffectState.Unknown)
+                        pending.Add($"Pending or dispatched preparation effect remains unresolved at {step.Target}.");
+                }
+                catch (JsonException) { }
+                continue;
+            }
             try
             {
                 var effect = JsonSerializer.Deserialize<FoundationOperation>(record.Value, FactoryGitHubJson.Options);
@@ -429,7 +524,23 @@ internal sealed class FactoryOffboardingService(IAzureCliRunner azure, HttpClien
                     pending.Add($"Pending or dispatched preparation effect remains unresolved at {effect.Target}.");
             }
             catch (JsonException) { }
+        }
         return pending;
+    }
+
+    private static void AddPendingCoordinator<T>(
+        ConfigurationSetting record, ICollection<string> pending, Func<T, bool> isPending)
+    {
+        try
+        {
+            var coordinator = JsonSerializer.Deserialize<T>(record.Value, FactoryGitHubJson.Options);
+            if (coordinator is not null && isPending(coordinator))
+                pending.Add($"Pending or uncertain preparation coordinator remains unresolved at {record.Key}.");
+        }
+        catch (JsonException)
+        {
+            pending.Add($"Preparation coordinator is unreadable at {record.Key}.");
+        }
     }
 
     private static IReadOnlyList<string> UnapprovedAuthorityChanges(
@@ -445,6 +556,8 @@ internal sealed class FactoryOffboardingService(IAzureCliRunner azure, HttpClien
         foreach (var key in before.Keys.Intersect(after.Keys, StringComparer.Ordinal))
         {
             if (before[key].Value == after[key].Value) continue;
+            if (IsApprovedPreparationProgression(key, before[key].Value, after[key].Value))
+                continue;
             try
             {
                 var original = JsonSerializer.Deserialize<FoundationOperation>(before[key].Value, FactoryGitHubJson.Options);
@@ -463,6 +576,104 @@ internal sealed class FactoryOffboardingService(IAzureCliRunner azure, HttpClien
         return changes;
     }
 
+    private static bool IsApprovedPreparationProgression(string key, string before, string after)
+    {
+        try
+        {
+            if (IsPreparationEffectKey(key))
+            {
+                var original = JsonSerializer.Deserialize<PreviewPreparationEffect>(before, FactoryGitHubJson.Options);
+                var current = JsonSerializer.Deserialize<PreviewPreparationEffect>(after, FactoryGitHubJson.Options);
+                return original is not null && current is not null
+                    && SamePreparationEffect(original, current)
+                    && original.State is PreviewPreparationEffectState.Intended or PreviewPreparationEffectState.Dispatched
+                    && current.State is PreviewPreparationEffectState.Confirmed
+                        or PreviewPreparationEffectState.KnownFailed
+                        or PreviewPreparationEffectState.Unknown;
+            }
+            if (key == FactoryPreviewPreparation.RootKey)
+            {
+                var original = JsonSerializer.Deserialize<PreviewPreparationCoordinator>(before, FactoryGitHubJson.Options);
+                var current = JsonSerializer.Deserialize<PreviewPreparationCoordinator>(after, FactoryGitHubJson.Options);
+                return original is not null && current is not null && SamePreparationCoordinator(original, current)
+                    && original.State is PreviewPreparationState.Reviewed or PreviewPreparationState.Partial
+                    && current.State is PreviewPreparationState.Partial or PreviewPreparationState.ConfirmedNotReady
+                        or PreviewPreparationState.Blocked or PreviewPreparationState.KnownFailed
+                        or PreviewPreparationState.Unknown or PreviewPreparationState.Canceled;
+            }
+            if (key == FactoryLive.RootKey)
+            {
+                var original = JsonSerializer.Deserialize<FactoryLiveCoordinator>(before, FactoryGitHubJson.Options);
+                var current = JsonSerializer.Deserialize<FactoryLiveCoordinator>(after, FactoryGitHubJson.Options);
+                return original is not null && current is not null
+                    && original with { State = current.State, ConfirmedEffects = current.ConfirmedEffects } == current
+                    && original.State is FactoryLiveState.Reviewed or FactoryLiveState.Preparing
+                    && current.State is FactoryLiveState.Preparing or FactoryLiveState.PreparedAwaitingPublication
+                        or FactoryLiveState.Blocked or FactoryLiveState.Failed
+                        or FactoryLiveState.Unknown or FactoryLiveState.Canceled;
+            }
+            if (key == FactoryPublisher.RootKey)
+            {
+                var original = JsonSerializer.Deserialize<FactoryPublisherCoordinator>(before, FactoryGitHubJson.Options);
+                var current = JsonSerializer.Deserialize<FactoryPublisherCoordinator>(after, FactoryGitHubJson.Options);
+                return original is not null && current is not null
+                    && original with
+                    {
+                        State = current.State,
+                        ConfirmedEffects = current.ConfirmedEffects,
+                        NativeProviderProof = current.NativeProviderProof,
+                    } == current
+                    && original.State is FactoryPublisherState.Reviewed or FactoryPublisherState.Preparing
+                    && current.State is FactoryPublisherState.Preparing
+                        or FactoryPublisherState.PublicationPreparedAwaitingPromotion
+                        or FactoryPublisherState.Blocked or FactoryPublisherState.Failed
+                        or FactoryPublisherState.Unknown or FactoryPublisherState.Canceled;
+            }
+            if (IsPublicationStepKey(key))
+            {
+                var original = JsonSerializer.Deserialize<PreviewPublicationStep>(before, FactoryGitHubJson.Options);
+                var current = JsonSerializer.Deserialize<PreviewPublicationStep>(after, FactoryGitHubJson.Options);
+                return original is not null && current is not null
+                    && original with { State = current.State, NativeRevision = current.NativeRevision } == current
+                    && original.State is PreviewPreparationEffectState.Intended
+                        or PreviewPreparationEffectState.Dispatched
+                    && current.State is PreviewPreparationEffectState.Confirmed
+                        or PreviewPreparationEffectState.KnownFailed
+                        or PreviewPreparationEffectState.Unknown;
+            }
+            if (key == FactoryPreviewPublication.RootKey)
+            {
+                var original = JsonSerializer.Deserialize<PreviewPublicationJournal>(before, FactoryGitHubJson.Options);
+                var current = JsonSerializer.Deserialize<PreviewPublicationJournal>(after, FactoryGitHubJson.Options);
+                return original is not null && current is not null
+                    && original with
+                    {
+                        Phase = current.Phase,
+                        WriteCount = current.WriteCount,
+                        Seed = current.Seed,
+                        Reason = current.Reason,
+                    } == current;
+            }
+        }
+        catch (JsonException) { }
+        return false;
+    }
+
+    private static bool SamePreparationEffect(PreviewPreparationEffect left, PreviewPreparationEffect right) =>
+        left with
+        {
+            State = right.State,
+            ReceiptHashes = right.ReceiptHashes,
+            Reason = right.Reason,
+            CouncilEndpoint = right.CouncilEndpoint,
+            DeploymentOutputsSha256 = right.DeploymentOutputsSha256,
+            Acknowledgment = right.Acknowledgment,
+        } == right;
+
+    private static bool SamePreparationCoordinator(
+        PreviewPreparationCoordinator left, PreviewPreparationCoordinator right) =>
+        left with { State = right.State, ConfirmedEffects = right.ConfirmedEffects, Reason = right.Reason } == right;
+
     private static bool SameOperationIdentity(FoundationOperation left, FoundationOperation right) =>
         left.SchemaVersion == right.SchemaVersion && left.Kind == right.Kind && left.FactoryId == right.FactoryId
         && left.OperationId == right.OperationId && left.Index == right.Index && Same(left.Target, right.Target)
@@ -473,18 +684,8 @@ internal sealed class FactoryOffboardingService(IAzureCliRunner azure, HttpClien
         && left.ConditionVersion == right.ConditionVersion;
 
     private static IReadOnlySet<string> PlannedGrantTargetsFromPlan(FactoryOffboardingPlan plan) =>
-        plan.ProposedRemovals
-            .Select(removal =>
-            {
-                var marker = "grant target=";
-                var start = removal.IndexOf(marker, StringComparison.Ordinal);
-                if (start < 0) return null;
-                start += marker.Length;
-                var end = removal.IndexOf(';', start);
-                return end < 0 ? null : removal[start..end];
-            })
-            .Where(target => target is not null)
-            .Select(target => target!)
+        plan.ApprovedGrantRemovals
+            .Select(grant => grant.Target)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
     private static string AuthoritySnapshotRevision(string ownerRevision,
@@ -495,6 +696,126 @@ internal sealed class FactoryOffboardingService(IAzureCliRunner azure, HttpClien
 
     private static object NormalizedAuthorityRecord(ConfigurationSetting record)
     {
+        if (IsPreparationEffectKey(record.Key))
+        {
+            try
+            {
+                var effect = JsonSerializer.Deserialize<PreviewPreparationEffect>(record.Value, FactoryGitHubJson.Options);
+                if (effect is not null)
+                    return new
+                    {
+                        record.Key,
+                        Operation = FactoryModelsValidation.Hash(effect with
+                        {
+                            State = PreviewPreparationEffectState.Intended,
+                            ReceiptHashes = [],
+                            Reason = null,
+                            CouncilEndpoint = null,
+                            DeploymentOutputsSha256 = null,
+                            Acknowledgment = null,
+                        }),
+                    };
+            }
+            catch (JsonException) { }
+        }
+        if (record.Key == FactoryPreviewPreparation.RootKey)
+        {
+            try
+            {
+                var coordinator = JsonSerializer.Deserialize<PreviewPreparationCoordinator>(
+                    record.Value, FactoryGitHubJson.Options);
+                if (coordinator is not null)
+                    return new
+                    {
+                        record.Key,
+                        Operation = FactoryModelsValidation.Hash(coordinator with
+                        {
+                            State = PreviewPreparationState.Reviewed,
+                            ConfirmedEffects = 0,
+                            Reason = null,
+                        }),
+                    };
+            }
+            catch (JsonException) { }
+        }
+        if (record.Key == FactoryLive.RootKey)
+        {
+            try
+            {
+                var coordinator = JsonSerializer.Deserialize<FactoryLiveCoordinator>(
+                    record.Value, FactoryGitHubJson.Options);
+                if (coordinator is not null)
+                    return new
+                    {
+                        record.Key,
+                        Operation = FactoryModelsValidation.Hash(coordinator with
+                        {
+                            State = FactoryLiveState.Reviewed,
+                            ConfirmedEffects = 0,
+                        }),
+                    };
+            }
+            catch (JsonException) { }
+        }
+        if (record.Key == FactoryPublisher.RootKey)
+        {
+            try
+            {
+                var coordinator = JsonSerializer.Deserialize<FactoryPublisherCoordinator>(
+                    record.Value, FactoryGitHubJson.Options);
+                if (coordinator is not null)
+                    return new
+                    {
+                        record.Key,
+                        Operation = FactoryModelsValidation.Hash(coordinator with
+                        {
+                            State = FactoryPublisherState.Reviewed,
+                            ConfirmedEffects = 0,
+                            NativeProviderProof = null,
+                        }),
+                    };
+            }
+            catch (JsonException) { }
+        }
+        if (IsPublicationStepKey(record.Key))
+        {
+            try
+            {
+                var step = JsonSerializer.Deserialize<PreviewPublicationStep>(record.Value, FactoryGitHubJson.Options);
+                if (step is not null)
+                    return new
+                    {
+                        record.Key,
+                        Operation = FactoryModelsValidation.Hash(step with
+                        {
+                            State = PreviewPreparationEffectState.Intended,
+                            NativeRevision = null,
+                        }),
+                    };
+            }
+            catch (JsonException) { }
+        }
+        if (record.Key == FactoryPreviewPublication.RootKey)
+        {
+            try
+            {
+                var journal = JsonSerializer.Deserialize<PreviewPublicationJournal>(
+                    record.Value, FactoryGitHubJson.Options);
+                if (journal is not null)
+                    return new
+                    {
+                        record.Key,
+                        Operation = FactoryModelsValidation.Hash(journal with
+                        {
+                            Phase = PreviewPublicationPhase.PublishingSeedCapability,
+                            WriteCount = 0,
+                            Seed = null,
+                            Reason = null,
+                        }),
+                    };
+            }
+            catch (JsonException) { }
+        }
         try
         {
             var effect = JsonSerializer.Deserialize<FoundationOperation>(record.Value, FactoryGitHubJson.Options);
@@ -543,6 +864,36 @@ internal sealed class FactoryOffboardingService(IAzureCliRunner azure, HttpClien
         IReadOnlyDictionary<string, ConfigurationSetting> authority) =>
         authority.Where(pair => !FactoryOffboarding.IsStopRecord(pair.Key))
             .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+
+    private static bool IsPreparationEffectKey(string key) =>
+        key.StartsWith(FactoryPreviewPreparation.Namespace + "/", StringComparison.Ordinal)
+            && key.Contains("/effects/", StringComparison.Ordinal)
+        || key.StartsWith(FactoryLive.Prefix, StringComparison.Ordinal)
+            && key.Contains("/effects/", StringComparison.Ordinal)
+        || key.StartsWith(FactoryPublisher.Prefix, StringComparison.Ordinal)
+            && key.Contains("/effects/", StringComparison.Ordinal);
+
+    private static bool IsPublicationStepKey(string key)
+    {
+        if (!key.StartsWith(FactoryPreviewPublication.Namespace, StringComparison.Ordinal)
+            || key == FactoryPreviewPublication.RootKey)
+            return false;
+        var separator = key.LastIndexOf('/');
+        return separator >= 0 && int.TryParse(key[(separator + 1)..],
+            System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out _);
+    }
+
+    private static async Task<IReadOnlyDictionary<string, ConfigurationSetting>> ReadOffboardingAuthorityAsync(
+        OwnerReservationStore product, CancellationToken token)
+    {
+        var authority = (await product.ReadFactoryAuthorityAsync(token))
+            .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+        foreach (var prefix in new[] { FactoryLive.Prefix, FactoryPublisher.Prefix })
+            foreach (var pair in await product.ReadNamespaceAsync(prefix, token, maximumRecords: 256))
+                if (!authority.TryAdd(pair.Key, pair.Value))
+                    throw new JsonException("Duplicate product authority record.");
+        return authority;
+    }
 
     private static async Task<bool> ConfirmAdmissionClosedAsync(
         OwnerReservationStore product, string expectedValue, FactoryOffboardingRequest expected,

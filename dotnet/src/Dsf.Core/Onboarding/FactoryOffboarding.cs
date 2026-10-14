@@ -14,7 +14,15 @@ public sealed record FactoryOffboardingPlan(
     string AuthorityRevision, IReadOnlyList<string> PreservedAssets,
     IReadOnlyList<string> ProposedRemovals, IReadOnlyList<string> OwnershipBlockers,
     IReadOnlyList<string> ContinuingCosts, IReadOnlyList<string> ResidualAuthority,
-    string Fingerprint);
+    string Fingerprint)
+{
+    public IReadOnlyList<FactoryOffboardingGrant> ApprovedGrantRemovals { get; init; } = [];
+}
+
+public sealed record FactoryOffboardingGrant(
+    string AuthorityKey, Guid FactoryId, Guid OperationId, int Index, string Target, string ApiVersion,
+    string RequestSha256, Guid ClientRequestId, DateTimeOffset StartedAt, string PrincipalId,
+    string RoleDefinitionId, string Scope, string? Condition, string? ConditionVersion);
 
 public sealed record FactoryOffboardingRequest(
     int Protocol, string Kind, Guid OperationId, Guid FactoryId, string PlanFingerprint,

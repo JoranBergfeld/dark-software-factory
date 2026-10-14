@@ -294,12 +294,14 @@ public sealed class FactoryOffboardingTests
         Assert.DoesNotContain(scenario.Arm.Product.Values(), pair => pair.Key == FactoryOffboarding.Key);
     }
 
-    [Fact]
-    public async Task Pending_preparation_effect_blocks_detached_certification_after_admission_closes()
+    [Theory]
+    [InlineData("preview")]
+    [InlineData("live")]
+    [InlineData("publisher")]
+    public async Task Real_preparation_effects_block_detached_certification_after_admission_closes(string kind)
     {
         using var scenario = await CharterScenario.ReadyAsync();
-        var effect = RacingGrant(scenario, FoundationOperationState.InFlight, FoundationResourceDisposition.CreateRequested);
-        scenario.Arm.Product.Seed("dsf/factory/racing-grant", JsonSerializer.Serialize(effect, FactoryGitHubJson.Options));
+        var effect = SeedPreparation(scenario, kind, PreviewPreparationEffectState.Dispatched);
         var operation = Guid.NewGuid();
         var reviewed = await scenario.Machine.InvokeAsync("offboard", "--operation", operation.ToString());
 
@@ -313,16 +315,32 @@ public sealed class FactoryOffboardingTests
         Assert.DoesNotContain(effect.Target, scenario.Previous.DeletedGrants);
     }
 
-    [Fact]
-    public async Task Preparation_completing_during_admission_close_is_reconciled_before_detached()
+    [Theory]
+    [InlineData("preview")]
+    [InlineData("live")]
+    [InlineData("publisher")]
+    public async Task Uncertain_real_preparation_coordinators_block_detached_certification(string kind)
     {
         using var scenario = await CharterScenario.ReadyAsync();
-        var effect = RacingGrant(scenario, FoundationOperationState.InFlight, FoundationResourceDisposition.CreateRequested);
-        const string key = "dsf/factory/racing-grant";
-        scenario.Arm.Product.Seed(key, JsonSerializer.Serialize(effect, FactoryGitHubJson.Options));
+        SeedPreparation(scenario, kind, PreviewPreparationEffectState.Confirmed, uncertainCoordinator: true);
         var operation = Guid.NewGuid();
         var reviewed = await scenario.Machine.InvokeAsync("offboard", "--operation", operation.ToString());
-        Assert.Contains(effect.Target, reviewed.Result["plan"]!["proposedRemovals"]!.ToJsonString(), StringComparison.OrdinalIgnoreCase);
+
+        var result = await scenario.Machine.InvokeAsync("offboard", "--operation", operation.ToString(),
+            "--approve", (string)reviewed.Result["plan"]!["fingerprint"]!);
+
+        Assert.Equal("Partial", (string?)result.Result["state"]);
+        Assert.Contains(result.Result["blockedRemovals"]!.AsArray(),
+            item => ((string)item!).Contains("coordinator", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task Real_preparation_effect_completing_during_admission_close_is_reconciled_before_detached()
+    {
+        using var scenario = await CharterScenario.ReadyAsync();
+        var effect = SeedPreparation(scenario, "preview", PreviewPreparationEffectState.Intended);
+        var operation = Guid.NewGuid();
+        var reviewed = await scenario.Machine.InvokeAsync("offboard", "--operation", operation.ToString());
         var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         scenario.Arm.Product.BeforePut = async (writeKey, _) =>
@@ -336,48 +354,140 @@ public sealed class FactoryOffboardingTests
         var execution = scenario.Machine.InvokeAsync("offboard", "--operation", operation.ToString(),
             "--approve", (string)reviewed.Result["plan"]!["fingerprint"]!);
         await reached.Task;
-        var completed = effect with
-        {
-            State = FoundationOperationState.Completed,
-            Disposition = FoundationResourceDisposition.Created,
-            HttpStatus = 201,
-        };
-        scenario.Arm.Product.Change(key, _ => JsonSerializer.Serialize(completed, FactoryGitHubJson.Options));
-        scenario.Previous.SeedResource(effect.Target, new JsonObject
-        {
-            ["id"] = effect.Target,
-            ["properties"] = new JsonObject
-            {
-                ["principalId"] = effect.PrincipalId,
-                ["roleDefinitionId"] = effect.RoleDefinitionId,
-                ["scope"] = effect.RoleScope,
-                ["condition"] = null,
-                ["conditionVersion"] = null,
-                ["createdOn"] = effect.Incarnation,
-            },
-        });
+        scenario.Arm.Product.Change(FactoryPreviewPreparation.EffectKey(effect.OperationId, effect.Index), _ =>
+            JsonSerializer.Serialize(effect with { State = PreviewPreparationEffectState.Confirmed },
+                FactoryGitHubJson.Options));
+        scenario.Arm.Product.Change(FactoryPreviewPreparation.RootKey, value =>
+            JsonSerializer.Serialize(
+                JsonSerializer.Deserialize<PreviewPreparationCoordinator>(value, FactoryGitHubJson.Options)! with
+                {
+                    State = PreviewPreparationState.ConfirmedNotReady,
+                    ConfirmedEffects = 1,
+                }, FactoryGitHubJson.Options));
         release.SetResult();
 
         var result = await execution;
 
         Assert.Equal("Detached", (string?)result.Result["state"]);
-        Assert.Contains(effect.Target, scenario.Previous.DeletedGrants);
         scenario.Reconstruct();
         var repeated = await scenario.Machine.InvokeAsync("offboard", "--operation", operation.ToString(),
             "--approve", (string)reviewed.Result["plan"]!["fingerprint"]!);
         Assert.Equal("Detached", (string?)repeated.Result["state"]);
     }
 
-    private static FoundationOperation RacingGrant(
-        CharterScenario scenario, FoundationOperationState state, FoundationResourceDisposition disposition)
+    [Fact]
+    public async Task Grant_created_after_review_is_preserved_pending_a_new_review()
+    {
+        using var scenario = await CharterScenario.ReadyAsync();
+        var operation = Guid.NewGuid();
+        var reviewed = await scenario.Machine.InvokeAsync("offboard", "--operation", operation.ToString());
+        var grant = NewGrant(scenario, "post-review");
+        scenario.Arm.Product.BeforePut = (writeKey, _) =>
+        {
+            if (writeKey != FactoryOffboarding.Key) return Task.CompletedTask;
+            scenario.Arm.Product.BeforePut = null;
+            scenario.Arm.Product.Seed("dsf/factory/post-review-grant",
+                JsonSerializer.Serialize(grant, FactoryGitHubJson.Options));
+            scenario.Previous.SeedResource(grant.Target, GrantResource(grant));
+            return Task.CompletedTask;
+        };
+
+        var result = await scenario.Machine.InvokeAsync("offboard", "--operation", operation.ToString(),
+            "--approve", (string)reviewed.Result["plan"]!["fingerprint"]!);
+
+        Assert.Equal("Partial", (string?)result.Result["state"]);
+        Assert.DoesNotContain(grant.Target, scenario.Previous.DeletedGrants);
+        Assert.Contains(result.Result["blockedRemovals"]!.AsArray(),
+            item => ((string)item!).Contains("newly reviewed plan", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task Grant_with_changed_reviewed_ownership_is_preserved_pending_a_new_review()
+    {
+        using var scenario = await CharterScenario.ReadyAsync();
+        const string key = "dsf/factory/reviewed-grant";
+        var original = NewGrant(scenario, "reviewed-grant");
+        scenario.Arm.Product.Seed(key, JsonSerializer.Serialize(original, FactoryGitHubJson.Options));
+        scenario.Previous.SeedResource(original.Target, GrantResource(original));
+        var operation = Guid.NewGuid();
+        var reviewed = await scenario.Machine.InvokeAsync("offboard", "--operation", operation.ToString());
+        var changed = original with { PrincipalId = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee" };
+        scenario.Arm.Product.BeforePut = (writeKey, _) =>
+        {
+            if (writeKey != FactoryOffboarding.Key) return Task.CompletedTask;
+            scenario.Arm.Product.BeforePut = null;
+            scenario.Arm.Product.Change(key, _ => JsonSerializer.Serialize(changed, FactoryGitHubJson.Options));
+            scenario.Previous.ChangeResource(changed.Target,
+                resource => resource["properties"]!["principalId"] = changed.PrincipalId);
+            return Task.CompletedTask;
+        };
+
+        var result = await scenario.Machine.InvokeAsync("offboard", "--operation", operation.ToString(),
+            "--approve", (string)reviewed.Result["plan"]!["fingerprint"]!);
+
+        Assert.Equal("Partial", (string?)result.Result["state"]);
+        Assert.DoesNotContain(changed.Target, scenario.Previous.DeletedGrants);
+        Assert.Contains(result.Result["blockedRemovals"]!.AsArray(),
+            item => ((string)item!).Contains("newly reviewed plan", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static PreviewPreparationEffect SeedPreparation(
+        CharterScenario scenario, string kind, PreviewPreparationEffectState state, bool uncertainCoordinator = false)
     {
         var manifest = JsonSerializer.Deserialize<FactoryManifest>(
             scenario.Arm.Product.Values()[ProductConfigurationKeys.FactoryManifest], FactoryGitHubJson.Options)!;
-        const string target = "/subscriptions/22222222-2222-2222-2222-222222222222/resourceGroups/widget-decide"
-            + "/providers/Microsoft.Authorization/roleAssignments/cccccccc-cccc-cccc-cccc-cccccccccccc";
-        return new(1, "racing-preparation-grant", manifest.Identity.FactoryId, Guid.NewGuid(), 0, target,
+        var operation = Guid.NewGuid();
+        var effect = new PreviewPreparationEffect(1, manifest.Identity.FactoryId, operation, new string('a', 64), 0,
+            "/subscriptions/22222222-2222-2222-2222-222222222222/resourceGroups/widget-decide"
+                + "/providers/Microsoft.App/containerApps/widget-decide",
+            new string('b', 64), Guid.NewGuid(), DateTimeOffset.Parse("2026-09-15T22:00:00Z"),
+            state, [], null);
+        switch (kind)
+        {
+            case "preview":
+                scenario.Arm.Product.Seed(FactoryPreviewPreparation.RootKey,
+                    JsonSerializer.Serialize(new PreviewPreparationCoordinator(1, FactoryPreviewPreparation.Kind,
+                        manifest.Identity.FactoryId, operation, effect.PlanFingerprint, new string('c', 64), 0, 0,
+                        manifest.Identity.AzureActorId, effect.IntendedAt, Guid.NewGuid(),
+                        uncertainCoordinator ? PreviewPreparationState.Unknown : PreviewPreparationState.Partial,
+                        state == PreviewPreparationEffectState.Confirmed ? 1 : 0, null), FactoryGitHubJson.Options));
+                scenario.Arm.Product.Seed(FactoryPreviewPreparation.EffectKey(operation, 0),
+                    JsonSerializer.Serialize(effect, FactoryGitHubJson.Options));
+                break;
+            case "live":
+                scenario.Arm.Product.Seed(FactoryLive.RootKey,
+                    JsonSerializer.Serialize(new FactoryLiveCoordinator(1, manifest.Identity.FactoryId, operation,
+                        effect.PlanFingerprint, new string('c', 64), 0, 0, manifest.Identity.AzureActorId,
+                        effect.IntendedAt, uncertainCoordinator ? FactoryLiveState.Unknown : FactoryLiveState.Preparing,
+                        state == PreviewPreparationEffectState.Confirmed ? 1 : 0), FactoryGitHubJson.Options));
+                scenario.Arm.Product.Seed(FactoryLive.EffectKey(operation, 0),
+                    JsonSerializer.Serialize(effect, FactoryGitHubJson.Options));
+                break;
+            case "publisher":
+                scenario.Arm.Product.Seed(FactoryPublisher.RootKey,
+                    JsonSerializer.Serialize(new FactoryPublisherCoordinator(1, manifest.Identity.FactoryId, operation,
+                        effect.PlanFingerprint, new string('c', 64), 0, 0, manifest.Identity.AzureActorId,
+                        effect.IntendedAt,
+                        uncertainCoordinator ? FactoryPublisherState.Unknown : FactoryPublisherState.Preparing,
+                        state == PreviewPreparationEffectState.Confirmed ? 1 : 0), FactoryGitHubJson.Options));
+                scenario.Arm.Product.Seed(FactoryPublisher.EffectKey(operation, 0),
+                    JsonSerializer.Serialize(effect, FactoryGitHubJson.Options));
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(kind));
+        }
+        return effect;
+    }
+
+    private static FoundationOperation NewGrant(CharterScenario scenario, string kind)
+    {
+        var manifest = JsonSerializer.Deserialize<FactoryManifest>(
+            scenario.Arm.Product.Values()[ProductConfigurationKeys.FactoryManifest], FactoryGitHubJson.Options)!;
+        var target = "/subscriptions/22222222-2222-2222-2222-222222222222/resourceGroups/widget-decide"
+            + $"/providers/Microsoft.Authorization/roleAssignments/{Guid.NewGuid():D}";
+        return new(1, kind, manifest.Identity.FactoryId, Guid.NewGuid(), 0, target,
             "2022-04-01", new string('c', 64), Guid.NewGuid(), DateTimeOffset.Parse("2026-09-15T22:00:00Z"),
-            state, disposition)
+            FoundationOperationState.Completed, FoundationResourceDisposition.Created)
         {
             PrincipalId = "cccccccc-cccc-cccc-cccc-cccccccccccc",
             RoleDefinitionId = "/subscriptions/22222222-2222-2222-2222-222222222222"
@@ -386,4 +496,18 @@ public sealed class FactoryOffboardingTests
             Incarnation = "2026-09-15T22:00:00+00:00",
         };
     }
+
+    private static JsonObject GrantResource(FoundationOperation grant) => new()
+    {
+        ["id"] = grant.Target,
+        ["properties"] = new JsonObject
+        {
+            ["principalId"] = grant.PrincipalId,
+            ["roleDefinitionId"] = grant.RoleDefinitionId,
+            ["scope"] = grant.RoleScope,
+            ["condition"] = grant.Condition,
+            ["conditionVersion"] = grant.ConditionVersion,
+            ["createdOn"] = grant.Incarnation,
+        },
+    };
 }
