@@ -139,10 +139,12 @@ internal sealed class FactoryReservationService(
                 var foundation = new FactoryFoundationService(azure, http, clock);
                 var admission = Result(anchor, root, anchor.State, "Foundation has started.") with
                 { Plan = plan, ConfirmedClaims = confirmedClaims, ConfirmedPlanChunks = anchor.PlanChunks };
-                if (!resume) return await foundation.InspectAsync(admission, anchor.Foundation, token);
-                return await foundation.ResumeAsync(admission, anchor.Foundation,
+                FactoryReservationResult result;
+                if (!resume) result = await foundation.InspectAsync(admission, anchor.Foundation, token);
+                else result = await foundation.ResumeAsync(admission, anchor.Foundation,
                     () => new ApplicationBoundaryPlanner(reviewer, new AzureBoundaryReader(azure))
                         .PlanAsync(plan.Selection, token, anchor.Identity.PlanFingerprint, proof), token);
+                return await FactoryReconfigurationProjection.ApplyAsync(result, reviewer, azure, http, clock, token);
             }
             if (!resume)
                 return Result(anchor, root, anchor.Intent is not null && anchor.State == FactoryReservationState.Partial ? FactoryReservationState.Unknown : anchor.State,

@@ -99,17 +99,21 @@ public static class FactoryAudit
         {
             var root = Require(AuditStoreKind.Governance, FactoryReconfigurationOperationRecords.RootKey);
             var operation = FactoryReconfigurationOperationRecords.Read(root.Content, manifest.Identity, now);
-            if (operation.ReviewedManifest != manifest || operation.ManifestRevision !=
-                Require(AuditStoreKind.Governance, ProductConfigurationKeys.FactoryManifest).Identity.NativeRevision)
+            if (operation.Phase == FactoryReconfigurationPhase.Quiescing
+                && (operation.ReviewedManifest != manifest || operation.ManifestRevision !=
+                    Require(AuditStoreKind.Governance, ProductConfigurationKeys.FactoryManifest).Identity.NativeRevision))
                 throw new JsonException("Reviewed reconfiguration manifest differs.");
             var manifestRecord = Require(AuditStoreKind.Governance, ProductConfigurationKeys.FactoryManifest);
             Link(root, manifestRecord);
             if (operation.ConfirmedChunks == operation.InputChunks)
             {
                 var archive = FactoryReconfigurationOperationRecords.ValidateArchive(operation, reconfigurationValues);
-                if (reconfigurationValues.Count != archive.Count + 1)
+                if (operation.Phase == FactoryReconfigurationPhase.Quiescing
+                    && reconfigurationValues.Count != archive.Count + 1)
                     throw new JsonException("Unexpected reconfiguration operation record.");
                 foreach (var key in archive) Link(root, Require(AuditStoreKind.Governance, key));
+                foreach (var key in reconfigurationValues.Keys.Except(archive.Append(root.Identity.Key), StringComparer.Ordinal))
+                    Link(root, Require(AuditStoreKind.Governance, key));
             }
             else
             {

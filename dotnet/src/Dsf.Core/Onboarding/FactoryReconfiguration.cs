@@ -44,7 +44,7 @@ public sealed record FactoryReconfigurationReview(FactoryReconfigurationState St
     public bool HasRemoteEffects { get; init; }
     public bool? AdmissionClosed { get; init; }
     public FactoryReconfigurationOperation? Operation { get; init; }
-    public bool ConfigurationApplied => false;
+    public bool ConfigurationApplied => Operation?.Phase >= FactoryReconfigurationPhase.AwaitingEvidence;
     public bool IsActivated => false;
     public bool CanApply => false;
     public string NextActor => "operator / eligible resource, source and model administrators";

@@ -42,6 +42,7 @@ public sealed record FactoryReservationResult(
     public int ConfirmedPlanChunks { get; init; }
     public ReservationWriteIntent? PendingIntent { get; init; }
     public ApplicationBoundaryPlan? Plan { get; init; }
+    public ApplicationBoundaryPlan? ReconfiguredPlan { get; init; }
     public FactoryFoundationResult? Foundation { get; init; }
     public FactoryGitHubAuthority? GitHubAuthority { get; init; }
     public FactoryTelemetry? Telemetry { get; init; }

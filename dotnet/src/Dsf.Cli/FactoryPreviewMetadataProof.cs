@@ -24,8 +24,18 @@ internal sealed class FactoryPreviewMetadataProof(IReadOnlyDictionary<string, st
         }
         if (records.Values.Any(r => r.ContentType != (FactoryPreviewPublication.IsPreparationRecord(r.Key)
             ? FactoryPreviewPublication.PreparationContentType : FactoryPreviewValidation.RecordContentType))) throw Unconfirmed();
+        var historyManifest = manifest;
+        var reconfiguration = await store.ReadAsync(FactoryReconfigurationOperationRecords.RootKey, token);
+        if (reconfiguration is not null)
+        {
+            var transition = FactoryReconfigurationOperationRecords.Read(
+                reconfiguration.Value, admission.Identity!, clock.GetUtcNow());
+            if (transition.Phase is FactoryReconfigurationPhase.Reconciling or FactoryReconfigurationPhase.AwaitingEvidence)
+                historyManifest = transition.ReviewedManifest;
+        }
         DefinitePreviewPreparation history;
-        try { history = FactoryPreviewPublication.ReadDefinite(manifest, records.ToDictionary(p => p.Key, p => p.Value.Value), clock.GetUtcNow()); }
+        try { history = FactoryPreviewPublication.ReadDefinite(historyManifest,
+            records.ToDictionary(p => p.Key, p => p.Value.Value), clock.GetUtcNow()); }
         catch (PreviewCapabilityException) { throw Unconfirmed(); }
         if (history.Plan.Manifest.Identity != admission.Identity) throw Unconfirmed();
         var revisions = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);

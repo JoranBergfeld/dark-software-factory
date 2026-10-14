@@ -33,15 +33,48 @@ internal sealed partial class FactoryReconfigurationTransition(
                     return Result(FactoryReconfigurationState.Blocked, "A different original reconfiguration remains retained; no replacement or takeover.");
                 if (resume)
                 {
-                    operation = await ResumeInputArchiveAsync(admission, store, records, root, operation, input, () => effects = true, token);
+                    FactoryReconfigurationReview? reviewed = null;
+                    if (operation.Phase == FactoryReconfigurationPhase.Quiescing)
+                    {
+                        operation = await ResumeInputArchiveAsync(admission, store, records, root, operation, input, () => effects = true, token);
+                        records = await store.ReadNamespaceAsync(FactoryReconfigurationOperationRecords.Prefix, token,
+                            FactoryReconfigurationOperationRecords.MaximumRecords);
+                        root = records[FactoryReconfigurationOperationRecords.RootKey];
+                        operation = FactoryReconfigurationOperationRecords.Read(root.Value, identity, clock.GetUtcNow());
+                        if (!ReadInputs(records, operation, out var retained) || retained is null) throw new JsonException();
+                        input = retained;
+                        reviewed = await new FactoryReconfigurationService(reviewer, azure, http, clock)
+                            .ReviewAsync(admission, input, operation.ApprovalFingerprint, token, operation.OperationId);
+                        if (reviewed.State != FactoryReconfigurationState.Reviewed
+                            || reviewed.Fingerprint != operation.ApprovalFingerprint)
+                            throw new ReservationStoreException(FactoryReservationState.Blocked,
+                                "Current governing authority differs from the admitted review; no configuration writes.");
+                    }
+                    else
+                    {
+                        if (!ReadInputs(records, operation, out var retained) || retained is null) throw new JsonException();
+                        if (input is not null && FactoryModelsValidation.Hash(input) != FactoryModelsValidation.Hash(retained))
+                            throw new ReservationStoreException(FactoryReservationState.Blocked,
+                                "Resume input differs from retained reviewed input; no replacement.");
+                        input = retained;
+                    }
+                    if (operation.Phase is FactoryReconfigurationPhase.Quiescing or FactoryReconfigurationPhase.Reconciling)
+                    {
+                        operation = await ApplyConfigurationAsync(admission, store, root, operation, input!, reviewed,
+                            () => effects = true, token);
+                        return Result(FactoryReconfigurationState.Partial,
+                            "Reviewed configuration applied conditionally. Previous evidence and activation are historical; renewed checks and preview required.");
+                    }
                     return Result(FactoryReconfigurationState.Partial,
-                        "Original exact reviewed input archive recovered under a new conditional coordinator; old admission remains closed, pending native reconciliation.");
+                        "Reviewed configuration remains applied under the original operation; continue only the required renewed evidence and activation stages.");
                 }
                 if (!inspect)
                     return Result(FactoryReconfigurationState.Partial, "Original transition retained. Inspect the same operation; no repeated application or old-configuration restart.");
                 var complete = ReadInputs(records, operation, out _);
                 return Result(FactoryReconfigurationState.Partial, complete
-                    ? "Exact reviewed inputs retained and old admission closed. Original admitted/issued effects still require native reconciliation; no completed-stop or application claim."
+                    ? operation.Phase >= FactoryReconfigurationPhase.AwaitingEvidence
+                        ? "Exact reviewed configuration is applied and old admission remains closed. Renewed evidence, preview and activation are still required."
+                        : "Exact reviewed inputs retained and old admission closed. Original admitted/issued effects still require native reconciliation; no completed-stop or application claim."
                     : "Old admission closed, but original input archive is incomplete. Retain this operation and exact original input; no replacement.");
             }
             if (inspect || resume)
@@ -102,7 +135,9 @@ internal sealed partial class FactoryReconfigurationTransition(
                 ReservationStoreException r when r.State == FactoryReservationState.Blocked => FactoryReconfigurationState.Blocked,
                 ReservationStoreException r when r.State == FactoryReservationState.Failed => closed == true ? FactoryReconfigurationState.Partial : FactoryReconfigurationState.Failed,
                 _ => FactoryReconfigurationState.Unknown,
-            }, "Original transition state or dispatched write is unconfirmed. Inspect the retained operation; no rollback, old-configuration resume or forced replay.");
+            }, e is ReservationStoreException reservation
+                ? reservation.Message
+                : "Original transition state or dispatched write is unconfirmed. Inspect the retained operation; no rollback, old-configuration resume or forced replay.");
         }
 
         FactoryReconfigurationReview Result(FactoryReconfigurationState state, string detail) => new(state, detail)
@@ -118,10 +153,7 @@ internal sealed partial class FactoryReconfigurationTransition(
         input = null;
         if (!records.TryGetValue(FactoryReconfigurationOperationRecords.RequestKey(operation.OperationId), out var requestRecord))
             return false;
-        var request = FactoryReconfigurationOperationRecords.Read(requestRecord.Value, operation.Identity, operation.ApprovedAt);
-        if (request.ConfirmedChunks != 0 || request.CoordinatorId != operation.OperationId || FactoryModelsValidation.Hash(operation with
-            { CoordinatorId = request.CoordinatorId, ConfirmedChunks = 0, Phase = request.Phase }) != FactoryModelsValidation.Hash(request))
-            throw new JsonException();
+        _ = FactoryReconfigurationOperationRecords.ReadAdmissionRequest(operation, requestRecord.Value);
         using var content = new MemoryStream();
         for (var index = 0; index < operation.InputChunks; index++)
         {

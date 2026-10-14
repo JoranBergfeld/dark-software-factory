@@ -83,7 +83,8 @@ internal sealed partial class FactoryTelemetryService
         }
         var reader = new AzureBoundaryReader(azure);
         var currentResources = new List<BoundaryResource>();
-        foreach (var id in admission.Plan!.Selection.ApplicationResourceIds)
+        var boundary = (admission.ReconfiguredPlan ?? admission.Plan)!.Selection;
+        foreach (var id in boundary.ApplicationResourceIds)
         {
             var raw = await reader.ReadAsync(["resource", "show", "--ids", id, "--subscription", admission.Identity!.SubscriptionId], token);
             var resource = AzureBoundaryReader.Resource(raw);
@@ -126,7 +127,7 @@ internal sealed partial class FactoryTelemetryService
         var topology = CompleteValues(components).Select(AzureBoundaryReader.Resource).ToArray();
         var discovery = new AzureBoundaryDiscovery(admission.Identity.TenantId, admission.Identity.SubscriptionId,
             admission.Identity.AzureActorId, currentResources, [], []) { InspectedTopology = topology, EvidenceTables = tableModes };
-        var failures = ApplicationBoundaryPolicy.Review(admission.Plan.Selection, discovery);
+        var failures = ApplicationBoundaryPolicy.Review(boundary, discovery);
         if (failures.Count != 0)
             throw new ReservationStoreException(FactoryReservationState.Blocked, "NOT READY: " + string.Join(" ", failures.Select(f => f.Detail))
                 + " Application/evidence administrator must reconcile; no scope, tags, diagnostics or workspace changes.");

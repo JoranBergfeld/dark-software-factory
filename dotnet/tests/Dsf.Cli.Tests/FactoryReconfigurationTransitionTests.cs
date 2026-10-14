@@ -112,7 +112,7 @@ public sealed class FactoryReconfigurationTransitionTests
         Assert.DoesNotContain(transport.Scenario.Arm.Product.Writes, w => w.Key == Root && w.IfNoneMatch == "*");
         var complete = transport.Scenario.Arm.Product.Export();
         var status = await machine.InvokeAsync("reconfigure", "--status", "--operation", operation.ToString());
-        Assert.Equal("Quiescing", (string?)status.Result["operation"]?["phase"]);
+        Assert.Equal("AwaitingEvidence", (string?)status.Result["operation"]?["phase"]);
         Assert.Equal(complete, transport.Scenario.Arm.Product.Export());
         transport.Scenario.Arm.Product.Remove(Root);
         var missing = transport.Scenario.Arm.Product.Export();
@@ -141,6 +141,75 @@ public sealed class FactoryReconfigurationTransitionTests
         var applied = await InvokeAsync(machine, desired, "--apply", "--operation", Guid.NewGuid().ToString(), "--approve", approval);
         Assert.Equal("Blocked", (string?)applied.Result["state"]);
         Assert.Equal(before, transport.Scenario.Arm.Product.Export());
+    }
+
+    [Fact]
+    public async Task Resume_conditionally_applies_configuration_and_invalidates_old_evidence_and_activation()
+    {
+        using var transport = await FactoryActivationTests.ReadyAsync();
+        var machine = transport.Scenario.Machine;
+        var inspected = await machine.InvokeAsync("reconfigure", "--inspect");
+        var desired = inspected.Result["currentInputs"]!.DeepClone();
+        desired["telemetry"]!["freshnessSeconds"] = 7200;
+        desired["judgment"]!["threshold"] = 0.7;
+        var reviewed = await InvokeAsync(machine, desired);
+        var operation = Guid.NewGuid();
+        var admitted = await InvokeAsync(machine, desired, "--apply", "--operation", operation.ToString(),
+            "--approve", (string)reviewed.Result["fingerprint"]!);
+        Assert.Equal("Quiescing", (string?)admitted.Result["operation"]?["phase"]);
+
+        var resumed = await InvokeAsync(machine, desired, "--resume", "--operation", operation.ToString());
+        Assert.True((bool?)resumed.Result["configurationApplied"] == true, resumed.Terminal.Output + resumed.Terminal.Error);
+        Assert.Equal("AwaitingEvidence", (string?)resumed.Result["operation"]?["phase"]);
+        Assert.False((bool)resumed.Result["isActivated"]!);
+        var values = transport.Scenario.Arm.Product.Values();
+        var telemetryRecord = JsonNode.Parse(values[ProductConfigurationKeys.FactoryTelemetry])!;
+        Assert.Equal(7200, (int?)telemetryRecord["configuration"]?["freshnessSeconds"]);
+        Assert.Equal("Partial", (string?)telemetryRecord["state"]);
+        Assert.Null(telemetryRecord["proof"]);
+        var manifest = JsonNode.Parse(values[ProductConfigurationKeys.FactoryManifest])!;
+        Assert.Null(manifest["previewOperationId"]);
+        Assert.Null(manifest["previewApprovalFingerprint"]);
+        Assert.Contains(values.Keys, k => k.StartsWith($"dsf/factory/reconfiguration/{operation:N}/snapshots/", StringComparison.Ordinal));
+        var telemetry = await machine.InvokeAsync("telemetry", "--verify-only");
+        Assert.True(telemetry.Exit == 0, telemetry.Terminal.Output + telemetry.Terminal.Error);
+        Assert.Equal("Ready", (string?)telemetry.Result["telemetry"]?["state"]);
+        var activation = await machine.InvokeAsync("activate", "--operation", Guid.NewGuid().ToString());
+        Assert.Equal("Blocked", (string?)activation.Result["state"]);
+    }
+
+    [Fact]
+    public async Task Application_reserves_added_claim_before_configuration_without_mutating_application_tags()
+    {
+        using var transport = await PreviewEvaluationTests.ConfiguredAsync();
+        FactoryActivationTests.ConnectAudit(transport);
+        var machine = transport.Scenario.Machine;
+        var inspected = await machine.InvokeAsync("reconfigure", "--inspect");
+        var desired = inspected.Result["currentInputs"]!.DeepClone();
+        const string added = BoundaryPlanFixture.Data + "-new";
+        machine.Boundary.Resources[added] = BoundaryPlanFixture.Resource(added, "Microsoft.Storage/storageAccounts");
+        desired["boundary"]!["applicationResourceIds"]!.AsArray().Add(added);
+        desired["boundary"]!["boundaryReview"] = null;
+        var draft = await InvokeAsync(machine, desired);
+        desired["boundary"]!["boundaryReview"] = new JsonObject
+        {
+            ["selectionFingerprint"] = (string)draft.Result["selectionFingerprint"]!,
+            ["accountableOwner"] = "acme/platform",
+            ["dedicated"] = true,
+            ["crossOwnerExclusive"] = true,
+        };
+        var reviewed = await InvokeAsync(machine, desired);
+        Assert.Equal("Reviewed", (string?)reviewed.Result["state"]);
+        var operation = Guid.NewGuid();
+        await InvokeAsync(machine, desired, "--apply", "--operation", operation.ToString(),
+            "--approve", (string)reviewed.Result["fingerprint"]!);
+        var beforeTags = machine.Boundary.Resources[added]["tags"]!.DeepClone();
+        var resumed = await InvokeAsync(machine, desired, "--resume", "--operation", operation.ToString());
+        Assert.Equal("AwaitingEvidence", (string?)resumed.Result["operation"]?["phase"]);
+        var claim = ProductConfigurationKeys.OwnerResourceClaim(added.ToLowerInvariant());
+        Assert.Contains(claim, machine.Store.Export());
+        Assert.True(JsonNode.DeepEquals(beforeTags, machine.Boundary.Resources[added]["tags"]));
+        Assert.True((bool?)resumed.Result["admissionClosed"]);
     }
 
     internal static async Task<(int Exit, JsonNode Result, ScriptedTerminal Terminal)> InvokeAsync(
