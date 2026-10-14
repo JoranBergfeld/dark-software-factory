@@ -1166,6 +1166,16 @@ internal sealed class ReservationTestStore
                     if (current is not null) store.ModifyResponse?.Invoke(request.Method, current);
                     return Reply(current is null ? HttpStatusCode.NotFound : HttpStatusCode.OK, current);
                 }
+                if (request.Method == HttpMethod.Delete)
+                {
+                    var deleteMatch = request.Headers.TryGetValues("If-Match", out var deleteMatches) ? deleteMatches.Single() : null;
+                    if (current is null) return Reply(HttpStatusCode.NotFound, null);
+                    if (deleteMatch != "\"" + (string?)current["etag"] + "\"")
+                        return Reply(HttpStatusCode.PreconditionFailed, null);
+                    store.records.Remove(key);
+                    store.valueSnapshot = null;
+                    return Reply(HttpStatusCode.NoContent, null);
+                }
                 Assert.Equal(HttpMethod.Put, request.Method);
                 var match = request.Headers.TryGetValues("If-Match", out var matches) ? matches.Single() : null;
                 var none = request.Headers.TryGetValues("If-None-Match", out var nones) ? nones.Single() : null;

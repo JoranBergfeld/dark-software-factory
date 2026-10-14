@@ -129,10 +129,11 @@ internal sealed class FactoryReservationService(
                     proof.Add(existing);
                     confirmedClaims++;
                 }
-                else if (i < anchor.CompletedSteps) throw new JsonException();
+                else if (i < anchor.CompletedSteps && anchor.Offboarding is null) throw new JsonException();
             }
             if (anchor.State == FactoryReservationState.Reserved
-                && (anchor.CompletedSteps != steps.Count || anchor.Intent is not null || confirmedClaims != anchor.ClaimCount))
+                && (anchor.CompletedSteps != steps.Count || anchor.Intent is not null
+                    || anchor.Offboarding is null && confirmedClaims != anchor.ClaimCount))
                 throw new JsonException();
             if (anchor.Foundation is not null)
             {

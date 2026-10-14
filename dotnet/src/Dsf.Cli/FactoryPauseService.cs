@@ -34,6 +34,7 @@ internal sealed class FactoryPauseService(IAzureCliRunner azure, HttpClient? htt
                 { Request = retained, AdmissionClosed = true };
             return await ObservePublicationsAsync(admission, store, Requested(retained), token);
         }
+
         if (operation is null)
             return new(FactoryPauseState.NotRequested, "No deliberate pause request observed. This is not readiness, activation or runtime admission.")
             { AdmissionClosed = false };
@@ -63,6 +64,17 @@ internal sealed class FactoryPauseService(IAzureCliRunner azure, HttpClient? htt
         return await ObservePublicationsAsync(admission, store, Requested(request), token);
     }
 
+    internal Task<FactoryPauseResult> InspectIssuedPublicationsAsync(
+        FactoryReservationResult admission, CancellationToken token)
+    {
+        var identity = admission.Identity ?? throw new JsonException();
+        var endpoint = admission.Foundation?.ProductEndpoint ?? throw new JsonException();
+        var store = new OwnerReservationStore(endpoint, identity.TenantId, identity.SubscriptionId, azure, http, identity.AzureActorId);
+        return ObservePublicationsAsync(admission, store,
+            new(FactoryPauseState.DrainingUnknown, "Issued-effect inventory for council detachment.")
+            { AdmissionClosed = true }, token);
+    }
+
     private async Task<FactoryPauseResult> ObservePublicationsAsync(FactoryReservationResult admission, OwnerReservationStore store,
         FactoryPauseResult result, CancellationToken token)
     {
@@ -78,7 +90,7 @@ internal sealed class FactoryPauseService(IAzureCliRunner azure, HttpClient? htt
                     $"{publication.Operation:D}/{e.Index}", e.State == CharterEffectState.Dispatched ? "Unknown" : e.State.ToString(), charter.Revision!)));
             var records = await store.ReadNamespaceAsync(FactoryPromotion.Prefix, pending.Token);
             if (!records.TryGetValue(FactoryPromotion.RootKey, out var root))
-                return result with { IssuedPublications = effects };
+                return result with { IssuedPublications = effects, PublicationInventoryComplete = true };
             var promotion = JsonSerializer.Deserialize<FactoryPromotionApproval>(root.Value, FactorySourceValidation.RecordJson) ?? throw new JsonException();
             if (promotion.FactoryId != admission.Identity!.FactoryId || promotion.Phase != FactoryPromotionPhase.Active
                 || promotion.NativeIndices?.Key != FactoryPromotion.SeedsKey(promotion.OperationId)

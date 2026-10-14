@@ -49,6 +49,9 @@ public static class FactoryPause
 
     public static void RequireAdmissionOpen(IEnumerable<string> keys)
     {
+        if (keys.Any(FactoryOffboarding.IsStopRecord))
+            throw new PreviewCapabilityException(FactoryCharterState.Blocked,
+                "OffboardingOrDetached: council admission closed; retained infrastructure and residual effects grant no runtime authority.");
         // A corrupt root or surviving history can only remove permission, never recreate unpaused authority.
         if (keys.Any(IsStopRecord))
             throw new PreviewCapabilityException(FactoryCharterState.Blocked,

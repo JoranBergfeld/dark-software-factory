@@ -881,6 +881,10 @@ public sealed class FactoryGitHubAuthorityWorkflowTests
         public List<JsonNode> Copies { get; } = [];
         public List<JsonNode> Deployments { get; } = [];
         public List<JsonNode> Grants { get; } = [];
+        public IReadOnlyCollection<string> ResourceIds => resources.Keys;
+        public List<string> DeletedGrants { get; } = [];
+        public List<string> DeletedKeyVersions { get; } = [];
+        public bool CleanupDenied { get; set; }
         public List<string> GrantReads { get; } = [];
         public Action? OnGrantRead { get; set; }
         public string? GrantConditionVersion { get; init; }
@@ -891,6 +895,28 @@ public sealed class FactoryGitHubAuthorityWorkflowTests
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
         {
             var path = request.RequestUri!.AbsolutePath;
+            if (request.Method == HttpMethod.Delete
+                && path.Contains("/providers/microsoft.authorization/roleassignments/", StringComparison.OrdinalIgnoreCase))
+            {
+                if (CleanupDenied) return new(HttpStatusCode.Forbidden);
+                if (!resources.Remove(path)) return new(HttpStatusCode.NotFound);
+                DeletedGrants.Add(path);
+                return new(HttpStatusCode.NoContent);
+            }
+            if (request.RequestUri.Host.EndsWith(".vault.azure.net", StringComparison.Ordinal)
+                && path.StartsWith("/secrets/github-app-private-key/", StringComparison.Ordinal))
+            {
+                var version = request.RequestUri.GetLeftPart(UriPartial.Path);
+                if (request.Method == HttpMethod.Get)
+                    return DeletedKeyVersions.Contains(version)
+                        ? new(HttpStatusCode.NotFound)
+                        : Reply(new JsonObject { ["id"] = version, ["attributes"] = new JsonObject
+                        { ["enabled"] = true, ["created"] = DateTimeOffset.Parse("2026-09-15T23:00:00Z").ToUnixTimeSeconds() } });
+                Assert.Equal(HttpMethod.Delete, request.Method);
+                if (CleanupDenied) return new(HttpStatusCode.Forbidden);
+                DeletedKeyVersions.Add(version);
+                return Reply(new JsonObject { ["recoveryId"] = version + "/deleted", ["deletedDate"] = 1789513200 });
+            }
             if (request.Method == HttpMethod.Get && path.Contains("/providers/microsoft.authorization/roleassignments/", StringComparison.Ordinal))
             {
                 GrantReads.Add(path);
