@@ -11,6 +11,20 @@ namespace Dsf.Cli.Tests;
 public sealed class FactoryActivationAuthorityTests(ActivationAuthorityFixture fixture) : IClassFixture<ActivationAuthorityFixture>
 {
     [Fact]
+    public async Task Offboarding_history_invalidates_retained_operator_activation_authority()
+    {
+        var transport = await fixture.ResetApprovedAsync();
+        transport.Scenario.Arm.Product.Seed(FactoryOffboarding.HistoryKey(Guid.NewGuid()), "{}");
+
+        var result = await transport.Scenario.Machine.InvokeAsync("activate", "--status");
+
+        Assert.NotEqual(0, result.Exit);
+        Assert.False((bool)result.Result["approvalCurrent"]!);
+        Assert.False((bool)result.Result["currentReady"]!);
+        Assert.Contains("OffboardingOrDetached", (string?)result.Result["detail"]);
+    }
+
+    [Fact]
     public async Task Genuine_serialized_operator_approval_cannot_enable_shared_runtime_work_or_a_live_boolean()
     {
         var transport = await fixture.ResetApprovedAsync();

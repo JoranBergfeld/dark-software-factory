@@ -150,7 +150,12 @@ internal sealed class FactoryPublisherAuthority(FactoryHostSettings settings, bo
     {
         var gateway = new AzureConfigurationSettingsGateway(credential, http);
         var transition = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var prefix in new[] { FactoryPause.Key, FactoryPause.HistoryPrefix, FactoryReconfigurationOperationRecords.Prefix })
+        foreach (var prefix in new[]
+                 {
+                     FactoryPause.Key, FactoryPause.HistoryPrefix,
+                     FactoryOffboarding.Key, FactoryOffboarding.HistoryPrefix,
+                     FactoryReconfigurationOperationRecords.Prefix,
+                 })
             await foreach (var record in gateway.ListRecordsAsync(settings.ProductEndpoint, "*", token, prefix + "*"))
                 if (inspection is not null) _ = inspection.Include(record.Key);
                 else if (prefix == FactoryReconfigurationOperationRecords.Prefix) transition.Add(record.Key, record.Value);

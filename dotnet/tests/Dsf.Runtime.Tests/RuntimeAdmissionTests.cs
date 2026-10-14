@@ -14,6 +14,17 @@ namespace Dsf.Runtime.Tests;
 
 public sealed class RuntimeAdmissionTests
 {
+    [Theory]
+    [InlineData("dsf/factory/offboarding")]
+    [InlineData("dsf/factory/audit/offboarding/retained/request")]
+    public void Retained_inspection_degrades_offboarding_to_closed_admission(string key)
+    {
+        var inspection = new FactoryInspectionAuthority();
+
+        Assert.False(inspection.Include(key));
+        Assert.True(inspection.AdmissionClosed);
+    }
+
     private static readonly RuntimeSettings Settings = new(
         "acme", "https://dsfo-11111111111111111111111111111111.azconfig.io.", "", "",
         "https://cosmos.example", "https://openai.example", "gpt-deploy", "embed-deploy", "", "", "", "acme/acme");
@@ -58,7 +69,7 @@ public sealed class RuntimeAdmissionTests
         foreach (var entry in new[] { "manual", "preview", "resume", "sweep", "outcomes", "http", "agent", "loop" })
         foreach (var damage in new[] { "none", "invalid-pin", "missing-profile", "malformed-profile", "unreadable",
                      "missing-manifest", "missing-all", "mutating-profile", "active-manifest", "wrong-factory", "legacy-coexists",
-                     "pause", "pause-history" })
+                     "pause", "pause-history", "offboarding", "offboarding-history" })
             yield return [entry, damage];
     }
 
@@ -77,6 +88,8 @@ public sealed class RuntimeAdmissionTests
         if (damage == "unreadable") configuration.ReadFailure = new Azure.RequestFailedException(403, "secret-governance-provider-detail");
         if (damage == "pause") configuration.Values.Add("dsf/factory/pause", "{unconfirmed-private-stop");
         if (damage == "pause-history") configuration.Values.Add("dsf/factory/audit/pause/retained/request", "{}");
+        if (damage == "offboarding") configuration.Values.Add("dsf/factory/offboarding", "{unconfirmed-private-detach");
+        if (damage == "offboarding-history") configuration.Values.Add("dsf/factory/audit/offboarding/retained/request", "{}");
         if (damage == "legacy-coexists")
             foreach (var item in PersistedRuntimeConfiguration.Greenfield().Values) configuration.Values.Add(item.Key, item.Value);
         if (damage is "mutating-profile" or "active-manifest" or "wrong-factory")
@@ -144,7 +157,9 @@ public sealed class RuntimeAdmissionTests
             });
             error = denied.Message;
         }
-        Assert.Contains(damage is "pause" or "pause-history" ? "DeliberatePause" : damage == "none" ? "Verified product governance"
+        Assert.Contains(damage is "pause" or "pause-history" ? "DeliberatePause"
+            : damage is "offboarding" or "offboarding-history" ? "OffboardingOrDetached"
+            : damage == "none" ? "Verified product governance"
             : damage == "unreadable" ? "unreadable" : "governance", error);
         Assert.DoesNotContain("secret-governance-provider-detail", error);
         Assert.Single(configuration.Reads);

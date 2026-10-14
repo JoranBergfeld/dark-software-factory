@@ -199,6 +199,20 @@ public sealed class LivingDocumentationTests
     }
 
     [Fact]
+    public void Offboarding_guide_preserves_assets_and_discloses_residual_cost_and_authority()
+    {
+        var content = ReadRepoFile("docs/site/get-started/offboard-council.md");
+        var navigation = ReadRepoFile("mkdocs.yml");
+
+        Assert.Contains("dsf onboard decide offboard", content, StringComparison.Ordinal);
+        Assert.Contains("does **not** delete", content, StringComparison.Ordinal);
+        Assert.Contains("keep incurring", content, StringComparison.Ordinal);
+        Assert.Contains("already-issued tokens", content, StringComparison.Ordinal);
+        Assert.Contains("Partial", content, StringComparison.Ordinal);
+        Assert.Contains("offboard-council.md", navigation, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Creation_doc_describes_high_maturity_retry_as_experimental_signal_detection()
     {
         var content = ReadRepoFile("docs/site/concept/creation.md");

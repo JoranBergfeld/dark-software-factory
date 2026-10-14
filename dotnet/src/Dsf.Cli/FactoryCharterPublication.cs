@@ -236,6 +236,8 @@ internal sealed partial class FactoryCharterService
                 : e is CharterOperationException problem ? problem.State : FactoryCharterState.Unknown;
             if (!issued && state == FactoryCharterState.Partial && e is CharterOperationException capacity)
                 return Result(ReadPublication(root, admission), root, capacity.Message, state);
+            if (!issued && e is CharterOperationException blocked)
+                return Result(publication, root, blocked.Message, state);
             return Result(publication, root, "Publication held; native response or current authority unconfirmed. Inspect original receipts; no recreation.", state);
         }
 
@@ -321,10 +323,14 @@ internal sealed partial class FactoryCharterService
 
     private async Task CheckCurrentAsync(FactoryReservationResult admission, CharterReview expected, CancellationToken token)
     {
-        var stops = await ProductStore(admission).ReadNamespaceAsync(FactoryPause.Key, token);
-        var history = await ProductStore(admission).ReadNamespaceAsync(FactoryPause.HistoryPrefix, token);
-        if (stops.Count != 0 || history.Count != 0)
-            throw new CharterOperationException(FactoryCharterState.Blocked, "Stop closes all new charter dispatch, not original outcome inspection.");
+        try
+        {
+            await ProductStore(admission).RequireAdmissionOpenAsync(token);
+        }
+        catch (PreviewCapabilityException e)
+        {
+            throw new CharterOperationException(FactoryCharterState.Blocked, e.Message);
+        }
         var fresh = await new FactoryReservationService(reviewer, azure, http, clock).StatusAsync(admission.Identity!.OwnerEndpoint,
             admission.Identity.TenantId, admission.Identity.SubscriptionId, admission.Identity.ProductKey, token);
         if (fresh.State != FactoryReservationState.Reserved || fresh.Identity != admission.Identity || fresh.Foundation?.State != FactoryFoundationState.Inactive)

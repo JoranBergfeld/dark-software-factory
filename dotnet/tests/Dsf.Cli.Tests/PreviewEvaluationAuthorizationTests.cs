@@ -1,4 +1,5 @@
 using Dsf.Cli;
+using Dsf.Core.Onboarding;
 using Xunit;
 
 namespace Dsf.Cli.Tests;
@@ -23,6 +24,26 @@ public sealed class PreviewEvaluationAuthorizationTests
         Assert.Equal(before, transport.SeedDocuments);
         Assert.DoesNotContain(transport.Requests.Skip(start), r => r.Uri.AbsolutePath is "/evaluate" or "/evaluation");
         PreviewEvaluationTests.AssertNoForbiddenEffects(transport, start);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Offboarding_root_or_history_blocks_operator_preview_evaluation(bool history)
+    {
+        using var transport = await PreviewEvaluationTests.ConfiguredAsync();
+        var operation = Guid.NewGuid();
+        transport.Scenario.Arm.Product.Seed(
+            history ? FactoryOffboarding.HistoryKey(operation) : FactoryOffboarding.Key, "{}");
+        var start = transport.Requests.Count;
+
+        var result = await transport.Scenario.Machine.InvokeAsync(
+            "preview", ["--evaluation", .. PreviewEvaluationTests.Pins(transport)]);
+
+        Assert.NotEqual(0, result.Exit);
+        Assert.Equal("Blocked", (string?)result.Result["readiness"]);
+        Assert.Contains("OffboardingOrDetached", (string?)result.Result["reason"]);
+        Assert.DoesNotContain(transport.Requests.Skip(start), request => request.Uri.AbsolutePath == "/evaluation");
     }
 
     private sealed class RejectCouncilToken(IAzureCliRunner next) : IAzureCliRunner

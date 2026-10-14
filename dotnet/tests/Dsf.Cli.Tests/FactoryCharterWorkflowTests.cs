@@ -13,6 +13,30 @@ namespace Dsf.Cli.Tests;
 public sealed class FactoryCharterWorkflowTests
 {
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Offboarding_root_or_history_blocks_charter_publication_without_GitHub_writes(bool history)
+    {
+        using var scenario = await CharterScenario.ReadyAsync();
+        var review = await scenario.Machine.InvokeAsync("charter");
+        scenario.BeforeGitHubRead = path =>
+        {
+            if (!path.StartsWith("repos/acme/renamed/git/ref/heads/", StringComparison.Ordinal)
+                || path.EndsWith("/" + scenario.Source.Source!.Branch, StringComparison.Ordinal)) return;
+            scenario.BeforeGitHubRead = null;
+            scenario.Arm.Product.Seed(
+                history ? FactoryOffboarding.HistoryKey(Guid.NewGuid()) : FactoryOffboarding.Key, "{}");
+        };
+
+        var result = await scenario.Machine.InvokeAsync(
+            "charter", "--publish", "--approve", (string)review.Result["revision"]!);
+
+        Assert.True((string?)result.Result["state"] == "Blocked", result.Result.ToJsonString());
+        Assert.Contains("OffboardingOrDetached", (string?)result.Result["detail"]);
+        Assert.Empty(scenario.GitHubWrites);
+    }
+
+    [Theory]
     [InlineData("missing-adoption", FactoryCharterState.Blocked)]
     [InlineData("orphaned-adoption", FactoryCharterState.Unknown)]
     [InlineData("missing-payload", FactoryCharterState.Unknown)]
@@ -1120,6 +1144,7 @@ internal sealed class CharterScenario : IDisposable
     internal int? LoseEffect;
     internal int? RejectEffect;
     internal Action<int>? AfterEffect;
+    internal Action<string>? BeforeGitHubRead;
     internal bool HumanBranchEdit;
     internal bool CanPush = true;
     internal bool WrongCommitFiles;
@@ -1190,6 +1215,7 @@ internal sealed class CharterScenario : IDisposable
         var method = args[Array.IndexOf(args.ToArray(), "--method") + 1];
         if (method == "GET")
         {
+            BeforeGitHubRead?.Invoke(path);
             if (path == "repositories/913")
             {
                 var repo = JsonNode.Parse(Machine.Boundary.Repository.Responses[path].StandardOutput)!;

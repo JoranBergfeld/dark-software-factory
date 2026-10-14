@@ -40,6 +40,7 @@ public sealed record FactoryReconfigurationReview(FactoryReconfigurationState St
     public IReadOnlyList<AuditRecordIdentity> AffectedEvidence { get; init; } = [];
     public FactoryKeyCustody? KeyCustody { get; init; }
     public bool DeliberatelyPaused { get; init; }
+    public bool OffboardingOrDetached { get; init; }
     public bool RenewedApprovalRequired { get; init; }
     public bool HasRemoteEffects { get; init; }
     public bool? AdmissionClosed { get; init; }

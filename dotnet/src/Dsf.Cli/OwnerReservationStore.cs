@@ -86,6 +86,16 @@ internal sealed class OwnerReservationStore : IFactoryCharterEvidenceReader
     internal Task<IReadOnlyDictionary<string, ConfigurationSetting>> ReadFactoryAuthorityAsync(CancellationToken token) =>
         ReadNamespaceAsync("dsf/factory/", token, maximumPages: 1024, excludeAudit: true);
 
+    internal async Task RequireAdmissionOpenAsync(CancellationToken token)
+    {
+        foreach (var prefix in new[]
+                 {
+                     FactoryPause.Key, FactoryPause.HistoryPrefix,
+                     FactoryOffboarding.Key, FactoryOffboarding.HistoryPrefix,
+                 })
+            FactoryPause.RequireAdmissionOpen((await ReadNamespaceAsync(prefix, token, maximumRecords: 128)).Keys);
+    }
+
     internal async Task<IReadOnlyDictionary<string, ConfigurationSetting>> ReadNamespaceAsync(string prefix, CancellationToken token,
         int maximumRecords = 1024, long maximumBytes = 4 * 1024 * 1024, int maximumPages = 64, bool excludeAudit = false)
     {
@@ -180,6 +190,7 @@ internal sealed class OwnerReservationStore : IFactoryCharterEvidenceReader
             if (await ReadAsync(expected.Key, token) is not null)
                 throw new FactoryAuditException(FactoryAuditState.Unknown, "Conditional deletion not confirmed; retain original dispatched effect, never retry.");
         }
+
         catch (RequestFailedException e) when (e.Status is 401 or 403)
         { throw new FactoryAuditException(FactoryAuditState.Blocked, "Operator requires App Configuration data-plane delete on the private analysis store; no runtime grant is broadened."); }
         catch (RequestFailedException e) when (e.Status is 409 or 412)
@@ -237,6 +248,45 @@ internal sealed class OwnerReservationStore : IFactoryCharterEvidenceReader
         catch (Exception e) when (e is RequestFailedException or HttpRequestException or OperationCanceledException)
         { throw new ReservationStoreException(FactoryReservationState.Unknown,
             "Owner claim release response unconfirmed; inspect the original reconfiguration."); }
+    }
+
+    internal async Task DeleteOnboardingClaimAsync(ConfigurationSetting expected, CancellationToken token)
+    {
+        if (!(expected.Key.StartsWith(ProductConfigurationKeys.OwnerOnboardingPrefix + "repositories/", StringComparison.Ordinal)
+              || expected.Key.StartsWith(ProductConfigurationKeys.OwnerOnboardingPrefix + "resources/", StringComparison.Ordinal))
+            || expected.Label is not null || expected.ETag.ToString().Length == 0
+            || !FactoryReservationRecords.TryIdentify(expected.Key, expected.Label, expected.Value, out _))
+            throw new ReservationStoreException(FactoryReservationState.Blocked,
+                "Only exact trusted owner repository/resource claims may be released.");
+        try
+        {
+            var response = await client.DeleteConfigurationSettingAsync(expected, onlyIfUnchanged: true, cancellationToken: token);
+            if (response.Status is not (200 or 204))
+                throw new ReservationStoreException(FactoryReservationState.Unknown,
+                    "Native claim deletion response was not confirmed.");
+            if (await ReadAsync(expected.Key, token) is not null)
+                throw new ReservationStoreException(FactoryReservationState.Unknown,
+                    "Conditional claim deletion was not confirmed absent.");
+        }
+        catch (RequestFailedException e) when (e.Status is 401 or 403)
+        {
+            throw new ReservationStoreException(FactoryReservationState.Blocked,
+                "Owner denied exact factory claim release; retained registration remains partial.");
+        }
+        catch (RequestFailedException e) when (e.Status is 409 or 412)
+        {
+            throw new ReservationStoreException(FactoryReservationState.Blocked,
+                "Owner claim changed or conflicts with another operation; no release.");
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception e) when (e is RequestFailedException or HttpRequestException or OperationCanceledException)
+        {
+            throw new ReservationStoreException(FactoryReservationState.Unknown,
+                "Owner claim release response uncertain; inspect exact claim, never retry blindly.");
+        }
     }
 
     private static void VerifyRecord(ConfigurationSetting record, string key)

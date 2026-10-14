@@ -19,6 +19,7 @@ public sealed record FactoryReservationAnchor(
     public ReservationWriteIntent? Intent { get; init; }
     public FactoryReservationState State { get; init; } = FactoryReservationState.Partial;
     public FactoryFoundationPointer? Foundation { get; init; }
+    public FactoryOffboardingPointer? Offboarding { get; init; }
 }
 
 public sealed record FactoryReservationPlanChunk(

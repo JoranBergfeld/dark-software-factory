@@ -89,8 +89,10 @@ internal sealed partial class FactoryReconfigurationService(
                     || !FactoryReconfigurationOperationRecords.IsRecord(r.Identity.Key))
                 .Select(r => new FactoryReconfigurationRevision(r.Identity.Store.ToString(), r.Identity.Key,
                 r.Identity.NativeRevision, r.Identity.Sha256))).OrderBy(r => r.Store, StringComparer.Ordinal).ThenBy(r => r.Key, StringComparer.Ordinal).ToArray();
+        var offboardingOrDetached = anchor.Offboarding is not null || values.Keys.Any(FactoryOffboarding.IsStopRecord);
         var result = new FactoryReconfigurationReview(FactoryReconfigurationState.Inspected,
-            "Authoritative current configuration and protected history, not current readiness or application approval.")
+            "Authoritative current configuration and protected history, not current readiness or application approval."
+            + (!offboardingOrDetached ? "" : " Council offboarding closes admission; retained state remains read-only."))
         {
             FactoryId = identity.FactoryId, RepositoryId = identity.RepositoryId, CurrentInputs = current,
             CurrentRevision = FactoryModelsValidation.Hash(revisions), Revisions = revisions,
@@ -100,6 +102,7 @@ internal sealed partial class FactoryReconfigurationService(
             PreservedAssets = admission.Plan.Categories!.PreservedAssets,
             ReusedPrerequisites = admission.Plan.Categories.ReusedPrerequisites,
             DeliberatelyPaused = values.Keys.Any(k => k == FactoryPause.Key || k.StartsWith(FactoryPause.HistoryPrefix, StringComparison.Ordinal)),
+            OffboardingOrDetached = offboardingOrDetached,
         };
         if (desired is not null)
         {

@@ -54,7 +54,17 @@ internal static class FactoryReservationRecords
                         || anchor.Intent is { } intent && (intent.Step != anchor.CompletedSteps
                             || intent.Step >= anchor.PlanChunks + anchor.ClaimCount - 1 || intent.Label != ProductConfigurationKeys.NoLabel
                             || intent.Key.Length > 256 || !intent.Key.StartsWith(ProductConfigurationKeys.OwnerOnboardingPrefix, StringComparison.Ordinal)
-                            || !IsHash(intent.ValueSha256)))
+                            || !IsHash(intent.ValueSha256))
+                        || anchor.Offboarding is { } offboarding
+                            && (offboarding.OperationId == Guid.Empty
+                                || offboarding.State is not (FactoryOffboardingState.Partial or FactoryOffboardingState.Detached)
+                                || !IsHash(offboarding.PlanFingerprint)
+                                || string.IsNullOrWhiteSpace(offboarding.AuthorityRevision) || offboarding.AuthorityRevision.Length > 256
+                                || offboarding.RequestedAt.Offset != TimeSpan.Zero
+                                || offboarding.RequestedAt < anchor.Identity.CreatedAt
+                                || offboarding.State == FactoryOffboardingState.Detached != (offboarding.CompletedAt is not null)
+                                || offboarding.CompletedAt is { } completed
+                                    && (completed.Offset != TimeSpan.Zero || completed < offboarding.RequestedAt)))
                         return false;
                     identity = anchor.Identity;
                     break;

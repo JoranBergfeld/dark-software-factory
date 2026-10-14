@@ -206,8 +206,12 @@ internal sealed class SourceWorkflowTransport(FactoryFoundationTests.FoundationT
             if (LoseAcquisition) throw new HttpRequestException("Lost source response");
             return new(runner.Status) { Content = new StringContent(runner.Body, System.Text.Encoding.UTF8, "application/json") };
         }
+        if (uri.Host.EndsWith(".vault.azure.net", StringComparison.Ordinal))
+            return await fallback.SendAsync(request, token);
         Assert.Equal("management.azure.com", uri.Host);
         var path = uri.AbsolutePath.ToLowerInvariant();
+        if (request.Method == HttpMethod.Delete)
+            return await fallback.SendAsync(request, token);
         if (request.Method == HttpMethod.Get)
         {
             if (ReplacedNetwork && path.EndsWith("-network", StringComparison.Ordinal))

@@ -194,10 +194,9 @@ internal sealed partial class FactoryPreviewPreparationService
             void Validate(IReadOnlyDictionary<string, JsonElement> resources, string endpoint) => FactoryPublisher.ValidateResources(plan!, resources, endpoint);
             async Task CurrentAsync(bool readiness = false, bool allowPromotion = false)
             {
-                FactoryPause.RequireAdmissionOpen((await store.ReadNamespaceAsync(FactoryPause.Key, token)).Keys);
-                FactoryPause.RequireAdmissionOpen((await store.ReadNamespaceAsync(FactoryPause.HistoryPrefix, token, maximumRecords: 128)).Keys);
+                await store.RequireAdmissionOpenAsync(token);
                 await FactoryReconfigurationGate.RequireAsync(store, plan!.Deployment.Manifest.Identity, clock, token,
-                    FactoryReconfigurationPhase.AwaitingEvidence, FactoryReconfigurationPhase.AwaitingActivation);
+                   FactoryReconfigurationPhase.AwaitingEvidence, FactoryReconfigurationPhase.AwaitingActivation);
                 var currentAuthority = await store.ReadFactoryAuthorityAsync(token);
                 var revision = FactoryModelsValidation.Hash(currentAuthority.Values
                     .Where(r => !r.Key.StartsWith(FactoryReconfigurationOperationRecords.Prefix, StringComparison.Ordinal))

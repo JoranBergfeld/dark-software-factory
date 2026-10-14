@@ -13,6 +13,7 @@ internal sealed partial class FactoryPreviewPreparationService(
     {
         FactoryPreviewPreparation.Validate(selection);
         var store = Store(admission);
+        await store.RequireAdmissionOpenAsync(token);
         if (await store.ReadAsync(FactoryPreviewPreparation.RootKey, token) is not null)
             throw Failure("PreviewPreparationAlreadyHeld: inspect the original operation; no replacement plan.");
         await store.RequirePristineAsync(FactoryPreviewPreparation.Namespace, token);
