@@ -32,7 +32,20 @@ internal sealed class FactoryReservationService(
         var key = ProductConfigurationKeys.OwnerProductClaim(identity.ProductKey);
         var value = FactoryReservationRecords.Serialize(anchor);
         ConfigurationSetting root;
-        try { root = await store.WriteAsync(key, value, null, token); }
+        try
+        {
+            root = await store.WriteAsync(key, value, null, token);
+        }
+        catch (ReservationStoreException e) when (e.State == FactoryReservationState.Blocked)
+        {
+            var existing = await store.ReadAsync(key, token);
+            if (existing is null || !FactoryReservationRecords.TryReadRetirement(
+                    existing.Key, existing.Label, existing.Value, out var retirement))
+                return new(FactoryReservationState.Blocked,
+                    "Product key already has a live, missing or unrecognized registration; no takeover or replacement.",
+                    identity);
+            return await ReplaceRetiredAsync(store, existing, retirement!, anchor, steps, plan, token);
+        }
         catch (ReservationStoreException e)
         {
             return new(token.IsCancellationRequested ? FactoryReservationState.Canceled : e.State,
@@ -41,6 +54,127 @@ internal sealed class FactoryReservationService(
             { HasRegistryEffects = e.State == FactoryReservationState.Unknown };
         }
         return (await ContinueAsync(store, root, anchor, steps, token)) with { HasRegistryEffects = true };
+    }
+
+    private static async Task<FactoryReservationResult> ReplaceRetiredAsync(
+        OwnerReservationStore store, ConfigurationSetting root, FactoryRetirementPointer retirement,
+        FactoryReservationAnchor replacement, IReadOnlyList<(string Key, string Value)> steps,
+        ApplicationBoundaryPlan reviewed, CancellationToken token)
+    {
+        try
+        {
+            var observed = reviewed.OwnerAdmission?.Observations.SingleOrDefault(observation =>
+                observation.Key == root.Key && observation.ETag == root.ETag.ToString()
+                && observation.ValueFingerprint == FactoryReservationRecords.Hash(root.Value));
+            if (observed is null)
+                return new(FactoryReservationState.Blocked,
+                    "Fresh reviewed owner admission did not include the exact retirement pointer; no replacement.",
+                    replacement.Identity);
+            var requestRecord = await store.ReadAsync(
+                FactoryPurge.HistoryKey(retirement.PurgeOperationId), token) ?? throw new JsonException();
+            var request = JsonSerializer.Deserialize<FactoryPurgeRequest>(
+                requestRecord.Value, FactoryGitHubJson.Options) ?? throw new JsonException();
+            if (request.Protocol != 1 || request.Kind != FactoryPurge.Kind
+                || request.OperationId != retirement.PurgeOperationId
+                || request.FactoryId != retirement.FactoryId
+                || request.PlanFingerprint != retirement.PlanFingerprint
+                || request.AuditRevision != retirement.AuditRevision
+                || string.IsNullOrWhiteSpace(request.OwnerAuthorityRevision)
+                || string.IsNullOrWhiteSpace(request.ProductAuthorityRevision)
+                || request.AuditDisposition != retirement.AuditDisposition
+                || request.ApprovedBy != retirement.ApprovedBy
+                || request.RequestedAt > retirement.RetiredAt)
+                throw new JsonException();
+            var pointer = new FactoryPurgePointer(retirement.PurgeOperationId,
+                FactoryPurgeState.Purging, retirement.PlanFingerprint, request.AuthorityRevision,
+                retirement.AuditRevision, request.RequestedAt);
+            var oldIdentity = new FactoryReservationIdentity(retirement.FactoryId, Guid.Empty, "", "",
+                0, "", "", "", "", "", retirement.ApprovedBy, 0, DateTimeOffset.MinValue);
+            var plan = await FactoryPurgeService.ReadPlanAsync(store,
+                oldIdentity with { ProductKey = retirement.ProductKey }, pointer, token);
+            var ordered = plan.ProposedDeletions
+                .OrderBy(resource => resource.AuditBacking ? 1 : 0)
+                .ThenByDescending(resource => resource.ResourceId.Count(character => character == '/'))
+                .ToArray();
+            var effects = await store.ReadNamespaceAsync(
+                FactoryPurge.HistoryPrefix + retirement.PurgeOperationId.ToString("N") + "/effects/",
+                token, maximumRecords: ordered.Length + 1);
+            if (effects.Count != ordered.Length)
+                return new(FactoryReservationState.Blocked,
+                    "Retired factory purge effect set is incomplete or unrecognized; new identity remains blocked.",
+                    replacement.Identity);
+            for (var index = 0; index < ordered.Length; index++)
+            {
+                if (!effects.TryGetValue(
+                        FactoryPurge.EffectKey(retirement.PurgeOperationId, index), out var effectRecord))
+                    throw new JsonException();
+                var effect = JsonSerializer.Deserialize<FactoryPurgeDeleteEffect>(
+                    effectRecord.Value, FactoryGitHubJson.Options) ?? throw new JsonException();
+                if (effect.Protocol != 1 || effect.FactoryId != retirement.FactoryId
+                    || effect.OperationId != retirement.PurgeOperationId || effect.Index != index
+                    || effect.Target != ordered[index] || effect.State != AuditDeleteState.Confirmed)
+                    return new(FactoryReservationState.Blocked,
+                        "Retired factory has unresolved or changed purge effects; new identity remains blocked.",
+                        replacement.Identity);
+            }
+            var boundaryRecord = await store.ReadAsync(
+                FactoryPurge.BoundaryKey(retirement.PurgeOperationId), token) ?? throw new JsonException();
+            var boundary = JsonSerializer.Deserialize<FactoryPurgeBoundary>(
+                boundaryRecord.Value, FactoryGitHubJson.Options) ?? throw new JsonException();
+            if (boundary.Protocol != 1 || boundary.FactoryId != retirement.FactoryId
+                || boundary.OperationId != retirement.PurgeOperationId
+                || boundary.PlanFingerprint != retirement.PlanFingerprint
+                || boundary.AuthorityRevision != request.AuthorityRevision
+                || boundary.OwnerAuthorityRevision != request.OwnerAuthorityRevision
+                || boundary.ProductAuthorityRevision != request.ProductAuthorityRevision
+                || boundary.AuditRevision != retirement.AuditRevision
+                || boundary.AuditDisposition != retirement.AuditDisposition
+                || boundary.VerifiedAt < request.RequestedAt
+                || boundary.VerifiedAt > retirement.RetiredAt)
+                throw new JsonException();
+            var claims = await store.ReadNamespaceAsync(ProductConfigurationKeys.OwnerOnboardingPrefix, token);
+            if (claims.Values.Any(record =>
+                    (record.Key.StartsWith(ProductConfigurationKeys.OwnerOnboardingPrefix + "repositories/",
+                         StringComparison.Ordinal)
+                     || record.Key.StartsWith(ProductConfigurationKeys.OwnerOnboardingPrefix + "resources/",
+                         StringComparison.Ordinal))
+                    && FactoryReservationRecords.TryIdentify(
+                        record.Key, record.Label, record.Value, out var identity)
+                    && identity?.FactoryId == retirement.FactoryId))
+                return new(FactoryReservationState.Blocked,
+                    "Retired factory owner claims remain unresolved; new identity remains blocked.",
+                    replacement.Identity);
+            var retirementKey = FactoryPurge.RetirementKey(retirement.FactoryId);
+            var history = await store.ReadAsync(retirementKey, token);
+            if (history is null)
+                await store.WriteAsync(retirementKey, root.Value, null, token);
+            else if (history.Value != root.Value)
+                return new(FactoryReservationState.Blocked,
+                    "Retirement history conflicts with the live retirement pointer; no replacement.",
+                    replacement.Identity);
+            ConfigurationSetting admitted;
+            try
+            {
+                admitted = await store.WriteAsync(root.Key,
+                    FactoryReservationRecords.Serialize(replacement), root.ETag, token);
+            }
+            catch (ReservationStoreException)
+            {
+                var current = await store.ReadAsync(root.Key, CancellationToken.None);
+                if (current?.Value != FactoryReservationRecords.Serialize(replacement)) throw;
+                admitted = current;
+            }
+            return (await ContinueAsync(store, admitted, replacement, steps, token)) with
+            {
+                HasRegistryEffects = true,
+            };
+        }
+        catch (Exception e) when (e is JsonException or FormatException or InvalidOperationException)
+        {
+            return new(FactoryReservationState.Blocked,
+                "Retired factory history, effects or final audit boundary are incomplete or unreadable; no replacement.",
+                replacement.Identity);
+        }
     }
 
     public Task<FactoryReservationResult> StatusAsync(
@@ -57,6 +191,9 @@ internal sealed class FactoryReservationService(
         var store = Store(endpoint, tenant, subscription);
         var root = await store.ReadAsync(ProductConfigurationKeys.OwnerProductClaim(product), token);
         if (root is null) return new(FactoryReservationState.Unknown, "No durable admission is visible; resume cannot invent an earlier write, identity or approval.");
+        if (FactoryReservationRecords.TryReadRetirement(root.Key, root.Label, root.Value, out _))
+            return new(FactoryReservationState.Blocked,
+                "Factory identity is permanently retired; status, resume and reattachment are forbidden. Onboard only a new identity after retained retirement review.");
         var anchor = ReadAnchor(root, endpoint, tenant, subscription, product);
         try
         {
@@ -135,6 +272,21 @@ internal sealed class FactoryReservationService(
                 && (anchor.CompletedSteps != steps.Count || anchor.Intent is not null
                     || anchor.Offboarding is null && confirmedClaims != anchor.ClaimCount))
                 throw new JsonException();
+            if (anchor.Purge is not null && anchor.Foundation is { } purgeFoundation)
+                return Result(anchor, root, FactoryReservationState.Reserved,
+                    "Detached factory is in durable purge recovery; only the original purge operation may reconcile retained effects.") with
+                {
+                    Plan = plan,
+                    ConfirmedClaims = confirmedClaims,
+                    ConfirmedPlanChunks = anchor.PlanChunks,
+                    Foundation = new(purgeFoundation.State, purgeFoundation.Stage,
+                        "Retained owner-side foundation locator for purge recovery only.",
+                        purgeFoundation.OperationId, [])
+                    {
+                        ProductEndpoint = purgeFoundation.ProductEndpoint,
+                        ProfilePin = purgeFoundation.ProfilePin,
+                    },
+                };
             if (anchor.Foundation is not null)
             {
                 var foundation = new FactoryFoundationService(azure, http, clock);

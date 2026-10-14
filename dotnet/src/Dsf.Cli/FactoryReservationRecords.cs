@@ -64,7 +64,16 @@ internal static class FactoryReservationRecords
                                 || offboarding.RequestedAt < anchor.Identity.CreatedAt
                                 || offboarding.State == FactoryOffboardingState.Detached != (offboarding.CompletedAt is not null)
                                 || offboarding.CompletedAt is { } completed
-                                    && (completed.Offset != TimeSpan.Zero || completed < offboarding.RequestedAt)))
+                                    && (completed.Offset != TimeSpan.Zero || completed < offboarding.RequestedAt))
+                        || anchor.Purge is { } purge
+                            && (anchor.Offboarding?.State != FactoryOffboardingState.Detached
+                                || purge.OperationId == Guid.Empty || purge.State != FactoryPurgeState.Purging
+                                || !IsHash(purge.PlanFingerprint)
+                                || string.IsNullOrWhiteSpace(purge.AuthorityRevision)
+                                || string.IsNullOrWhiteSpace(purge.AuditRevision)
+                                || purge.RequestedAt.Offset != TimeSpan.Zero
+                                || purge.RequestedAt < anchor.Identity.CreatedAt
+                                || purge.CompletedAt is not null))
                         return false;
                     identity = anchor.Identity;
                     break;
@@ -93,6 +102,7 @@ internal static class FactoryReservationRecords
                     break;
                 default: return false;
             }
+
             new RepositoryAttachmentReviewRequest("owner/repository", identity.OwnerEndpoint, null).Validate();
             return identity.OwnerEndpoint == new Uri(identity.OwnerEndpoint).GetLeftPart(UriPartial.Authority).ToLowerInvariant()
                 && identity.FactoryId != Guid.Empty && identity.OperationId != Guid.Empty && identity.RepositoryId > 0
@@ -108,6 +118,33 @@ internal static class FactoryReservationRecords
         catch (Exception e) when (e is JsonException or KeyNotFoundException or InvalidOperationException or FormatException
                                      or ArgumentNullException or NullReferenceException or BoundaryInputException)
         { identity = null; return false; }
+    }
+
+    public static bool TryReadRetirement(
+        string key, string? label, string value, out FactoryRetirementPointer? retirement)
+    {
+        retirement = null;
+        try
+        {
+            var parsed = Parse<FactoryRetirementPointer>(value);
+            if (label is not (null or "\0")
+                || key != ProductConfigurationKeys.OwnerProductClaim(parsed.ProductKey)
+                || parsed.Protocol != 1 || parsed.Kind != FactoryPurge.RetirementKind
+                || parsed.FactoryId == Guid.Empty || parsed.PurgeOperationId == Guid.Empty
+                || parsed.PlanFingerprint.Length != 64
+                || parsed.PlanFingerprint.Any(character => character is not (>= '0' and <= '9' or >= 'a' and <= 'f'))
+                || string.IsNullOrWhiteSpace(parsed.AuditDisposition)
+                || string.IsNullOrWhiteSpace(parsed.AuditRevision)
+                || string.IsNullOrWhiteSpace(parsed.ApprovedBy)
+                || parsed.RetiredAt == default || parsed.RetiredAt.Offset != TimeSpan.Zero)
+                return false;
+            retirement = parsed;
+            return true;
+        }
+        catch (Exception e) when (e is JsonException or NullReferenceException)
+        {
+            return false;
+        }
     }
 
     private static bool IsHash(string value) => value.Length == 64 && value.All(c => c is >= '0' and <= '9' or >= 'a' and <= 'f');
