@@ -20,6 +20,7 @@ public sealed record FactoryReservationAnchor(
     public FactoryReservationState State { get; init; } = FactoryReservationState.Partial;
     public FactoryFoundationPointer? Foundation { get; init; }
     public FactoryOffboardingPointer? Offboarding { get; init; }
+    public FactoryPurgePointer? Purge { get; init; }
 }
 
 public sealed record FactoryReservationPlanChunk(

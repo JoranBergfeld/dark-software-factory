@@ -76,6 +76,7 @@ nav:
       - Retain and export onboarding evidence: get-started/retain-audit-evidence.md
       - Review retained factory input changes: get-started/review-factory-reconfiguration.md
       - Offboard only the council: get-started/offboard-council.md
+      - Purge a detached factory: get-started/purge-factory.md
       - Enable optional evidence sources: get-started/enable-optional-evidence-sources.md
       - Provision a factory: get-started/provision-a-factory.md
       - Implement the application: get-started/implement-application.md

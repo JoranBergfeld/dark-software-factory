@@ -834,6 +834,7 @@ public sealed class FactoryFoundationTests
         public bool HyphenDatabaseRid { get; init; }
         public string? CosmosRidTarget { get; init; }
         public string? CosmosRidValue { get; init; }
+        public string? LoseDeleteResponseFor { get; set; }
         public bool DeploymentFails { get; init; }
         public bool DeploymentCanceled { get; init; }
         public string? InsightsDamage { get; init; }
@@ -841,6 +842,8 @@ public sealed class FactoryFoundationTests
         public JsonNode? GuidValue { get; init; }
         private readonly Dictionary<string, JsonNode> created = new(StringComparer.OrdinalIgnoreCase);
         public IReadOnlyDictionary<string, JsonNode> CreatedResources => created;
+        public List<string> DeletedResources { get; } = [];
+        public void SeedResource(string id, JsonNode resource) => created.Add(id, resource);
         public List<string> Writes { get; } = [];
         public string ExportNative() => System.Text.Json.JsonSerializer.Serialize(created);
         public void RestoreNative(string serialized)
@@ -873,6 +876,16 @@ public sealed class FactoryFoundationTests
                 return await client.SendAsync(request, token);
             }
             Assert.Equal("management.azure.com", request.RequestUri.Host);
+            if (request.Method == HttpMethod.Delete)
+            {
+                var removed = created.Remove(request.RequestUri.AbsolutePath);
+                if (removed) DeletedResources.Add(request.RequestUri.AbsolutePath);
+                if (removed && request.RequestUri.AbsolutePath == LoseDeleteResponseFor)
+                    throw new HttpRequestException("synthetic lost delete response");
+                return removed
+                    ? JsonReply(HttpStatusCode.NoContent, new JsonObject())
+                    : JsonReply(HttpStatusCode.NotFound, new JsonObject());
+            }
             if (request.Method == HttpMethod.Get)
             {
                 if (CreateDamage == "read-timeout") throw new TaskCanceledException("secret-provider-detail");

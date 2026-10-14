@@ -884,7 +884,11 @@ public sealed class FactoryGitHubAuthorityWorkflowTests
         public IReadOnlyCollection<string> ResourceIds => resources.Keys;
         public List<string> DeletedGrants { get; } = [];
         public List<string> DeletedKeyVersions { get; } = [];
+        public List<string> DeletedFactoryResources { get; } = [];
         public bool CleanupDenied { get; set; }
+        public string? LoseFactoryDeleteResponseFor { get; set; }
+        public string? RejectFactoryDeleteFor { get; set; }
+        public Action<string>? OnFactoryDelete { get; set; }
         public List<string> GrantReads { get; } = [];
         public Action? OnGrantRead { get; set; }
         public string? GrantConditionVersion { get; init; }
@@ -902,6 +906,17 @@ public sealed class FactoryGitHubAuthorityWorkflowTests
                 if (CleanupDenied) return new(HttpStatusCode.Forbidden);
                 if (!resources.Remove(path)) return new(HttpStatusCode.NotFound);
                 DeletedGrants.Add(path);
+                return new(HttpStatusCode.NoContent);
+            }
+            if (request.Method == HttpMethod.Delete && resources.ContainsKey(path))
+            {
+                OnFactoryDelete?.Invoke(path);
+                if (path == RejectFactoryDeleteFor) throw new HttpRequestException("synthetic uncertain delete");
+                if (CleanupDenied) return new(HttpStatusCode.Forbidden);
+                resources.Remove(path);
+                DeletedFactoryResources.Add(path);
+                if (path == LoseFactoryDeleteResponseFor)
+                    throw new HttpRequestException("synthetic lost delete response");
                 return new(HttpStatusCode.NoContent);
             }
             if (request.RequestUri.Host.EndsWith(".vault.azure.net", StringComparison.Ordinal)
@@ -1142,6 +1157,17 @@ public sealed class FactoryGitHubAuthorityWorkflowTests
                     return Reply(pending, HttpStatusCode.Created);
                 }
                 return Reply(receipt, HttpStatusCode.Created);
+            }
+            if (request.Method == HttpMethod.Get
+                && path.EndsWith("/resources", StringComparison.OrdinalIgnoreCase))
+            {
+                var group = path[..^"/resources".Length];
+                var values = foundation.CreatedResources.Concat(resources)
+                    .Where(pair => pair.Key.StartsWith(group + "/", StringComparison.OrdinalIgnoreCase))
+                    .Where(pair => !pair.Key.Contains("/secrets/", StringComparison.OrdinalIgnoreCase))
+                    .Where(pair => pair.Value["id"] is not null)
+                    .Select(pair => pair.Value.DeepClone()).ToArray();
+                return Reply(new JsonObject { ["value"] = new JsonArray(values) });
             }
             return await fallback.SendAsync(request, token);
         }

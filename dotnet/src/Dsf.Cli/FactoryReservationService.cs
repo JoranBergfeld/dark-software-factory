@@ -57,6 +57,9 @@ internal sealed class FactoryReservationService(
         var store = Store(endpoint, tenant, subscription);
         var root = await store.ReadAsync(ProductConfigurationKeys.OwnerProductClaim(product), token);
         if (root is null) return new(FactoryReservationState.Unknown, "No durable admission is visible; resume cannot invent an earlier write, identity or approval.");
+        if (TryReadRetirement(root, product, out _))
+            return new(FactoryReservationState.Blocked,
+                "Factory identity is permanently retired; status, resume and reattachment are forbidden. Onboard only a new identity after retained retirement review.");
         var anchor = ReadAnchor(root, endpoint, tenant, subscription, product);
         try
         {
@@ -253,6 +256,33 @@ internal sealed class FactoryReservationService(
         }
         catch (Exception e) when (e is JsonException or NullReferenceException)
         { throw new ReservationStoreException(FactoryReservationState.Unknown, "Unrecognized or inconsistent remote admission; no adoption or overwrite."); }
+    }
+
+    private static bool TryReadRetirement(
+        ConfigurationSetting root, string product, out FactoryRetirementPointer? retirement)
+    {
+        retirement = null;
+        try
+        {
+            var value = FactoryReservationRecords.Parse<FactoryRetirementPointer>(root.Value);
+            if (root.Key != ProductConfigurationKeys.OwnerProductClaim(product)
+                || root.Label is not (null or "\0")
+                || value.Protocol != 1 || value.Kind != FactoryPurge.RetirementKind
+                || value.FactoryId == Guid.Empty || value.PurgeOperationId == Guid.Empty
+                || value.ProductKey != product || value.PlanFingerprint.Length != 64
+                || value.PlanFingerprint.Any(character => character is not (>= '0' and <= '9' or >= 'a' and <= 'f'))
+                || string.IsNullOrWhiteSpace(value.AuditDisposition)
+                || string.IsNullOrWhiteSpace(value.AuditRevision)
+                || string.IsNullOrWhiteSpace(value.ApprovedBy)
+                || value.RetiredAt == default || value.RetiredAt.Offset != TimeSpan.Zero)
+                return false;
+            retirement = value;
+            return true;
+        }
+        catch (Exception e) when (e is JsonException or NullReferenceException)
+        {
+            return false;
+        }
     }
 
     private static FactoryReservationResult Result(FactoryReservationAnchor anchor, ConfigurationSetting root, FactoryReservationState state, string detail) =>

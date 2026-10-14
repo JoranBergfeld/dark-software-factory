@@ -64,7 +64,16 @@ internal static class FactoryReservationRecords
                                 || offboarding.RequestedAt < anchor.Identity.CreatedAt
                                 || offboarding.State == FactoryOffboardingState.Detached != (offboarding.CompletedAt is not null)
                                 || offboarding.CompletedAt is { } completed
-                                    && (completed.Offset != TimeSpan.Zero || completed < offboarding.RequestedAt)))
+                                    && (completed.Offset != TimeSpan.Zero || completed < offboarding.RequestedAt))
+                        || anchor.Purge is { } purge
+                            && (anchor.Offboarding?.State != FactoryOffboardingState.Detached
+                                || purge.OperationId == Guid.Empty || purge.State != FactoryPurgeState.Purging
+                                || !IsHash(purge.PlanFingerprint)
+                                || string.IsNullOrWhiteSpace(purge.AuthorityRevision)
+                                || string.IsNullOrWhiteSpace(purge.AuditRevision)
+                                || purge.RequestedAt.Offset != TimeSpan.Zero
+                                || purge.RequestedAt < anchor.Identity.CreatedAt
+                                || purge.CompletedAt is not null))
                         return false;
                     identity = anchor.Identity;
                     break;
