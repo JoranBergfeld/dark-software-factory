@@ -131,6 +131,14 @@ application.
 `Partial`, `Blocked`, `Failed`, `Canceled`, and `Unknown` use a nonzero CLI
 exit. Automation must inspect serialized state and durable progress fields.
 
+Reconfiguration, pause, and offboarding contend on one durable conditional
+lifecycle coordinator. If pause/offboarding wins, application is blocked before
+the transition coordinator or configuration/claim effects are written. If
+reconfiguration wins, offboarding remains blocked while its coordinator is not
+`Completed`. Every resumed transition dispatch rechecks the retained lifecycle
+owner and pause/offboarding authority; detached factories cannot resume stale
+configuration or claim mutations.
+
 Inspect the retained operation without dispatch:
 
 ```bash

@@ -14,7 +14,7 @@ internal sealed partial class FactoryReconfigurationTransition
         FactoryReservationResult admission, OwnerReservationStore store,
         ConfigurationSetting root, FactoryReconfigurationOperation operation,
         FactoryReconfigurationInputs input, FactoryReconfigurationReview? reviewed,
-        Action beforeDispatch, CancellationToken token)
+        Func<Task> beforeDispatch, CancellationToken token)
     {
         await ReconcileClaimsAsync(admission, store, operation, input, additions: true, beforeDispatch, token);
         var targets = operation.Phase == FactoryReconfigurationPhase.Quiescing
@@ -38,16 +38,16 @@ internal sealed partial class FactoryReconfigurationTransition
         }
         if (operation.Phase == FactoryReconfigurationPhase.Quiescing)
         {
-            beforeDispatch();
             foreach (var snapshot in snapshots)
                 await EnsureSnapshotAsync(store, operation, snapshot.Snapshot, snapshot.Value,
-                    snapshot.Desired, token);
+                    snapshot.Desired, beforeDispatch, token);
             operation = operation with
             {
                 Phase = FactoryReconfigurationPhase.Reconciling,
                 CoordinatorId = Guid.NewGuid(),
                 SnapshotRecords = snapshots.Count,
             };
+            await beforeDispatch();
             root = await store.WriteAsync(root.Key, Serialize(operation), root.ETag, token);
         }
         else
@@ -74,7 +74,7 @@ internal sealed partial class FactoryReconfigurationTransition
                 if (current.Value != snapshot.Value || current.ETag.ToString() != snapshot.Snapshot.ETag)
                     throw new ReservationStoreException(FactoryReservationState.Blocked,
                         "ConcurrentConfigurationChange: original reviewed record changed; no overwrite or forced continuation.");
-                beforeDispatch();
+                await beforeDispatch();
                 current = await store.WriteAsync(target.Key, target.Value, current.ETag, token);
             }
             operation = operation with
@@ -84,17 +84,19 @@ internal sealed partial class FactoryReconfigurationTransition
                 AppliedManifestRevision = target.Key == ProductConfigurationKeys.FactoryManifest
                     ? current.ETag.ToString() : operation.AppliedManifestRevision,
             };
+            await beforeDispatch();
             root = await store.WriteAsync(root.Key, Serialize(operation), root.ETag, token);
         }
         operation = operation with { Phase = FactoryReconfigurationPhase.AwaitingEvidence, CoordinatorId = Guid.NewGuid() };
         await ReconcileClaimsAsync(admission, store, operation, input, additions: false, beforeDispatch, token);
+        await beforeDispatch();
         await store.WriteAsync(root.Key, Serialize(operation), root.ETag, token);
         return operation;
     }
 
     private async Task ReconcileClaimsAsync(FactoryReservationResult admission, OwnerReservationStore product,
         FactoryReconfigurationOperation operation, FactoryReconfigurationInputs input,
-        bool additions, Action beforeDispatch, CancellationToken token)
+        bool additions, Func<Task> beforeDispatch, CancellationToken token)
     {
         var owner = new OwnerReservationStore(admission.Identity!.OwnerEndpoint, admission.Identity.TenantId,
             admission.Identity.SubscriptionId, azure, http, admission.Identity.AzureActorId);
@@ -129,7 +131,7 @@ internal sealed partial class FactoryReconfigurationTransition
             var journal = await product.ReadAsync(journalKey, token);
             if (journal is null)
             {
-                beforeDispatch();
+                await beforeDispatch();
                 await product.WriteAsync(journalKey, Serialize(change), null, token);
             }
             else if (journal.Value != Serialize(change))
@@ -140,7 +142,7 @@ internal sealed partial class FactoryReconfigurationTransition
             {
                 if (existing is null)
                 {
-                    beforeDispatch();
+                    await beforeDispatch();
                     await owner.WriteAsync(key, after!, null, token);
                 }
                 else if (existing.Value != after)
@@ -153,7 +155,7 @@ internal sealed partial class FactoryReconfigurationTransition
                     || existing.ETag.ToString() != change.BeforeETag)
                     throw new ReservationStoreException(FactoryReservationState.Blocked,
                         "Removed owner claim changed after review; no release.");
-                beforeDispatch();
+                await beforeDispatch();
                 await owner.DeleteReconfiguredClaimAsync(existing, change, token);
             }
         }
@@ -245,12 +247,16 @@ internal sealed partial class FactoryReconfigurationTransition
 
     private static async Task EnsureSnapshotAsync(OwnerReservationStore store,
         FactoryReconfigurationOperation operation, FactoryReconfigurationSnapshot snapshot,
-        string value, string desired, CancellationToken token)
+        string value, string desired, Func<Task> beforeDispatch, CancellationToken token)
     {
         var descriptor = Serialize(snapshot);
         var descriptorKey = FactoryReconfigurationOperationRecords.SnapshotKey(operation.OperationId, snapshot.Index);
         var existing = await store.ReadAsync(descriptorKey, token);
-        if (existing is null) await store.WriteAsync(descriptorKey, descriptor, null, token);
+        if (existing is null)
+        {
+            await beforeDispatch();
+            await store.WriteAsync(descriptorKey, descriptor, null, token);
+        }
         else if (existing.Value != descriptor) throw new JsonException();
         var bytes = Encoding.UTF8.GetBytes(value);
         for (var index = 0; index < snapshot.Chunks; index++)
@@ -260,7 +266,11 @@ internal sealed partial class FactoryReconfigurationTransition
                     Math.Min(SnapshotChunkBytes, bytes.Length - index * SnapshotChunkBytes)))));
             var key = FactoryReconfigurationOperationRecords.SnapshotChunkKey(operation.OperationId, snapshot.Index, index);
             existing = await store.ReadAsync(key, token);
-            if (existing is null) await store.WriteAsync(key, chunk, null, token);
+            if (existing is null)
+            {
+                await beforeDispatch();
+                await store.WriteAsync(key, chunk, null, token);
+            }
             else if (existing.Value != chunk) throw new JsonException();
         }
         bytes = Encoding.UTF8.GetBytes(desired);
@@ -271,7 +281,11 @@ internal sealed partial class FactoryReconfigurationTransition
                     Math.Min(SnapshotChunkBytes, bytes.Length - index * SnapshotChunkBytes)))));
             var key = FactoryReconfigurationOperationRecords.SnapshotDesiredChunkKey(operation.OperationId, snapshot.Index, index);
             existing = await store.ReadAsync(key, token);
-            if (existing is null) await store.WriteAsync(key, chunk, null, token);
+            if (existing is null)
+            {
+                await beforeDispatch();
+                await store.WriteAsync(key, chunk, null, token);
+            }
             else if (existing.Value != chunk) throw new JsonException();
         }
     }

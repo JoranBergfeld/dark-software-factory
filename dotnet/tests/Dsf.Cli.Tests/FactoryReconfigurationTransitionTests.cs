@@ -60,6 +60,83 @@ public sealed class FactoryReconfigurationTransitionTests
     }
 
     [Fact]
+    public async Task Offboarding_admission_winning_the_race_blocks_reconfiguration_without_transition_mutation()
+    {
+        using var transport = await PreviewEvaluationTests.ConfiguredAsync();
+        FactoryActivationTests.ConnectAudit(transport);
+        var machine = transport.Scenario.Machine;
+        var inspected = await machine.InvokeAsync("reconfigure", "--inspect");
+        var desired = inspected.Result["currentInputs"]!.DeepClone();
+        desired["telemetry"]!["freshnessSeconds"] = 7200;
+        var reviewed = await InvokeAsync(machine, desired);
+        var detachOperation = Guid.NewGuid();
+        var detachReview = await machine.InvokeAsync("offboard", "--operation", detachOperation.ToString());
+        var reconfigurationReachedDispatch = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var allowReconfigurationDispatch = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstLifecycleDispatch = 0;
+        transport.Scenario.Arm.Product.BeforePut = async (key, _) =>
+        {
+            if (key != "dsf/factory/lifecycle" || Interlocked.Exchange(ref firstLifecycleDispatch, 1) != 0) return;
+            reconfigurationReachedDispatch.TrySetResult();
+            await allowReconfigurationDispatch.Task;
+        };
+
+        var applying = InvokeAsync(machine, desired, "--apply", "--operation", Guid.NewGuid().ToString(),
+            "--approve", (string)reviewed.Result["fingerprint"]!);
+        await reconfigurationReachedDispatch.Task.WaitAsync(TimeSpan.FromMinutes(1));
+        transport.Scenario.Arm.Product.BeforePut = null;
+        var detached = await machine.InvokeAsync("offboard", "--operation", detachOperation.ToString(),
+            "--approve", (string)detachReview.Result["plan"]!["fingerprint"]!);
+        allowReconfigurationDispatch.TrySetResult();
+        var applied = await applying;
+
+        Assert.Contains((string?)detached.Result["state"], new[] { "Partial", "Detached" });
+        Assert.True((bool?)detached.Result["admissionClosed"]);
+        Assert.Equal("Blocked", (string?)applied.Result["state"]);
+        Assert.DoesNotContain(transport.Scenario.Arm.Product.Values().Keys,
+            key => key.StartsWith("dsf/factory/reconfiguration/", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Reconfiguration_admission_winning_the_race_keeps_offboarding_blocked_while_transition_is_active()
+    {
+        using var transport = await PreviewEvaluationTests.ConfiguredAsync();
+        FactoryActivationTests.ConnectAudit(transport);
+        var machine = transport.Scenario.Machine;
+        var inspected = await machine.InvokeAsync("reconfigure", "--inspect");
+        var desired = inspected.Result["currentInputs"]!.DeepClone();
+        desired["telemetry"]!["freshnessSeconds"] = 7200;
+        var reviewed = await InvokeAsync(machine, desired);
+        var detachOperation = Guid.NewGuid();
+        var detachReview = await machine.InvokeAsync("offboard", "--operation", detachOperation.ToString());
+        var offboardingReachedDispatch = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var allowOffboardingDispatch = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstLifecycleDispatch = 0;
+        transport.Scenario.Arm.Product.BeforePut = async (key, _) =>
+        {
+            if (key != "dsf/factory/lifecycle" || Interlocked.Exchange(ref firstLifecycleDispatch, 1) != 0) return;
+            offboardingReachedDispatch.TrySetResult();
+            await allowOffboardingDispatch.Task;
+        };
+
+        var offboarding = machine.InvokeAsync("offboard", "--operation", detachOperation.ToString(),
+            "--approve", (string)detachReview.Result["plan"]!["fingerprint"]!);
+        await offboardingReachedDispatch.Task.WaitAsync(TimeSpan.FromMinutes(1));
+        transport.Scenario.Arm.Product.BeforePut = null;
+        var applied = await InvokeAsync(machine, desired, "--apply", "--operation", Guid.NewGuid().ToString(),
+            "--approve", (string)reviewed.Result["fingerprint"]!);
+        allowOffboardingDispatch.TrySetResult();
+        var detached = await offboarding;
+
+        Assert.Equal("Quiescing", (string?)applied.Result["operation"]?["phase"]);
+        Assert.Equal("Blocked", (string?)detached.Result["state"]);
+        Assert.DoesNotContain(FactoryOffboarding.Key, transport.Scenario.Arm.Product.Values().Keys);
+        var currentOffboarding = await machine.InvokeAsync("offboard", "--operation", Guid.NewGuid().ToString());
+        Assert.Contains(currentOffboarding.Result["plan"]!["ownershipBlockers"]!.AsArray(),
+            blocker => ((string)blocker!).Contains("Reconfiguration operation", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task Retained_transition_is_audit_linked_to_reviewed_manifest_and_inputs()
     {
         using var transport = await PreviewEvaluationTests.ConfiguredAsync();
@@ -319,6 +396,9 @@ public sealed class FactoryReconfigurationTransitionTests
         var completed = await InvokeAsync(machine, desired, "--resume", "--operation", operation.ToString());
         Assert.Equal("Completed", (string?)completed.Result["operation"]?["phase"]);
         Assert.True((bool?)completed.Result["isActivated"]);
+        var offboarding = await machine.InvokeAsync("offboard", "--operation", Guid.NewGuid().ToString());
+        Assert.DoesNotContain(offboarding.Result["plan"]!["ownershipBlockers"]!.AsArray(),
+            blocker => ((string)blocker!).Contains("Reconfiguration operation", StringComparison.Ordinal));
     }
 
     [Fact]

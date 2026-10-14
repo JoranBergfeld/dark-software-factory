@@ -76,6 +76,39 @@ public sealed class FactoryOffboardingTests
     }
 
     [Fact]
+    public async Task Detached_factory_blocks_stale_reconfiguration_resume_without_claim_or_configuration_mutation()
+    {
+        using var scenario = await CharterScenario.ReadyAsync();
+        var detachOperation = Guid.NewGuid();
+        var reviewed = await scenario.Machine.InvokeAsync("offboard", "--operation", detachOperation.ToString());
+        var detached = await scenario.Machine.InvokeAsync("offboard", "--operation", detachOperation.ToString(),
+            "--approve", (string)reviewed.Result["plan"]!["fingerprint"]!);
+        Assert.Equal("Detached", (string?)detached.Result["state"]);
+        var anchor = FactoryReservationRecords.Parse<FactoryReservationAnchor>(
+            scenario.Machine.Store.Values()[ProductConfigurationKeys.OwnerProductClaim("widget")]);
+        var manifest = FactoryReservationRecords.Parse<FactoryManifest>(
+            scenario.Arm.Product.Values()[ProductConfigurationKeys.FactoryManifest]);
+        var operationId = Guid.NewGuid();
+        var operation = new FactoryReconfigurationOperation(
+            1, operationId, anchor.Identity, new string('a', 64), new string('b', 64), "retained-manifest",
+            manifest, new string('c', 64), 1, 1, anchor.Identity.AzureActorId,
+            DateTimeOffset.Parse("2026-09-15T22:30:00Z"), FactoryReconfigurationPhase.Quiescing,
+            operationId, 0);
+        scenario.Arm.Product.Seed(FactoryReconfigurationOperationRecords.RootKey,
+            FactoryReservationRecords.Serialize(operation));
+        var owner = scenario.Machine.Store.Export();
+        var product = scenario.Arm.Product.Export();
+
+        var resumed = await scenario.Machine.InvokeAsync("reconfigure", "--resume",
+            "--operation", operationId.ToString());
+
+        Assert.Equal("Blocked", (string?)resumed.Result["state"]);
+        Assert.Contains("OffboardingOrDetached", (string?)resumed.Result["detail"], StringComparison.Ordinal);
+        Assert.Equal(owner, scenario.Machine.Store.Export());
+        Assert.Equal(product, scenario.Arm.Product.Export());
+    }
+
+    [Fact]
     public async Task Denied_factory_grant_cleanup_keeps_admission_closed_and_reports_partial_cleanup()
     {
         using var scenario = await CharterScenario.ReadyAsync();

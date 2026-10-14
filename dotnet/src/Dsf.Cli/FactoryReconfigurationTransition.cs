@@ -17,10 +17,29 @@ internal sealed partial class FactoryReconfigurationTransition(
         bool? closed = null;
         try
         {
-            if (admission.State != FactoryReservationState.Reserved || admission.Identity is not { } identity
-                || admission.Foundation?.ProductEndpoint is not { } endpoint)
+            if (admission.Identity is not { } identity)
+                return new(FactoryReconfigurationState.Blocked, "Trusted retained factory required; no transition admitted.");
+            var endpoint = admission.Foundation?.ProductEndpoint
+                ?? (resume ? $"https://dsfo-{identity.FactoryId:N}.azconfig.io" : null);
+            if (endpoint is null)
                 return new(FactoryReconfigurationState.Blocked, "Trusted retained factory required; no transition admitted.");
             var store = new OwnerReservationStore(endpoint, identity.TenantId, identity.SubscriptionId, azure, http, identity.AzureActorId);
+            if (resume)
+            {
+                await store.RequireAdmissionOpenAsync(token);
+                await FactoryLifecycleCoordinator.RequireOwnedIfPresentAsync(store, identity,
+                    FactoryLifecycleCoordinator.Reconfiguration, operationId, clock, token);
+            }
+            if (admission.State != FactoryReservationState.Reserved)
+                return new(FactoryReconfigurationState.Blocked, "Trusted retained factory required; no transition admitted.");
+            async Task BeforeDispatchAsync()
+            {
+                await FactoryLifecycleCoordinator.AcquireAsync(store, identity,
+                    FactoryLifecycleCoordinator.Reconfiguration, operationId, clock, token);
+                await FactoryLifecycleCoordinator.RequireAsync(store, identity,
+                    FactoryLifecycleCoordinator.Reconfiguration, operationId, clock, token);
+                effects = true;
+            }
             var records = await store.ReadNamespaceAsync(FactoryReconfigurationOperationRecords.Prefix, token,
                 FactoryReconfigurationOperationRecords.MaximumRecords);
             if (records.Count != 0)
@@ -36,7 +55,7 @@ internal sealed partial class FactoryReconfigurationTransition(
                     FactoryReconfigurationReview? reviewed = null;
                     if (operation.Phase == FactoryReconfigurationPhase.Quiescing)
                     {
-                        operation = await ResumeInputArchiveAsync(admission, store, records, root, operation, input, () => effects = true, token);
+                        operation = await ResumeInputArchiveAsync(admission, store, records, root, operation, input, BeforeDispatchAsync, token);
                         records = await store.ReadNamespaceAsync(FactoryReconfigurationOperationRecords.Prefix, token,
                             FactoryReconfigurationOperationRecords.MaximumRecords);
                         root = records[FactoryReconfigurationOperationRecords.RootKey];
@@ -61,7 +80,7 @@ internal sealed partial class FactoryReconfigurationTransition(
                     if (operation.Phase is FactoryReconfigurationPhase.Quiescing or FactoryReconfigurationPhase.Reconciling)
                     {
                         operation = await ApplyConfigurationAsync(admission, store, root, operation, input!, reviewed,
-                            () => effects = true, token);
+                            BeforeDispatchAsync, token);
                         return Result(FactoryReconfigurationState.Partial,
                             "Reviewed configuration applied conditionally. Previous evidence and activation are historical; renewed checks and preview required.");
                     }
@@ -75,7 +94,7 @@ internal sealed partial class FactoryReconfigurationTransition(
                         if (await store.ReadAsync(FactoryPreviewPreparation.RootKey, token) is not null)
                             previousPreparation = await previewService.InspectAsync(admission, token);
                         (root, operation) = await RetireOldGenerationAsync(admission, store, root, operation,
-                            () => effects = true, token);
+                            BeforeDispatchAsync, token);
                         if (await store.ReadAsync(FactoryPreviewPreparation.RootKey, token) is null)
                         {
                             previousPreparation ??= previewService.ReadRetiredPreparation(
@@ -85,7 +104,7 @@ internal sealed partial class FactoryReconfigurationTransition(
                                 {
                                     OperationId = operation.OperationId,
                                     Judgment = input!.Judgment,
-                                }, token);
+                                }, BeforeDispatchAsync, token);
                         }
                         var currentManifest = FactoryGovernance.ReadInactiveManifest(
                             (await store.ReadAsync(ProductConfigurationKeys.FactoryManifest, token))?.Value,
@@ -103,6 +122,7 @@ internal sealed partial class FactoryReconfigurationTransition(
                             Phase = FactoryReconfigurationPhase.AwaitingActivation,
                             CoordinatorId = Guid.NewGuid(),
                         };
+                        await BeforeDispatchAsync();
                         root = await store.WriteAsync(root.Key, Serialize(operation), root.ETag, token);
                         return Result(FactoryReconfigurationState.Partial,
                             "Renewed fully evaluated preview is current. A separate exact activation approval and final promotion are required.");
@@ -123,13 +143,24 @@ internal sealed partial class FactoryReconfigurationTransition(
                             Phase = FactoryReconfigurationPhase.Completed,
                             CoordinatorId = Guid.NewGuid(),
                         };
+                        await BeforeDispatchAsync();
                         await store.WriteAsync(root.Key, Serialize(operation), root.ETag, token);
+                        await FactoryLifecycleCoordinator.CompleteAsync(store, identity,
+                            FactoryLifecycleCoordinator.Reconfiguration, operationId,
+                            FactoryLifecycleCoordinator.Completed, clock, token);
                         return Result(FactoryReconfigurationState.Reviewed,
                             "Reconfiguration completed after renewed evidence, fully evaluated preview, explicit activation approval and final promotion.");
                     }
                     if (operation.Phase == FactoryReconfigurationPhase.Completed)
+                    {
+                        await FactoryLifecycleCoordinator.AcquireAsync(store, identity,
+                            FactoryLifecycleCoordinator.Reconfiguration, operationId, clock, token);
+                        await FactoryLifecycleCoordinator.CompleteAsync(store, identity,
+                            FactoryLifecycleCoordinator.Reconfiguration, operationId,
+                            FactoryLifecycleCoordinator.Completed, clock, token);
                         return Result(FactoryReconfigurationState.Reviewed,
                             "Reconfiguration completed; retained transition history is audit evidence, not an admission pause.");
+                    }
                     return Result(FactoryReconfigurationState.Partial,
                         "Reviewed configuration remains applied under the original operation; continue only the required renewed evidence and activation stages.");
                 }
@@ -207,12 +238,20 @@ internal sealed partial class FactoryReconfigurationTransition(
             var current = await new FactoryReconfigurationService(reviewer, azure, http, clock).ReviewAsync(admission, input, approval, token);
             if (current.State != FactoryReconfigurationState.Reviewed || current.Fingerprint != approval)
                 return Result(FactoryReconfigurationState.Blocked, "Current authority changed before admission; exact fresh review required.");
-            effects = true;
+            await FactoryLifecycleCoordinator.AcquireAsync(store, identity,
+                FactoryLifecycleCoordinator.Reconfiguration, operationId, clock, token);
+            await BeforeDispatchAsync();
             var coordinator = await store.WriteAsync(FactoryReconfigurationOperationRecords.RootKey, initial, null, token);
             closed = true;
+            await BeforeDispatchAsync();
             await store.WriteAsync(FactoryReconfigurationOperationRecords.RequestKey(operationId), initial, null, token);
-            foreach (var chunk in chunks) await store.WriteAsync(chunk.Key, chunk.Value, null, token);
+            foreach (var chunk in chunks)
+            {
+                await BeforeDispatchAsync();
+                await store.WriteAsync(chunk.Key, chunk.Value, null, token);
+            }
             operation = operation with { ConfirmedChunks = chunks.Length, CoordinatorId = Guid.NewGuid() };
+            await BeforeDispatchAsync();
             coordinator = await store.WriteAsync(coordinator.Key, Serialize(operation), coordinator.ETag, token);
             records = await store.ReadNamespaceAsync(FactoryReconfigurationOperationRecords.Prefix, token,
                 FactoryReconfigurationOperationRecords.MaximumRecords);

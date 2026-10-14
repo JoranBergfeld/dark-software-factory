@@ -49,6 +49,8 @@ internal sealed class FactoryPauseService(IAzureCliRunner azure, HttpClient? htt
             || (await store.ReadAsync(ProductConfigurationKeys.FactoryProfile, token))?.ETag != profile!.ETag)
             return new(FactoryPauseState.Blocked, "Factory/profile changed before stop dispatch. Review current identity; no write dispatched.");
         // The first confirmed native create closes admission; the audit copy is not a cross-key transaction.
+        await FactoryLifecycleCoordinator.AcquireAsync(store, identity,
+            FactoryLifecycleCoordinator.Pause, operation.Value, clock, token);
         await store.WriteAsync(FactoryPause.Key, value, null, token);
         try
         {

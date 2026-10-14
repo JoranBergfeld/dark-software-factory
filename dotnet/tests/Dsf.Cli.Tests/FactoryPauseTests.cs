@@ -114,7 +114,7 @@ public sealed class FactoryPauseTests
         var both = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         scenario.Arm.Product.BeforePut = async (key, create) =>
         {
-            if (key != Key || !create) return;
+            if (key != FactoryLifecycleCoordinator.Key || !create) return;
             if (Interlocked.Increment(ref arrivals) == 2) both.SetResult();
             await both.Task.WaitAsync(TimeSpan.FromSeconds(60));
         };

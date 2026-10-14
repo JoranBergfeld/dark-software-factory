@@ -8,7 +8,7 @@ internal sealed partial class FactoryReconfigurationTransition
 {
     private async Task<FactoryReconfigurationOperation> ResumeInputArchiveAsync(FactoryReservationResult admission,
         OwnerReservationStore store, IReadOnlyDictionary<string, ConfigurationSetting> records, ConfigurationSetting root,
-        FactoryReconfigurationOperation operation, FactoryReconfigurationInputs? supplied, Action beforeDispatch, CancellationToken token)
+        FactoryReconfigurationOperation operation, FactoryReconfigurationInputs? supplied, Func<Task> beforeDispatch, CancellationToken token)
     {
         var complete = ReadInputs(records, operation, out var retained);
         var input = supplied is null ? retained : supplied with { Boundary = BoundarySelectionInput.Normalize(supplied.Boundary) };
@@ -27,7 +27,7 @@ internal sealed partial class FactoryReconfigurationTransition
         if (complete) return operation;
         var request = operation with { CoordinatorId = operation.OperationId, ConfirmedChunks = 0, Phase = FactoryReconfigurationPhase.Quiescing };
         operation = operation with { CoordinatorId = Guid.NewGuid() };
-        beforeDispatch();
+        await beforeDispatch();
         root = await store.WriteAsync(root.Key, Serialize(operation), root.ETag, token);
         var archive = Enumerable.Range(0, operation.InputChunks).Select(index =>
             (Key: FactoryReconfigurationOperationRecords.InputKey(operation.OperationId, index),
@@ -47,9 +47,11 @@ internal sealed partial class FactoryReconfigurationTransition
                     throw new ReservationStoreException(FactoryReservationState.Unknown, "Original immutable input archive differs; no overwrite.");
                 continue;
             }
+            await beforeDispatch();
             await store.WriteAsync(record.Key, record.Value, null, token);
         }
         operation = operation with { CoordinatorId = Guid.NewGuid(), ConfirmedChunks = operation.InputChunks };
+        await beforeDispatch();
         root = await store.WriteAsync(root.Key, Serialize(operation), root.ETag, token);
         var final = await store.ReadNamespaceAsync(FactoryReconfigurationOperationRecords.Prefix, token,
             FactoryReconfigurationOperationRecords.MaximumRecords);

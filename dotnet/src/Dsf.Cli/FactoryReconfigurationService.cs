@@ -85,8 +85,9 @@ internal sealed partial class FactoryReconfigurationService(
                 models.Configuration.ValidForSeconds, models.Routes!.Select(r => r.Selection).ToArray()),
             supplemental?.Configuration?.Selection, preview.Configuration.Inputs.Judgment);
         var revisions = ownerRecords.Values.Select(r => new FactoryReconfigurationRevision("owner", r.Key, r.ETag.ToString(), FactoryAudit.TextHash(r.Value)))
-            .Concat(graph.Records.Where(r => originalTransition is null || r.Identity.Store != AuditStoreKind.Governance
-                    || !FactoryReconfigurationOperationRecords.IsRecord(r.Identity.Key))
+            .Concat(graph.Records.Where(r => r.Identity.Key != FactoryLifecycleCoordinator.Key
+                    && (originalTransition is null || r.Identity.Store != AuditStoreKind.Governance
+                        || !FactoryReconfigurationOperationRecords.IsRecord(r.Identity.Key)))
                 .Select(r => new FactoryReconfigurationRevision(r.Identity.Store.ToString(), r.Identity.Key,
                 r.Identity.NativeRevision, r.Identity.Sha256))).OrderBy(r => r.Store, StringComparer.Ordinal).ThenBy(r => r.Key, StringComparer.Ordinal).ToArray();
         var offboardingOrDetached = anchor.Offboarding is not null || values.Keys.Any(FactoryOffboarding.IsStopRecord);

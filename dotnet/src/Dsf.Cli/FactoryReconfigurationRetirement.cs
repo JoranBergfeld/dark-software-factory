@@ -10,7 +10,7 @@ internal sealed partial class FactoryReconfigurationTransition
 {
     private async Task<(ConfigurationSetting Root, FactoryReconfigurationOperation Operation)> RetireOldGenerationAsync(
         FactoryReservationResult admission, OwnerReservationStore store, ConfigurationSetting root,
-        FactoryReconfigurationOperation operation, Action beforeDispatch, CancellationToken token)
+        FactoryReconfigurationOperation operation, Func<Task> beforeDispatch, CancellationToken token)
     {
         if (operation.RetiredRecords > 0 && operation.RetiredApplied == operation.RetiredRecords)
             return (root, operation);
@@ -30,6 +30,7 @@ internal sealed partial class FactoryReconfigurationTransition
                 RetiredRecords = records.Length,
                 CoordinatorId = Guid.NewGuid(),
             };
+            await beforeDispatch();
             root = await store.WriteAsync(root.Key, Serialize(operation), root.ETag, token);
         }
         else if (operation.RetiredRecords != records.Length + operation.RetiredApplied)
@@ -47,17 +48,18 @@ internal sealed partial class FactoryReconfigurationTransition
                     || current.Value != retired.Value)
                     throw new ReservationStoreException(FactoryReservationState.Blocked,
                         "ConcurrentGenerationChange: retained preview or activation changed; no deletion.");
-                beforeDispatch();
+                await beforeDispatch();
                 await store.DeleteRetiredFactoryAuthorityAsync(current, retired.Record, token);
             }
             operation = operation with { RetiredApplied = index + 1, CoordinatorId = Guid.NewGuid() };
+            await beforeDispatch();
             root = await store.WriteAsync(root.Key, Serialize(operation), root.ETag, token);
         }
         return (root, operation);
     }
 
     private async Task EnsureRetiredAsync(OwnerReservationStore store, FactoryReconfigurationOperation operation,
-        int index, ConfigurationSetting record, Action beforeDispatch, CancellationToken token)
+        int index, ConfigurationSetting record, Func<Task> beforeDispatch, CancellationToken token)
     {
         var bytes = Encoding.UTF8.GetBytes(record.Value);
         var descriptor = new FactoryReconfigurationRetiredRecord(1, operation.OperationId, index, record.Key,
@@ -67,7 +69,7 @@ internal sealed partial class FactoryReconfigurationTransition
         var existing = await store.ReadAsync(key, token);
         if (existing is null)
         {
-            beforeDispatch();
+            await beforeDispatch();
             await store.WriteAsync(key, Serialize(descriptor), null, token);
         }
         else if (existing.Value != Serialize(descriptor)) throw new JsonException();
@@ -80,7 +82,7 @@ internal sealed partial class FactoryReconfigurationTransition
             existing = await store.ReadAsync(chunkKey, token);
             if (existing is null)
             {
-                beforeDispatch();
+                await beforeDispatch();
                 await store.WriteAsync(chunkKey, Serialize(chunk), null, token);
             }
             else if (existing.Value != Serialize(chunk)) throw new JsonException();

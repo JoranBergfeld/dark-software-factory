@@ -49,6 +49,9 @@ internal sealed class FactoryOffboardingService(IAzureCliRunner azure, HttpClien
             if (approval != existing.Plan.Fingerprint)
                 return Result(FactoryOffboardingState.Blocked, "Approval differs from the retained detach plan; no cleanup replay.",
                     existing.Plan, existing.Request, true, anchor.Offboarding is not null);
+            if (product is not null)
+                await FactoryLifecycleCoordinator.AcquireAsync(product, identity,
+                    FactoryLifecycleCoordinator.Offboarding, operation, clock, token);
             return await CompleteAsync(owner, ownerRecord, anchor, product, authority, existing.Request, existing.Plan, token);
         }
 
@@ -71,6 +74,8 @@ internal sealed class FactoryOffboardingService(IAzureCliRunner azure, HttpClien
 
         if (product is not null)
         {
+            await FactoryLifecycleCoordinator.AcquireAsync(product, identity,
+                FactoryLifecycleCoordinator.Offboarding, operation, clock, token);
             try
             {
                 await product.WriteAsync(FactoryOffboarding.Key, value, null, token);
@@ -250,6 +255,10 @@ internal sealed class FactoryOffboardingService(IAzureCliRunner azure, HttpClien
             }
         }
 
+        if (product is not null)
+            await FactoryLifecycleCoordinator.CompleteAsync(product, anchor.Identity,
+                FactoryLifecycleCoordinator.Offboarding, request.OperationId,
+                FactoryLifecycleCoordinator.Detached, clock, token);
         return Result(FactoryOffboardingState.Detached, FactoryOffboarding.RedactedDetail,
             plan, request, true, true) with { CompletedRemovals = removals };
     }
@@ -335,6 +344,7 @@ internal sealed class FactoryOffboardingService(IAzureCliRunner azure, HttpClien
         if (authority.Keys.Any(k => k.StartsWith("dsf/factory/", StringComparison.Ordinal)
                                     && k.Contains("unknown", StringComparison.OrdinalIgnoreCase)))
             blockers.Add("unknown factory authority records require human ownership review");
+        blockers.AddRange(PendingReconfigurationEffects(authority));
         var costs = new[]
         {
             "continuing Azure charges for retained disabled compute, storage, network, logs, vault, configuration and audit",
@@ -453,9 +463,10 @@ internal sealed class FactoryOffboardingService(IAzureCliRunner azure, HttpClien
     private static IReadOnlyList<string> PendingPreparationEffects(
         IReadOnlyDictionary<string, ConfigurationSetting> authority)
     {
-        var pending = new List<string>();
+        var pending = PendingReconfigurationEffects(authority).ToList();
         foreach (var record in RelevantAuthority(authority).Values)
         {
+            if (FactoryReconfigurationOperationRecords.IsRecord(record.Key)) continue;
             if (record.Key == FactoryPreviewPreparation.RootKey)
             {
                 AddPendingCoordinator<PreviewPreparationCoordinator>(record, pending,
@@ -526,6 +537,29 @@ internal sealed class FactoryOffboardingService(IAzureCliRunner azure, HttpClien
             catch (JsonException) { }
         }
         return pending;
+    }
+
+    private static IReadOnlyList<string> PendingReconfigurationEffects(
+        IReadOnlyDictionary<string, ConfigurationSetting> authority)
+    {
+        var records = authority.Where(pair => FactoryReconfigurationOperationRecords.IsRecord(pair.Key))
+            .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+        if (records.Count == 0) return [];
+        if (!records.TryGetValue(FactoryReconfigurationOperationRecords.RootKey, out var root))
+            return ["Reconfiguration effects remain without their coordinator; quiescence is unconfirmed."];
+        try
+        {
+            var parsed = JsonSerializer.Deserialize<FactoryReconfigurationOperation>(
+                root.Value, FactorySourceValidation.RecordJson) ?? throw new JsonException();
+            var operation = FactoryReconfigurationOperationRecords.Read(root.Value, parsed.Identity, DateTimeOffset.MaxValue);
+            return operation.Phase == FactoryReconfigurationPhase.Completed
+                ? []
+                : [$"Reconfiguration operation {operation.OperationId:D} remains {operation.Phase}; quiescence is incomplete."];
+        }
+        catch (JsonException)
+        {
+            return ["Reconfiguration coordinator is unreadable; quiescence is unconfirmed."];
+        }
     }
 
     private static void AddPendingCoordinator<T>(
@@ -862,7 +896,8 @@ internal sealed class FactoryOffboardingService(IAzureCliRunner azure, HttpClien
 
     private static IReadOnlyDictionary<string, ConfigurationSetting> RelevantAuthority(
         IReadOnlyDictionary<string, ConfigurationSetting> authority) =>
-        authority.Where(pair => !FactoryOffboarding.IsStopRecord(pair.Key))
+        authority.Where(pair => !FactoryOffboarding.IsStopRecord(pair.Key)
+                                && pair.Key != FactoryLifecycleCoordinator.Key)
             .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
 
     private static bool IsPreparationEffectKey(string key) =>

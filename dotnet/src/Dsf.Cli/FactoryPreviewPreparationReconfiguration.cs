@@ -43,7 +43,8 @@ internal sealed partial class FactoryPreviewPreparationService
     }
 
     internal async Task SeedReconfiguredAsync(FactoryReservationResult admission,
-        PreviewPreparationResult previous, PreviewPreparationSelection selection, CancellationToken token)
+        PreviewPreparationResult previous, PreviewPreparationSelection selection,
+        Func<Task> beforeDispatch, CancellationToken token)
     {
         if (previous.Plan is not { } oldPlan || previous.Preparation is not { State: PreviewPreparationState.ConfirmedNotReady } oldCoordinator
             || previous.Effects is null || previous.Receipts is null || oldCoordinator.OperationId != oldPlan.Selection.OperationId)
@@ -86,11 +87,15 @@ internal sealed partial class FactoryPreviewPreparationService
             (bytes.Length + plan.Policy.ChunkBytes - 1) / plan.Policy.ChunkBytes,
             plan.Manifest.Identity.AzureActorId, clock.GetUtcNow(), Guid.Empty,
             PreviewPreparationState.ConfirmedNotReady, plan.Steps.Count, null);
+        await beforeDispatch();
         await WriteAsync(store, FactoryPreviewPreparation.RootKey, coordinator, null, token);
         for (var index = 0; index < coordinator.PlanChunks; index++)
+        {
+            await beforeDispatch();
             await WriteAsync(store, FactoryPreviewPreparation.ChunkKey(selection.OperationId, index),
                 Convert.ToBase64String(bytes.AsSpan(index * plan.Policy.ChunkBytes,
                     Math.Min(plan.Policy.ChunkBytes, bytes.Length - index * plan.Policy.ChunkBytes))), null, token);
+        }
         for (var index = 0; index < plan.Steps.Count; index++)
         {
             var oldEffect = oldEffects[index];
@@ -100,11 +105,15 @@ internal sealed partial class FactoryPreviewPreparationService
                 PlanFingerprint = plan.Fingerprint,
                 ReusedFromOperationId = oldCoordinator.OperationId,
             };
+            await beforeDispatch();
             await WriteAsync(store, FactoryPreviewPreparation.EffectKey(selection.OperationId, index), effect, null, token);
             var reused = receipts.Where(receipt => oldEffect.ReceiptHashes.Contains(FactoryModelsValidation.Hash(receipt))).ToArray();
             for (var receipt = 0; receipt < reused.Length; receipt++)
+            {
+                await beforeDispatch();
                 await WriteAsync(store, FactoryPreviewPreparation.ReceiptKey(selection.OperationId, index, receipt),
                     reused[receipt], null, token);
+            }
         }
         var journal = await ReadJournalAsync(admission, store, token) ?? throw Unknown("ReconfiguredPreparationJournalUnconfirmed");
         await VerifyConfirmedAsync(journal, token);
