@@ -42,16 +42,21 @@ internal interface IWebIqSearchGateway
 /// path, and auth header the Python <c>webiq</c> SDK (ADR 0020) uses, so this
 /// adapter reads the same real API a served <c>webiq</c> agent talks to.
 /// </summary>
-internal sealed class WebIqSearchGateway(HttpClient? httpClient = null) : IWebIqSearchGateway
+internal sealed class WebIqSearchGateway(HttpClient? httpClient = null, Uri? endpoint = null) : IWebIqSearchGateway
 {
     private const string DefaultBaseUrl = "https://api.microsoft.ai/v3";
     private static readonly JsonSerializerOptions SerializerOptions = new(JsonSerializerDefaults.Web);
 
     private readonly HttpClient httpClient = httpClient ?? new HttpClient();
-    private readonly Uri searchEndpoint = new(
+    private readonly Uri searchEndpoint = endpoint ?? new(
         (httpClient?.BaseAddress?.AbsoluteUri ?? DefaultBaseUrl).TrimEnd('/') + "/search/web");
 
+    // Preserve legacy null-as-empty semantics; strict proof consumes RetrieveAsync directly.
     public async Task<IReadOnlyList<WebIqResult>> SearchAsync(
+        string apiKey, string query, CancellationToken cancellationToken)
+        => (await RetrieveAsync(apiKey, query, cancellationToken)).WebResults ?? [];
+
+    internal async Task<WebIqSearchResponse> RetrieveAsync(
         string apiKey, string query, CancellationToken cancellationToken)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, searchEndpoint)
@@ -63,43 +68,33 @@ internal sealed class WebIqSearchGateway(HttpClient? httpClient = null) : IWebIq
         HttpResponseMessage response;
         try
         {
-            response = await httpClient.SendAsync(request, cancellationToken);
+            response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         }
-        catch (HttpRequestException exception)
+        catch (HttpRequestException)
         {
-            throw new InvalidOperationException(
-                $"could not run a WebIQ web search for query '{query}': {exception.Message}", exception);
+            throw new Dsf.Core.Onboarding.SupplementalSourceException(Dsf.Core.Onboarding.SupplementalReason.NetworkUnavailable);
         }
 
         using (response)
         {
-            var body = await response.Content.ReadAsStringAsync(cancellationToken);
             if (response.StatusCode != HttpStatusCode.OK)
             {
-                WebIqApiError? error;
-                try
-                {
-                    error = JsonSerializer.Deserialize<WebIqApiError>(body, SerializerOptions);
-                }
-                catch (JsonException exception)
-                {
-                    throw new InvalidOperationException(
-                        $"WebIQ answered HTTP {(int)response.StatusCode} with an unreadable error response.", exception);
-                }
-
-                throw new InvalidOperationException($"WebIQ answered HTTP {(int)response.StatusCode}"
-                    + $" (code: {error?.ErrorCode}, retryAfter: {error?.RetryAfter}, traceId: {error?.TraceId}).");
+                throw new Dsf.Core.Onboarding.SupplementalSourceException(response.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.Unauthorized
+                    ? Dsf.Core.Onboarding.SupplementalReason.PermissionDenied : response.StatusCode == HttpStatusCode.PartialContent
+                        ? Dsf.Core.Onboarding.SupplementalReason.Incomplete : Dsf.Core.Onboarding.SupplementalReason.NetworkUnavailable);
             }
 
             WebIqSearchResponse? parsed;
             try
             {
-                parsed = JsonSerializer.Deserialize<WebIqSearchResponse>(body, SerializerOptions);
+                using var body = await Dsf.Core.Onboarding.EvidencePayload.ReadAsync(response, cancellationToken);
+                Dsf.Core.Onboarding.EvidencePayload.RequireComplete(body.RootElement);
+                parsed = body.RootElement.Deserialize<WebIqSearchResponse>(SerializerOptions);
             }
             catch (JsonException exception)
             {
                 throw new InvalidOperationException(
-                    $"WebIQ answered unreadable JSON for query '{query}': {exception.Message}", exception);
+                    "WebIQ answered unreadable JSON; query and provider details withheld.", exception);
             }
 
             if (parsed is null || !string.IsNullOrEmpty(parsed.ErrorCode))
@@ -108,7 +103,7 @@ internal sealed class WebIqSearchGateway(HttpClient? httpClient = null) : IWebIq
             }
 
             // WebRequest/WebResponse have no continuation parameter or token in SDK 0.1.8.
-            return parsed.WebResults ?? [];
+            return parsed;
         }
     }
 }
@@ -153,7 +148,10 @@ internal sealed class WebIqIntegration(
         }
 
         var apiKey = await ResolveApiKeyAsync(product, cancellationToken);
-        var results = await gateway.SearchAsync(apiKey, query, cancellationToken);
+        IReadOnlyList<WebIqResult> results;
+        try { results = await gateway.SearchAsync(apiKey, query, cancellationToken); }
+        catch (Dsf.Core.Onboarding.SupplementalSourceException e)
+        { throw new InvalidOperationException(e.Message, e); }
 
         var evidence = new List<EvidenceItem>();
         foreach (var result in results)

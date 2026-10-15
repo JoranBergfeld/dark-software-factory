@@ -3,8 +3,15 @@ set -euo pipefail
 
 package="$(cd "$(dirname "${1:?NuGet package required}")" && pwd)/$(basename "$1")"
 eng="$(cd "$(dirname "$0")" && pwd)"
-scratch="$(mktemp -d)"
-trap 'rm -rf "$scratch"' EXIT
+if [[ -n "${DSF_SMOKE_DIRECTORY:-}" ]]; then
+  test ! -e "$DSF_SMOKE_DIRECTORY"
+  mkdir -p "$DSF_SMOKE_DIRECTORY"
+  scratch="$(cd "$DSF_SMOKE_DIRECTORY" && pwd)"
+  export DSF_INSTALLED_SMOKE_DIRECTORY="$scratch/verification"
+else
+  scratch="$(mktemp -d)"
+  trap 'rm -rf "$scratch"' EXIT
+fi
 name="$(basename "$package")"
 version="${name#DarkSoftwareFactory.Cli.}"
 version="${version%.nupkg}"
@@ -20,5 +27,7 @@ if [[ -f "$cli.exe" ]]; then cli="$cli.exe"; fi
 assembly="$(find "$scratch/tool/.store" -type f -name dsf.dll -print -quit)"
 test -n "$assembly"
 test "$(cat "$(dirname "$assembly")/dsf-bundle.version")" = "$version"
-dotnet run --project "$eng/InstallationSmoke" -- \
+smoke_options=(--configuration "${DSF_SMOKE_CONFIGURATION:-Debug}")
+if [[ "${DSF_SMOKE_NO_RESTORE:-0}" == "1" ]]; then smoke_options+=(--no-restore); fi
+dotnet run --project "$eng/InstallationSmoke" "${smoke_options[@]}" -- \
   --cli "$cli" --payload "$(dirname "$assembly")"

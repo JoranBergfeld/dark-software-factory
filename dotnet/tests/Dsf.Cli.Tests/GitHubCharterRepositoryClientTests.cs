@@ -227,7 +227,7 @@ public sealed class GitHubCharterRepositoryClientTests
         public List<IReadOnlyList<string>> Invocations { get; } = [];
         public Exception? Error { get; init; }
 
-        public GhInvocationResult Run(IReadOnlyList<string> arguments, CancellationToken cancellationToken)
+        public GhInvocationResult Run(IReadOnlyList<string> arguments, CancellationToken cancellationToken, string? standardInput = null)
         {
             Invocations.Add(arguments);
             if (Error is not null)

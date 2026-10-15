@@ -1,6 +1,8 @@
 using System.Runtime.CompilerServices;
 using Azure.Data.AppConfiguration;
 using Azure.Identity;
+using Azure.Core;
+using Azure.Core.Pipeline;
 using Dsf.Core.Runtime;
 
 namespace Dsf.Runtime;
@@ -36,18 +38,35 @@ internal interface IConfigurationSettingsGateway
 /// (which is fine to require <c>az</c>, since it always runs on an operator's
 /// authenticated workstation).
 /// </summary>
-internal sealed class AzureConfigurationSettingsGateway : IConfigurationSettingsGateway
+internal sealed class AzureConfigurationSettingsGateway(TokenCredential? credential = null, HttpClient? http = null) : IConfigurationSettingsGateway
 {
+    private ConfigurationClient Client(string endpoint)
+    {
+        if (credential is null) return new(new Uri(endpoint), new DefaultAzureCredential());
+        var options = new ConfigurationClientOptions { Retry = { MaxRetries = 0 } };
+        if (http is not null) options.Transport = new HttpClientTransport(http);
+        return new(new Uri(endpoint), credential, options);
+    }
+
     public async IAsyncEnumerable<(string Key, string Value)> ListAsync(
         string endpoint,
         string label,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        var client = new ConfigurationClient(new Uri(endpoint), new DefaultAzureCredential());
-        var selector = new SettingSelector { LabelFilter = label };
+        await foreach (var setting in ListRecordsAsync(endpoint, label, cancellationToken))
+            yield return (setting.Key, setting.Value);
+    }
+
+    internal async IAsyncEnumerable<ConfigurationSetting> ListRecordsAsync(
+        string endpoint, string label, [EnumeratorCancellation] CancellationToken cancellationToken, string keyFilter = "*")
+    {
+        var client = Client(endpoint);
+        var selector = new SettingSelector { LabelFilter = label, KeyFilter = keyFilter };
         await foreach (var setting in client.GetConfigurationSettingsAsync(selector, cancellationToken))
         {
-            yield return (setting.Key, setting.Value);
+            if (label == ProductConfigurationKeys.NoLabel && setting.Label is not null)
+                throw new InvalidOperationException("Product configuration returned a labelled record for unlabelled authority.");
+            yield return setting;
         }
     }
 
@@ -58,7 +77,7 @@ internal sealed class AzureConfigurationSettingsGateway : IConfigurationSettings
         string? label,
         CancellationToken cancellationToken)
     {
-        var client = new ConfigurationClient(new Uri(endpoint), new DefaultAzureCredential());
+        var client = Client(endpoint);
         await client.SetConfigurationSettingAsync(
             new ConfigurationSetting(key, value, label), onlyIfUnchanged: false, cancellationToken);
     }

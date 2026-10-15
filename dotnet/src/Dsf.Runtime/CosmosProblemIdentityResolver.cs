@@ -9,7 +9,8 @@ namespace Dsf.Runtime;
 /// <summary>Assigns persistent problem identities using the conveyor's clustering policy, not observation hashes.</summary>
 internal sealed class CosmosProblemIdentityResolver(
     string endpoint, string database, string container, string product, ICosmosDocumentGateway gateway,
-    IEvidenceClusterer? clusterer = null) : IProblemIdentityResolver
+    IEvidenceClusterer? clusterer = null, string? originalResourceId = null,
+    Func<CancellationToken, Task>? beforeMutation = null) : IProblemIdentityResolver
 {
     private static readonly JsonSerializerOptions Options = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
     private readonly IEvidenceClusterer clusterer = clusterer ?? new LexicalSimilarityEvidenceClusterer();
@@ -24,6 +25,13 @@ internal sealed class CosmosProblemIdentityResolver(
         {
             cancellationToken.ThrowIfCancellationRequested();
             var json = await gateway.ReadAsync(endpoint, database, container, product, id, cancellationToken);
+            if (originalResourceId is not null)
+            {
+                if (json is null) throw new InvalidOperationException("Original protected logical-problem index missing; no recreation.");
+                using var native = JsonDocument.Parse(json, new() { AllowDuplicateProperties = false });
+                if (native.RootElement.GetProperty("_rid").GetString() != originalResourceId)
+                    throw new InvalidOperationException("Original protected logical-problem index incarnation changed.");
+            }
             var index = json is null ? new ProblemIndex(id, product, scope, [])
                 : JsonSerializer.Deserialize<ProblemIndex>(json, Options)
                     ?? throw new InvalidOperationException("stored problem identity index is null");
@@ -68,6 +76,7 @@ internal sealed class CosmosProblemIdentityResolver(
                 Etag = null,
             };
             var document = JsonSerializer.Serialize(updated, Options);
+            if (beforeMutation is not null) await beforeMutation(cancellationToken);
             var saved = json is null
                 ? await gateway.CreateIfAbsentAsync(endpoint, database, container, product, id, document, cancellationToken)
                 : await gateway.ReplaceIfMatchAsync(endpoint, database, container, product, id, document,

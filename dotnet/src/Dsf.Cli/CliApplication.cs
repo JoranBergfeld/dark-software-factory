@@ -10,7 +10,7 @@ using Dsf.Core.Runtime;
 
 namespace Dsf.Cli;
 
-public static class CliApplication
+public static partial class CliApplication
 {
     private const int Success = 0;
     private const int Failure = 1;
@@ -131,7 +131,12 @@ public static class CliApplication
         IAzureProvisioningClient azure,
         IAppConfigurationClient appConfig,
         ICharterRepositoryClient charterRepository,
-        ICharterStore charterStore)
+        ICharterStore charterStore,
+        RepositoryAttachmentReviewer? repositoryReviewer = null,
+        IAzureCliRunner? boundaryAzure = null,
+        HttpClient? reservationHttp = null,
+        TimeProvider? reservationClock = null,
+        HttpMessageHandler? modelProofTransport = null)
     {
         if (cancellationToken.IsCancellationRequested)
         {
@@ -143,7 +148,7 @@ public static class CliApplication
             .Select(arg => arg.Split('=', 2)[0])
             .ToHashSet();
         var root = BuildRootCommand(
-            terminal, providedOptions, github, azure, appConfig, charterRepository, charterStore);
+            terminal, providedOptions, github, azure, appConfig, charterRepository, charterStore, repositoryReviewer, boundaryAzure, reservationHttp, reservationClock, modelProofTransport);
         var parseResult = root.Parse(args);
         return await InvokeAsync(parseResult, terminal, cancellationToken);
     }
@@ -187,7 +192,12 @@ public static class CliApplication
         IAzureProvisioningClient azure,
         IAppConfigurationClient appConfig,
         ICharterRepositoryClient charterRepository,
-        ICharterStore charterStore)
+        ICharterStore charterStore,
+        RepositoryAttachmentReviewer? repositoryReviewer = null,
+        IAzureCliRunner? boundaryAzure = null,
+        HttpClient? reservationHttp = null,
+        TimeProvider? reservationClock = null,
+        HttpMessageHandler? modelProofTransport = null)
     {
         var root = new RootCommand("Dark Software Factory — factory CLI (create product instances)");
         root.Options.Remove(root.Options.Single(option => option.Name == "--version"));
@@ -197,6 +207,7 @@ public static class CliApplication
         helpOption.Aliases.Remove("/h");
 
         root.Subcommands.Add(BuildNewCommand(terminal, providedOptions, github, azure, appConfig));
+        root.Subcommands.Add(BuildOnboardCommand(terminal, providedOptions, repositoryReviewer, boundaryAzure, reservationHttp, reservationClock, modelProofTransport));
         root.Subcommands.Add(BuildListCommand(terminal, appConfig));
         root.Subcommands.Add(BuildOffboardCommand());
         root.Subcommands.Add(BuildBootstrapCommand(terminal));
@@ -207,6 +218,37 @@ public static class CliApplication
         root.Subcommands.Add(BuildServeOrchestratorCommand());
         root.Subcommands.Add(BuildServeAgentCommand());
         root.Subcommands.Add(BuildPollOutcomesCommand());
+        var githubHost = new Command("serve-github-auth", "serve the isolated, inactive factory GitHub authentication module (runtime)");
+        githubHost.SetAction((_, token) => RuntimeShell(["serve-github-auth"], token));
+        root.Subcommands.Add(githubHost);
+        var telemetryHost = new Command("serve-telemetry", "serve isolated inactive Azure Monitor telemetry proof (runtime)");
+        telemetryHost.SetAction((_, token) => RuntimeShell(["serve-telemetry"], token));
+        root.Subcommands.Add(telemetryHost);
+        var modelHost = new Command("serve-models", "serve isolated inactive model capability workloads (runtime)");
+        modelHost.SetAction((_, token) => RuntimeShell(["serve-models"], token));
+        root.Subcommands.Add(modelHost);
+        var sourceHost = new Command("serve-source", "serve isolated inactive pinned source acquisition (runtime)");
+        sourceHost.SetAction((_, token) => RuntimeShell(["serve-source"], token));
+        root.Subcommands.Add(sourceHost);
+        var supplementalHost = new Command("serve-supplemental", "serve isolated optional evidence proof (runtime)");
+        supplementalHost.SetAction((_, token) => RuntimeShell(["serve-supplemental"], token));
+        root.Subcommands.Add(supplementalHost);
+        foreach (var (verb, description) in new[]
+        {
+            ("serve-preview", "serve protected supervised council evaluation; never publish or activate (runtime)"),
+            ("serve-decide", "serve separately reviewed native Decide execution (runtime)"),
+            ("serve-publisher", "serve isolated native create-once publication (runtime)"),
+            ("serve-publication-context", "serve original council publication admission (runtime)"),
+            ("serve-source-context", "serve protected council-only adopted source context (runtime)"),
+            ("serve-preview-models", "serve protected council-only native model evaluation (runtime)"),
+            ("serve-preview-telemetry", "serve protected council-only application telemetry evidence (runtime)"),
+            ("serve-preview-supplemental", "serve protected council-only selected supplemental evidence (runtime)"),
+        })
+        {
+            var previewHost = new Command(verb, description);
+            previewHost.SetAction((_, token) => RuntimeShell([verb], token));
+            root.Subcommands.Add(previewHost);
+        }
         root.Subcommands.Add(BuildCharterCommand(terminal, appConfig, charterRepository, charterStore));
 
         return root;

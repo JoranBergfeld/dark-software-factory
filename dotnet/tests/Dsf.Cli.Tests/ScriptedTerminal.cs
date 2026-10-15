@@ -14,6 +14,7 @@ internal sealed class ScriptedTerminal(TerminalCapabilities capabilities, IReadO
     public IReadOnlyList<string> Prompts => _prompts;
     public string Output => _output.ToString();
     public string Error => _error.ToString();
+    public Action<string>? OnPrompt { get; init; }
 
     public void WriteLine(string value) => _output.WriteLine(value);
 
@@ -22,6 +23,7 @@ internal sealed class ScriptedTerminal(TerminalCapabilities capabilities, IReadO
     public string? Prompt(string message)
     {
         _prompts.Add(message);
+        OnPrompt?.Invoke(message);
         return _answers.Count == 0 ? null : _answers.Dequeue();
     }
 

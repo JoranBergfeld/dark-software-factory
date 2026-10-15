@@ -21,6 +21,8 @@ public sealed class S7Filing : IStation
 
     public async Task RunAsync(ConveyorRun run, ConveyorServices services, CancellationToken cancellationToken)
     {
+        if (run.Profile == ConveyorProfile.OnboardingPreview && !run.DryRun)
+            throw new EvaluationException("OnboardingEvaluationRequiresDryRun");
         CouncilReview.RevalidateForFiling(run, services.ProductMaturity);
         if (run.Status == RunStatus.Escalated)
         {
@@ -31,7 +33,13 @@ public sealed class S7Filing : IStation
         {
             foreach (var proposal in accepted)
             {
-                run.PreviewedIssues.Add(new IssuePreview(proposal.Title, proposal.IntentKey, [.. proposal.Labels]));
+                if (run.Profile == ConveyorProfile.OnboardingPreview)
+                {
+                    if (!proposal.Labels.SequenceEqual([OnboardingPublication.ProposalLabel]))
+                        throw new EvaluationException("ForbiddenOnboardingPublicationLabel");
+                    run.PreviewedIssues.Add(OnboardingPublication.Preview(proposal, run));
+                }
+                else run.PreviewedIssues.Add(new IssuePreview(proposal.Title, proposal.IntentKey, [.. proposal.Labels]));
                 run.Record(
                     StationName,
                     $"dry run: would file '{proposal.Title}' labels=[{string.Join(", ", proposal.Labels)}] "

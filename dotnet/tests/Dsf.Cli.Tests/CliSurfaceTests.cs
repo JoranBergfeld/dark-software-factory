@@ -6,6 +6,85 @@ namespace Dsf.Cli.Tests;
 
 public sealed class CliSurfaceTests
 {
+    [Theory]
+    [InlineData("serve-preview")]
+    [InlineData("serve-source-context")]
+    [InlineData("serve-preview-models")]
+    [InlineData("serve-preview-telemetry")]
+    [InlineData("serve-preview-supplemental")]
+    public async Task Preview_hosts_reach_bundled_runtime_and_fail_closed_without_source_settings(string verb)
+    {
+        var result = await DsfProcess.RunAsync(verb);
+        Assert.Equal(1, result.ExitCode);
+        Assert.Contains("DSF_FACTORY_PROFILE_PIN", result.Stderr);
+        Assert.Contains("AZURE_CLIENT_ID", result.Stderr);
+        Assert.Contains("DSF_PRODUCT", result.Stderr);
+        Assert.Contains("AZURE_APPCONFIG_ENDPOINT", result.Stderr);
+        Assert.DoesNotContain("AZURE_OPENAI", result.Stderr);
+        Assert.Empty(result.Stdout);
+    }
+
+    [Fact]
+    public async Task Supplemental_host_front_door_requires_pinned_source_settings_without_legacy_credentials()
+    {
+        var result = await DsfProcess.RunAsync("serve-supplemental");
+        Assert.Equal(1, result.ExitCode);
+        Assert.Contains("DSF_SUPPLEMENTAL_CONFIG", result.Stderr);
+        Assert.Contains("AZURE_CLIENT_ID", result.Stderr);
+        Assert.Contains("DSF_PRODUCT", result.Stderr);
+        Assert.Contains("AZURE_APPCONFIG_ENDPOINT", result.Stderr);
+        Assert.Contains("DSF_FACTORY_PROFILE_PIN", result.Stderr);
+        Assert.DoesNotContain("AZURE_OPENAI", result.Stderr);
+        Assert.Empty(result.Stdout);
+    }
+
+    [Fact]
+    public async Task Source_host_front_door_requires_its_own_pinned_code_identity_without_legacy_credentials()
+    {
+        var result = await DsfProcess.RunAsync("serve-source");
+        Assert.Equal(1, result.ExitCode);
+        Assert.Contains("Factory source", result.Stderr);
+        Assert.Contains("DSF_FACTORY_PROFILE_PIN", result.Stderr);
+        Assert.Contains("AZURE_CLIENT_ID", result.Stderr);
+        Assert.DoesNotContain("AZURE_OPENAI", result.Stderr);
+        Assert.Empty(result.Stdout);
+    }
+
+    [Fact]
+    public async Task Model_host_front_door_uses_the_bundled_runtime_without_legacy_credentials()
+    {
+        var result = await DsfProcess.RunAsync("serve-models");
+        Assert.Equal(1, result.ExitCode);
+        Assert.Contains("Factory models", result.Stderr);
+        Assert.Contains("DSF_FACTORY_PROFILE_PIN", result.Stderr);
+        Assert.Contains("AZURE_CLIENT_ID", result.Stderr);
+        Assert.DoesNotContain("AZURE_OPENAI", result.Stderr);
+        Assert.Empty(result.Stdout);
+    }
+
+    [Fact]
+    public async Task Telemetry_host_front_door_uses_the_installed_runtime_and_requires_its_own_identity_settings()
+    {
+        var result = await DsfProcess.RunAsync("serve-telemetry");
+        Assert.Equal(1, result.ExitCode);
+        Assert.Contains("Azure Monitor source", result.Stderr);
+        Assert.Contains("DSF_FACTORY_PROFILE_PIN", result.Stderr);
+        Assert.Contains("AZURE_CLIENT_ID", result.Stderr);
+        Assert.DoesNotContain("AZURE_OPENAI", result.Stderr);
+        Assert.Empty(result.Stdout);
+    }
+
+    [Fact]
+    public async Task Authentication_host_front_door_reaches_its_own_pinned_settings_without_legacy_runtime_fallback()
+    {
+        var result = await DsfProcess.RunAsync("serve-github-auth");
+        Assert.Equal(1, result.ExitCode);
+        Assert.Contains("DSF_FACTORY_PROFILE_PIN", result.Stderr);
+        Assert.Contains("AZURE_CLIENT_ID", result.Stderr);
+        Assert.DoesNotContain("AZURE_OPENAI", result.Stderr);
+        Assert.Empty(result.Stdout);
+    }
+
     [Fact]
     public async Task Top_level_help_exposes_frozen_command_grammar()
     {
@@ -24,18 +103,32 @@ public sealed class CliSurfaceTests
               -h, --help  Show help and usage information
 
             Commands:
-              new                    create a new isolated product factory instance
-              list, ls               list provisioned product factories from the owner App Config index
-              offboard <product>     remove Azure/runtime artifacts for a product
-              bootstrap              one-time: create the DSF GitHub App and store it in the owner Key Vault
-              delete <product>       permanently destroy a product factory instance
-              deprovision <product>  permanently destroy a product factory instance
-              run                    run the intake line for one signal (runtime)
-              sweep                  sweep enabled source agents once (runtime)
-              serve-orchestrator     run the orchestrator worker (runtime)
-              serve-agent            serve a source agent over A2A (runtime)
-              poll-outcomes          poll human outcome labels and record audited learning data (runtime)
-              charter                manage the product charter (.dsf/charter.md)
+              new                         create a new isolated product factory instance
+              onboard                     stage existing application attachment and inactive foundation without greenfield provisioning
+              list, ls                    list provisioned product factories from the owner App Config index
+              offboard <product>          remove Azure/runtime artifacts for a product
+              bootstrap                   one-time: create the DSF GitHub App and store it in the owner Key Vault
+              delete <product>            permanently destroy a product factory instance
+              deprovision <product>       permanently destroy a product factory instance
+              run                         run the intake line for one signal (runtime)
+              sweep                       sweep enabled source agents once (runtime)
+              serve-orchestrator          run the orchestrator worker (runtime)
+              serve-agent                 serve a source agent over A2A (runtime)
+              poll-outcomes               poll human outcome labels and record audited learning data (runtime)
+              serve-github-auth           serve the isolated, inactive factory GitHub authentication module (runtime)
+              serve-telemetry             serve isolated inactive Azure Monitor telemetry proof (runtime)
+              serve-models                serve isolated inactive model capability workloads (runtime)
+              serve-source                serve isolated inactive pinned source acquisition (runtime)
+              serve-supplemental          serve isolated optional evidence proof (runtime)
+              serve-preview               serve protected supervised council evaluation; never publish or activate (runtime)
+              serve-decide                serve separately reviewed native Decide execution (runtime)
+              serve-publisher             serve isolated native create-once publication (runtime)
+              serve-publication-context   serve original council publication admission (runtime)
+              serve-source-context        serve protected council-only adopted source context (runtime)
+              serve-preview-models        serve protected council-only native model evaluation (runtime)
+              serve-preview-telemetry     serve protected council-only application telemetry evidence (runtime)
+              serve-preview-supplemental  serve protected council-only selected supplemental evidence (runtime)
+              charter                     manage the product charter (.dsf/charter.md)
 
 
             """.Replace("\r\n", "\n"),

@@ -48,6 +48,16 @@ public static class ConveyorLine
             return run;
         }
 
+        try { OnboardingEvaluation.ValidateInputs(run, services); }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            run.Status = RunStatus.Error;
+            run.FailureReason = OnboardingEvaluation.ErrorDetail(run, exception);
+            run.Record("evaluation:context", run.FailureReason);
+            await TryPersistAsync(run, "evaluation:context", services, cancellationToken);
+            return run;
+        }
+
         await TraceAsync(services, "run.start", run, station: null, cancellationToken);
 
         foreach (var station in Stations)
@@ -61,7 +71,9 @@ public static class ConveyorLine
 
             try
             {
+                OnboardingEvaluation.ValidateInputs(run, services);
                 await station.RunAsync(run, services, cancellationToken);
+                OnboardingEvaluation.ValidateInputs(run, services);
                 run.Checkpoints.Add(station.Name);
                 // Persist before the next station starts: the checkpoint is only
                 // real once the store has it, so a resumed run never skips a
@@ -76,8 +88,8 @@ public static class ConveyorLine
                 // failure: either of those can fail too, and the operator needs
                 // the station that actually broke, not the last thing that did.
                 run.FailureReason =
-                    $"station '{station.Name}' failed ({exception.GetType().Name}): {exception.Message}";
-                run.Record(station.Name, $"station error ({exception.GetType().Name}): {exception.Message}");
+                    $"station '{station.Name}' failed ({exception.GetType().Name}): {OnboardingEvaluation.ErrorDetail(run, exception)}";
+                run.Record(station.Name, $"station error ({exception.GetType().Name}): {OnboardingEvaluation.ErrorDetail(run, exception)}");
                 await TraceAsync(services, "station.error", run, station.Name, cancellationToken);
                 await TryPersistAsync(run, station.Name, services, cancellationToken);
                 await TraceAsync(services, "run.complete", run, station: null, cancellationToken);
@@ -111,7 +123,7 @@ public static class ConveyorLine
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            run.Record(station, $"could not persist the failed run ({exception.GetType().Name}): {exception.Message}");
+            run.Record(station, $"could not persist the failed run ({exception.GetType().Name}): {OnboardingEvaluation.ErrorDetail(run, exception)}");
         }
     }
 
@@ -144,7 +156,7 @@ public static class ConveyorLine
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            run.Record(station ?? name, $"could not trace '{name}' ({exception.GetType().Name}): {exception.Message}");
+            run.Record(station ?? name, $"could not trace '{name}' ({exception.GetType().Name}): {OnboardingEvaluation.ErrorDetail(run, exception)}");
         }
     }
 }

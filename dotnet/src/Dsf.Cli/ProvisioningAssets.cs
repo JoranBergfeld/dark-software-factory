@@ -12,6 +12,16 @@ internal sealed class ProvisioningAssets
         "main.json",
         "sre-agent.json",
         "copy-owner-secret.json",
+        "onboard-foundation.json",
+        "product-github-private-key.json",
+        "onboard-github-auth.json",
+        "onboard-telemetry.json",
+        "onboard-models.json",
+        "onboard-source.json",
+        "onboard-supplemental.json",
+        "onboard-preview-workloads.json",
+        "onboard-live.json",
+        "onboard-publisher.json",
     };
 
     private readonly string directory;

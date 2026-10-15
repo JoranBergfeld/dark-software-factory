@@ -10,6 +10,8 @@ public sealed record DeliberationRound(
 /// <summary>Typed S5 checkpoint and complete human-review package; never reconstructed from audit prose.</summary>
 public sealed record CouncilReview
 {
+    public ConveyorProfile Profile { get; init; }
+    public string? EvaluationRevision { get; init; }
     [JsonRequired] public IReadOnlyList<EvidenceItem> Evidence { get; init; } = [];
     [JsonRequired] public double Threshold { get; init; }
     [JsonRequired] public string ProductMaturity { get; init; } = "";
@@ -22,6 +24,10 @@ public sealed record CouncilReview
     [JsonRequired] public ProposalVerdict Outcome { get; init; } = ProposalVerdict.Pending;
     public string? FailureReason { get; init; }
 
+    internal static ProposalVerdict Decide(ConveyorProfile profile, string maturity, IReadOnlyList<JurorVerdict> votes) =>
+        profile == ConveyorProfile.OnboardingPreview ? JuryVerdictRules.DecideProposalOnly(votes)
+            : JuryVerdictRules.Decide(maturity, votes);
+
     internal static void RevalidateForFiling(ConveyorRun run, string currentMaturity)
     {
         if (run.Status != RunStatus.Open)
@@ -33,15 +39,24 @@ public sealed record CouncilReview
         {
             var review = proposal.CouncilReview;
             if (proposal.Verdict != ProposalVerdict.Proceed || review is null
+                || review.Profile != run.Profile
+                || run.Profile == ConveyorProfile.OnboardingPreview && review.EvaluationRevision != OnboardingEvaluation.Revision(run)
                 || review.Outcome != ProposalVerdict.Proceed || review.Evidence.Count == 0
                 || review.RoundsRequested is < 1 or > 2 || review.Rounds.Count != review.RoundsRequested
                 || review.Recommendation is null || review.JurorNames.Count != 3
                 || !review.JurorNames.ToHashSet(StringComparer.Ordinal)
                     .SetEquals(review.JuryVerdicts.Select(verdict => verdict.JurorName))
-                || JuryVerdictRules.Decide(review.ProductMaturity, review.JuryVerdicts) != ProposalVerdict.Proceed)
+                || Decide(run.Profile, review.ProductMaturity, review.JuryVerdicts) != ProposalVerdict.Proceed)
             {
                 throw new InvalidOperationException(
                     $"proposal '{proposal.Id}' has no complete typed S5 Proceed review; legacy acceptance is not filing authority");
+            }
+            if (run.Profile == ConveyorProfile.OnboardingPreview)
+            {
+                SemanticGrounding.RequireSupported(proposal, run);
+                if (!review.Evidence.SequenceEqual(proposal.ClusterEvidence))
+                    throw new EvaluationException("SavedReviewEvidenceChanged");
+                OnboardingEvaluation.ValidateReview(run, review, requireComplete: true);
             }
 
             var recommendation = LensSynthesizer.Synthesize(review.Rounds[^1].Verdicts, review.Threshold);
@@ -57,7 +72,7 @@ public sealed record CouncilReview
         foreach (var proposal in run.Proposals)
         {
             var review = proposal.CouncilReview!;
-            var outcome = JuryVerdictRules.Decide(currentMaturity, review.JuryVerdicts);
+            var outcome = Decide(run.Profile, currentMaturity, review.JuryVerdicts);
             if (outcome == ProposalVerdict.Escalate)
             {
                 proposal.Verdict = outcome;
