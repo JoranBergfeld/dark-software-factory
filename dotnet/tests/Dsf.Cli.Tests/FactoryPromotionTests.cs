@@ -323,12 +323,34 @@ public sealed class FactoryPromotionTests(PromotableFactoryFixture fixture) : IC
             transport.Values()[FactoryActivation.RootKey])!["operationId"]!;
         var interrupted = await machine.InvokeAsync("activate", "--operation", activationOperation.ToString());
         Assert.Equal("Blocked", (string?)interrupted.Result["state"]);
-        Assert.DoesNotContain(accessKeys[0], transport.Values().Keys);
+        Assert.True(!transport.Values().ContainsKey(accessKeys[0]),
+            interrupted.Result.ToJsonString() + interrupted.Terminal.Output + interrupted.Terminal.Error);
         Assert.Contains(accessKeys[1], transport.Values().Keys);
         Assert.Contains(FactoryReattachment.Key, transport.Values().Keys);
 
         transport.Scenario.Arm.Product.LoseDeleteResponseKey = null;
         transport.Scenario.Arm.Product.RejectDeleteKey = null;
+        var progressKey = FactoryReattachment.FinalizationProgressKey(reattachment);
+        var progressWrites = 0;
+        transport.Scenario.Arm.Product.BeforePut = (key, _) =>
+        {
+            if (key == progressKey && ++progressWrites == 2)
+                transport.Scenario.Arm.Product.RejectKey = progressKey;
+            return Task.CompletedTask;
+        };
+        var finalProgressInterrupted = await machine.InvokeAsync(
+            "activate", "--operation", activationOperation.ToString());
+        Assert.Equal("Failed", (string?)finalProgressInterrupted.Result["state"]);
+        Assert.Contains(FactoryReattachment.Key, transport.Values().Keys);
+        var interruptedAnchor = FactoryReservationRecords.Parse<FactoryReservationAnchor>(
+            machine.Store.Values()[ProductConfigurationKeys.OwnerProductClaim(identity.ProductKey)]);
+        Assert.NotNull(interruptedAnchor.Reattachment);
+        var interruptedProgress = FactoryReservationRecords.Parse<FactoryReattachmentRetirementProgress>(
+            transport.Values()[progressKey]);
+        Assert.Equal(interruptedProgress.Records - 1, interruptedProgress.Applied);
+
+        transport.Scenario.Arm.Product.BeforePut = null;
+        transport.Scenario.Arm.Product.RejectKey = null;
         var finalized = await machine.InvokeAsync("activate", "--operation", activationOperation.ToString());
         Assert.True((string?)finalized.Result["state"] == "ApprovalOnly",
             finalized.Result.ToJsonString() + finalized.Terminal.Output + finalized.Terminal.Error);
@@ -336,7 +358,7 @@ public sealed class FactoryPromotionTests(PromotableFactoryFixture fixture) : IC
         Assert.DoesNotContain(accessKeys[0], transport.Values().Keys);
         Assert.DoesNotContain(accessKeys[1], transport.Values().Keys);
         var progress = FactoryReservationRecords.Parse<FactoryReattachmentRetirementProgress>(
-            transport.Values()[FactoryReattachment.FinalizationProgressKey(reattachment)]);
+            transport.Values()[progressKey]);
         Assert.Equal(3, progress.Records);
         Assert.Equal(progress.Records, progress.Applied);
         var anchor = FactoryReservationRecords.Parse<FactoryReservationAnchor>(

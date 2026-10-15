@@ -103,6 +103,10 @@ internal sealed class FactoryReattachmentFinalizer(
                 throw new ReservationStoreException(FactoryReservationState.Blocked,
                     "Restored access set changed during reattachment finalization.");
 
+            stage = "committing reattachment finalization";
+            progress = progress with { Applied = progress.Records };
+            await product.WriteAsync(progressKey,
+                FactoryReservationRecords.Serialize(progress), progressRecord.ETag, token);
             stage = "clearing owner pointer";
             if (anchor.Reattachment is { } pointer)
             {
@@ -119,9 +123,6 @@ internal sealed class FactoryReattachmentFinalizer(
             }
             stage = "retiring reattachment stop";
             await product.DeleteReattachmentGenerationAsync(requestRecord, token);
-            progress = progress with { Applied = progress.Records };
-            await product.WriteAsync(progressKey,
-                FactoryReservationRecords.Serialize(progress), progressRecord.ETag, token);
         }
         catch (ReservationStoreException) { throw; }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }

@@ -8,6 +8,33 @@ namespace Dsf.Cli.Tests;
 
 public sealed class FactoryOffboardingTests
 {
+    [Fact]
+    public async Task Completed_reattachment_allows_new_detach()
+    {
+        using var scenario = await CharterScenario.ReadyAsync();
+        var identity = FactoryReservationRecords.Parse<FactoryReservationAnchor>(
+            scenario.Machine.Store.Values()[ProductConfigurationKeys.OwnerProductClaim("widget")]).Identity;
+        scenario.Arm.Product.Seed(FactoryLifecycleCoordinator.Key,
+            FactoryReservationRecords.Serialize(new FactoryLifecycleLease(
+                1, "decide-lifecycle-coordinator", identity.FactoryId,
+                FactoryLifecycleCoordinator.Reattachment, Guid.NewGuid(),
+                FactoryLifecycleCoordinator.Completed, identity.AzureActorId,
+                scenario.Source.Source!.Clock.Now)));
+        var operation = Guid.NewGuid();
+
+        var review = await scenario.Machine.InvokeAsync("offboard", "--operation", operation.ToString());
+        var detached = await scenario.Machine.InvokeAsync(
+            "offboard", "--operation", operation.ToString(),
+            "--approve", (string)review.Result["plan"]!["fingerprint"]!);
+
+        Assert.Equal("Detached", (string?)detached.Result["state"]);
+        var lease = FactoryLifecycleCoordinator.Read(
+            scenario.Arm.Product.Values()[FactoryLifecycleCoordinator.Key],
+            identity, scenario.Source.Source.Clock.Now);
+        Assert.Equal(FactoryLifecycleCoordinator.Offboarding, lease.Transition);
+        Assert.Equal(FactoryLifecycleCoordinator.Detached, lease.State);
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]

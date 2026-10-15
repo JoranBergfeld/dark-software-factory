@@ -68,7 +68,7 @@ internal static class FactoryLifecycleCoordinator
         var retained = Read(current.Value, identity, clock.GetUtcNow());
         if (retained.Transition == transition && retained.OperationId == operationId)
             return current;
-        if (retained.Transition == Reconfiguration && retained.State == Completed
+        if (retained.Transition is Reconfiguration or Reattachment && retained.State == Completed
             && transition is Offboarding or Pause)
             return await store.WriteAsync(Key, value, current.ETag, token);
         throw new ReservationStoreException(FactoryReservationState.Blocked,
