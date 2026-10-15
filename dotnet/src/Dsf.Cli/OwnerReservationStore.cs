@@ -302,7 +302,9 @@ internal sealed class OwnerReservationStore : IFactoryCharterEvidenceReader
             || expected.Key == FactoryOffboarding.Key
             || expected.Key.StartsWith(FactoryOffboarding.HistoryPrefix, StringComparison.Ordinal)
             || expected.Key == ProductConfigurationKeys.CharterAdopted
-            || expected.Key == ProductConfigurationKeys.CharterAdoptionOperation;
+            || expected.Key == ProductConfigurationKeys.CharterAdoptionOperation
+            || expected.Key == FactoryReattachment.Key
+            || expected.Key.StartsWith(FactoryReattachment.AccessPrefix, StringComparison.Ordinal);
         if (!permitted || expected.Label is not null || expected.ETag.ToString().Length == 0)
             throw new ReservationStoreException(FactoryReservationState.Blocked,
                 "Only exact stale preview and activation-generation records may be retired for reattachment.");
@@ -319,8 +321,18 @@ internal sealed class OwnerReservationStore : IFactoryCharterEvidenceReader
             throw new ReservationStoreException(FactoryReservationState.Blocked,
                 "Stale preview or activation authority changed; no forced retirement.");
         }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            throw;
+        }
         catch (Exception e) when (e is RequestFailedException or HttpRequestException or OperationCanceledException)
         {
+            try
+            {
+                if (await ReadAsync(expected.Key, token) is null) return;
+            }
+            catch (Exception read) when (read is RequestFailedException or HttpRequestException
+                or OperationCanceledException) { }
             throw new ReservationStoreException(FactoryReservationState.Unknown,
                 "Stale-generation retirement response uncertain; inspect original reattachment.");
         }

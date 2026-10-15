@@ -37,7 +37,9 @@ internal sealed partial class FactoryPreviewPreparationService(
     {
         var records = await store.ReadFactoryAuthorityAsync(token);
         var values = records.Where(p => !p.Key.StartsWith(FactoryPreviewPreparation.Namespace + "/", StringComparison.Ordinal)
-                && !p.Key.StartsWith(FactoryAudit.Namespace, StringComparison.Ordinal))
+                && !p.Key.StartsWith(FactoryAudit.Namespace, StringComparison.Ordinal)
+                && !FactoryReattachment.IsStopRecord(p.Key)
+                && !p.Key.StartsWith(FactoryReattachment.AccessPrefix, StringComparison.Ordinal))
             .ToDictionary(p => p.Key, p => p.Value.Value, StringComparer.Ordinal);
         foreach (var key in new[] { ProductConfigurationKeys.FactoryManifest, ProductConfigurationKeys.FactoryProfile,
             ProductConfigurationKeys.FactoryGitHubAuthority, ProductConfigurationKeys.FactorySource, ProductConfigurationKeys.FactoryModels,

@@ -46,6 +46,8 @@ internal sealed class FactoryActivationService(RepositoryAttachmentReviewer revi
             {
                 if (observed.Review.Fingerprint != reviewed.Fingerprint)
                     throw new FactoryActivationException(FactoryActivationState.Blocked, "Retained approval is stale against current native governance/evidence revisions.");
+                await new FactoryReattachmentFinalizer(azure, http)
+                    .CompleteAsync(identity, store, receipt!, token);
                 return Result(FactoryActivationState.ApprovalOnly, "Original operator approval retained and currently ready; factory remains inactive.", observed, true);
             }
             reviewed = observed.Review;
@@ -79,6 +81,8 @@ internal sealed class FactoryActivationService(RepositoryAttachmentReviewer revi
             if (final[FactoryActivation.RootKey].ETag != coordinator.ETag || observed.Review.Fingerprint != reviewed.Fingerprint)
                 throw new FactoryActivationException(FactoryActivationState.Blocked, "Final approval or current authority changed; no current approval released.");
             await RequireUnpausedAsync(store, identity, token);
+            await new FactoryReattachmentFinalizer(azure, http)
+                .CompleteAsync(identity, store, receipt, token);
             return Result(FactoryActivationState.ApprovalOnly, "Exact operator approval retained; live promotion blocked. Approval is not activation or historical completion.", observed, true);
         }
         catch (Exception e) when (e is FactoryActivationException or FactoryAuditException or ReservationStoreException
@@ -105,7 +109,7 @@ internal sealed class FactoryActivationService(RepositoryAttachmentReviewer revi
                 }
                 catch (Exception rejection) when (rejection is ReservationStoreException or OperationCanceledException) { state = FactoryActivationState.Unknown; }
             }
-            return new(state, e is FactoryActivationException ? e.Message
+            return new(state, e is FactoryActivationException or ReservationStoreException ? e.Message
                 : "Current approval authority/effect unconfirmed; inspect original operation. No replay, activation or rollback.")
             { Review = reviewed, Approval = receipt };
         }

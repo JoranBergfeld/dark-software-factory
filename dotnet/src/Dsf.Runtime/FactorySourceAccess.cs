@@ -158,6 +158,8 @@ internal sealed class FactorySourceAccess(FactoryHostSettings settings, TokenCre
             .ListAsync(settings.ProductEndpoint, ProductConfigurationKeys.NoLabel, token))
         {
             if (key.StartsWith(FactoryReconfigurationOperationRecords.Prefix, StringComparison.Ordinal)) continue;
+            if (FactoryReattachment.IsStopRecord(key)
+                || key.StartsWith(FactoryReattachment.AccessPrefix, StringComparison.Ordinal)) continue;
             if (key.StartsWith(FactoryAudit.Namespace, StringComparison.Ordinal))
             {
                 if (!retention.Add(key) || retention.Count > FactoryAudit.GovernanceHistoryRecords

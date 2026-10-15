@@ -64,6 +64,10 @@ public static class FactoryReattachment
         HistoryPrefix + operation.ToString("N") + "/retired/" + index.ToString("D4") + "/current";
     public static string RetiredChunkKey(Guid operation, int record, int index) =>
         HistoryPrefix + operation.ToString("N") + "/retired/" + record.ToString("D4") + "/chunks/" + index.ToString("D4");
+    public static string FinalizedKey(Guid operation, int index) =>
+        HistoryPrefix + operation.ToString("N") + "/finalized/" + index.ToString("D4") + "/current";
+    public static string FinalizedChunkKey(Guid operation, int record, int index) =>
+        HistoryPrefix + operation.ToString("N") + "/finalized/" + record.ToString("D4") + "/chunks/" + index.ToString("D4");
     public static string AccessKey(Guid operation, int index) =>
         AccessPrefix + operation.ToString("N") + "/" + index.ToString("D4");
     public static string RetirementKey(Guid factory) => "dsf/onboarding/retired/" + factory.ToString("N");

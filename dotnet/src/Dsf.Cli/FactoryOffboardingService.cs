@@ -34,6 +34,31 @@ internal sealed class FactoryOffboardingService(IAzureCliRunner azure, HttpClien
             product = new OwnerReservationStore(endpoint, identity.TenantId, identity.SubscriptionId, azure, http, identity.AzureActorId);
             authority = await ReadOffboardingAuthorityAsync(product, token);
         }
+        if (product is not null && await product.ReadAsync(FactoryReattachment.Key, token) is not null)
+            return new(FactoryOffboardingState.Blocked,
+                "Reattachment remains in progress; complete its exact activation or cancellation before detach.");
+        if (anchor.Reattachment is not null)
+        {
+            if (product is null)
+                return new(FactoryOffboardingState.Unknown,
+                    "Reattachment pointer remains but protected product authority is unavailable; no detach transition.");
+            try
+            {
+                await new FactoryReattachmentFinalizer(azure, http).CompleteAsync(identity, product, null, token);
+                ownerRecord = await owner.ReadAsync(ownerRecord.Key, token)
+                    ?? throw new ReservationStoreException(FactoryReservationState.Unknown,
+                        "Owner registration disappeared after completed reattachment recovery.");
+                anchor = FactoryReservationRecords.Parse<FactoryReservationAnchor>(ownerRecord.Value);
+                if (anchor.Identity != identity || anchor.Reattachment is not null)
+                    throw new ReservationStoreException(FactoryReservationState.Unknown,
+                        "Completed reattachment pointer recovery is unconfirmed.");
+            }
+            catch (ReservationStoreException e)
+            {
+                return new(e.State == FactoryReservationState.Blocked
+                    ? FactoryOffboardingState.Blocked : FactoryOffboardingState.Unknown, e.Message);
+            }
+        }
 
         var existing = await ExistingAsync(owner, product, identity, anchor, admission, authority, token);
         if (existing is not null)

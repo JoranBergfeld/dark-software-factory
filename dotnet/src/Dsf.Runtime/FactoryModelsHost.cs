@@ -101,6 +101,7 @@ public static partial class RuntimeVerbs
                     ?? new ManagedIdentityCredential(ManagedIdentityId.FromUserAssignedClientId(settings.ManagedIdentityClientId));
                 var configuration = new AzureConfigurationSettingsGateway(credential, dependencies.ModelHttp);
                 var (manifest, authority, values) = await ReadAsync(configuration, context.RequestAborted);
+                if (authorityOnly) RemoveReattachmentTransition(values);
                 var caller = authority.Bindings![route.StartsWith("juror-", StringComparison.Ordinal) ? 0 : 1];
                 if (authority.Bindings[0].ClientId != settings.ManagedIdentityClientId
                     || !NativeCaller(context, caller.PrincipalId!, manifest.Identity.TenantId, caller.ClientId)) throw new JsonException();
@@ -137,6 +138,7 @@ public static partial class RuntimeVerbs
                     : await workloads.JudgeAsync(route, completion!.Input, context.RequestAborted);
                 inferenceCompleted = native is null;
                 var (latestManifest, _, latestValues) = await ReadAsync(configuration, context.RequestAborted);
+                if (authorityOnly) RemoveReattachmentTransition(latestValues);
                 var latest = await FactoryRuntimeModels.ReadAsync(latestManifest, latestValues, reference, dependencies.ModelClock.GetUtcNow(),
                     credential, dependencies.ModelHttp ?? ModelHttp, context.RequestAborted);
                 if (FactoryModelsValidation.Hash(latestManifest) != FactoryModelsValidation.Hash(manifest)
@@ -180,6 +182,14 @@ public static partial class RuntimeVerbs
             var manifest = FactoryGovernance.ReadInactiveManifest(values.GetValueOrDefault(ProductConfigurationKeys.FactoryManifest),
                 values.GetValueOrDefault(ProductConfigurationKeys.FactoryProfile), settings.Product, settings.ProductEndpoint, settings.ProfilePin);
             return (manifest, FactoryModelsValidation.ReadPreparation(manifest, values), values);
+        }
+
+        static void RemoveReattachmentTransition(Dictionary<string, string> values)
+        {
+            values.Remove(FactoryReattachment.Key);
+            foreach (var key in values.Keys
+                         .Where(key => key.StartsWith(FactoryReattachment.AccessPrefix, StringComparison.Ordinal)).ToArray())
+                values.Remove(key);
         }
     }
 }

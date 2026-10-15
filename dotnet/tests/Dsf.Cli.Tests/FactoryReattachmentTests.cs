@@ -61,11 +61,11 @@ public sealed class FactoryReattachmentTests
         var status = await scenario.Machine.InvokeAsync("status");
         Assert.Equal("Reserved", (string?)status.Result["state"]);
         Assert.Contains("Reattachment", (string?)status.Result["detail"], StringComparison.Ordinal);
-        var renewedModels = await scenario.Machine.InvokeAsync("models", "--verify-only");
-        Assert.Contains((string?)renewedModels.Result["models"]!["state"], new[] { "Blocked", "Unknown" });
         var staleActivation = await scenario.Machine.InvokeAsync(
             "activate", "--operation", Guid.NewGuid().ToString());
         Assert.Equal("Blocked", (string?)staleActivation.Result["state"]);
+        Assert.Equal("Complete configured current preview required.",
+            (string?)staleActivation.Result["detail"]);
     }
 
     [Fact]
@@ -179,7 +179,7 @@ public sealed class FactoryReattachmentTests
         var uncertain = await scenario.Machine.InvokeAsync(
             "reattach", "--operation", operation.ToString(), "--approve", fingerprint);
 
-        Assert.Equal("Unknown", (string?)uncertain.Result["state"]);
+        Assert.Equal("AwaitingReadiness", (string?)uncertain.Result["state"]);
         Assert.DoesNotContain(staleActivation, scenario.Arm.Product.Values().Keys);
         var retired = scenario.Arm.Product.Values()
             .Where(pair => pair.Key.StartsWith(
@@ -221,7 +221,7 @@ public sealed class FactoryReattachmentTests
 
         var uncertain = await scenario.Machine.InvokeAsync(
             "reattach", "--operation", operation.ToString(), "--approve", fingerprint);
-        Assert.Equal("Unknown", (string?)uncertain.Result["state"]);
+        Assert.Equal("AwaitingReadiness", (string?)uncertain.Result["state"]);
         Assert.DoesNotContain(FactoryOffboarding.Key, scenario.Arm.Product.Values().Keys);
 
         scenario.Arm.Product.LoseDeleteResponseKey = null;
