@@ -12,8 +12,7 @@ internal static class FactoryReconfigurationProjection
         if (admission.State != FactoryReservationState.Reserved || admission.Identity is not { } identity
             || admission.Foundation?.ProductEndpoint is not { } endpoint)
             return admission;
-        var product = new OwnerReservationStore(endpoint, identity.TenantId, identity.SubscriptionId,
-            azure, http, identity.AzureActorId);
+        var product = new OwnerReservationStore(endpoint, identity.TenantId, identity.SubscriptionId, azure, http);
         var records = await product.ReadNamespaceAsync(FactoryReconfigurationOperationRecords.Prefix, token,
             FactoryReconfigurationOperationRecords.MaximumRecords);
         if (!records.TryGetValue(FactoryReconfigurationOperationRecords.RootKey, out var root)) return admission;
@@ -23,7 +22,7 @@ internal static class FactoryReconfigurationProjection
         var input = FactoryReconfigurationOperationRecords.ReadInputArchive(operation,
             records.ToDictionary(p => p.Key, p => p.Value.Value, StringComparer.Ordinal)).Input;
         var owner = new OwnerReservationStore(identity.OwnerEndpoint, identity.TenantId, identity.SubscriptionId,
-            azure, http, identity.AzureActorId);
+            azure, http);
         var proof = new ReservationAdmissionProof();
         foreach (var record in (await owner.ReadNamespaceAsync(ProductConfigurationKeys.OwnerOnboardingPrefix, token)).Values)
             proof.Add(record);
