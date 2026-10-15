@@ -73,7 +73,15 @@ internal static class FactoryReservationRecords
                                 || string.IsNullOrWhiteSpace(purge.AuditRevision)
                                 || purge.RequestedAt.Offset != TimeSpan.Zero
                                 || purge.RequestedAt < anchor.Identity.CreatedAt
-                                || purge.CompletedAt is not null))
+                                || purge.CompletedAt is not null)
+                        || anchor.Reattachment is { } reattachment
+                            && (reattachment.OperationId == Guid.Empty
+                                || reattachment.State != FactoryReattachmentState.AwaitingReadiness
+                                || !IsHash(reattachment.PlanFingerprint)
+                                || string.IsNullOrWhiteSpace(reattachment.AuthorityRevision)
+                                || reattachment.RequestedAt.Offset != TimeSpan.Zero
+                                || reattachment.RequestedAt < anchor.Identity.CreatedAt)
+                        || anchor.Offboarding is not null && anchor.Reattachment is not null)
                         return false;
                     identity = anchor.Identity;
                     break;

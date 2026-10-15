@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using Dsf.Core.Onboarding;
 using Dsf.Core.Runtime;
 using Xunit;
 
@@ -7,6 +8,30 @@ namespace Dsf.Cli.Tests;
 public sealed class FactoryPauseTests
 {
     private const string Key = "dsf/factory/pause";
+
+    [Fact]
+    public async Task Completed_reattachment_allows_explicit_pause()
+    {
+        using var scenario = await CharterScenario.ReadyAsync();
+        var identity = FactoryReservationRecords.Parse<FactoryReservationAnchor>(
+            scenario.Machine.Store.Values()[ProductConfigurationKeys.OwnerProductClaim("widget")]).Identity;
+        scenario.Arm.Product.Seed(FactoryLifecycleCoordinator.Key,
+            FactoryReservationRecords.Serialize(new FactoryLifecycleLease(
+                1, "decide-lifecycle-coordinator", identity.FactoryId,
+                FactoryLifecycleCoordinator.Reattachment, Guid.NewGuid(),
+                FactoryLifecycleCoordinator.Completed, identity.AzureActorId,
+                scenario.Source.Source!.Clock.Now)));
+
+        var result = await scenario.Machine.InvokeAsync(
+            "pause", "--request", "--operation", Guid.NewGuid().ToString());
+
+        Assert.Equal("DrainingUnknown", (string?)result.Result["state"]);
+        var lease = FactoryLifecycleCoordinator.Read(
+            scenario.Arm.Product.Values()[FactoryLifecycleCoordinator.Key],
+            identity, scenario.Source.Source.Clock.Now);
+        Assert.Equal(FactoryLifecycleCoordinator.Pause, lease.Transition);
+        Assert.Equal(FactoryLifecycleCoordinator.Active, lease.State);
+    }
 
     [Fact]
     public async Task Explicit_operator_pause_is_durable_without_readiness_or_a_completed_stop_claim()

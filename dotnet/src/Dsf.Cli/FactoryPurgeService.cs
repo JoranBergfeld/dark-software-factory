@@ -31,6 +31,11 @@ internal sealed class FactoryPurgeService(IAzureCliRunner azure, HttpClient? htt
                 "Retained product authority and audit stores are required for reviewed purge; partial onboarding remains preserved.");
 
         var product = Store(endpoint, identity);
+        if (anchor.Reattachment is not null
+            || anchor.Purge is null
+                && await product.ReadAsync(FactoryReattachment.Key, token) is not null)
+            return new(FactoryPurgeState.Blocked,
+                "Reattachment remains active or pending finalization; no purge transition.");
         var audit = new FactoryAuditService(azure, http, clock);
         FactoryPurgePlan plan;
         FactoryPurgeRequest? request = null;

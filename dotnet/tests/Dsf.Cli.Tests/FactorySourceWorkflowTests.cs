@@ -235,6 +235,8 @@ internal sealed class SourceWorkflowTransport(FactoryFoundationTests.FoundationT
                 }).ToArray() });
             return await fallback.SendAsync(request, token);
         }
+        if (path.Contains("/providers/microsoft.authorization/roleassignments/", StringComparison.Ordinal))
+            return await fallback.SendAsync(request, token);
         Assert.Equal(HttpMethod.Put, request.Method);
         Assert.Contains("/providers/microsoft.resources/deployments/sc-", path);
         var body = JsonNode.Parse(await request.Content!.ReadAsStringAsync(token))!;

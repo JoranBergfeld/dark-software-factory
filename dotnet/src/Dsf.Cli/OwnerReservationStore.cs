@@ -268,6 +268,7 @@ internal sealed class OwnerReservationStore : IFactoryCharterEvidenceReader
                 throw new ReservationStoreException(FactoryReservationState.Unknown,
                     "Conditional claim deletion was not confirmed absent.");
         }
+
         catch (RequestFailedException e) when (e.Status is 401 or 403)
         {
             throw new ReservationStoreException(FactoryReservationState.Blocked,
@@ -286,6 +287,54 @@ internal sealed class OwnerReservationStore : IFactoryCharterEvidenceReader
         {
             throw new ReservationStoreException(FactoryReservationState.Unknown,
                 "Owner claim release response uncertain; inspect exact claim, never retry blindly.");
+        }
+    }
+
+    internal async Task DeleteReattachmentGenerationAsync(ConfigurationSetting expected, CancellationToken token)
+    {
+        var permitted = expected.Key.StartsWith(ProductConfigurationKeys.FactoryPreview, StringComparison.Ordinal)
+            || expected.Key.StartsWith(FactoryPreviewPreparation.Namespace, StringComparison.Ordinal)
+            || expected.Key.StartsWith(FactoryPreviewPublication.Namespace, StringComparison.Ordinal)
+            || expected.Key.StartsWith(FactoryActivation.Prefix, StringComparison.Ordinal)
+            || expected.Key.StartsWith(FactoryLive.Prefix, StringComparison.Ordinal)
+            || expected.Key.StartsWith(FactoryPublisher.Prefix, StringComparison.Ordinal)
+            || expected.Key.StartsWith(FactoryPromotion.Prefix, StringComparison.Ordinal)
+            || expected.Key == FactoryOffboarding.Key
+            || expected.Key.StartsWith(FactoryOffboarding.HistoryPrefix, StringComparison.Ordinal)
+            || expected.Key == ProductConfigurationKeys.CharterAdopted
+            || expected.Key == ProductConfigurationKeys.CharterAdoptionOperation
+            || expected.Key == FactoryReattachment.Key
+            || expected.Key.StartsWith(FactoryReattachment.AccessPrefix, StringComparison.Ordinal);
+        if (!permitted || expected.Label is not null || expected.ETag.ToString().Length == 0)
+            throw new ReservationStoreException(FactoryReservationState.Blocked,
+                "Only exact stale preview and activation-generation records may be retired for reattachment.");
+        try
+        {
+            var response = await client.DeleteConfigurationSettingAsync(expected, onlyIfUnchanged: true,
+                cancellationToken: token);
+            if (response.Status is not (200 or 204) || await ReadAsync(expected.Key, token) is not null)
+                throw new ReservationStoreException(FactoryReservationState.Unknown,
+                    "Conditional stale-generation retirement unconfirmed.");
+        }
+        catch (RequestFailedException e) when (e.Status is 401 or 403 or 409 or 412)
+        {
+            throw new ReservationStoreException(FactoryReservationState.Blocked,
+                "Stale preview or activation authority changed; no forced retirement.");
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception e) when (e is RequestFailedException or HttpRequestException or OperationCanceledException)
+        {
+            try
+            {
+                if (await ReadAsync(expected.Key, token) is null) return;
+            }
+            catch (Exception read) when (read is RequestFailedException or HttpRequestException
+                or OperationCanceledException) { }
+            throw new ReservationStoreException(FactoryReservationState.Unknown,
+                "Stale-generation retirement response uncertain; inspect original reattachment.");
         }
     }
 

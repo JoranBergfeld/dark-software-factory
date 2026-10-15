@@ -4,6 +4,8 @@
 the application, repository, factory identity, protected audit, recovery records,
 or retained factory infrastructure. Retained Azure resources can keep incurring
 charges. Purge and identity retirement are separate reviewed operations.
+Before purge, a detached factory may return only through the explicit
+[same-identity reattachment](reattach-council.md) review.
 
 Use the installed CLI with the original trusted owner locator:
 

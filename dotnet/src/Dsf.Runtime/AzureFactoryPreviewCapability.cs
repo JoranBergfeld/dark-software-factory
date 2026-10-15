@@ -120,6 +120,8 @@ internal sealed class AzureFactoryPreviewCapability(
             var key = setting.Key;
             if (inspection is not null && !inspection.Include(key)) continue;
             if (key.StartsWith(FactoryReconfigurationOperationRecords.Prefix, StringComparison.Ordinal)) continue;
+            if (FactoryReattachment.IsStopRecord(key)
+                || key.StartsWith(FactoryReattachment.AccessPrefix, StringComparison.Ordinal)) continue;
             RuntimeWorkflow.EnsureCouncilAdmissionOpen([key]);
             var metadata = Metadata(setting);
             publicationGovernance.Add(key, setting);

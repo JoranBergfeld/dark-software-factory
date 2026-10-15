@@ -98,6 +98,8 @@ internal sealed partial class FactoryAuditService(IAzureCliRunner azure, HttpCli
             foreach (var (key, record) in values)
             {
                 if (key.StartsWith(FactoryAudit.Namespace + "exports/", StringComparison.Ordinal)) continue;
+                if (FactoryReattachment.IsStopRecord(key)
+                    || key.StartsWith(FactoryReattachment.AccessPrefix, StringComparison.Ordinal)) continue;
                 using var json = JsonDocument.Parse(record.Value, new JsonDocumentOptions { AllowDuplicateProperties = false });
                 records.Add(new(new(identity.FactoryId, kind, key, record.ETag.ToString(), FactoryAudit.TextHash(record.Value)),
                     record.LastModified ?? throw new JsonException(), record.Value, [], AuditRetentionStatus.Retained));

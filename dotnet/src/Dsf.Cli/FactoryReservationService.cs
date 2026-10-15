@@ -297,7 +297,15 @@ internal sealed class FactoryReservationService(
                 else result = await foundation.ResumeAsync(admission, anchor.Foundation,
                     () => new ApplicationBoundaryPlanner(reviewer, new AzureBoundaryReader(azure))
                         .PlanAsync(plan.Selection, token, anchor.Identity.PlanFingerprint, proof), token);
-                return await FactoryReconfigurationProjection.ApplyAsync(result, reviewer, azure, http, clock, token);
+                var projected = await FactoryReconfigurationProjection.ApplyAsync(result, reviewer, azure, http, clock, token);
+                return anchor.Reattachment is not null && projected.State == FactoryReservationState.Partial
+                    ? projected with
+                    {
+                        State = FactoryReservationState.Reserved,
+                        Detail = "Reattached owner reservation is current; nested source, access, evidence or model readiness remains partial and activation is absent. "
+                            + projected.Detail,
+                    }
+                    : projected;
             }
             if (!resume)
                 return Result(anchor, root, anchor.Intent is not null && anchor.State == FactoryReservationState.Partial ? FactoryReservationState.Unknown : anchor.State,

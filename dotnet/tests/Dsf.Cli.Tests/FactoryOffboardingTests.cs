@@ -9,6 +9,122 @@ namespace Dsf.Cli.Tests;
 public sealed class FactoryOffboardingTests
 {
     [Fact]
+    public async Task Completed_reattachment_allows_new_detach()
+    {
+        using var scenario = await CharterScenario.ReadyAsync();
+        var identity = FactoryReservationRecords.Parse<FactoryReservationAnchor>(
+            scenario.Machine.Store.Values()[ProductConfigurationKeys.OwnerProductClaim("widget")]).Identity;
+        scenario.Arm.Product.Seed(FactoryLifecycleCoordinator.Key,
+            FactoryReservationRecords.Serialize(new FactoryLifecycleLease(
+                1, "decide-lifecycle-coordinator", identity.FactoryId,
+                FactoryLifecycleCoordinator.Reattachment, Guid.NewGuid(),
+                FactoryLifecycleCoordinator.Completed, identity.AzureActorId,
+                scenario.Source.Source!.Clock.Now)));
+        var operation = Guid.NewGuid();
+
+        var review = await scenario.Machine.InvokeAsync("offboard", "--operation", operation.ToString());
+        var detached = await scenario.Machine.InvokeAsync(
+            "offboard", "--operation", operation.ToString(),
+            "--approve", (string)review.Result["plan"]!["fingerprint"]!);
+
+        Assert.Equal("Detached", (string?)detached.Result["state"]);
+        var lease = FactoryLifecycleCoordinator.Read(
+            scenario.Arm.Product.Values()[FactoryLifecycleCoordinator.Key],
+            identity, scenario.Source.Source.Clock.Now);
+        Assert.Equal(FactoryLifecycleCoordinator.Offboarding, lease.Transition);
+        Assert.Equal(FactoryLifecycleCoordinator.Detached, lease.State);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task In_progress_reattachment_blocks_new_detach(bool ownerPointerRetained)
+    {
+        using var scenario = await CharterScenario.ReadyAsync();
+        var identity = FactoryReservationRecords.Parse<FactoryReservationAnchor>(
+            scenario.Machine.Store.Values()[ProductConfigurationKeys.OwnerProductClaim("widget")]).Identity;
+        var operation = Guid.NewGuid();
+        var requestedAt = scenario.Source.Source!.Clock.Now;
+        var request = new FactoryReattachmentRequest(1, FactoryReattachment.Kind, operation,
+            identity.FactoryId, new string('a', 64), new string('b', 64), identity.AzureActorId, requestedAt);
+        if (ownerPointerRetained)
+            scenario.Machine.Store.Change(ProductConfigurationKeys.OwnerProductClaim("widget"), value =>
+            {
+                var anchor = FactoryReservationRecords.Parse<FactoryReservationAnchor>(value);
+                return FactoryReservationRecords.Serialize(anchor with
+                {
+                    Reattachment = new(operation, FactoryReattachmentState.AwaitingReadiness,
+                        request.PlanFingerprint, request.AuthorityRevision, requestedAt),
+                });
+            });
+        scenario.Arm.Product.Seed(FactoryReattachment.Key, FactoryReservationRecords.Serialize(request));
+
+        scenario.Reconstruct();
+        var result = await scenario.Machine.InvokeAsync("offboard", "--operation", Guid.NewGuid().ToString());
+
+        Assert.Equal("Blocked", (string?)result.Result["state"]);
+        Assert.Contains("reattachment", (string?)result.Result["detail"], StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(FactoryOffboarding.Key, scenario.Arm.Product.Values().Keys);
+    }
+
+    [Fact]
+    public async Task Completed_reattachment_pointer_is_cleared_before_later_detach_review()
+    {
+        using var scenario = await CharterScenario.ReadyAsync();
+        var identity = FactoryReservationRecords.Parse<FactoryReservationAnchor>(
+            scenario.Machine.Store.Values()[ProductConfigurationKeys.OwnerProductClaim("widget")]).Identity;
+        var operation = Guid.NewGuid();
+        var requestedAt = scenario.Source.Source!.Clock.Now;
+        var request = new FactoryReattachmentRequest(1, FactoryReattachment.Kind, operation,
+            identity.FactoryId, new string('a', 64), new string('b', 64), identity.AzureActorId, requestedAt);
+        var requestValue = FactoryReservationRecords.Serialize(request);
+        scenario.Machine.Store.Change(ProductConfigurationKeys.OwnerProductClaim("widget"), value =>
+        {
+            var anchor = FactoryReservationRecords.Parse<FactoryReservationAnchor>(value);
+            return FactoryReservationRecords.Serialize(anchor with
+            {
+                Reattachment = new(operation, FactoryReattachmentState.AwaitingReadiness,
+                    request.PlanFingerprint, request.AuthorityRevision, requestedAt),
+            });
+        });
+        scenario.Arm.Product.Seed(FactoryReattachment.HistoryKey(operation), requestValue);
+        var descriptor = new FactoryReattachmentRetiredRecord(1, operation, 0,
+            FactoryReattachment.Key, "revision-completed", FactoryReservationRecords.Hash(requestValue),
+            System.Text.Encoding.UTF8.GetByteCount(requestValue), 1);
+        scenario.Arm.Product.Seed(FactoryReattachment.FinalizedKey(operation, 0),
+            FactoryReservationRecords.Serialize(descriptor));
+        scenario.Arm.Product.Seed(FactoryReattachment.FinalizedChunkKey(operation, 0, 0),
+            FactoryReservationRecords.Serialize(new FactoryReattachmentRetiredChunk(
+                1, operation, 0, 0, Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(requestValue)))));
+        scenario.Arm.Product.Seed(FactoryReattachment.FinalizationProgressKey(operation),
+            FactoryReservationRecords.Serialize(new FactoryReattachmentRetirementProgress(
+                1, operation, request.PlanFingerprint, 1, 1)));
+
+        scenario.Reconstruct();
+        var result = await scenario.Machine.InvokeAsync("offboard", "--operation", Guid.NewGuid().ToString());
+
+        Assert.Equal("ReviewRequired", (string?)result.Result["state"]);
+        var anchor = FactoryReservationRecords.Parse<FactoryReservationAnchor>(
+            scenario.Machine.Store.Values()[ProductConfigurationKeys.OwnerProductClaim("widget")]);
+        Assert.Null(anchor.Reattachment);
+        var detached = await scenario.Machine.InvokeAsync("offboard",
+            "--operation", (string)result.Result["plan"]!["operationId"]!,
+            "--approve", (string)result.Result["plan"]!["fingerprint"]!);
+        Assert.Equal("Detached", (string?)detached.Result["state"]);
+        anchor = FactoryReservationRecords.Parse<FactoryReservationAnchor>(
+            scenario.Machine.Store.Values()[ProductConfigurationKeys.OwnerProductClaim("widget")]);
+        Assert.Null(anchor.Reattachment);
+        Assert.Equal(FactoryOffboardingState.Detached, anchor.Offboarding?.State);
+
+        scenario.Machine.Boundary.Repository.ReservationHttp =
+            new HttpClient(scenario.Previous, disposeHandler: false);
+        scenario.Reconstruct();
+        var next = await scenario.Machine.InvokeAsync(
+            "reattach", "--operation", Guid.NewGuid().ToString());
+        Assert.Equal("ReviewRequired", (string?)next.Result["state"]);
+    }
+
+    [Fact]
     public async Task Active_factory_requires_exact_review_before_detach_and_preserves_product_assets()
     {
         using var scenario = await CharterScenario.ReadyAsync();

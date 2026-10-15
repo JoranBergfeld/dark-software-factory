@@ -15,6 +15,7 @@ internal static class FactoryLifecycleCoordinator
     internal const string Reconfiguration = "reconfiguration";
     internal const string Offboarding = "offboarding";
     internal const string Pause = "pause";
+    internal const string Reattachment = "reattachment";
     internal const string Active = "active";
     internal const string Completed = "completed";
     internal const string Detached = "detached";
@@ -25,6 +26,23 @@ internal static class FactoryLifecycleCoordinator
     {
         if (transition == Reconfiguration)
             await store.RequireAdmissionOpenAsync(token);
+        else if (transition == Reattachment)
+        {
+            var detachedRecord = await store.ReadAsync(Key, token)
+                ?? throw new ReservationStoreException(FactoryReservationState.Blocked,
+                    "Detached lifecycle coordinator required; retained infrastructure cannot self-authorize.");
+            var detachedLease = Read(detachedRecord.Value, identity, clock.GetUtcNow());
+            if (detachedLease.Transition == Reattachment
+                && detachedLease.OperationId == operationId && detachedLease.State == Active)
+                return detachedRecord;
+            if (detachedLease.Transition != Offboarding || detachedLease.State != Detached)
+                throw new ReservationStoreException(FactoryReservationState.Blocked,
+                    "Only an explicitly detached factory may reattach.");
+            var desiredReattachment = new FactoryLifecycleLease(1, Kind, identity.FactoryId, transition,
+                operationId, Active, identity.AzureActorId, clock.GetUtcNow());
+            return await store.WriteAsync(Key, FactoryReservationRecords.Serialize(desiredReattachment),
+                detachedRecord.ETag, token);
+        }
         else if (transition is Offboarding or Pause)
             await RequireNoActiveReconfigurationAsync(store, identity, clock, token);
         else
@@ -50,7 +68,7 @@ internal static class FactoryLifecycleCoordinator
         var retained = Read(current.Value, identity, clock.GetUtcNow());
         if (retained.Transition == transition && retained.OperationId == operationId)
             return current;
-        if (retained.Transition == Reconfiguration && retained.State == Completed
+        if (retained.Transition is Reconfiguration or Reattachment && retained.State == Completed
             && transition is Offboarding or Pause)
             return await store.WriteAsync(Key, value, current.ETag, token);
         throw new ReservationStoreException(FactoryReservationState.Blocked,
@@ -101,6 +119,7 @@ internal static class FactoryLifecycleCoordinator
         if (retained.State == state) return;
         if (retained.State != Active
             || transition == Reconfiguration && state != Completed
+            || transition == Reattachment && state != Completed
             || transition == Offboarding && state != Detached)
             throw new ReservationStoreException(FactoryReservationState.Blocked,
                 "Lifecycle coordinator cannot enter the requested terminal state.");
@@ -115,9 +134,9 @@ internal static class FactoryLifecycleCoordinator
         if (lease.Protocol != 1 || lease.Kind != Kind || lease.FactoryId != identity.FactoryId
             || lease.OperationId == Guid.Empty || lease.ApprovedBy != identity.AzureActorId
             || lease.StartedAt.Offset != TimeSpan.Zero || lease.StartedAt < identity.CreatedAt
-            || lease.StartedAt > now || lease.Transition is not (Reconfiguration or Offboarding or Pause)
+            || lease.StartedAt > now || lease.Transition is not (Reconfiguration or Offboarding or Pause or Reattachment)
             || lease.State is not (Active or Completed or Detached)
-            || lease.Transition != Reconfiguration && lease.State == Completed
+            || lease.Transition is not (Reconfiguration or Reattachment) && lease.State == Completed
             || lease.Transition != Offboarding && lease.State == Detached)
             throw new JsonException("Protected lifecycle coordinator binding is invalid.");
         return lease;

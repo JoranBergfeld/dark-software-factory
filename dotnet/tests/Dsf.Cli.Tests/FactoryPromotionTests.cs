@@ -2,6 +2,7 @@ using System.Text.Json.Nodes;
 using System.Net;
 using System.Net.Http.Json;
 using Dsf.Core.Onboarding;
+using Dsf.Core.Runtime;
 using Xunit;
 
 namespace Dsf.Cli.Tests;
@@ -262,6 +263,7 @@ public sealed class FactoryPromotionTests(PromotableFactoryFixture fixture) : IC
             audited.AddRange(audit.Result["records"]!.AsArray().Select(r => r!.DeepClone()));
             if (audit.Result["nextPage"] is null) break;
         }
+
         foreach (var marker in new[] { "decision-index-", "publication-index-", "problem-index-", "decision-", "proposal-" })
             Assert.Contains(audited, r => ((string)r!["identity"]!["key"]!).Contains("/docs/" + marker, StringComparison.Ordinal));
         Assert.Contains(audited, r => (string?)r!["identity"]!["store"] == "Run"
@@ -275,6 +277,147 @@ public sealed class FactoryPromotionTests(PromotableFactoryFixture fixture) : IC
         Assert.True((bool)status.Result["historicallyCompleted"]!);
         Assert.False((bool)status.Result["currentReady"]!);
         Assert.True((bool)status.Result["firstConfirmedFiling"]!);
+    }
+
+    [Fact]
+    public async Task Fresh_final_promotion_finalizes_reattachment_and_reopens_runtime()
+    {
+        var transport = fixture.Reset();
+        var machine = transport.Scenario.Machine;
+        var identity = transport.Manifest.Identity;
+        var reattachment = Guid.NewGuid();
+        var fingerprint = new string('a', 64);
+        var authorityRevision = new string('b', 64);
+        var requestedAt = transport.Scenario.Source.Source!.Clock.Now;
+        machine.Store.Change(ProductConfigurationKeys.OwnerProductClaim(identity.ProductKey), value =>
+        {
+            var anchor = FactoryReservationRecords.Parse<FactoryReservationAnchor>(value);
+            return FactoryReservationRecords.Serialize(anchor with
+            {
+                Reattachment = new(reattachment, FactoryReattachmentState.AwaitingReadiness,
+                    fingerprint, authorityRevision, requestedAt),
+            });
+        });
+        var request = new FactoryReattachmentRequest(1, FactoryReattachment.Kind, reattachment,
+            identity.FactoryId, fingerprint, authorityRevision, identity.AzureActorId, requestedAt);
+        transport.Scenario.Arm.Product.Seed(
+            FactoryReattachment.Key, FactoryReservationRecords.Serialize(request));
+        var accessKeys = new[]
+        {
+            FactoryReattachment.AccessKey(reattachment, 0),
+            FactoryReattachment.AccessKey(reattachment, 1),
+        };
+        transport.Scenario.Arm.Product.Seed(accessKeys[0], """{"kind":"exact-restored-access","index":0}""");
+        transport.Scenario.Arm.Product.Seed(accessKeys[1], """{"kind":"exact-restored-access","index":1}""");
+        transport.Scenario.Arm.Product.LoseDeleteResponseKey = accessKeys[0];
+        transport.Scenario.Arm.Product.RejectDeleteKey = accessKeys[1];
+        var live = FactoryLive.ReadConfirmed(transport.Values()
+                .Where(pair => pair.Key.StartsWith(FactoryLive.Prefix, StringComparison.Ordinal)).ToDictionary(),
+            transport.Scenario.Source.Source.Clock.Now);
+        using var http = new HttpClient(transport, false) { Timeout = Timeout.InfiniteTimeSpan };
+        using var blocked = await http.PostAsJsonAsync(
+            live.Endpoint + "/decide", new FactoryDecisionRequest(Guid.NewGuid()), FactorySourceValidation.RecordJson);
+        Assert.Equal(HttpStatusCode.Forbidden, blocked.StatusCode);
+        Assert.Contains("ReattachmentAwaitingReadiness", await blocked.Content.ReadAsStringAsync());
+        var activationOperation = (Guid)JsonNode.Parse(
+            transport.Values()[FactoryActivation.RootKey])!["operationId"]!;
+        var interrupted = await machine.InvokeAsync("activate", "--operation", activationOperation.ToString());
+        Assert.Equal("Blocked", (string?)interrupted.Result["state"]);
+        Assert.True(!transport.Values().ContainsKey(accessKeys[0]),
+            interrupted.Result.ToJsonString() + interrupted.Terminal.Output + interrupted.Terminal.Error);
+        Assert.Contains(accessKeys[1], transport.Values().Keys);
+        Assert.Contains(FactoryReattachment.Key, transport.Values().Keys);
+
+        transport.Scenario.Arm.Product.LoseDeleteResponseKey = null;
+        transport.Scenario.Arm.Product.RejectDeleteKey = null;
+        var progressKey = FactoryReattachment.FinalizationProgressKey(reattachment);
+        var progressWrites = 0;
+        transport.Scenario.Arm.Product.BeforePut = (key, _) =>
+        {
+            if (key == progressKey && ++progressWrites == 2)
+                transport.Scenario.Arm.Product.RejectKey = progressKey;
+            return Task.CompletedTask;
+        };
+        var finalProgressInterrupted = await machine.InvokeAsync(
+            "activate", "--operation", activationOperation.ToString());
+        Assert.Equal("Failed", (string?)finalProgressInterrupted.Result["state"]);
+        Assert.Contains(FactoryReattachment.Key, transport.Values().Keys);
+        var interruptedAnchor = FactoryReservationRecords.Parse<FactoryReservationAnchor>(
+            machine.Store.Values()[ProductConfigurationKeys.OwnerProductClaim(identity.ProductKey)]);
+        Assert.NotNull(interruptedAnchor.Reattachment);
+        var interruptedProgress = FactoryReservationRecords.Parse<FactoryReattachmentRetirementProgress>(
+            transport.Values()[progressKey]);
+        Assert.Equal(interruptedProgress.Records - 1, interruptedProgress.Applied);
+
+        transport.Scenario.Arm.Product.BeforePut = null;
+        transport.Scenario.Arm.Product.RejectKey = null;
+        var finalized = await machine.InvokeAsync("activate", "--operation", activationOperation.ToString());
+        Assert.True((string?)finalized.Result["state"] == "ApprovalOnly",
+            finalized.Result.ToJsonString() + finalized.Terminal.Output + finalized.Terminal.Error);
+        Assert.DoesNotContain(FactoryReattachment.Key, transport.Values().Keys);
+        Assert.DoesNotContain(accessKeys[0], transport.Values().Keys);
+        Assert.DoesNotContain(accessKeys[1], transport.Values().Keys);
+        var progress = FactoryReservationRecords.Parse<FactoryReattachmentRetirementProgress>(
+            transport.Values()[progressKey]);
+        Assert.Equal(3, progress.Records);
+        Assert.Equal(progress.Records, progress.Applied);
+        var anchor = FactoryReservationRecords.Parse<FactoryReservationAnchor>(
+            machine.Store.Values()[ProductConfigurationKeys.OwnerProductClaim(identity.ProductKey)]);
+        Assert.Null(anchor.Reattachment);
+        Assert.Contains(transport.Values(), pair =>
+            pair.Key.StartsWith(FactoryReattachment.HistoryPrefix + reattachment.ToString("N") + "/finalized/",
+                StringComparison.Ordinal)
+            && pair.Value.Contains(Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(
+                FactoryReservationRecords.Serialize(request))), StringComparison.Ordinal));
+        var operation = Guid.NewGuid().ToString();
+        var review = await machine.InvokeAsync("activate", "--promote", "--operation", operation);
+
+        var activated = await machine.InvokeAsync("activate", "--promote", "--operation", operation,
+            "--approve", (string)review.Result["approvalFingerprint"]!);
+
+        Assert.Equal("Activated", (string?)activated.Result["state"]);
+        using var admitted = await http.PostAsJsonAsync(
+            live.Endpoint + "/decide", new FactoryDecisionRequest(Guid.NewGuid()), FactorySourceValidation.RecordJson);
+        Assert.Equal(HttpStatusCode.Accepted, admitted.StatusCode);
+        transport.Requests.Clear();
+    }
+
+    [Fact]
+    public async Task Activation_older_than_reattachment_does_not_reopen_admission()
+    {
+        var transport = fixture.Reset();
+        var machine = transport.Scenario.Machine;
+        var identity = transport.Manifest.Identity;
+        var reattachment = Guid.NewGuid();
+        var requestedAt = transport.Scenario.Source.Source!.Clock.Now.AddSeconds(1);
+        var fingerprint = new string('a', 64);
+        var authorityRevision = new string('b', 64);
+        machine.Store.Change(ProductConfigurationKeys.OwnerProductClaim(identity.ProductKey), value =>
+        {
+            var anchor = FactoryReservationRecords.Parse<FactoryReservationAnchor>(value);
+            return FactoryReservationRecords.Serialize(anchor with
+            {
+                Reattachment = new(reattachment, FactoryReattachmentState.AwaitingReadiness,
+                    fingerprint, authorityRevision, requestedAt),
+            });
+        });
+        transport.Scenario.Arm.Product.Seed(FactoryReattachment.Key,
+            FactoryReservationRecords.Serialize(new FactoryReattachmentRequest(
+                1, FactoryReattachment.Kind, reattachment, identity.FactoryId,
+                fingerprint, authorityRevision, identity.AzureActorId, requestedAt)));
+        var activationOperation = (Guid)JsonNode.Parse(
+            transport.Values()[FactoryActivation.RootKey])!["operationId"]!;
+
+        var result = await machine.InvokeAsync("activate", "--operation", activationOperation.ToString());
+
+        Assert.Equal("Blocked", (string?)result.Result["state"]);
+        Assert.Equal("Fresh revision-bound activation after reattachment is required.",
+            (string?)result.Result["detail"]);
+        Assert.Contains(FactoryReattachment.Key, transport.Values().Keys);
+        var anchor = FactoryReservationRecords.Parse<FactoryReservationAnchor>(
+            machine.Store.Values()[ProductConfigurationKeys.OwnerProductClaim(identity.ProductKey)]);
+        Assert.NotNull(anchor.Reattachment);
+        transport.Requests.Clear();
     }
 }
 

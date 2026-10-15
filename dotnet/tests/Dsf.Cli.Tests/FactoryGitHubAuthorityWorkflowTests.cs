@@ -924,13 +924,21 @@ public sealed class FactoryGitHubAuthorityWorkflowTests
                 return new(HttpStatusCode.NoContent);
             }
             if (request.RequestUri.Host.EndsWith(".vault.azure.net", StringComparison.Ordinal)
+                && path == "/deletedsecrets/github-app-private-key/recover")
+            {
+                Assert.Equal(HttpMethod.Post, request.Method);
+                DeletedKeyVersions.Clear();
+                return Reply(new JsonObject { ["recovered"] = true });
+            }
+            if (request.RequestUri.Host.EndsWith(".vault.azure.net", StringComparison.Ordinal)
                 && path.StartsWith("/secrets/github-app-private-key/", StringComparison.Ordinal))
             {
                 var version = request.RequestUri.GetLeftPart(UriPartial.Path);
                 if (request.Method == HttpMethod.Get)
                     return DeletedKeyVersions.Contains(version)
                         ? new(HttpStatusCode.NotFound)
-                        : Reply(new JsonObject { ["id"] = version, ["attributes"] = new JsonObject
+                        : Reply(new JsonObject { ["id"] = Fault == "key-custody-conflict" ? version + "-changed" : version,
+                            ["attributes"] = new JsonObject
                         { ["enabled"] = true, ["created"] = DateTimeOffset.Parse("2026-09-15T23:00:00Z").ToUnixTimeSeconds() } });
                 Assert.Equal(HttpMethod.Delete, request.Method);
                 if (CleanupDenied) return new(HttpStatusCode.Forbidden);

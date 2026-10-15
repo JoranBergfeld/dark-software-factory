@@ -9,6 +9,8 @@ internal sealed class FactoryInspectionAuthority
 
     internal bool Include(string key)
     {
+        if (FactoryReattachment.IsStopRecord(key)
+            || key.StartsWith(FactoryReattachment.AccessPrefix, StringComparison.Ordinal)) return false;
         if (!FactoryPause.IsStopRecord(key) && !FactoryOffboarding.IsStopRecord(key)
            && !FactoryReconfigurationOperationRecords.IsRecord(key)) return true;
         AdmissionClosed = true;

@@ -69,7 +69,7 @@ public sealed class RuntimeAdmissionTests
         foreach (var entry in new[] { "manual", "preview", "resume", "sweep", "outcomes", "http", "agent", "loop" })
         foreach (var damage in new[] { "none", "invalid-pin", "missing-profile", "malformed-profile", "unreadable",
                      "missing-manifest", "missing-all", "mutating-profile", "active-manifest", "wrong-factory", "legacy-coexists",
-                     "pause", "pause-history", "offboarding", "offboarding-history" })
+                     "pause", "pause-history", "offboarding", "offboarding-history", "reattachment-awaiting-readiness" })
             yield return [entry, damage];
     }
 
@@ -77,7 +77,9 @@ public sealed class RuntimeAdmissionTests
     [MemberData(nameof(AdmissionCases))]
     public async Task Current_onboarding_governance_denies_every_runtime_path_without_effects(string entry, string damage)
     {
-        var configuration = Onboarding();
+        var configuration = damage == "reattachment-awaiting-readiness"
+            ? PersistedRuntimeConfiguration.Greenfield()
+            : Onboarding();
         var settings = Settings;
         if (damage == "invalid-pin")
             settings = settings with { IntegrationSettings = new Dictionary<string, string?> { [RuntimeIntegrationSettings.FactoryProfilePin] = "invalid" } };
@@ -90,6 +92,13 @@ public sealed class RuntimeAdmissionTests
         if (damage == "pause-history") configuration.Values.Add("dsf/factory/audit/pause/retained/request", "{}");
         if (damage == "offboarding") configuration.Values.Add("dsf/factory/offboarding", "{unconfirmed-private-detach");
         if (damage == "offboarding-history") configuration.Values.Add("dsf/factory/audit/offboarding/retained/request", "{}");
+        if (damage == "reattachment-awaiting-readiness")
+            configuration.Values.Add(FactoryReattachment.Key, JsonSerializer.Serialize(
+                new FactoryReattachmentRequest(1, FactoryReattachment.Kind, Guid.NewGuid(),
+                    Guid.Parse("11111111-1111-1111-1111-111111111111"), new string('a', 64),
+                    new string('b', 64), "55555555-5555-5555-5555-555555555555",
+                    DateTimeOffset.Parse("2026-09-15T23:00:00Z")),
+                FactorySourceValidation.RecordJson));
         if (damage == "legacy-coexists")
             foreach (var item in PersistedRuntimeConfiguration.Greenfield().Values) configuration.Values.Add(item.Key, item.Value);
         if (damage is "mutating-profile" or "active-manifest" or "wrong-factory")
@@ -159,6 +168,7 @@ public sealed class RuntimeAdmissionTests
         }
         Assert.Contains(damage is "pause" or "pause-history" ? "DeliberatePause"
             : damage is "offboarding" or "offboarding-history" ? "OffboardingOrDetached"
+            : damage == "reattachment-awaiting-readiness" ? "ReattachmentAwaitingReadiness"
             : damage == "none" ? "Verified product governance"
             : damage == "unreadable" ? "unreadable" : "governance", error);
         Assert.DoesNotContain("secret-governance-provider-detail", error);

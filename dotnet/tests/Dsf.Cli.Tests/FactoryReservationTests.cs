@@ -1092,6 +1092,7 @@ internal sealed class ReservationTestStore
     public bool LoseBeforeCommit { get; set; }
     public string? RejectKey { get; set; }
     public string? RejectDeleteKey { get; set; }
+    public string? LoseDeleteResponseKey { get; set; }
     public string? RejectReadKey { get; set; }
     public Func<string, bool, Task>? BeforePut { get; set; }
     public Action<string, string>? AfterPut { get; set; }
@@ -1196,6 +1197,8 @@ internal sealed class ReservationTestStore
                         return Reply(HttpStatusCode.PreconditionFailed, null);
                     store.records.Remove(key);
                     store.valueSnapshot = null;
+                    if (key == store.LoseDeleteResponseKey)
+                        throw new HttpRequestException("secret-lost-delete-response");
                     return Reply(HttpStatusCode.NoContent, null);
                 }
                 Assert.Equal(HttpMethod.Put, request.Method);

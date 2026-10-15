@@ -162,6 +162,7 @@ public static partial class CliApplication
         decide.Subcommands.Add(BuildPauseCommand(terminal, reviewer, boundaryAzure, reservationHttp, reservationClock));
         decide.Subcommands.Add(BuildOnboardingOffboardCommand(terminal, reviewer, boundaryAzure, reservationHttp, reservationClock));
         decide.Subcommands.Add(BuildOnboardingPurgeCommand(terminal, reviewer, boundaryAzure, reservationHttp, reservationClock));
+        decide.Subcommands.Add(BuildOnboardingReattachCommand(terminal, reviewer, boundaryAzure, reservationHttp, reservationClock));
         decide.Subcommands.Add(BuildReconfigureCommand(terminal, reviewer, boundaryAzure, reservationHttp, reservationClock));
         decide.Subcommands.Add(BuildActivationCommand(terminal, reviewer, boundaryAzure, reservationHttp, reservationClock));
         decide.Subcommands.Add(BuildLiveCommand(terminal, reviewer, boundaryAzure, reservationHttp, reservationClock));
