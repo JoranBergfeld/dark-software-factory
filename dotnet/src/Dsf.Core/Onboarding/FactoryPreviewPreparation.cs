@@ -4,14 +4,31 @@ using Dsf.Core.Runtime;
 
 namespace Dsf.Core.Onboarding;
 
+public sealed record PreviewRuntimeConfiguration(
+    string RuntimeImage, string AudienceClientId, string MetadataRoleDefinitionId);
 public sealed record PreviewWorkloadSelection(string RuntimeImage, string AudienceClientId);
 public sealed record PreviewTelemetryPreparationSelection(string RuntimeImage, string AudienceClientId,
-    string MetadataRoleDefinitionId, int RowsPerTable);
+    string MetadataRoleDefinitionId, int RowsPerTable)
+{
+    [JsonIgnore]
+    public PreviewRuntimeConfiguration Runtime =>
+        new(RuntimeImage, AudienceClientId, MetadataRoleDefinitionId);
+}
 public sealed record PreviewSupplementalPreparationSelection(string Kind, string RuntimeImage, string AudienceClientId,
-    string MetadataRoleDefinitionId);
+    string MetadataRoleDefinitionId)
+{
+    [JsonIgnore]
+    public PreviewRuntimeConfiguration Runtime =>
+        new(RuntimeImage, AudienceClientId, MetadataRoleDefinitionId);
+}
 public sealed record PreviewPreparationSelection(Guid OperationId, string RuntimeImage, string AudienceClientId,
     string MetadataRoleDefinitionId, PreviewWorkloadSelection Models, PreviewTelemetryPreparationSelection Telemetry,
-    IReadOnlyList<PreviewSupplementalPreparationSelection> Supplemental, CouncilJudgmentConfiguration Judgment);
+    IReadOnlyList<PreviewSupplementalPreparationSelection> Supplemental, CouncilJudgmentConfiguration Judgment)
+{
+    [JsonIgnore]
+    public PreviewRuntimeConfiguration Runtime =>
+        new(RuntimeImage, AudienceClientId, MetadataRoleDefinitionId);
+}
 
 public enum PreviewPreparationState { Reviewed, Partial, ConfirmedNotReady, SeedAwaitingApproval, ConfiguredAwaitingEvaluation, Blocked, KnownFailed, Unknown, Canceled }
 public enum PreviewPreparationEffectState { Intended, Dispatched, Confirmed, KnownFailed, Unknown }
@@ -110,8 +127,8 @@ public static class FactoryPreviewPreparation
             FactorySourceValidation.ValidateSelection(new(source.RuntimeImage, source.AudienceClientId));
         }
         FactoryPreviewInputValidation.Validate(new(FactoryPreviewInputValidation.Policy, selection.Judgment));
-        foreach (var role in new[] { selection.MetadataRoleDefinitionId, selection.Telemetry.MetadataRoleDefinitionId }
-            .Concat(selection.Supplemental.Select(s => s.MetadataRoleDefinitionId)))
+        foreach (var role in new[] { selection.Runtime.MetadataRoleDefinitionId, selection.Telemetry.Runtime.MetadataRoleDefinitionId }
+            .Concat(selection.Supplemental.Select(s => s.Runtime.MetadataRoleDefinitionId)))
         {
             var segments = role?.Split('/') ?? [];
             if (segments.Length != 7 || segments[1] != "subscriptions" || !Guid.TryParseExact(segments[2], "D", out var subscription)

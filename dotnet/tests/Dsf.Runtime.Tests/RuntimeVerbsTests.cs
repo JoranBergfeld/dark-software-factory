@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
+using Dsf.Core.Onboarding;
 using Dsf.Core.Runtime;
 using Dsf.FeatureCouncil.Conveyor;
 using Microsoft.AspNetCore.Builder;
@@ -368,6 +369,34 @@ public sealed class RuntimeVerbsTests
     }
 
     [Fact]
+    public async Task Uncertain_onboarding_sweep_resumes_the_same_durable_invocation_on_the_next_tick()
+    {
+        var configuration = PromotedOnboarding();
+        var decisions = new ScriptedOnboardingDecisionRunner();
+        decisions.Failures.Enqueue(new RuntimeVerbException("decision outcome unconfirmed"));
+        var dependencies = TestDependencies.Build(configurationSettingsGateway: configuration) with
+        {
+            OnboardingDecisionRunner = decisions,
+        };
+
+        await Assert.ThrowsAsync<RuntimeVerbException>(() =>
+            RuntimeVerbs.SweepAsync(Settings with
+            {
+                AppConfigEndpoint = "https://dsfo-11111111111111111111111111111111.azconfig.io",
+            }, true, dependencies, CancellationToken.None));
+        var resumed = await RuntimeVerbs.SweepAsync(Settings with
+        {
+            AppConfigEndpoint = "https://dsfo-11111111111111111111111111111111.azconfig.io",
+        }, false, dependencies, CancellationToken.None);
+
+        Assert.NotNull(resumed);
+        Assert.Equal(2, decisions.Requests.Count);
+        Assert.NotEqual(Guid.Empty, decisions.Requests[0].InvocationId);
+        Assert.Equal(decisions.Requests[0].InvocationId, decisions.Requests[1].InvocationId);
+        Assert.True(decisions.Requests[1].DryRun);
+    }
+
+    [Fact]
     public async Task Orchestrator_host_serves_health_and_previews_a_posted_signal()
     {
         var dependencies = TestDependencies.Build(evidenceGatherers:
@@ -453,6 +482,61 @@ public sealed class RuntimeVerbsTests
         {
             await app.StopAsync();
         }
+    }
+
+    [Fact]
+    public async Task Greenfield_http_transport_failure_preserves_server_error_without_onboarding_recovery_text()
+    {
+        await using var app = RuntimeVerbs.BuildOrchestratorHost(
+            Settings, TestDependencies.Build(runStore: new UnconfirmedRunStore()), "127.0.0.1", 0);
+        await app.StartAsync();
+        try
+        {
+            using var client = new HttpClient { BaseAddress = new Uri(BaseAddress(app)) };
+            using var response = await client.PostAsync("/run",
+                new StringContent("""{"product_hints":"acme","source_kinds":["azuremonitor"]}""",
+                    Encoding.UTF8, "application/json"));
+
+            Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+            Assert.DoesNotContain("invocation_id", await response.Content.ReadAsStringAsync(),
+                StringComparison.OrdinalIgnoreCase);
+        }
+        finally { await app.StopAsync(); }
+    }
+
+    [Fact]
+    public async Task Onboarding_http_unknown_returns_conflict_with_original_invocation_recovery()
+    {
+        var invocation = Guid.NewGuid();
+        var decisions = new ScriptedOnboardingDecisionRunner();
+        decisions.Failures.Enqueue(new IOException("response lost"));
+        var dependencies = TestDependencies.Build(configurationSettingsGateway: PromotedOnboarding()) with
+        {
+            OnboardingDecisionRunner = decisions,
+        };
+        await using var app = RuntimeVerbs.BuildOrchestratorHost(
+            Settings with { AppConfigEndpoint = "https://dsfo-11111111111111111111111111111111.azconfig.io" },
+            dependencies, "127.0.0.1", 0);
+        await app.StartAsync();
+        try
+        {
+            using var client = new HttpClient { BaseAddress = new Uri(BaseAddress(app)) };
+            client.DefaultRequestHeaders.Authorization =
+                new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", "caller-token");
+            using var response = await client.PostAsync("/run",
+                new StringContent(JsonSerializer.Serialize(new
+                {
+                    product_hints = "acme",
+                    source_kinds = Array.Empty<string>(),
+                    invocation_id = invocation,
+                }), Encoding.UTF8, "application/json"));
+
+            Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+            Assert.Contains("invocation_id", await response.Content.ReadAsStringAsync(),
+                StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(invocation, Assert.Single(decisions.Requests).InvocationId);
+        }
+        finally { await app.StopAsync(); }
     }
 
     [Fact]
@@ -626,6 +710,70 @@ public sealed class RuntimeVerbsTests
 
     private static string BaseAddress(WebApplication app) =>
         app.Urls.First().Replace("[::]", "127.0.0.1", StringComparison.Ordinal);
+
+    private static TestDependencies.PersistedRuntimeConfiguration PromotedOnboarding()
+    {
+        var configuration = RuntimeAdmissionTests.Onboarding();
+        var operation = Guid.Parse("66666666-6666-6666-6666-666666666666");
+        var seed = new AuditRecordIdentity(
+            Guid.Parse("11111111-1111-1111-1111-111111111111"),
+            AuditStoreKind.Governance, FactoryPromotion.SeedsKey(operation), "revision", new string('d', 64));
+        var approval = new FactoryPromotionApproval(
+            1, seed.FactoryId, operation, "55555555-5555-5555-5555-555555555555",
+            DateTimeOffset.Parse("2026-09-15T23:00:00Z"), "", "authority", new string('e', 64),
+            new string('f', 64), [])
+        {
+            NativeIndices = seed,
+            Phase = FactoryPromotionPhase.Active,
+        };
+        approval = approval with { ReviewFingerprint = FactoryPromotion.Fingerprint(approval) };
+        configuration.Values[FactoryPromotion.RootKey] =
+            JsonSerializer.Serialize(approval, FactorySourceValidation.RecordJson);
+        configuration.Values[FactoryPromotion.IntentKey] = "{}";
+        configuration.Values[seed.Key] = "{}";
+        configuration.Values[FactoryPromotion.CompletionKey(operation)] = "{}";
+        return configuration;
+    }
+
+    private sealed class ScriptedOnboardingDecisionRunner : IOnboardingDecisionRunner
+    {
+        public Queue<Exception> Failures { get; } = [];
+        public List<FactoryDecisionRequest> Requests { get; } = [];
+
+        public Task<ConveyorRun> RunAsync(
+            RuntimeSettings settings, RuntimeDependencies dependencies, FactoryManifest manifest,
+            FactoryDecisionRequest request, CancellationToken cancellationToken)
+        {
+            Requests.Add(request);
+            if (Failures.TryDequeue(out var failure)) return Task.FromException<ConveyorRun>(failure);
+            return Task.FromResult(new ConveyorRun
+            {
+                Id = FactoryPromotion.DecisionId(manifest.Identity.FactoryId, request.InvocationId) + "-run",
+                Profile = ConveyorProfile.OnboardingPreview,
+                ProductHints = [manifest.Identity.ProductKey],
+                DryRun = request.DryRun,
+                Status = RunStatus.Previewed,
+            });
+        }
+
+        public Task<PreviewHttpObservation> ObserveAsync(
+            RuntimeSettings settings, RuntimeDependencies dependencies, FactoryManifest manifest,
+            FactoryDecisionRequest request, string bearer, CancellationToken cancellationToken)
+        {
+            Requests.Add(request);
+            if (Failures.TryDequeue(out var failure)) return Task.FromException<PreviewHttpObservation>(failure);
+            throw new NotSupportedException();
+        }
+    }
+
+    private sealed class UnconfirmedRunStore : IRunStore
+    {
+        public Task<ConveyorRun?> LoadAsync(string runId, CancellationToken cancellationToken) =>
+            Task.FromException<ConveyorRun?>(new OperationCanceledException("storage response unconfirmed"));
+
+        public Task SaveAsync(ConveyorRun run, string station, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+    }
 }
 
 /// <summary>

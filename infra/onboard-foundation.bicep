@@ -60,6 +60,7 @@ resource runtimeDatabase 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@202
   }
 }
 
+// These documents are addressed independently, so /id keeps point reads isolated across store purposes.
 var idPartitionedStores = ['working', 'records', 'lessons', 'charters']
 resource memoryContainers 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = [for store in idPartitionedStores: {
   parent: runtimeDatabase
@@ -73,6 +74,7 @@ resource memoryContainers 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/co
   }
 }]
 
+// Run and learning queries stay product-scoped; /product colocates each factory's operational history.
 var productPartitionedStores = ['runs', 'learning']
 resource runtimeContainers 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = [for store in productPartitionedStores: {
   parent: runtimeDatabase
@@ -127,6 +129,7 @@ resource virtualNetwork 'Microsoft.Network/virtualNetworks@2024-05-01' = {
   properties: {
     addressSpace: { addressPrefixes: ['10.173.0.0/16'] }
     subnets: [
+      // Container Apps requires a delegated subnet; keep compute separate from Private Link addresses.
       {
         name: 'apps'
         properties: {
@@ -136,6 +139,7 @@ resource virtualNetwork 'Microsoft.Network/virtualNetworks@2024-05-01' = {
         }
       }
       {
+        // Private endpoints need network policies disabled so service-specific Private Link rules apply.
         name: 'private-endpoints'
         properties: {
           addressPrefix: '10.173.2.0/24'
@@ -147,6 +151,7 @@ resource virtualNetwork 'Microsoft.Network/virtualNetworks@2024-05-01' = {
   }
 }
 
+// One descriptor drives endpoint, DNS zone, and zone-group creation to keep each private service binding aligned.
 var privateServices = [
   { suffix: 'vault', zone: 'privatelink.vaultcore.azure.net', target: keyVault.id, group: 'vault' }
   { suffix: 'cosmos', zone: 'privatelink.documents.azure.com', target: cosmosAccount.id, group: 'Sql' }
@@ -193,6 +198,7 @@ resource hostingEnvironment 'Microsoft.App/managedEnvironments@2025-01-01' = {
   location: location
   properties: {
     infrastructureResourceGroup: '${namePrefix}-hosting-infra'
+    // Internal-only ingress forces runtime access through the factory VNet and its private service endpoints.
     vnetConfiguration: { infrastructureSubnetId: '${virtualNetwork.id}/subnets/apps', internal: true }
     workloadProfiles: [{ name: 'Consumption', workloadProfileType: 'Consumption' }]
     appLogsConfiguration: { destination: 'none' }

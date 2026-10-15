@@ -25,18 +25,16 @@ public static partial class CliApplication
             var interactive = terminal.Capabilities.IsInteractive && !parse.GetValue(json);
             try
             {
-                var owner = FactoryGovernance.NormalizeEndpoint(Input(endpoint));
-                var name = Input(product);
-                var tenantId = Identifier(Input(tenant)).ToString();
-                var subscriptionId = Identifier(Input(subscription)).ToString();
-                var id = Identifier(Input(operation));
+                var context = ParseOnboardLifecycleContext(
+                    parse.GetValue, terminal, interactive, endpoint, product, tenant, subscription, operation,
+                    static () => new ArgumentException());
                 var approval = parse.GetValue(approve)?.Trim();
                 var runner = azure ?? new SystemAzureCliRunner();
                 var time = clock ?? TimeProvider.System;
                 var admission = await new FactoryReservationService(reviewer, runner, http, time)
-                    .StatusAsync(owner, tenantId, subscriptionId, name, token);
+                    .StatusAsync(context.OwnerEndpoint, context.TenantId, context.SubscriptionId, context.Product, token);
                 result = await new FactoryOffboardingService(runner, http, time)
-                    .ExecuteAsync(admission, id, approval, token);
+                    .ExecuteAsync(admission, context.OperationId, approval, token);
             }
             catch (ArgumentException)
             {
@@ -67,15 +65,6 @@ public static partial class CliApplication
             terminal.WriteLine(JsonSerializer.Serialize(result, ReviewJson));
             return result.State == FactoryOffboardingState.Detached ? Success
                 : result.State == FactoryOffboardingState.Canceled ? CanceledExitCode : Failure;
-
-            string Input(Option<string> option)
-            {
-                var value = parse.GetValue(option)?.Trim();
-                if (string.IsNullOrEmpty(value) && interactive) value = terminal.Prompt(option.Name + ": ")?.Trim();
-                return !string.IsNullOrEmpty(value) ? value : throw new ArgumentException();
-            }
-            static Guid Identifier(string value) =>
-                Guid.TryParse(value, out var id) && id != Guid.Empty ? id : throw new ArgumentException();
         });
         return command;
     }

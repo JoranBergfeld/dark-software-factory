@@ -51,6 +51,8 @@ public sealed class ProvisioningAssetsTests
     [InlineData("onboard-source.json")]
     [InlineData("onboard-supplemental.json")]
     [InlineData("onboard-preview-workloads.json")]
+    [InlineData("onboard-foundation.json")]
+    [InlineData("onboard-telemetry.json")]
     [InlineData("onboard-live.json")]
     [InlineData("onboard-publisher.json")]
     public void Default_resolver_uses_shipped_assembly_relative_templates(string entrypoint)

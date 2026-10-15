@@ -11,6 +11,10 @@ namespace Dsf.Runtime;
 /// </summary>
 internal static partial class RuntimeWorkflow
 {
+    private const string ScheduledInvocationKey = "dsf/factory/runtime/scheduled-invocation";
+    private sealed record ScheduledInvocation(
+        int Protocol, Guid FactoryId, Guid InvocationId, bool DryRun, bool Settled);
+
     internal static void EnsureCouncilAdmissionOpen(IEnumerable<string> keys) => FactoryPause.RequireAdmissionOpen(keys);
 
     internal static async Task<SourceCharterContextResult> ReadSourceCharterContextAsync(
@@ -186,6 +190,65 @@ internal static partial class RuntimeWorkflow
                 "refusing to file live without an explicit manual gate: set "
                 + $"{RuntimeIntegrationSettings.ConfirmLiveFiling}=true to confirm this run may file real GitHub "
                 + "issues instead of previewing them.");
+        }
+    }
+
+    internal static async Task<FactoryDecisionRequest> ResolveScheduledInvocationAsync(
+        RuntimeSettings settings, RuntimeDependencies dependencies, FactoryManifest manifest,
+        bool dryRun, CancellationToken cancellationToken)
+    {
+        ScheduledInvocation? current = null;
+        await foreach (var (key, value) in dependencies.ConfigurationSettingsGateway.ListAsync(
+            FactoryGovernance.NormalizeEndpoint(settings.AppConfigEndpoint),
+            ProductConfigurationKeys.NoLabel, cancellationToken))
+        {
+            if (key != ScheduledInvocationKey) continue;
+            current = JsonSerializer.Deserialize<ScheduledInvocation>(value, FactorySourceValidation.RecordJson)
+                ?? throw new RuntimeVerbException("Scheduled onboarding invocation record is invalid; no replacement invocation issued.");
+        }
+        if (current is not null && (current.Protocol != 1 || current.FactoryId != manifest.Identity.FactoryId
+            || current.InvocationId == Guid.Empty))
+            throw new RuntimeVerbException("Scheduled onboarding invocation record is invalid; no replacement invocation issued.");
+        if (current is { Settled: false }) return new(current.InvocationId, current.DryRun);
+
+        var invocation = Guid.NewGuid();
+        try
+        {
+            await dependencies.ConfigurationSettingsGateway.SetAsync(
+                FactoryGovernance.NormalizeEndpoint(settings.AppConfigEndpoint), ScheduledInvocationKey,
+                JsonSerializer.Serialize(new ScheduledInvocation(
+                    1, manifest.Identity.FactoryId, invocation, dryRun, false),
+                    FactorySourceValidation.RecordJson),
+                label: null, cancellationToken);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException
+                                          || !cancellationToken.IsCancellationRequested)
+        {
+            throw new RuntimeVerbException(
+                $"Scheduled onboarding invocation {invocation:D} persistence unconfirmed; inspect that invocation before retrying.");
+        }
+        return new(invocation, dryRun);
+    }
+
+    internal static async Task SetScheduledInvocationSettledAsync(
+        RuntimeSettings settings, RuntimeDependencies dependencies, FactoryManifest manifest,
+        FactoryDecisionRequest request,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await dependencies.ConfigurationSettingsGateway.SetAsync(
+                FactoryGovernance.NormalizeEndpoint(settings.AppConfigEndpoint), ScheduledInvocationKey,
+                JsonSerializer.Serialize(new ScheduledInvocation(
+                    1, manifest.Identity.FactoryId, request.InvocationId, request.DryRun, true),
+                    FactorySourceValidation.RecordJson),
+                label: null, cancellationToken);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException
+                                          || !cancellationToken.IsCancellationRequested)
+        {
+            throw new RuntimeVerbException(
+                $"Scheduled onboarding invocation {request.InvocationId:D} closeout unconfirmed; resume that invocation only.");
         }
     }
 

@@ -81,7 +81,8 @@ public static partial class RuntimeVerbs
         {
             if (signal.InvocationId is not { } invocation || signal.ProductHints.Any(p => p != onboarding.Identity.ProductKey))
                 throw new RuntimeVerbException("Onboarding signals require an explicit nonempty invocation_id and the original product; use that same invocation to resume.");
-            return await new FactoryDecisionClient(settings, dependencies, onboarding).RunAsync(new(invocation, signal.DryRun), cancellationToken);
+            return await dependencies.OnboardingDecisionRunner.RunAsync(
+                settings, dependencies, onboarding, new(invocation, signal.DryRun), cancellationToken);
         }
         RuntimeWorkflow.EnsureLiveFilingConfirmed(signal.DryRun, env);
 
@@ -112,9 +113,7 @@ public static partial class RuntimeVerbs
         ArgumentNullException.ThrowIfNull(dependencies);
 
         var onboarding = await RuntimeWorkflow.EnsureWorkAdmittedAsync(settings, dependencies, cancellationToken, env, onboardingForwarding: true);
-        if (onboarding is not null)
-            return await new FactoryDecisionClient(settings, dependencies, onboarding).RunAsync(new(Guid.NewGuid(), dryRun), cancellationToken);
-        RuntimeWorkflow.EnsureLiveFilingConfirmed(dryRun, env);
+        if (onboarding is null) RuntimeWorkflow.EnsureLiveFilingConfirmed(dryRun, env);
         cancellationToken.ThrowIfCancellationRequested();
 
         IAsyncDisposable? ownership;
@@ -142,6 +141,16 @@ public static partial class RuntimeVerbs
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (onboarding is not null)
+            {
+                var request = await RuntimeWorkflow.ResolveScheduledInvocationAsync(
+                    settings, dependencies, onboarding, dryRun, cancellationToken);
+                var decision = await dependencies.OnboardingDecisionRunner.RunAsync(
+                    settings, dependencies, onboarding, request, cancellationToken);
+                await RuntimeWorkflow.SetScheduledInvocationSettledAsync(
+                    settings, dependencies, onboarding, request, cancellationToken);
+                return decision;
+            }
             var services = ComposeServices(settings, dependencies);
             IReadOnlyList<string> kinds;
             try
@@ -371,11 +380,12 @@ public static partial class RuntimeVerbs
                 return Results.BadRequest(new { error = exception.Message });
             }
 
+            FactoryManifest? onboarding = null;
             try
             {
                 using var deadline = new CancellationTokenSource(FactoryPreviewValidation.RequestBudget, dependencies.PreviewClock);
                 using var admission = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline.Token);
-                var onboarding = await RuntimeWorkflow.EnsureWorkAdmittedAsync(settings, dependencies, admission.Token, env, onboardingForwarding: true);
+                onboarding = await RuntimeWorkflow.EnsureWorkAdmittedAsync(settings, dependencies, admission.Token, env, onboardingForwarding: true);
                 if (onboarding is not null)
                 {
                     if (signal.InvocationId is not { } invocation || signal.ProductHints.Any(p => p != onboarding.Identity.ProductKey))
@@ -385,8 +395,8 @@ public static partial class RuntimeVerbs
                         || !caller.Scheme.Equals("Bearer", StringComparison.OrdinalIgnoreCase) || string.IsNullOrWhiteSpace(caller.Parameter))
                         return Results.Json(new { error = "Original caller bearer for the pinned native decision audience required; server credentials are never lent to HTTP callers." },
                             statusCode: StatusCodes.Status403Forbidden);
-                    var observed = (await new FactoryDecisionClient(settings, dependencies, onboarding).ObserveAsync(
-                        new(invocation, true), true, admission.Token, caller.Parameter)).Observation;
+                    var observed = await dependencies.OnboardingDecisionRunner.ObserveAsync(
+                        settings, dependencies, onboarding, new(invocation, true), caller.Parameter, admission.Token);
                     return Results.Json(observed, OutputJson, statusCode: observed.Readiness is PreviewReadiness.Queued or PreviewReadiness.Running
                         or PreviewReadiness.Checking ? StatusCodes.Status202Accepted : StatusCodes.Status200OK);
                 }
@@ -400,8 +410,9 @@ public static partial class RuntimeVerbs
             {
                 return Results.Json(new { error = exception.Message }, statusCode: StatusCodes.Status403Forbidden);
             }
-            catch (Exception exception) when (exception is OperationCanceledException or HttpRequestException or IOException
-                or JsonException or InvalidOperationException or Azure.RequestFailedException)
+            catch (Exception exception) when (onboarding is not null
+                && exception is (OperationCanceledException or HttpRequestException or IOException
+                    or JsonException or InvalidOperationException or Azure.RequestFailedException))
             {
                 return Results.Json(new { state = "Unknown", error = "Original HTTP intake or response unconfirmed; preserve invocation_id. No automatic replacement." },
                     statusCode: StatusCodes.Status409Conflict);
