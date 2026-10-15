@@ -43,16 +43,65 @@ internal sealed class FactoryReattachmentFinalizer(
                 throw new ReservationStoreException(FactoryReservationState.Blocked,
                     "Fresh revision-bound activation after reattachment is required.");
             stage = "archiving restored access";
-            var access = await product.ReadNamespaceAsync(
+            var progressKey = FactoryReattachment.FinalizationProgressKey(request.OperationId);
+            var progressRecord = await product.ReadAsync(progressKey, token);
+            FactoryReattachmentRetirementProgress progress;
+            if (progressRecord is null)
+            {
+                var access = await product.ReadNamespaceAsync(
+                    FactoryReattachment.AccessPrefix + request.OperationId.ToString("N") + "/", token,
+                    maximumRecords: FactoryAudit.GovernanceHistoryRecords);
+                var records = access.Values.OrderBy(record => record.Key, StringComparer.Ordinal)
+                    .Append(requestRecord).ToArray();
+                for (var index = 0; index < records.Length; index++)
+                    await ArchiveAsync(product, request.OperationId, index, records[index], token);
+                progress = new(1, request.OperationId, request.PlanFingerprint, records.Length, 0);
+                progressRecord = await product.WriteAsync(progressKey,
+                    FactoryReservationRecords.Serialize(progress), null, token);
+            }
+            else
+            {
+                progress = FactoryReservationRecords.Parse<FactoryReattachmentRetirementProgress>(progressRecord.Value);
+                if (progress.Protocol != 1 || progress.OperationId != request.OperationId
+                    || progress.PlanFingerprint != request.PlanFingerprint || progress.Records < 1
+                    || progress.Applied < 0 || progress.Applied > progress.Records)
+                    throw new JsonException();
+            }
+            stage = "retiring restored access";
+            var archivedAccess = new (FactoryReattachmentRetiredRecord Record, string Value)[progress.Records - 1];
+            for (var index = 0; index < archivedAccess.Length; index++)
+            {
+                archivedAccess[index] = await ReadArchivedAsync(product, request.OperationId, index, token);
+                if (!archivedAccess[index].Record.Key.StartsWith(
+                        FactoryReattachment.AccessPrefix + request.OperationId.ToString("N") + "/",
+                        StringComparison.Ordinal))
+                    throw new JsonException();
+            }
+            for (var index = progress.Applied; index < progress.Records - 1; index++)
+            {
+                var archived = archivedAccess[index];
+                var current = await product.ReadAsync(archived.Record.Key, token);
+                if (current is not null)
+                {
+                    RequireSame(archived, current);
+                    await product.DeleteReattachmentGenerationAsync(current, token);
+                }
+                progress = progress with { Applied = index + 1 };
+                progressRecord = await product.WriteAsync(progressKey,
+                    FactoryReservationRecords.Serialize(progress), progressRecord.ETag, token);
+            }
+            var archivedRequest = await ReadArchivedAsync(
+                product, request.OperationId, progress.Records - 1, token);
+            if (archivedRequest.Record.Key != FactoryReattachment.Key
+                || archivedRequest.Value != requestRecord.Value)
+                throw new JsonException();
+            RequireSame(archivedRequest, requestRecord);
+            var remaining = await product.ReadNamespaceAsync(
                 FactoryReattachment.AccessPrefix + request.OperationId.ToString("N") + "/", token,
                 maximumRecords: FactoryAudit.GovernanceHistoryRecords);
-            var records = access.Values.Append(requestRecord)
-                .OrderBy(record => record.Key, StringComparer.Ordinal).ToArray();
-            for (var index = 0; index < records.Length; index++)
-                await ArchiveAsync(product, request.OperationId, index, records[index], token);
-            stage = "retiring restored access";
-            foreach (var record in access.Values.OrderBy(record => record.Key, StringComparer.Ordinal))
-                await product.DeleteReattachmentGenerationAsync(record, token);
+            if (remaining.Count != 0)
+                throw new ReservationStoreException(FactoryReservationState.Blocked,
+                    "Restored access set changed during reattachment finalization.");
 
             stage = "clearing owner pointer";
             if (anchor.Reattachment is { } pointer)
@@ -70,6 +119,9 @@ internal sealed class FactoryReattachmentFinalizer(
             }
             stage = "retiring reattachment stop";
             await product.DeleteReattachmentGenerationAsync(requestRecord, token);
+            progress = progress with { Applied = progress.Records };
+            await product.WriteAsync(progressKey,
+                FactoryReservationRecords.Serialize(progress), progressRecord.ETag, token);
         }
         catch (ReservationStoreException) { throw; }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
@@ -100,8 +152,18 @@ internal sealed class FactoryReattachmentFinalizer(
         var records = await product.ReadNamespaceAsync(
             FactoryReattachment.HistoryPrefix + pointer.OperationId.ToString("N") + "/finalized/",
             token, maximumRecords: FactoryAudit.GovernanceHistoryRecords);
+        if (!records.TryGetValue(FactoryReattachment.FinalizationProgressKey(pointer.OperationId), out var progressRecord))
+            throw new ReservationStoreException(FactoryReservationState.Unknown,
+                "Completed reattachment finalization progress is missing.");
+        var progress = FactoryReservationRecords.Parse<FactoryReattachmentRetirementProgress>(progressRecord.Value);
+        if (progress.Protocol != 1 || progress.OperationId != pointer.OperationId
+            || progress.PlanFingerprint != pointer.PlanFingerprint
+            || progress.Records < 1 || progress.Applied != progress.Records)
+            throw new ReservationStoreException(FactoryReservationState.Unknown,
+                "Completed reattachment finalization progress is incomplete.");
         var descriptor = records.Values.Select(record =>
-                record.Key.EndsWith("/current", StringComparison.Ordinal)
+                record.Key != FactoryReattachment.FinalizationProgressKey(pointer.OperationId)
+                && record.Key.EndsWith("/current", StringComparison.Ordinal)
                     ? JsonSerializer.Deserialize<FactoryReattachmentRetiredRecord>(
                         record.Value, FactoryGitHubJson.Options) : null)
             .SingleOrDefault(record => record?.Key == FactoryReattachment.Key)
@@ -164,5 +226,48 @@ internal sealed class FactoryReattachmentFinalizer(
                 throw new ReservationStoreException(FactoryReservationState.Blocked,
                     "Reattachment finalization archive changed; no deletion.");
         }
+    }
+
+    private static async Task<(FactoryReattachmentRetiredRecord Record, string Value)> ReadArchivedAsync(
+        OwnerReservationStore product, Guid operation, int index, CancellationToken token)
+    {
+        const int chunkBytes = FactoryReconfigurationOperationRecords.ChunkBytes;
+        var descriptor = FactoryReservationRecords.Parse<FactoryReattachmentRetiredRecord>(
+            (await product.ReadAsync(FactoryReattachment.FinalizedKey(operation, index), token))?.Value
+            ?? throw new JsonException());
+        if (descriptor.Protocol != 1 || descriptor.OperationId != operation
+            || descriptor.Index != index || descriptor.Bytes < 0
+            || descriptor.Chunks != (descriptor.Bytes + chunkBytes - 1) / chunkBytes)
+            throw new JsonException();
+        using var content = new MemoryStream();
+        for (var chunk = 0; chunk < descriptor.Chunks; chunk++)
+        {
+            var archived = FactoryReservationRecords.Parse<FactoryReattachmentRetiredChunk>(
+                (await product.ReadAsync(
+                    FactoryReattachment.FinalizedChunkKey(operation, index, chunk), token))?.Value
+                ?? throw new JsonException());
+            var bytes = Convert.FromBase64String(archived.Data);
+            if (archived.Protocol != 1 || archived.OperationId != operation
+                || archived.Record != index || archived.Index != chunk
+                || bytes.Length != Math.Min(chunkBytes, descriptor.Bytes - chunk * chunkBytes))
+                throw new JsonException();
+            content.Write(bytes);
+        }
+        var value = Encoding.UTF8.GetString(content.ToArray());
+        if (content.Length != descriptor.Bytes
+            || FactoryReservationRecords.Hash(value) != descriptor.Sha256)
+            throw new JsonException();
+        return (descriptor, value);
+    }
+
+    private static void RequireSame(
+        (FactoryReattachmentRetiredRecord Record, string Value) archived,
+        Azure.Data.AppConfiguration.ConfigurationSetting current)
+    {
+        if (current.ETag.ToString() != archived.Record.ETag
+            || FactoryReservationRecords.Hash(current.Value) != archived.Record.Sha256
+            || current.Value != archived.Value)
+            throw new ReservationStoreException(FactoryReservationState.Blocked,
+                "Concurrent reattachment-access change; no deletion.");
     }
 }

@@ -69,6 +69,9 @@ public sealed class FactoryOffboardingTests
         scenario.Arm.Product.Seed(FactoryReattachment.FinalizedChunkKey(operation, 0, 0),
             FactoryReservationRecords.Serialize(new FactoryReattachmentRetiredChunk(
                 1, operation, 0, 0, Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(requestValue)))));
+        scenario.Arm.Product.Seed(FactoryReattachment.FinalizationProgressKey(operation),
+            FactoryReservationRecords.Serialize(new FactoryReattachmentRetirementProgress(
+                1, operation, request.PlanFingerprint, 1, 1)));
 
         scenario.Reconstruct();
         var result = await scenario.Machine.InvokeAsync("offboard", "--operation", Guid.NewGuid().ToString());

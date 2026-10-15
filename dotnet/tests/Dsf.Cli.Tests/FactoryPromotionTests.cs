@@ -302,9 +302,15 @@ public sealed class FactoryPromotionTests(PromotableFactoryFixture fixture) : IC
             identity.FactoryId, fingerprint, authorityRevision, identity.AzureActorId, requestedAt);
         transport.Scenario.Arm.Product.Seed(
             FactoryReattachment.Key, FactoryReservationRecords.Serialize(request));
-        var accessKey = FactoryReattachment.AccessKey(reattachment, 0);
-        transport.Scenario.Arm.Product.Seed(accessKey, """{"kind":"exact-restored-access"}""");
-        transport.Scenario.Arm.Product.LoseDeleteResponseKey = accessKey;
+        var accessKeys = new[]
+        {
+            FactoryReattachment.AccessKey(reattachment, 0),
+            FactoryReattachment.AccessKey(reattachment, 1),
+        };
+        transport.Scenario.Arm.Product.Seed(accessKeys[0], """{"kind":"exact-restored-access","index":0}""");
+        transport.Scenario.Arm.Product.Seed(accessKeys[1], """{"kind":"exact-restored-access","index":1}""");
+        transport.Scenario.Arm.Product.LoseDeleteResponseKey = accessKeys[0];
+        transport.Scenario.Arm.Product.RejectDeleteKey = accessKeys[1];
         var live = FactoryLive.ReadConfirmed(transport.Values()
                 .Where(pair => pair.Key.StartsWith(FactoryLive.Prefix, StringComparison.Ordinal)).ToDictionary(),
             transport.Scenario.Source.Source.Clock.Now);
@@ -315,11 +321,24 @@ public sealed class FactoryPromotionTests(PromotableFactoryFixture fixture) : IC
         Assert.Contains("ReattachmentAwaitingReadiness", await blocked.Content.ReadAsStringAsync());
         var activationOperation = (Guid)JsonNode.Parse(
             transport.Values()[FactoryActivation.RootKey])!["operationId"]!;
+        var interrupted = await machine.InvokeAsync("activate", "--operation", activationOperation.ToString());
+        Assert.Equal("Blocked", (string?)interrupted.Result["state"]);
+        Assert.DoesNotContain(accessKeys[0], transport.Values().Keys);
+        Assert.Contains(accessKeys[1], transport.Values().Keys);
+        Assert.Contains(FactoryReattachment.Key, transport.Values().Keys);
+
+        transport.Scenario.Arm.Product.LoseDeleteResponseKey = null;
+        transport.Scenario.Arm.Product.RejectDeleteKey = null;
         var finalized = await machine.InvokeAsync("activate", "--operation", activationOperation.ToString());
         Assert.True((string?)finalized.Result["state"] == "ApprovalOnly",
             finalized.Result.ToJsonString() + finalized.Terminal.Output + finalized.Terminal.Error);
         Assert.DoesNotContain(FactoryReattachment.Key, transport.Values().Keys);
-        Assert.DoesNotContain(accessKey, transport.Values().Keys);
+        Assert.DoesNotContain(accessKeys[0], transport.Values().Keys);
+        Assert.DoesNotContain(accessKeys[1], transport.Values().Keys);
+        var progress = FactoryReservationRecords.Parse<FactoryReattachmentRetirementProgress>(
+            transport.Values()[FactoryReattachment.FinalizationProgressKey(reattachment)]);
+        Assert.Equal(3, progress.Records);
+        Assert.Equal(progress.Records, progress.Applied);
         var anchor = FactoryReservationRecords.Parse<FactoryReservationAnchor>(
             machine.Store.Values()[ProductConfigurationKeys.OwnerProductClaim(identity.ProductKey)]);
         Assert.Null(anchor.Reattachment);
