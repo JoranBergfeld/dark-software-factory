@@ -90,7 +90,7 @@ public static partial class RuntimeVerbs
                 if (context.Request.Path == "/execution")
                 {
                     var inspection = await FactoryDecisionInspection.OpenAsync(settings, dependencies, new(request.OperationId, true),
-                        credential, http, pending.Token, request.RolloutFingerprint);
+                        credential, http, pending.Token, request.RolloutFingerprint, requireCurrentReadiness: true);
                     var original = inspection.Live.Authority;
                     if (!NativeCaller(context, original.Preview.Manifest.Identity.AzureActorId, original.Preview.Manifest.Identity.TenantId, null))
                         throw new PreviewCapabilityException(FactoryCharterState.Blocked, "ExplicitGovernanceOperatorExerciseRequired");

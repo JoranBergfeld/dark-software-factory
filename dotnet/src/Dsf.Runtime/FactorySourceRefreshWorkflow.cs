@@ -7,7 +7,7 @@ namespace Dsf.Runtime;
 
 /// <summary>CODE-owned descriptive work. Only the authenticated promoted council admits advances; reads never advance.</summary>
 internal sealed partial class FactorySourceRefreshWorkflow(FactoryHostSettings settings, FactorySourceAccess source,
-    HttpClient http, TimeProvider clock)
+    HttpClient http, TimeProvider clock, Func<CancellationToken, Task<string>> readGovernanceRevision)
 {
     private readonly SourceProgressStore store = new(source, http, "intent");
     private readonly GitHubSourceSnapshot github = new(source, clock, charterReview: true);
@@ -271,6 +271,8 @@ internal sealed partial class FactorySourceRefreshWorkflow(FactoryHostSettings s
         var records = await FactoryRuntimeModels.ReadPromotionRecordsAsync(
             settings.ProductEndpoint, source.Credential, http, clock.GetUtcNow(), token);
         _ = FactoryRuntimeModels.RequirePromotion(source.Manifest, settings.ProductEndpoint, records, clock.GetUtcNow());
+        var governance = await readGovernanceRevision(token);
+        if (!FactorySourceValidation.Hash(governance)) throw new JsonException();
         adoption = await FactoryCharterAdoptionReader.ReadAsync(source.Manifest.Identity.FactoryId,
             new AzureCharterEvidenceReader(settings.ProductEndpoint, source.Credential, http), token)
             ?? throw Denied(SourceRefreshState.Blocked, "CurrentAdoptedHumanCharterRequired");
@@ -284,14 +286,13 @@ internal sealed partial class FactorySourceRefreshWorkflow(FactoryHostSettings s
         if (model.ApprovalFingerprint != adoption.Adoption.ModelRevision)
             throw Denied(SourceRefreshState.ReviewRequired, "ApprovedModelConfigurationChanged");
         binding = new(snapshot, adoption.Adoption.Revision, adoption.Revision, adoption.OperationRevision,
-            adoption.Adoption.CharterSha256, GovernanceRevision(records), model.ApprovalFingerprint, adoption.Adoption.AnalysisRevision);
+            adoption.Adoption.CharterSha256, governance, model.ApprovalFingerprint, adoption.Adoption.AnalysisRevision);
     }
 
     private async Task FenceWorkAsync(CancellationToken token)
     {
-        var records = await FactoryRuntimeModels.ReadPromotionRecordsAsync(
-            settings.ProductEndpoint, source.Credential, http, clock.GetUtcNow(), token);
-        if (GovernanceRevision(records) != binding.GovernanceRevision)
+        var currentGovernance = await readGovernanceRevision(token);
+        if (currentGovernance != binding.GovernanceRevision)
             throw Denied(SourceRefreshState.Blocked, "CurrentSourceRefreshAdmissionClosedOrChanged");
         var current = await store.ReadAsync(FactorySourceRefresh.CurrentKey, token);
         if (root is null ? current is not null : current?.ETag != root.ETag || current.Value != root.Value)
@@ -369,9 +370,6 @@ internal sealed partial class FactorySourceRefreshWorkflow(FactoryHostSettings s
         SameGovernance(first, second) && first.Snapshot with { ObservedAt = second.Snapshot.ObservedAt } == second.Snapshot;
     private static bool SameGovernance(SourceRefreshBinding first, SourceRefreshBinding second) =>
         first with { Snapshot = second.Snapshot } == second;
-    private static string GovernanceRevision(IReadOnlyDictionary<string, ConfigurationSetting> records) =>
-        FactoryModelsValidation.Hash(records.Where(p => FactoryPromotion.IsLiveAuthorityKey(p.Key)).OrderBy(p => p.Key, StringComparer.Ordinal)
-            .Select(p => new { p.Key, p.Value.Value, ETag = p.Value.ETag.ToString(), p.Value.ContentType }));
     private static PreviewCapabilityException Denied(SourceRefreshState state, string reason) =>
         new(state switch { SourceRefreshState.Unknown => FactoryCharterState.Unknown, SourceRefreshState.Partial => FactoryCharterState.Partial,
             SourceRefreshState.Failed => FactoryCharterState.Failed, _ => FactoryCharterState.Blocked }, reason);

@@ -23,12 +23,9 @@ internal sealed partial class FactoryAuditService
             FactoryAudit.TextHash(seedRecord.Value)) != promotion.NativeIndices) throw new JsonException();
         var seeds = JsonSerializer.Deserialize<FactoryPromotionSeeds>(seedRecord.Value, FactorySourceValidation.RecordJson) ?? throw new JsonException();
         var factory = admission.Identity!;
-        var indexRecord = await ReadNativeAsync(admission, FactoryPublication.Container,
-            FactoryActivityIndex.Name(factory.FactoryId, true), AuditStoreKind.Publication, token);
-        if (indexRecord.Identity.NativeResourceId != seeds.Publications.Identity.NativeResourceId) throw new JsonException();
-        var index = FactoryActivityIndex.Read(indexRecord.Content, factory.FactoryId, factory.ProductKey, promotion.OperationId, true, clock.GetUtcNow());
+        var pages = await ReadActivityPagesAsync(admission, seeds.Publications.Identity, promotion.OperationId, true, token);
         var outcomes = new List<FactoryPublicationInspection>();
-        foreach (var entry in index.Entries)
+        foreach (var entry in pages.SelectMany(page => page.Index.Entries))
         {
             var native = await ReadNativeAsync(admission, FactoryPublication.Container, entry.Id, AuditStoreKind.Publication, token);
             if (entry.NativeResourceId is null || entry.NativeResourceId != native.Identity.NativeResourceId) throw new JsonException();
@@ -39,9 +36,35 @@ internal sealed partial class FactoryAuditService
             FactoryPublication.RequireOrigin(journal, origin.Content, origin.Identity);
             outcomes.Add(FactoryPublicationRecovery.Inspect(journal, native.Identity, governance.Keys.Any(FactoryPause.IsStopRecord)));
         }
-        if ((await ReadNativeAsync(admission, FactoryPublication.Container, index.Id, AuditStoreKind.Publication, token)).Identity != indexRecord.Identity)
-            throw new JsonException("Publication history changed during inspection.");
+        foreach (var page in pages)
+            if ((await ReadNativeAsync(admission, FactoryPublication.Container, page.Index.Id, AuditStoreKind.Publication, token)).Identity
+                != page.Record.Identity)
+                throw new JsonException("Publication history changed during inspection.");
         return outcomes;
+    }
+
+    private async Task<IReadOnlyList<(FactoryAuditRecord Record, FactoryActivityIndex Index)>> ReadActivityPagesAsync(
+        FactoryReservationResult admission, AuditRecordIdentity seed, Guid operation, bool publication, CancellationToken token)
+    {
+        var factory = admission.Identity!;
+        var pages = new List<(FactoryAuditRecord Record, FactoryActivityIndex Index)>();
+        var entries = new HashSet<string>(StringComparer.Ordinal);
+        var expectedResource = seed.NativeResourceId;
+        for (var page = 0; ; page = checked(page + 1))
+        {
+            var record = await ReadNativeAsync(admission, FactoryActivityIndex.Container(publication),
+                FactoryActivityIndex.Name(factory.FactoryId, publication, page), seed.Store, token);
+            if (record.Identity.NativeResourceId != expectedResource
+                || seed.FactoryId != factory.FactoryId || page == 0 && record.Identity.Key != seed.Key)
+                throw new JsonException("Original native activity index incarnation differs.");
+            var index = FactoryActivityIndex.Read(record.Content, factory.FactoryId, factory.ProductKey,
+                operation, publication, clock.GetUtcNow(), page);
+            if (index.Entries.Any(entry => !entries.Add(entry.Id)))
+                throw new JsonException("Original native activity appears on multiple index pages.");
+            pages.Add((record, index));
+            if (index.NextPageNativeResourceId is null) return pages;
+            expectedResource = index.NextPageNativeResourceId;
+        }
     }
 
     private async Task ReadActivityAsync(FactoryReservationResult admission, IReadOnlyDictionary<string, ConfigurationSetting> governance,
@@ -86,14 +109,13 @@ internal sealed partial class FactoryAuditService
         foreach (var (seed, publication) in new[] { (seeds.Decisions.Identity, false), (seeds.Publications.Identity, true) })
         {
             var container = FactoryActivityIndex.Container(publication);
-            var id = FactoryActivityIndex.Name(manifest.Identity.FactoryId, publication);
-            var record = await ReadNativeAsync(admission, container, id, seed.Store, token);
-            if (record.Identity.NativeResourceId != seed.NativeResourceId) throw new JsonException("Original native activity index incarnation differs.");
-            var index = FactoryActivityIndex.Read(record.Content, manifest.Identity.FactoryId, manifest.Identity.ProductKey,
-                seeds.OperationId, publication, clock.GetUtcNow());
-            records.Add(record);
-            indices.Add((record, container, id));
-            foreach (var entry in index.Entries)
+            var pages = await ReadActivityPagesAsync(admission, seed, seeds.OperationId, publication, token);
+            foreach (var page in pages)
+            {
+                records.Add(page.Record);
+                indices.Add((page.Record, container, page.Index.Id));
+            }
+            foreach (var entry in pages.SelectMany(page => page.Index.Entries))
             {
                 if (publication)
                 {

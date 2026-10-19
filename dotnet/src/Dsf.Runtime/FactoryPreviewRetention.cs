@@ -19,7 +19,10 @@ public static partial class RuntimeVerbs
         var source = new FactorySourceAccess(settings, credential, http, dependencies.SourceClock);
         await source.CheckAsync(token);
         var records = new AzureCharterEvidenceReader(settings.ProductEndpoint, source.Credential, http);
-        var context = await RuntimeWorkflow.ReadSourceCharterContextAsync(source, records, http, dependencies.SourceClock, token);
+        var authority = new AzureFactoryPreviewCapability(settings, PreviewHostKind.SourceContext,
+            credential, http, dependencies.SourceClock);
+        var context = await RuntimeWorkflow.ReadSourceCharterContextAsync(source, records, http, dependencies.SourceClock, token,
+            async cancellation => (await authority.CheckAsync(request.Preview, cancellation)).GovernanceRevision);
         ValidatePreviewContext(capability, context);
         var analysis = context.Current!.Analysis.Progress!;
         if (analysis.Revision != request.Revision || analysis.ChainSha256 != request.ChainSha256

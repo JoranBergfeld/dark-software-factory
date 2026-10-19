@@ -8,6 +8,7 @@ using Xunit;
 
 namespace Dsf.Cli.Tests;
 
+[Collection(FactoryLifecycleIntegrationCollection.Name)]
 public sealed partial class FactoryEvidenceRefreshTests(ActivatedFactoryFixture fixture) : IClassFixture<ActivatedFactoryFixture>
 {
     [Fact]

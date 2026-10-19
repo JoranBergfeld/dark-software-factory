@@ -7,7 +7,8 @@ namespace Dsf.Runtime;
 internal sealed record FactoryDecisionInspection(FactoryLiveExecution Live, PreviewExecutionStore Store, FactoryInspectionAuthority Access)
 {
     internal static async Task<FactoryDecisionInspection> OpenAsync(FactoryHostSettings settings, RuntimeDependencies dependencies,
-        FactoryDecisionRequest request, TokenCredential credential, HttpClient http, CancellationToken token, string? rollout = null)
+        FactoryDecisionRequest request, TokenCredential credential, HttpClient http, CancellationToken token, string? rollout = null,
+        bool requireCurrentReadiness = false)
     {
         if (request.InvocationId == Guid.Empty) throw new JsonException("Original explicit invocation required.");
         var access = new FactoryInspectionAuthority();
@@ -18,8 +19,8 @@ internal sealed record FactoryDecisionInspection(FactoryLiveExecution Live, Prev
             publisher.Capability.Plan, dependencies.PreviewClock.GetUtcNow());
         if (rollout is not null && rollout != promotion.LiveFingerprint)
             throw new PreviewCapabilityException(FactoryCharterState.Blocked, "OriginalInvocationRolloutRequired");
-        var liveAuthority = new FactoryLiveAuthority(settings, dependencies, credential, http, access);
         var liveRequest = new FactoryLiveRequest(request.InvocationId, promotion.LiveFingerprint);
+        var liveAuthority = new FactoryLiveAuthority(settings, dependencies, credential, http, access);
         var snapshot = await liveAuthority.CheckAsync(liveRequest, false, token);
         var live = new FactoryLiveExecution(snapshot, liveRequest, liveAuthority);
         var scope = new FactoryPublicationDecisionScope(request.InvocationId, publisher.Identity(FactoryPromotion.RootKey),
@@ -40,6 +41,8 @@ internal sealed record FactoryDecisionInspection(FactoryLiveExecution Live, Prev
             || (await publisherAuthority.CheckAsync(token)).Revision != publisher.Revision
             || (await liveAuthority.CheckAsync(liveRequest, false, token)).Revision != snapshot.Revision)
             throw new PreviewCapabilityException(FactoryCharterState.Unknown, "OriginalInvocationAuthorityOrIncarnationChanged");
+        if (requireCurrentReadiness && !access.AdmissionClosed)
+            _ = await new FactoryLiveAuthority(settings, dependencies, credential, http).CheckAsync(liveRequest, true, token);
         return new(live, store, access);
     }
 }

@@ -115,6 +115,16 @@ public static partial class RuntimeVerbs
         var onboarding = await RuntimeWorkflow.EnsureWorkAdmittedAsync(settings, dependencies, cancellationToken, env, onboardingForwarding: true);
         if (onboarding is null) RuntimeWorkflow.EnsureLiveFilingConfirmed(dryRun, env);
         cancellationToken.ThrowIfCancellationRequested();
+        if (onboarding is not null)
+        {
+            var request = await RuntimeWorkflow.ResolveScheduledInvocationAsync(
+                settings, dependencies, onboarding, dryRun, cancellationToken);
+            var decision = await dependencies.OnboardingDecisionRunner.RunAsync(
+                settings, dependencies, onboarding, request, cancellationToken);
+            await RuntimeWorkflow.SetScheduledInvocationSettledAsync(
+                settings, dependencies, onboarding, request, cancellationToken);
+            return decision;
+        }
 
         IAsyncDisposable? ownership;
         try
@@ -141,16 +151,6 @@ public static partial class RuntimeVerbs
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (onboarding is not null)
-            {
-                var request = await RuntimeWorkflow.ResolveScheduledInvocationAsync(
-                    settings, dependencies, onboarding, dryRun, cancellationToken);
-                var decision = await dependencies.OnboardingDecisionRunner.RunAsync(
-                    settings, dependencies, onboarding, request, cancellationToken);
-                await RuntimeWorkflow.SetScheduledInvocationSettledAsync(
-                    settings, dependencies, onboarding, request, cancellationToken);
-                return decision;
-            }
             var services = ComposeServices(settings, dependencies);
             IReadOnlyList<string> kinds;
             try

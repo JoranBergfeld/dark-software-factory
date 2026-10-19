@@ -546,19 +546,31 @@ public static class FactoryAudit
                 var currentIndex = Require(seed.Store, seed.Key);
                 if (currentIndex.Identity.NativeResourceId != seed.NativeResourceId) throw new JsonException();
                 Link(proof, currentIndex);
-                var index = FactoryActivityIndex.Read(currentIndex.Content, factory, manifest.Identity.ProductKey, promotion.OperationId, publication, now);
-                foreach (var entry in index.Entries)
+                var entries = new HashSet<string>(StringComparer.Ordinal);
+                for (var page = 0; ; page = checked(page + 1))
                 {
-                    foreach (var reference in entry.Publication?.References
-                        ?? (entry.Decision is { } scope ? new[] { scope.Promotion, scope.Publisher } : []))
+                    var index = FactoryActivityIndex.Read(currentIndex.Content, factory, manifest.Identity.ProductKey,
+                        promotion.OperationId, publication, now, page);
+                    foreach (var entry in index.Entries)
                     {
-                        var original = Require(reference.Store, reference.Key);
-                        if (original.Identity != reference) throw new JsonException("Original indexed admission evidence differs.");
-                        Link(currentIndex, original);
+                        if (!entries.Add(entry.Id)) throw new JsonException("Original activity appears on multiple index pages.");
+                        foreach (var reference in entry.Publication?.References
+                            ?? (entry.Decision is { } scope ? new[] { scope.Promotion, scope.Publisher } : []))
+                        {
+                            var original = Require(reference.Store, reference.Key);
+                            if (original.Identity != reference) throw new JsonException("Original indexed admission evidence differs.");
+                            Link(currentIndex, original);
+                        }
+                        var target = Require(seed.Store, $"dbs/{manifest.Identity.ProductKey}/colls/{FactoryActivityIndex.Container(publication)}/docs/{entry.Id}");
+                        if (entry.NativeResourceId is null || target.Identity.NativeResourceId != entry.NativeResourceId) throw new JsonException();
+                        Link(currentIndex, target);
                     }
-                    var target = Require(seed.Store, $"dbs/{manifest.Identity.ProductKey}/colls/{FactoryActivityIndex.Container(publication)}/docs/{entry.Id}");
-                    if (entry.NativeResourceId is null || target.Identity.NativeResourceId != entry.NativeResourceId) throw new JsonException();
-                    Link(currentIndex, target);
+                    if (index.NextPageNativeResourceId is null) break;
+                    var next = Require(seed.Store, FactoryActivityIndex.Key(manifest.Identity.ProductKey, factory, publication, checked(page + 1)));
+                    if (next.Identity.NativeResourceId != index.NextPageNativeResourceId)
+                        throw new JsonException("Original activity index page incarnation differs.");
+                    Link(currentIndex, next);
+                    currentIndex = next;
                 }
             }
             var problemIndex = Require(seeds.Problems.Identity.Store, seeds.Problems.Identity.Key);

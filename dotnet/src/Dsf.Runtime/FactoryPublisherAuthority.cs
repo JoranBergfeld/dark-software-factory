@@ -157,15 +157,16 @@ internal sealed class FactoryPublisherAuthority(FactoryHostSettings settings, bo
                      FactoryReconfigurationOperationRecords.Prefix,
                  })
             await foreach (var record in gateway.ListRecordsAsync(settings.ProductEndpoint, "*", token, prefix + "*"))
-                if (inspection is not null) _ = inspection.Include(record.Key);
+                if (inspection is not null) _ = inspection.Include(record.Key, record.Value);
                 else if (prefix == FactoryReconfigurationOperationRecords.Prefix) transition.Add(record.Key, record.Value);
                 else FactoryPause.RequireAdmissionOpen([record.Key]);
+        inspection?.CompleteTransition(clock.GetUtcNow());
         if (inspection is null) FactoryReconfigurationOperationRecords.RequireAdmissionOpen(transition, clock.GetUtcNow(),
             FactoryReconfigurationPhase.AwaitingActivation, FactoryReconfigurationPhase.Completed);
         var result = new Dictionary<string, ConfigurationSetting>();
         await foreach (var record in gateway.ListRecordsAsync(settings.ProductEndpoint, ProductConfigurationKeys.NoLabel, token))
         {
-            if (inspection is not null && !inspection.Include(record.Key)) continue;
+            if (inspection is not null && !inspection.Include(record.Key, record.Value)) continue;
             if (record.Key.StartsWith(FactoryReconfigurationOperationRecords.Prefix, StringComparison.Ordinal)) continue;
             FactoryPause.RequireAdmissionOpen([record.Key]);
             if (result.Count >= FactoryPreviewPublication.Policy.MaximumRecords + FactoryAudit.GovernanceHistoryRecords

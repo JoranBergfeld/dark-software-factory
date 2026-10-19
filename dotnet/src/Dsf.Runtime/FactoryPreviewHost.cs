@@ -96,7 +96,8 @@ public static partial class RuntimeVerbs
                 {
                     var source = new FactorySourceAccess(settings, credential, http, clock);
                     await source.CheckAsync(token);
-                    var workflow = new FactorySourceRefreshWorkflow(settings, source, http, clock);
+                    var workflow = new FactorySourceRefreshWorkflow(settings, source, http, clock,
+                        async cancellation => (await authority.CheckAsync(request, cancellation)).GovernanceRevision);
                     using var workBudget = new CancellationTokenSource(FactoryIntentLimits.AdvanceBudget, clock);
                     using var work = CancellationTokenSource.CreateLinkedTokenSource(token, workBudget.Token);
                     return refresh is null

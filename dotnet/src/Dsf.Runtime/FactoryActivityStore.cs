@@ -12,7 +12,7 @@ internal sealed class FactoryActivityStore(FactoryManifest manifest, FactoryProm
     private readonly string endpoint = Endpoint(manifest);
     private string Product => manifest.Identity.ProductKey;
     private string Container => FactoryActivityIndex.Container(publication);
-    private string Id => FactoryActivityIndex.Name(manifest.Identity.FactoryId, publication);
+    private string Id(int page = 0) => FactoryActivityIndex.Name(manifest.Identity.FactoryId, publication, page);
 
     internal static async Task<FactoryNativeIndexReceipt> InitializeProblemsAsync(FactoryManifest manifest, TokenCredential credential,
         HttpClient http, CancellationToken token)
@@ -46,14 +46,15 @@ internal sealed class FactoryActivityStore(FactoryManifest manifest, FactoryProm
         return new(Identity(manifest, publication, id, native), native.Json);
     }
 
-    internal async Task<(FactoryActivityIndex Document, AuditRecordIdentity Identity)> ReadAsync(CancellationToken token)
+    internal async Task<(FactoryActivityIndex Document, AuditRecordIdentity Identity, string SnapshotRevision)> ReadAsync(CancellationToken token)
     {
-        var native = await gateway.ReadCheckpointAsync(endpoint, Product, Container, Product, Id, token)
-            ?? throw new PreviewCapabilityException(FactoryCharterState.Unknown, "OriginalNativeReferenceIndexMissingNoRecreation");
-        var identity = Identity(manifest, publication, Id, native);
-        if (seed.Key != identity.Key || seed.NativeResourceId != identity.NativeResourceId || seed.FactoryId != identity.FactoryId)
-            throw new PreviewCapabilityException(FactoryCharterState.Unknown, "OriginalNativeReferenceIndexIncarnationChanged");
-        return (FactoryActivityIndex.Read(native.Json, manifest.Identity.FactoryId, Product, promotion.OperationId, publication, clock.GetUtcNow()), identity);
+        var pages = await ReadPagesAsync(token);
+        var root = pages[0];
+        var entries = pages.SelectMany(page => page.Document.Entries).ToArray();
+        if (entries.Select(entry => entry.Id).Distinct(StringComparer.Ordinal).Count() != entries.Length)
+            throw new JsonException("Original native reference appears on multiple pages.");
+        return (root.Document with { Entries = entries }, root.Identity,
+            FactoryModelsValidation.Hash(pages.Select(page => page.Identity).ToArray()));
     }
 
     internal bool HasSourceWork { get; private set; }
@@ -103,16 +104,21 @@ internal sealed class FactoryActivityStore(FactoryManifest manifest, FactoryProm
     {
         for (var attempt = 0; attempt < 8; attempt++)
         {
-            var current = await ReadAsync(token);
-            var entry = current.Document.Entries.SingleOrDefault(e => e.Id == id);
+            var pages = await ReadPagesAsync(token);
+            var entry = pages.SelectMany(page => page.Document.Entries).SingleOrDefault(e => e.Id == id);
             if (entry is not null)
             {
                 if (entry.NativeResourceId is null)
                     throw new PreviewCapabilityException(FactoryCharterState.Unknown, "OriginalAdmissionCreationUnconfirmedNoTakeover");
                 return false;
             }
-            if (current.Document.Entries.Count >= FactoryActivityIndex.MaximumEntries)
-                throw new PreviewCapabilityException(FactoryCharterState.Partial, "NativeDiscoveryCapacityExhaustedNoUnindexedAdmission");
+            var current = pages[^1];
+            if (current.Document.Entries.Count == FactoryActivityIndex.MaximumEntries)
+            {
+                await requireCurrent(token);
+                await EnsureNextPageAsync(current, token);
+                continue;
+            }
             var next = current.Document with { Entries = [.. current.Document.Entries,
                 new(id, intentHash, clock.GetUtcNow()) { Publication = intendedPublication, Decision = intendedDecision }] };
             await requireCurrent(token);
@@ -127,7 +133,8 @@ internal sealed class FactoryActivityStore(FactoryManifest manifest, FactoryProm
         _ = NativeCosmosResourceId.RequireDocument(nativeResource);
         for (var attempt = 0; attempt < 8; attempt++)
         {
-            var current = await ReadAsync(token);
+            var pages = await ReadPagesAsync(token);
+            var current = pages.Single(page => page.Document.Entries.Any(entry => entry.Id == id));
             var entry = current.Document.Entries.Single(e => e.Id == id);
             if (entry.NativeResourceId is { } original)
             {
@@ -148,8 +155,62 @@ internal sealed class FactoryActivityStore(FactoryManifest manifest, FactoryProm
     private Task<CosmosCheckpoint> WriteAsync(FactoryActivityIndex document, string etag, CancellationToken token)
     {
         document = document with { Checksum = document.CalculateChecksum() };
-        return gateway.WriteCheckpointAsync(endpoint, Product, Container, Product, Id,
+        return gateway.WriteCheckpointAsync(endpoint, Product, Container, Product, Id(document.Page),
             JsonSerializer.Serialize(document, FactoryGitHubJson.Options), etag, token);
+    }
+
+    private async Task<IReadOnlyList<(FactoryActivityIndex Document, AuditRecordIdentity Identity)>> ReadPagesAsync(CancellationToken token)
+    {
+        var pages = new List<(FactoryActivityIndex Document, AuditRecordIdentity Identity)>();
+        string? expectedNativeResourceId = seed.NativeResourceId;
+        for (var page = 0; ; page++)
+        {
+            var id = Id(page);
+            var native = await gateway.ReadCheckpointAsync(endpoint, Product, Container, Product, id, token)
+                ?? throw new PreviewCapabilityException(FactoryCharterState.Unknown, "OriginalNativeReferenceIndexMissingNoRecreation");
+            var identity = Identity(manifest, publication, id, native);
+            if (expectedNativeResourceId != identity.NativeResourceId || seed.FactoryId != identity.FactoryId
+                || page == 0 && seed.Key != identity.Key)
+                throw new PreviewCapabilityException(FactoryCharterState.Unknown, "OriginalNativeReferenceIndexIncarnationChanged");
+            var document = FactoryActivityIndex.Read(native.Json, manifest.Identity.FactoryId, Product,
+                promotion.OperationId, publication, clock.GetUtcNow(), page);
+            pages.Add((document, identity));
+            if (document.NextPageNativeResourceId is null) return pages;
+            expectedNativeResourceId = document.NextPageNativeResourceId;
+        }
+    }
+
+    private async Task EnsureNextPageAsync((FactoryActivityIndex Document, AuditRecordIdentity Identity) current, CancellationToken token)
+    {
+        var page = checked(current.Document.Page + 1);
+        var id = Id(page);
+        var native = await gateway.ReadCheckpointAsync(endpoint, Product, Container, Product, id, token);
+        if (native is null)
+        {
+            var document = new FactoryActivityIndex(1, id, Product, manifest.Identity.FactoryId,
+                promotion.OperationId, clock.GetUtcNow(), []) { Page = page };
+            document = document with { Checksum = document.CalculateChecksum() };
+            try
+            {
+                native = await gateway.WriteCheckpointAsync(endpoint, Product, Container, Product, id,
+                    JsonSerializer.Serialize(document, FactoryGitHubJson.Options), null, token);
+            }
+            catch (CosmosCheckpointException e) when (e.Failure == CosmosCheckpointFailure.Conflict)
+            {
+                native = await gateway.ReadCheckpointAsync(endpoint, Product, Container, Product, id, token);
+            }
+        }
+        if (native is null)
+            throw new PreviewCapabilityException(FactoryCharterState.Unknown, "NativeReferencePageCreationUnconfirmed");
+        var nextIdentity = Identity(manifest, publication, id, native);
+        _ = FactoryActivityIndex.Read(native.Json, manifest.Identity.FactoryId, Product,
+            promotion.OperationId, publication, clock.GetUtcNow(), page);
+        try
+        {
+            await WriteAsync(current.Document with { NextPageNativeResourceId = nextIdentity.NativeResourceId },
+                current.Identity.NativeRevision, token);
+        }
+        catch (CosmosCheckpointException e) when (e.Failure == CosmosCheckpointFailure.Conflict) { }
     }
 
     internal static AuditRecordIdentity Identity(FactoryManifest manifest, bool publication, string id, CosmosCheckpoint native)

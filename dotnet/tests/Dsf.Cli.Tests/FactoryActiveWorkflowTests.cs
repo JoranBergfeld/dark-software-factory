@@ -10,6 +10,7 @@ using Xunit;
 
 namespace Dsf.Cli.Tests;
 
+[Collection(FactoryLifecycleIntegrationCollection.Name)]
 public sealed class FactoryActiveWorkflowTests(ActivatedFactoryFixture fixture) : IClassFixture<ActivatedFactoryFixture>
 {
     [Fact]
@@ -678,6 +679,16 @@ public sealed class FactoryActiveWorkflowTests(ActivatedFactoryFixture fixture) 
         Assert.Equal(1, transport.IssuePosts);
     }
 
+    private sealed class UnsetSweepControlStore : ISweepControlStore
+    {
+        public Task<SweepControlState> ReadAsync(CancellationToken cancellationToken) =>
+            Task.FromResult(SweepControlState.Unset);
+
+        public Task SetPausedAsync(bool paused, CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public Task SetIntervalSecondsAsync(int seconds, CancellationToken cancellationToken) => Task.CompletedTask;
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -686,7 +697,10 @@ public sealed class FactoryActiveWorkflowTests(ActivatedFactoryFixture fixture) 
         var transport = fixture.Reset();
         if (changedSource) FactoryEvidenceRefreshTests.AdvanceDefaultBranch(transport);
         using var http = new HttpClient(transport, false) { Timeout = Timeout.InfiniteTimeSpan };
-        var dependencies = transport.DecisionDependencies(http);
+        var dependencies = transport.DecisionDependencies(http) with
+        {
+            SweepControlStoreFactory = _ => new UnsetSweepControlStore()
+        };
         var settings = new RuntimeSettings("widget", $"https://dsfo-{transport.Manifest.Identity.FactoryId:N}.azconfig.io",
             "", "", "https://cosmos.invalid", "https://model.invalid", "gpt", "embedding", "", "", "", "");
         var issued = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -826,6 +840,50 @@ public sealed class FactoryActiveWorkflowTests(ActivatedFactoryFixture fixture) 
         Assert.Equal(calls, transport.EvaluationInference.Count);
         Assert.Equal(0, transport.IssuePosts);
     }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Audit_follows_native_index_pages_and_rejects_missing_or_replaced_incarnations(bool replaced)
+    {
+        var transport = fixture.Reset();
+        var factory = transport.Manifest.Identity.FactoryId;
+        var path = "/" + FactoryActivityIndex.Key("widget", factory, false);
+        var native = JsonNode.Parse(transport.SeedDocuments[path])!;
+        var now = transport.Scenario.Source.Source!.Clock.Now;
+        var original = FactoryActivityIndex.Read(native.ToJsonString(), factory, "widget",
+            (Guid)native["promotionOperation"]!, false, now);
+        var authority = new AuditRecordIdentity(factory, AuditStoreKind.Governance, FactoryPromotion.RootKey,
+            "original", new string('a', 64));
+        var entries = Enumerable.Range(0, FactoryActivityIndex.MaximumEntries).Select(_ =>
+        {
+            var scope = new FactoryPublicationDecisionScope(Guid.NewGuid(), authority, authority);
+            return new FactoryActivityReference(FactoryPromotion.DecisionId(factory, scope.InvocationId),
+                FactoryModelsValidation.Hash(scope), now) { Decision = scope };
+        }).ToArray();
+        var root = original with { Entries = entries, NextPageNativeResourceId = "-wAAAIAAAAABAAAAAAAAAA==" };
+        native["entries"] = JsonSerializer.SerializeToNode(entries, FactorySourceValidation.RecordJson);
+        native["nextPageNativeResourceId"] = root.NextPageNativeResourceId;
+        native["checksum"] = root.CalculateChecksum();
+        transport.SeedDocuments[path] = native.ToJsonString();
+        var nextPath = "/" + FactoryActivityIndex.Key("widget", factory, false, 1);
+        if (replaced)
+        {
+            var next = original with { Id = FactoryActivityIndex.Name(factory, false, 1), Page = 1 };
+            var body = JsonSerializer.SerializeToNode(next with { Checksum = next.CalculateChecksum() }, FactorySourceValidation.RecordJson)!;
+            body["_rid"] = "-wAAAIAAAAACAAAAAAAAAA==";
+            body["_etag"] = "\"replacement\"";
+            transport.SeedDocuments[nextPath] = body.ToJsonString();
+        }
+        var before = transport.Requests.Count;
+
+        var audit = await transport.Scenario.Machine.InvokeAsync("audit");
+
+        Assert.NotEqual(0, audit.Exit);
+        Assert.Null(audit.Result["receipt"]);
+        Assert.Contains(transport.Requests.Skip(before), request => request.Uri.AbsolutePath == nextPath);
+    }
+
 }
 
 public class ActivatedFactoryFixture : IAsyncLifetime

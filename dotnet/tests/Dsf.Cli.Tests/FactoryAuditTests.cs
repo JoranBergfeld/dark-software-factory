@@ -1,9 +1,13 @@
 using System.Text.Json.Nodes;
+using Dsf.Core.Onboarding;
 using Dsf.Core.Runtime;
+using Dsf.Runtime;
+using Dsf.Runtime.Tests;
 using Xunit;
 
 namespace Dsf.Cli.Tests;
 
+[Collection(FactoryLifecycleIntegrationCollection.Name)]
 public sealed class FactoryAuditTests
 {
     [Fact]
@@ -275,7 +279,7 @@ public sealed class FactoryAuditTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Delayed_preview_reference_and_operator_expiry_compete_on_exact_native_analysis_interlock(bool runtimeWins)
+    public async Task Delayed_native_analysis_protection_and_operator_expiry_compete_on_exact_interlock(bool runtimeWins)
     {
         using var transport = await PreviewEvaluationTests.ConfiguredAsync();
         var scenario = transport.Scenario;
@@ -283,6 +287,15 @@ public sealed class FactoryAuditTests
         var source = scenario.Source.Source!;
         var revision = (Guid)JsonNode.Parse(source.Progress["intent/current"].Value)!["revision"]!;
         var key = $"intent/{revision:N}/retention";
+        using var sourceHttp = new HttpClient(scenario.Source.WorkloadTransport!(source));
+        var access = new FactorySourceAccess(FactoryHostSettings.Read(source.Environment, "Source context"),
+            new SourceTestCredential(source), sourceHttp, source.Clock);
+        await access.CheckAsync(CancellationToken.None);
+        var progressStore = new SourceProgressStore(access, sourceHttp, "intent");
+        var analysis = SourceProgressStore.Parse<IntentProgress>((await progressStore.ReadAsync("intent/current", CancellationToken.None))!);
+        var claim = new AnalysisEvidenceClaim(1, transport.Manifest.Identity.FactoryId, revision, analysis.ChainSha256!,
+            AnalysisRetentionKind.Protected, Guid.NewGuid(), FactoryModelsValidation.Hash(analysis),
+            analysis.AnalyzedChunks + analysis.CheckedChunks);
         var runtimeWaiting = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var expiryWaiting = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var runtimeCommitted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -303,12 +316,14 @@ public sealed class FactoryAuditTests
             }
         };
         source.AfterWrite = (target, _) => { if (target == key) runtimeCommitted.TrySetResult(); };
-        var preview = Evaluate();
+        // Exercise the native interlock, not admission of an unadopted successor into preview.
+        var protection = Record.ExceptionAsync(async () =>
+            await progressStore.WriteAsync(key, claim, null, CancellationToken.None));
         try
         {
-            var arrived = await Task.WhenAny(runtimeWaiting.Task, preview).WaitAsync(TimeSpan.FromSeconds(90));
+            var arrived = await Task.WhenAny(runtimeWaiting.Task, protection).WaitAsync(TimeSpan.FromSeconds(90));
             if (arrived != runtimeWaiting.Task)
-                Assert.Fail((await preview).ToJsonString() + "\n" + string.Join("\n", transport.HostFailures));
+                Assert.Fail((await protection)?.ToString() ?? "Protection write completed before the native barrier.");
             await Refresh();
             // An independently delayed native request cannot be fenced by the operator's elapsed time.
             scenario.Machine.Boundary.Repository.ReservationClock = new Dsf.Runtime.Tests.SourceTestClock { Now = source.Clock.Now.AddDays(90) };
@@ -338,7 +353,11 @@ public sealed class FactoryAuditTests
             var expired = await expiry;
             Assert.Equal(runtimeWins ? "Blocked" : "Expired", (string?)expired.Result["state"]);
             Assert.Equal(runtimeWins, audit.Deletes.Count == 0);
-            Assert.NotEqual("ReadyAwaitingActivation", (string?)(await preview)["readiness"]);
+            var failure = await protection;
+            if (runtimeWins) Assert.Null(failure);
+            else Assert.Equal("ProgressConflict", Assert.IsType<SourceProgressException>(failure).Message);
+            var retained = SourceProgressStore.Parse<AnalysisEvidenceClaim>((await progressStore.ReadAsync(key, CancellationToken.None))!);
+            Assert.Equal(runtimeWins ? AnalysisRetentionKind.Protected : AnalysisRetentionKind.Expiring, retained.Kind);
             Assert.Empty(transport.EvaluationInference);
             Assert.All(transport.SeedDocuments.Where(p => p.Key.Contains("/council-preview/", StringComparison.Ordinal)),
                 document => Assert.Null(JsonNode.Parse(document.Value)!["inputs"]));
@@ -349,7 +368,7 @@ public sealed class FactoryAuditTests
         {
             releaseRuntime.TrySetResult();
             releaseExpiry.TrySetResult();
-            await preview;
+            await protection;
         }
 
         async Task Refresh()
@@ -358,19 +377,29 @@ public sealed class FactoryAuditTests
             for (var i = 0; i < 8 && refreshed.Exit != 0; i++) refreshed = await scenario.Machine.InvokeAsync("infer");
             Assert.True(refreshed.Exit == 0, refreshed.Terminal.Output);
         }
+    }
 
-        async Task<JsonNode> Evaluate()
+    [Fact]
+    public async Task Unadopted_successor_cannot_start_automatic_source_refresh_before_promotion()
+    {
+        using var transport = await PreviewEvaluationTests.ConfiguredAsync();
+        var inferred = await transport.Scenario.Machine.InvokeAsync("infer", "--new-analysis");
+        for (var i = 0; i < 8 && inferred.Exit != 0; i++)
+            inferred = await transport.Scenario.Machine.InvokeAsync("infer");
+        Assert.True(inferred.Exit == 0, inferred.Terminal.Output);
+        var request = new PreviewCapabilityRequest(transport.Manifest.PreviewOperationId!.Value,
+            transport.Manifest.PreviewApprovalFingerprint!, Guid.NewGuid());
+        var result = await transport.InspectEvaluationAsync(request, "/evaluate");
+        while ((string?)result["readiness"] is "Queued" or "Running" or "Checking")
         {
-            var request = new Dsf.Core.Onboarding.PreviewCapabilityRequest(transport.Manifest.PreviewOperationId!.Value,
-                transport.Manifest.PreviewApprovalFingerprint!, Guid.NewGuid());
-            var result = await transport.InspectEvaluationAsync(request, "/evaluate");
-            while ((string?)result["readiness"] is "Queued" or "Running" or "Checking")
-            {
-                await Task.Delay(10);
-                result = await transport.InspectEvaluationAsync(request);
-            }
-            return result;
+            await Task.Delay(10);
+            result = await transport.InspectEvaluationAsync(request);
         }
+
+        Assert.Equal("Blocked", (string?)result["readiness"]);
+        Assert.DoesNotContain(transport.Scenario.Source.Source!.Progress.Keys,
+            key => key.StartsWith(FactorySourceRefresh.Prefix, StringComparison.Ordinal));
+        Assert.Empty(transport.EvaluationInference);
     }
 
     [Fact]

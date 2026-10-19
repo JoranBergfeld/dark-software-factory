@@ -8,6 +8,7 @@ using Xunit;
 
 namespace Dsf.Cli.Tests;
 
+[Collection(FactoryLifecycleIntegrationCollection.Name)]
 public sealed class FactoryPublicationReconciliationTests(ActivatedFactoryFixture fixture, Xunit.Abstractions.ITestOutputHelper output) : IClassFixture<ActivatedFactoryFixture>
 {
     [Theory]

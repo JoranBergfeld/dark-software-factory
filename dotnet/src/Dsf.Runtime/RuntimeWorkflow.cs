@@ -1,4 +1,7 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
+using Azure.Core;
+using Azure.Identity;
 using Dsf.Core.Onboarding;
 using Dsf.Core.Runtime;
 using Dsf.FeatureCouncil.Conveyor;
@@ -11,14 +14,19 @@ namespace Dsf.Runtime;
 /// </summary>
 internal static partial class RuntimeWorkflow
 {
-    private const string ScheduledInvocationKey = "dsf/factory/runtime/scheduled-invocation";
+    private static readonly HttpClient ScheduledInvocationHttp = new(new HttpClientHandler { AllowAutoRedirect = false })
+    { Timeout = Timeout.InfiniteTimeSpan };
     private sealed record ScheduledInvocation(
-        int Protocol, Guid FactoryId, Guid InvocationId, bool DryRun, bool Settled);
+        int Protocol, string Id, string Product, Guid FactoryId, Guid InvocationId, bool DryRun, bool Settled, string Checksum)
+    {
+        internal string CalculateChecksum() => FactoryModelsValidation.Hash(this with { Checksum = "" });
+    }
 
     internal static void EnsureCouncilAdmissionOpen(IEnumerable<string> keys) => FactoryPause.RequireAdmissionOpen(keys);
 
     internal static async Task<SourceCharterContextResult> ReadSourceCharterContextAsync(
-        FactorySourceAccess source, IFactoryCharterEvidenceReader records, HttpClient http, TimeProvider clock, CancellationToken token)
+        FactorySourceAccess source, IFactoryCharterEvidenceReader records, HttpClient http, TimeProvider clock, CancellationToken token,
+        Func<CancellationToken, Task<string>> readGovernanceRevision)
     {
         var retained = await FactoryCharterAdoptionReader.ReadAsync(source.Manifest.Identity.FactoryId, records, token);
         if (retained is null)
@@ -42,7 +50,8 @@ internal static partial class RuntimeWorkflow
         var result = new SourceCharterContextResult(FactoryCharterState.Adopted,
             "Current source-side adopted intent only; not council readiness or activation.", retained, evidence);
         if (analysis.Progress!.Revision != retained.Adoption.AnalysisRevision)
-            result = result with { Refresh = await new FactorySourceRefreshWorkflow(source.Settings, source, http, clock).QualifyAsync(result, token) };
+            result = result with { Refresh = await new FactorySourceRefreshWorkflow(
+                source.Settings, source, http, clock, readGovernanceRevision).QualifyAsync(result, token) };
         FactorySourceRefreshValidation.RequireCurrent(result, source.Manifest.Identity.ProductKey);
         return result;
     }
@@ -197,37 +206,32 @@ internal static partial class RuntimeWorkflow
         RuntimeSettings settings, RuntimeDependencies dependencies, FactoryManifest manifest,
         bool dryRun, CancellationToken cancellationToken)
     {
-        ScheduledInvocation? current = null;
-        await foreach (var (key, value) in dependencies.ConfigurationSettingsGateway.ListAsync(
-            FactoryGovernance.NormalizeEndpoint(settings.AppConfigEndpoint),
-            ProductConfigurationKeys.NoLabel, cancellationToken))
+        var store = ScheduledInvocationStore(settings, dependencies, manifest);
+        for (var attempt = 0; attempt < 8; attempt++)
         {
-            if (key != ScheduledInvocationKey) continue;
-            current = JsonSerializer.Deserialize<ScheduledInvocation>(value, FactorySourceValidation.RecordJson)
-                ?? throw new RuntimeVerbException("Scheduled onboarding invocation record is invalid; no replacement invocation issued.");
-        }
-        if (current is not null && (current.Protocol != 1 || current.FactoryId != manifest.Identity.FactoryId
-            || current.InvocationId == Guid.Empty))
-            throw new RuntimeVerbException("Scheduled onboarding invocation record is invalid; no replacement invocation issued.");
-        if (current is { Settled: false }) return new(current.InvocationId, current.DryRun);
+            var current = await ReadScheduledInvocationAsync(store, manifest, cancellationToken);
+            if (current.Document is { Settled: false } pending)
+                return new(pending.InvocationId, pending.DryRun);
 
-        var invocation = Guid.NewGuid();
-        try
-        {
-            await dependencies.ConfigurationSettingsGateway.SetAsync(
-                FactoryGovernance.NormalizeEndpoint(settings.AppConfigEndpoint), ScheduledInvocationKey,
-                JsonSerializer.Serialize(new ScheduledInvocation(
-                    1, manifest.Identity.FactoryId, invocation, dryRun, false),
-                    FactorySourceValidation.RecordJson),
-                label: null, cancellationToken);
+            var invocation = Guid.NewGuid();
+            var next = new ScheduledInvocation(1, store.Id, manifest.Identity.ProductKey, manifest.Identity.FactoryId, invocation, dryRun, false, "");
+            next = next with { Checksum = next.CalculateChecksum() };
+            try
+            {
+                await store.Gateway.WriteCheckpointAsync(store.Endpoint, manifest.Identity.ProductKey,
+                    FactoryPreviewValidation.PreviewContainer, manifest.Identity.ProductKey, store.Id,
+                    JsonSerializer.Serialize(next, FactoryGitHubJson.Options), current.ETag, cancellationToken);
+                return new(invocation, dryRun);
+            }
+            catch (CosmosCheckpointException exception) when (exception.Failure == CosmosCheckpointFailure.Conflict) { }
+            catch (Exception exception) when (exception is not OperationCanceledException
+                                              || !cancellationToken.IsCancellationRequested)
+            {
+                throw new RuntimeVerbException(
+                    $"Scheduled onboarding invocation {invocation:D} persistence unconfirmed; inspect that invocation before retrying.");
+            }
         }
-        catch (Exception exception) when (exception is not OperationCanceledException
-                                          || !cancellationToken.IsCancellationRequested)
-        {
-            throw new RuntimeVerbException(
-                $"Scheduled onboarding invocation {invocation:D} persistence unconfirmed; inspect that invocation before retrying.");
-        }
-        return new(invocation, dryRun);
+        throw new RuntimeVerbException("Scheduled onboarding invocation journal contention; retry without issuing unindexed work.");
     }
 
     internal static async Task SetScheduledInvocationSettledAsync(
@@ -235,21 +239,62 @@ internal static partial class RuntimeWorkflow
         FactoryDecisionRequest request,
         CancellationToken cancellationToken)
     {
-        try
+        var store = ScheduledInvocationStore(settings, dependencies, manifest);
+        for (var attempt = 0; attempt < 8; attempt++)
         {
-            await dependencies.ConfigurationSettingsGateway.SetAsync(
-                FactoryGovernance.NormalizeEndpoint(settings.AppConfigEndpoint), ScheduledInvocationKey,
-                JsonSerializer.Serialize(new ScheduledInvocation(
-                    1, manifest.Identity.FactoryId, request.InvocationId, request.DryRun, true),
-                    FactorySourceValidation.RecordJson),
-                label: null, cancellationToken);
+            var current = await ReadScheduledInvocationAsync(store, manifest, cancellationToken);
+            if (current.Document is not { } document || document.InvocationId != request.InvocationId
+                || document.DryRun != request.DryRun)
+                throw new RuntimeVerbException(
+                    $"Scheduled onboarding invocation {request.InvocationId:D} closeout has no exact original journal.");
+            if (document.Settled) return;
+            var settled = document with { Settled = true, Checksum = "" };
+            settled = settled with { Checksum = settled.CalculateChecksum() };
+            try
+            {
+                await store.Gateway.WriteCheckpointAsync(store.Endpoint, manifest.Identity.ProductKey,
+                    FactoryPreviewValidation.PreviewContainer, manifest.Identity.ProductKey, store.Id,
+                    JsonSerializer.Serialize(settled, FactoryGitHubJson.Options), current.ETag, cancellationToken);
+                return;
+            }
+            catch (CosmosCheckpointException exception) when (exception.Failure == CosmosCheckpointFailure.Conflict) { }
+            catch (Exception exception) when (exception is not OperationCanceledException
+                                              || !cancellationToken.IsCancellationRequested)
+            {
+                throw new RuntimeVerbException(
+                    $"Scheduled onboarding invocation {request.InvocationId:D} closeout unconfirmed; resume that invocation only.");
+            }
         }
-        catch (Exception exception) when (exception is not OperationCanceledException
-                                          || !cancellationToken.IsCancellationRequested)
-        {
-            throw new RuntimeVerbException(
-                $"Scheduled onboarding invocation {request.InvocationId:D} closeout unconfirmed; resume that invocation only.");
-        }
+        throw new RuntimeVerbException(
+            $"Scheduled onboarding invocation {request.InvocationId:D} closeout contended; resume that invocation only.");
+    }
+
+    private static (AzureCosmosDocumentGateway Gateway, string Endpoint, string Id) ScheduledInvocationStore(
+        RuntimeSettings settings, RuntimeDependencies dependencies, FactoryManifest manifest)
+    {
+        var credential = dependencies.PreviewCredential
+            ?? new DefaultAzureCredential();
+        var gateway = new AzureCosmosDocumentGateway(credential, dependencies.PreviewHttp ?? ScheduledInvocationHttp);
+        return (gateway, "https://" + FactoryPreviewValidation.Prefix(manifest.Identity.FactoryId) + "-cosmos.documents.azure.com",
+            "scheduled-invocation-" + manifest.Identity.FactoryId.ToString("N"));
+    }
+
+    private static async Task<(ScheduledInvocation? Document, string? ETag)> ReadScheduledInvocationAsync(
+        (AzureCosmosDocumentGateway Gateway, string Endpoint, string Id) store, FactoryManifest manifest,
+        CancellationToken cancellationToken)
+    {
+        var native = await store.Gateway.ReadCheckpointAsync(store.Endpoint, manifest.Identity.ProductKey,
+            FactoryPreviewValidation.PreviewContainer, manifest.Identity.ProductKey, store.Id, cancellationToken);
+        if (native is null) return (null, null);
+        var body = JsonNode.Parse(native.Json, documentOptions: new() { AllowDuplicateProperties = false })!.AsObject();
+        foreach (var key in AzureCosmosDocumentGateway.SystemProperties) body.Remove(key);
+        var document = body.Deserialize<ScheduledInvocation>(FactorySourceValidation.RecordJson)
+            ?? throw new RuntimeVerbException("Scheduled onboarding invocation record is invalid; no replacement invocation issued.");
+        if (document.Protocol != 1 || document.Id != store.Id || document.Product != manifest.Identity.ProductKey
+            || document.FactoryId != manifest.Identity.FactoryId
+            || document.InvocationId == Guid.Empty || document.Checksum != document.CalculateChecksum())
+            throw new RuntimeVerbException("Scheduled onboarding invocation record is invalid; no replacement invocation issued.");
+        return (document, native.ETag);
     }
 
     public static async Task<ConveyorRun> LoadOrCreateRunAsync(

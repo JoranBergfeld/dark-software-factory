@@ -985,15 +985,18 @@ Problem identity is conditionally retained in a fixed factory/repository
 scope; subsequent invocations of the same problem converge on one publication
 journal and original issue receipt. Native discovery records the intended
 decision or publication before creation and acknowledges its original Cosmos
-identity afterward. No unindexed admission is allowed. Each index is bounded
-at 256 entries; exhaustion blocks new work rather than granting query, delete,
-purge or untracked-storage permissions.
+identity afterward. No unindexed admission is allowed. Each index page is bounded
+at 256 entries; full pages conditionally link to the next page's exact Cosmos
+identity. This removes the factory-lifetime invocation cap without granting query,
+delete, purge or untracked-storage permissions. Original root identities and
+promotion receipts remain unchanged.
 
-`audit` automatically point-reads these original indices, retained decisions,
+`audit` automatically point-reads every linked index page, retained decisions,
 runs, problem identity, publication witnesses and journals. Its reader needs
 the existing reviewed read permissions on those native containers, not query
 or delete authority. Missing records, unacknowledged admissions and uncertain
-effects make closure unknown and prevent a complete export claim. Search
+effects make closure unknown and prevent a complete export claim. Missing or
+replaced pages also fail closed; inspection rechecks every page revision. Search
 results, shared App authorship, labels and copied body markers are never
 ownership or reconciliation evidence.
 

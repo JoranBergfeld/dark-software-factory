@@ -101,9 +101,10 @@ internal sealed class AzureFactoryPreviewCapability(
         foreach (var prefix in new[] { FactoryPause.Key, FactoryPause.HistoryPrefix, FactoryReconfigurationOperationRecords.Prefix })
             await foreach (var setting in new AzureConfigurationSettingsGateway(currentCredential, http)
                 .ListRecordsAsync(settings.ProductEndpoint, "*", token, prefix + "*"))
-                if (inspection is not null) _ = inspection.Include(setting.Key);
+                if (inspection is not null) _ = inspection.Include(setting.Key, setting.Value);
                 else if (prefix == FactoryReconfigurationOperationRecords.Prefix) transition.Add(setting.Key, setting.Value);
                 else RuntimeWorkflow.EnsureCouncilAdmissionOpen([setting.Key]);
+        inspection?.CompleteTransition(clock.GetUtcNow());
         if (inspection is null) FactoryReconfigurationOperationRecords.RequireAdmissionOpen(transition, clock.GetUtcNow(),
             FactoryReconfigurationPhase.AwaitingEvidence, FactoryReconfigurationPhase.AwaitingActivation,
             FactoryReconfigurationPhase.Completed);
@@ -118,7 +119,7 @@ internal sealed class AzureFactoryPreviewCapability(
             .ListRecordsAsync(settings.ProductEndpoint, ProductConfigurationKeys.NoLabel, token))
         {
             var key = setting.Key;
-            if (inspection is not null && !inspection.Include(key)) continue;
+            if (inspection is not null && !inspection.Include(key, setting.Value)) continue;
             if (key.StartsWith(FactoryReconfigurationOperationRecords.Prefix, StringComparison.Ordinal)) continue;
             if (FactoryReattachment.IsStopRecord(key)
                 || key.StartsWith(FactoryReattachment.AccessPrefix, StringComparison.Ordinal)) continue;

@@ -121,14 +121,15 @@ internal sealed class FactoryLiveAuthority(FactoryHostSettings settings, Runtime
         var transition = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var prefix in new[] { FactoryPause.Key, FactoryPause.HistoryPrefix, FactoryReconfigurationOperationRecords.Prefix })
             await foreach (var record in gateway.ListRecordsAsync(settings.ProductEndpoint, "*", token, prefix + "*"))
-                if (inspection is not null) _ = inspection.Include(record.Key);
+                if (inspection is not null) _ = inspection.Include(record.Key, record.Value);
                 else if (prefix == FactoryReconfigurationOperationRecords.Prefix) transition.Add(record.Key, record.Value);
                 else RuntimeWorkflow.EnsureCouncilAdmissionOpen([record.Key]);
+        inspection?.CompleteTransition(Clock.GetUtcNow());
         if (inspection is null) FactoryReconfigurationOperationRecords.RequireAdmissionOpen(transition, Clock.GetUtcNow(),
             FactoryReconfigurationPhase.AwaitingActivation, FactoryReconfigurationPhase.Completed);
         await foreach (var record in gateway.ListRecordsAsync(settings.ProductEndpoint, ProductConfigurationKeys.NoLabel, token))
         {
-            if (inspection is not null && !inspection.Include(record.Key)) continue;
+            if (inspection is not null && !inspection.Include(record.Key, record.Value)) continue;
             if (record.Key.StartsWith(FactoryReconfigurationOperationRecords.Prefix, StringComparison.Ordinal)) continue;
             RuntimeWorkflow.EnsureCouncilAdmissionOpen([record.Key]);
             if (result.Count >= FactoryPreviewPublication.Policy.MaximumRecords + FactoryAudit.GovernanceHistoryRecords

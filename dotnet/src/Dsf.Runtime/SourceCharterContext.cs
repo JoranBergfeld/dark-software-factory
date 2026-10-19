@@ -24,7 +24,17 @@ public static partial class RuntimeVerbs
             var source = new FactorySourceAccess(settings, credential, http, dependencies.SourceClock);
             await source.CheckAsync(pending.Token);
             var records = new AzureCharterEvidenceReader(settings.ProductEndpoint, source.Credential, http);
-            return await RuntimeWorkflow.ReadSourceCharterContextAsync(source, records, http, dependencies.SourceClock, pending.Token);
+            return await RuntimeWorkflow.ReadSourceCharterContextAsync(source, records, http, dependencies.SourceClock, pending.Token,
+                async cancellation =>
+                {
+                    var request = new PreviewCapabilityRequest(
+                        source.Manifest.PreviewOperationId ?? throw new JsonException("Approved preview operation required."),
+                        source.Manifest.PreviewApprovalFingerprint ?? throw new JsonException("Approved preview fingerprint required."),
+                        Guid.NewGuid());
+                    var authority = new AzureFactoryPreviewCapability(settings, PreviewHostKind.SourceContext,
+                        credential, http, dependencies.SourceClock);
+                    return (await authority.CheckAsync(request, cancellation)).GovernanceRevision;
+                });
         }
         catch (CharterAdoptionEvidenceException)
         { return Failure(FactoryCharterState.Unknown, "Protected adoption history or current pointer unconfirmed."); }

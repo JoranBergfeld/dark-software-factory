@@ -25,6 +25,77 @@ public sealed class RuntimeAdmissionTests
         Assert.True(inspection.AdmissionClosed);
     }
 
+    [Fact]
+    public void Retained_inspection_does_not_close_admission_for_completed_reconfiguration_history()
+    {
+        var now = DateTimeOffset.Parse("2026-09-15T23:00:00Z");
+        var inspection = new FactoryInspectionAuthority();
+        var transition = Reconfiguration(FactoryReconfigurationPhase.Completed, now);
+
+        Assert.False(inspection.Include(FactoryReconfigurationOperationRecords.RootKey,
+            JsonSerializer.Serialize(transition, FactorySourceValidation.RecordJson)));
+        inspection.CompleteTransition(now);
+        Assert.False(inspection.AdmissionClosed);
+    }
+
+    [Fact]
+    public void Retained_inspection_closes_admission_for_incomplete_reconfiguration()
+    {
+        var now = DateTimeOffset.Parse("2026-09-15T23:00:00Z");
+        var inspection = new FactoryInspectionAuthority();
+        var transition = Reconfiguration(FactoryReconfigurationPhase.AwaitingActivation, now);
+
+        Assert.False(inspection.Include(FactoryReconfigurationOperationRecords.RootKey,
+            JsonSerializer.Serialize(transition, FactorySourceValidation.RecordJson)));
+        inspection.CompleteTransition(now);
+        Assert.True(inspection.AdmissionClosed);
+    }
+
+    [Fact]
+    public void Retained_inspection_keeps_completed_reconfiguration_open_across_rechecks()
+    {
+        var now = DateTimeOffset.Parse("2026-09-15T23:00:00Z");
+        var inspection = new FactoryInspectionAuthority();
+        var value = JsonSerializer.Serialize(Reconfiguration(FactoryReconfigurationPhase.Completed, now),
+            FactorySourceValidation.RecordJson);
+
+        for (var read = 0; read < 3; read++)
+        {
+            Assert.False(inspection.Include(FactoryReconfigurationOperationRecords.RootKey, value));
+            inspection.CompleteTransition(now);
+            Assert.False(inspection.AdmissionClosed);
+        }
+    }
+
+    [Theory]
+    [InlineData("{}")]
+    [InlineData("[]")]
+    [InlineData("{\"transition\":42,\"state\":\"completed\"}")]
+    public void Malformed_lifecycle_record_closes_inspection_admission_without_throwing(string value)
+    {
+        var inspection = new FactoryInspectionAuthority();
+
+        Assert.False(inspection.Include("dsf/factory/lifecycle", value));
+        Assert.True(inspection.AdmissionClosed);
+    }
+
+    private static FactoryReconfigurationOperation Reconfiguration(FactoryReconfigurationPhase phase, DateTimeOffset now)
+    {
+        var identity = new FactoryReservationIdentity(Guid.NewGuid(), Guid.NewGuid(), "https://owner.azconfig.io", "acme", 913,
+            Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "prod", new string('a', 64), new string('b', 64),
+            Guid.NewGuid().ToString(), 42, now.AddHours(-1));
+        var manifest = new FactoryManifest(1, "decide-factory-manifest", "product-app-configuration", "Inactive",
+            identity, new string('c', 64), 1, 1, new string('d', 64));
+        return new FactoryReconfigurationOperation(1, Guid.NewGuid(), identity, new string('e', 64), new string('f', 64),
+            "manifest-etag", manifest, new string('1', 64), 1, 1, identity.AzureActorId, now.AddMinutes(-30),
+            phase, Guid.NewGuid(), 1)
+        {
+            SnapshotRecords = 1,
+            AppliedRecords = 1,
+            AppliedManifestRevision = "applied-etag"
+        };
+    }
+
     private static readonly RuntimeSettings Settings = new(
         "acme", "https://dsfo-11111111111111111111111111111111.azconfig.io.", "", "",
         "https://cosmos.example", "https://openai.example", "gpt-deploy", "embed-deploy", "", "", "", "acme/acme");

@@ -55,7 +55,7 @@ internal static partial class RuntimeWorkflow
         if (FactoryModelsValidation.Hash(candidates) != FactoryModelsValidation.Hash(document.Proof!.Candidates)) throw new JsonException();
         var original = store.NativeIdentity;
         await store.ReadDocumentAsync(token);
-        if (original != store.NativeIdentity || index.Identity != (await activity.ReadAsync(token)).Identity)
+        if (original != store.NativeIdentity || index.SnapshotRevision != (await activity.ReadAsync(token)).SnapshotRevision)
             throw new PreviewCapabilityException(FactoryCharterState.Unknown, "CurrentModelEvidenceChangedDuringInspection");
         await publisherAuthority.RequireSameAsync(publisher, token);
         RequireRecentModelEvaluation(document, models, clock.GetUtcNow());
