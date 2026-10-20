@@ -21,6 +21,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Dsf.Runtime.Tests" />
+    <InternalsVisibleTo Include="Dsf.Cli.Tests" />
   </ItemGroup>
 
 </Project>

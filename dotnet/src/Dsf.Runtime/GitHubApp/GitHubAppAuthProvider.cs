@@ -118,7 +118,7 @@ public sealed class GitHubAppAuthProvider : IGitHubAuthProvider
     /// rather than an external JWT library, since the shape needed here is three
     /// base64url segments and an RSA-SHA256 signature.
     /// </summary>
-    private static string BuildAppJwt(string appId, string privateKeyPem, DateTimeOffset now)
+    internal static string BuildAppJwt(string appId, string privateKeyPem, DateTimeOffset now)
     {
         using var rsa = RSA.Create();
         rsa.ImportFromPem(privateKeyPem);

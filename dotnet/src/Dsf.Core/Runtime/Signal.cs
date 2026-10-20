@@ -10,4 +10,7 @@ public sealed record Signal(
     string Path,
     IReadOnlyList<string> ProductHints,
     IReadOnlyList<string> SourceKinds,
-    bool DryRun);
+    bool DryRun)
+{
+    public Guid? InvocationId { get; init; }
+}

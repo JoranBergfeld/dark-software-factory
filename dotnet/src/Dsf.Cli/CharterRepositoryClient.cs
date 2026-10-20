@@ -37,14 +37,15 @@ internal sealed record GhInvocationResult(int ExitCode, string StandardOutput, s
 /// </summary>
 internal interface IGhCliRunner
 {
-    GhInvocationResult Run(IReadOnlyList<string> arguments, CancellationToken cancellationToken);
+    GhInvocationResult Run(IReadOnlyList<string> arguments, CancellationToken cancellationToken, string? standardInput = null);
 }
 
 /// <summary>Shells out to the real <c>gh</c> CLI on PATH.</summary>
 internal sealed class SystemGhCliRunner : IGhCliRunner
 {
-    public GhInvocationResult Run(IReadOnlyList<string> arguments, CancellationToken cancellationToken)
+    public GhInvocationResult Run(IReadOnlyList<string> arguments, CancellationToken cancellationToken, string? standardInput = null)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         using var process = new System.Diagnostics.Process();
         process.StartInfo.FileName = "gh";
         foreach (var argument in arguments)
@@ -54,6 +55,7 @@ internal sealed class SystemGhCliRunner : IGhCliRunner
 
         process.StartInfo.RedirectStandardOutput = true;
         process.StartInfo.RedirectStandardError = true;
+        process.StartInfo.RedirectStandardInput = standardInput is not null;
         process.StartInfo.UseShellExecute = false;
         try
         {
@@ -66,11 +68,23 @@ internal sealed class SystemGhCliRunner : IGhCliRunner
                 exception);
         }
 
-        var output = process.StandardOutput.ReadToEnd();
-        var error = process.StandardError.ReadToEnd();
-        process.WaitForExit();
-        cancellationToken.ThrowIfCancellationRequested();
-        return new GhInvocationResult(process.ExitCode, output, error);
+        var output = process.StandardOutput.ReadToEndAsync();
+        var error = process.StandardError.ReadToEndAsync();
+        try
+        {
+            if (standardInput is not null)
+            {
+                process.StandardInput.Write(standardInput);
+                process.StandardInput.Close();
+            }
+            process.WaitForExitAsync(cancellationToken).GetAwaiter().GetResult();
+            return new GhInvocationResult(process.ExitCode, output.GetAwaiter().GetResult(), error.GetAwaiter().GetResult());
+        }
+        catch (OperationCanceledException)
+        {
+            if (!process.HasExited) process.Kill(entireProcessTree: true);
+            throw;
+        }
     }
 }
 

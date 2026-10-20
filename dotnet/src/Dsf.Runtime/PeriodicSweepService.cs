@@ -16,7 +16,7 @@ internal sealed class PeriodicSweepService(
     TimeSpan interval,
     IReadOnlyDictionary<string, string?>? env,
     ISweepControlStore sweepControlStore,
-    ISweepLease sweepLease,
+    ISweepLease? sweepLease,
     ILogger<PeriodicSweepService> logger,
     TimeProvider? timeProvider = null) : BackgroundService
 {

@@ -5,6 +5,7 @@ public static class RuntimeIntegrationConfiguration
 {
     public static IReadOnlyList<string> Keys { get; } =
     [
+        RuntimeIntegrationSettings.FactoryProfilePin,
         RuntimeIntegrationSettings.CosmosDatabase,
         RuntimeIntegrationSettings.CosmosContainer,
         RuntimeIntegrationSettings.CosmosLearningContainer,

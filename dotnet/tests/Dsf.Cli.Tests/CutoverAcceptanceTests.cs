@@ -67,6 +67,15 @@ public sealed class CutoverAcceptanceTests
     }
 
     [Fact]
+    public void Ci_job_caps_runner_time_and_reports_individual_test_progress()
+    {
+        var ci = ReadRepoFile(".github/workflows/ci.yml");
+        Assert.Contains("    timeout-minutes: 10", ci, StringComparison.Ordinal);
+        Assert.Contains("dotnet test Dsf.sln --no-build --configuration Release --logger 'console;verbosity=normal'",
+            ci, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Dotnet_parity_gate_consumes_every_authoritative_matrix_surface()
     {
         var matrix = JsonNode.Parse(ReadRepoFile("parity/baseline/matrix.json"))

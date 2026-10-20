@@ -1,0 +1,115 @@
+using System.Text.Json.Serialization;
+
+namespace Dsf.Core.Onboarding;
+
+public enum FactoryFoundationState { Inactive, Partial, Blocked, Failed, Canceled, Unknown }
+public enum FoundationOperationState { Intent, InFlight, Completed, Failed, Unknown, Canceled }
+public enum FoundationResourceDisposition { CreateRequested, Created, Reused, Unproven, NoEffect, Associated }
+
+public sealed record FactoryFoundationPointer(
+    Guid OperationId, FactoryFoundationState State, int OperationCount, string Stage,
+    string? ProductEndpoint = null, string? ProfilePin = null)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? RequestSha256 { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? RecoveryDetail { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? CoordinatorId { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public FoundationRetryAdmission? RetryAdmission { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<FoundationRecoveryBlocker>? RecoveryBlockers { get; init; }
+}
+
+public sealed record FoundationRetryAdmission(int Index, Guid ClientRequestId);
+
+public sealed record FoundationRecoveryBlocker(int Index, string Target, string Detail)
+{
+    public FoundationResourceDisposition CurrentOwnership { get; init; } = FoundationResourceDisposition.Unproven;
+}
+
+public sealed record FoundationResourceAssociation(
+    string ParentResourceId, string ParentIncarnation, string ParentOperationId, string ParentCorrelationId);
+
+public sealed record FoundationOperation(
+    int SchemaVersion, string Kind, Guid FactoryId, Guid OperationId, int Index,
+    string Target, string ApiVersion, string RequestSha256, Guid ClientRequestId, DateTimeOffset StartedAt,
+    FoundationOperationState State, FoundationResourceDisposition Disposition)
+{
+    public int? HttpStatus { get; init; }
+    public string? ProviderRequestId { get; init; }
+    public string? ProviderCorrelationId { get; init; }
+    public DateTimeOffset? ResponseDate { get; init; }
+    public string? ResourceId { get; init; }
+    public string? PrincipalId { get; init; }
+    public string? ClientId { get; init; }
+    public string? Incarnation { get; init; }
+    public string? Endpoint { get; init; }
+    public string? DeploymentTarget { get; init; }
+    public string? ProviderOperationId { get; init; }
+    public string? LogicalIdentity { get; init; }
+    public string? ManagedBy { get; init; }
+    public string? RoleDefinitionId { get; init; }
+    public string? RoleScope { get; init; }
+    public string? Condition { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ConditionVersion { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? NativeRevision { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<FoundationAttemptReceipt>? PreviousAttempts { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public FoundationResourceAssociation? Association { get; init; }
+}
+
+public sealed record FoundationAttemptReceipt(
+    Guid ClientRequestId, DateTimeOffset StartedAt, FoundationOperationState State,
+    FoundationResourceDisposition Disposition, int? HttpStatus, string? ProviderRequestId, DateTimeOffset? ResponseDate);
+
+public sealed record FactoryOnboardingProfile(
+    int SchemaVersion, string Profile, Guid FactoryId, string PlanFingerprint,
+    IReadOnlyList<string> AllowedRepositoryMutations);
+
+public sealed record FactoryManifest(
+    int SchemaVersion, string Kind, string Authority, string Publication,
+    FactoryReservationIdentity Identity, string ReviewedPlanSha256, int PlanBytes, int PlanChunks,
+    string ProfilePin)
+{
+    public Guid? GitHubAuthorityOperationId { get; init; }
+    public string? GitHubAuthorityApprovalFingerprint { get; init; }
+    public Guid? TelemetryOperationId { get; init; }
+    public string? TelemetryApprovalFingerprint { get; init; }
+    public Guid? ModelsOperationId { get; init; }
+    public string? ModelsApprovalFingerprint { get; init; }
+    public Guid? SourceOperationId { get; init; }
+    public string? SourceApprovalFingerprint { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? SupplementalOperationId { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? SupplementalApprovalFingerprint { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? PreviewOperationId { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? PreviewApprovalFingerprint { get; init; }
+}
+
+public sealed record FactoryFoundationResult(
+    FactoryFoundationState State, string Stage, string Detail, Guid OperationId,
+    IReadOnlyList<FoundationOperation> Operations)
+{
+    public bool IsBaseProvisioned => State == FactoryFoundationState.Inactive;
+    public bool IsActivated => false;
+    public string? ProductEndpoint { get; init; }
+    public string? ProfilePin { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? CoordinatorId { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public FoundationRetryAdmission? RetryAdmission { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<FoundationRecoveryBlocker>? RecoveryBlockers { get; init; }
+    public IReadOnlyList<string> PendingStages { get; init; } =
+        ["workload grants", "GitHub authentication", "evidence access and connectivity",
+            "factory telemetry connectivity", "models", "code inventory and analysis",
+            "charter", "council readiness", "activation"];
+}

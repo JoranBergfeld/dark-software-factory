@@ -62,6 +62,23 @@ nav:
   - Get started:
       - Quickstart: get-started/quickstart.md
       - Bootstrap the owner: get-started/bootstrap.md
+      - Review existing repository attachment: get-started/review-repository-attachment.md
+      - Preview a dedicated application boundary: get-started/preview-application-boundary.md
+      - Reserve durable factory identity: get-started/reserve-factory-identity.md
+      - Provision an inactive Decide foundation: get-started/provision-inactive-foundation.md
+      - Verify factory GitHub authority: get-started/verify-factory-github-authority.md
+      - Prove scoped application telemetry: get-started/prove-application-telemetry.md
+      - Prove required model capabilities: get-started/prove-model-capabilities.md
+      - Acquire resumable source inventory: get-started/acquire-source-inventory.md
+      - Infer a grounded product charter: get-started/infer-product-charter.md
+      - Publish and adopt a reviewed charter: get-started/publish-adopt-charter.md
+      - Run a supervised council preview: get-started/prepare-council-preview.md
+      - Retain and export onboarding evidence: get-started/retain-audit-evidence.md
+      - Review retained factory input changes: get-started/review-factory-reconfiguration.md
+      - Offboard only the council: get-started/offboard-council.md
+      - Purge a detached factory: get-started/purge-factory.md
+      - Reattach a retained council: get-started/reattach-council.md
+      - Enable optional evidence sources: get-started/enable-optional-evidence-sources.md
       - Provision a factory: get-started/provision-a-factory.md
       - Implement the application: get-started/implement-application.md
       - Operate it: get-started/operate.md
