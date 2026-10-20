@@ -15,6 +15,7 @@ defaults:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Setup .NET
@@ -34,7 +35,7 @@ jobs:
           --configuration Release
           --filter FullyQualifiedName~CutoverAcceptanceTests
       - name: Test
-        run: dotnet test Dsf.sln --no-build --configuration Release
+        run: dotnet test Dsf.sln --no-build --configuration Release --logger 'console;verbosity=normal'
       - name: Module-reference boundary check
         run: dotnet test tests/Dsf.ModuleBoundaries.Tests --no-build --configuration Release
       - name: Pack and smoke-test installed CLI

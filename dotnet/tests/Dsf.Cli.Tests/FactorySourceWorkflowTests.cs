@@ -178,8 +178,7 @@ internal sealed class SourceWorkflowTransport(FactoryFoundationTests.FoundationT
     internal bool NetworkEtags { get; set; }
     internal Func<SourceInventoryTransport, HttpMessageHandler>? WorkloadTransport { get; set; }
     internal Action<string, string>? AfterHost { get; set; }
-    internal Dictionary<string, string> Values() => JsonNode.Parse(foundation.Product.ListJson())!.AsArray()
-        .ToDictionary(n => (string)n!["key"]!, n => (string)n!["value"]!);
+    internal Dictionary<string, string> Values() => foundation.Product.Values();
     internal JsonNode Record(string key) => JsonNode.Parse(Values()[key])!;
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
     {
@@ -217,15 +216,17 @@ internal sealed class SourceWorkflowTransport(FactoryFoundationTests.FoundationT
             if (ReplacedNetwork && path.EndsWith("-network", StringComparison.Ordinal))
                 return SourceInventoryTransport.Json(new { id = path, systemData = new { createdAt = "2000-01-01T00:00:00Z" }, properties = new { } });
             if (Resources.TryGetValue(path, out var resource)) return ModelsWorkflowTransport.Reply(HttpStatusCode.OK, resource);
-            using var native = new SourceInventoryTransport(Values(), new ReservationClock().GetUtcNow());
             if (path.EndsWith("/roleassignments", StringComparison.Ordinal))
                 return SourceInventoryTransport.Json(new { value = Resources.Where(p => p.Key.Contains("/roleassignments/", StringComparison.Ordinal)).Select(p => p.Value).ToArray() });
             if (path.EndsWith("/permissions", StringComparison.Ordinal))
                 return SourceInventoryTransport.Json(new { value = new[] { new { actions = new[] { "*" }, notActions = Array.Empty<string>() } } });
             if (path.EndsWith("/denyassignments", StringComparison.Ordinal)) return SourceInventoryTransport.Json(new { value = Array.Empty<object>() });
-            if (native.Resources.TryGetValue(path, out var existing) && (path.Contains("/roledefinitions/", StringComparison.Ordinal)
-                || path.Contains("/userassignedidentities/", StringComparison.Ordinal) || path.Contains("/managedenvironments/", StringComparison.Ordinal)))
-                return SourceInventoryTransport.Json(existing);
+            if (path.Contains("/roledefinitions/", StringComparison.Ordinal)
+                || path.Contains("/userassignedidentities/", StringComparison.Ordinal) || path.Contains("/managedenvironments/", StringComparison.Ordinal))
+            {
+                using var native = new SourceInventoryTransport(Values(), new ReservationClock().GetUtcNow());
+                if (native.Resources.TryGetValue(path, out var existing)) return SourceInventoryTransport.Json(existing);
+            }
             if (deployment is not null && path == (string?)deployment["id"]) return SourceInventoryTransport.Json(deployment);
             if (deployment is not null && path == (string?)deployment["id"] + "/operations")
                 return SourceInventoryTransport.Json(new { value = Resources.Select((r, i) => new
