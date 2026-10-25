@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Dsf.Core.Runtime;
 
 namespace Dsf.Cli;
 
@@ -39,7 +40,8 @@ internal sealed class AzureCliOwnerBootstrapClient(
         var result = await RunAsync(
             [
                 "appconfig", "kv", "list", "--endpoint", ownerAppConfigEndpoint,
-                "--auth-mode", "login", "--key", "dsf/owner/bootstrap/*",
+                "--auth-mode", "login", "--key", ProductConfigurationKeys.OwnerBootstrapStatusFilter,
+                "--label", "\\0", // Azure CLI takes literal \0, not a process-argument NUL.
                 "-o", "json",
             ],
             cancellationToken);
@@ -56,7 +58,9 @@ internal sealed class AzureCliOwnerBootstrapClient(
             .Select(status => new OwnerGitHubIdentity(
                 status!.AppId!,
                 status.InstallationId!,
-                status.InstallationSelection))
+                status.InstallationSelection,
+                status.KeyVaultUri,
+                status.AppConfigEndpoint))
             .ToArray();
         return identities.Length switch
         {

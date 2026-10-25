@@ -45,6 +45,16 @@ public sealed class ProvisioningAssetsTests
     [InlineData("main.json")]
     [InlineData("sre-agent.json")]
     [InlineData("copy-owner-secret.json")]
+    [InlineData("product-github-private-key.json")]
+    [InlineData("onboard-github-auth.json")]
+    [InlineData("onboard-models.json")]
+    [InlineData("onboard-source.json")]
+    [InlineData("onboard-supplemental.json")]
+    [InlineData("onboard-preview-workloads.json")]
+    [InlineData("onboard-foundation.json")]
+    [InlineData("onboard-telemetry.json")]
+    [InlineData("onboard-live.json")]
+    [InlineData("onboard-publisher.json")]
     public void Default_resolver_uses_shipped_assembly_relative_templates(string entrypoint)
     {
         Assert.Equal(

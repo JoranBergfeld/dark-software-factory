@@ -10,6 +10,7 @@ namespace Dsf.Core.Runtime;
 /// </summary>
 public static class RuntimeIntegrationSettings
 {
+    public const string FactoryProfilePin = "DSF_FACTORY_PROFILE_PIN";
     /// <summary>
     /// A single base-URL template for every source agent, with <c>{kind}</c>
     /// substituted per kind (e.g. <c>https://dsf-acme-{kind}.internal</c>).

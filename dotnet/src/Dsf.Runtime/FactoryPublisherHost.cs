@@ -1,0 +1,283 @@
+using System.Net;
+using System.Net.Http.Headers;
+using System.Net.Http.Json;
+using System.Text.Json;
+using Azure.Core;
+using Azure.Identity;
+using Dsf.Core.Onboarding;
+using Dsf.Runtime.GitHubApp;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Logging;
+
+namespace Dsf.Runtime;
+
+public static partial class RuntimeVerbs
+{
+    public static WebApplication BuildPublisherHost(FactoryHostSettings settings, RuntimeDependencies dependencies,
+        bool contextHost = false, string host = DefaultHost, int port = DefaultPort)
+    {
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions { Args = [] });
+        builder.Logging.ClearProviders();
+        builder.WebHost.UseUrls($"http://{host}:{port}");
+        builder.WebHost.ConfigureKestrel(o => o.Limits.MaxRequestBodySize = 4096);
+        var app = builder.Build();
+        if (contextHost)
+        {
+            app.MapPost("/publication-retry", (Func<HttpContext, Task<IResult>>)(c => Handle(c, false)));
+            app.MapPost("/readiness", (Func<HttpContext, Task<IResult>>)(c => Handle(c, true)));
+            app.MapPost("/activation-readiness", (Func<HttpContext, Task<IResult>>)(c => Handle(c, true)));
+            app.MapPost("/prepare-activation", (Func<HttpContext, Task<IResult>>)(c => Handle(c, true)));
+            app.MapPost("/publication-context", (Func<HttpContext, Task<IResult>>)(c => Handle(c, false)));
+        }
+        else
+        {
+            app.MapPost("/capability", (Func<HttpContext, Task<IResult>>)(c => Handle(c, true)));
+            app.MapPost("/prepare-activation", (Func<HttpContext, Task<IResult>>)(c => Handle(c, true)));
+            app.MapPost("/publish", (Func<HttpContext, Task<IResult>>)(c => Handle(c, false)));
+        }
+        app.MapPost("/publication-inspect", (Func<HttpContext, Task<IResult>>)(c => Handle(c, false)));
+        app.MapPost("/publication-reconcile", (Func<HttpContext, Task<IResult>>)(c => Handle(c, false)));
+        return app;
+
+        async Task<IResult> Handle(HttpContext context, bool readiness)
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            using var deadline = new CancellationTokenSource(FactoryPreviewValidation.RequestBudget, dependencies.PreviewClock);
+            using var pending = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted, deadline.Token);
+            var token = pending.Token;
+            var http = dependencies.PreviewHttp ?? PreviewHttp;
+            var phase = "native-authority";
+            try
+            {
+                if (context.Request.Headers["X-MS-CLIENT-PRINCIPAL-IDP"] != "aad") throw Denied("NativeCallerRequired");
+                var credential = dependencies.PreviewCredential
+                    ?? new ManagedIdentityCredential(ManagedIdentityId.FromUserAssignedClientId(settings.ManagedIdentityClientId));
+                var recovery = context.Request.Path is var path
+                    && (path == "/publication-inspect" || path == "/publication-reconcile" || path == "/publication-retry");
+                var outcomeAuthority = new FactoryPublicationOutcomeAuthority(settings, contextHost, credential, http, dependencies.PreviewClock);
+                var authority = new FactoryPublisherAuthority(settings, contextHost, credential, http, dependencies.PreviewClock);
+                var current = recovery ? await outcomeAuthority.ReadAsync(token) : await authority.CheckAsync(token);
+                var capability = current.Capability;
+                var identity = current.Manifest.Identity;
+                var caller = capability.Plan.Deployment.Bindings[contextHost ? "auth" : "council"];
+                if (!NativeCaller(context, contextHost && (readiness || recovery) ? identity.AzureActorId : caller.PrincipalId!,
+                    identity.TenantId, contextHost && (readiness || recovery) ? null : caller.ClientId))
+                    throw Denied("ExactNativePublicationCallerRequired");
+                if (recovery)
+                {
+                    phase = "original-publication-outcome";
+                    var request = await context.Request.ReadFromJsonAsync<FactoryPublicationRecoveryRequest>(FactorySourceValidation.RecordJson, token)
+                        ?? throw new JsonException();
+                    FactoryPublicationRecovery.Validate(request, context.Request.Path != "/publication-inspect");
+                    var original = await outcomeAuthority.OpenAsync(current, request, token);
+                    if (contextHost)
+                    {
+                        if (context.Request.Path == "/publication-retry")
+                        {
+                            var retry = await outcomeAuthority.RetryRequestAsync(current, original, request, token);
+                            var fresh = await authority.CheckAsync(token);
+                            var retried = await PostAsync<FactoryPublicationResult>(capability.PublisherEndpoint, "/publish", retry, fresh, token,
+                                knownOutcome: true);
+                            if (retried.NativeIdentity is null || retried.Journal.Id != request.Operation
+                                || FactoryModelsValidation.Hash(retried.Journal.Intent) != FactoryModelsValidation.Hash(original.Document.Intent))
+                                throw new JsonException();
+                            _ = FactoryPublication.ReadDocument(JsonSerializer.Serialize(retried.Journal, FactoryGitHubJson.Options), dependencies.PreviewClock.GetUtcNow());
+                            return Results.Json(FactoryPublicationRecovery.Inspect(retried.Journal, retried.NativeIdentity, false), OutputJson);
+                        }
+                        var observed = await PostAsync<FactoryPublicationInspection>(capability.PublisherEndpoint, context.Request.Path, request, current, token);
+                        if (observed.FactoryId != identity.FactoryId || observed.RepositoryId != identity.RepositoryId
+                            || observed.Operation != request.Operation || observed.Protocol != 1 || observed.Workflow != FactoryPublicationRecovery.Protocol)
+                            throw new JsonException();
+                        await outcomeAuthority.RequireSameAsync(current, token);
+                        return Results.Json(observed, OutputJson);
+                    }
+                    if (context.Request.Path == "/publication-reconcile")
+                    {
+                        await outcomeAuthority.RequireSameAsync(current, token);
+                        await original.ReconcileAsync(request, caller.PrincipalId!, token);
+                    }
+                    return Results.Json(FactoryPublicationRecovery.Inspect(original.Document, original.NativeIdentity!, outcomeAuthority.AdmissionClosed), OutputJson);
+                }
+                if (readiness)
+                {
+                    phase = "readiness-request";
+                    var request = await context.Request.ReadFromJsonAsync<FactoryLiveRequest>(FactorySourceValidation.RecordJson, token) ?? throw new JsonException();
+                    if (context.Request.Path == "/prepare-activation")
+                    {
+                        phase = "protected-final-promotion-intent";
+                        var intent = FactoryPromotion.RequireIntended(current.Records.ToDictionary(p => p.Key, p => p.Value.Value),
+                            current.Records.Keys.ToDictionary(k => k, current.Identity), capability.Plan, dependencies.PreviewClock.GetUtcNow());
+                        if (request.OperationId != intent.Review.OperationId || request.RolloutFingerprint != intent.Review.ReviewFingerprint
+                            || current.Records.ContainsKey(FactoryPromotion.RootKey)
+                            || current.Records.ContainsKey(FactoryPromotion.SeedsKey(request.OperationId)))
+                            throw Denied("OriginalUncompletedExplicitPromotionIntentRequired");
+                        if (!contextHost)
+                        {
+                            var seed = await FactoryActivityStore.InitializeAsync(current.Manifest, intent, true,
+                                current.Credential, http, dependencies.PreviewClock, token);
+                            await authority.RequireSameAsync(current, token);
+                            return Results.Json(seed, OutputJson);
+                        }
+                        var publicationSeed = await PostAsync<FactoryNativeIndexReceipt>(capability.PublisherEndpoint, "/prepare-activation", request, current, token);
+                        await authority.RequireSameAsync(current, token);
+                        var decisionSeed = await FactoryActivityStore.InitializeAsync(current.Manifest, intent, false,
+                            current.Credential, http, dependencies.PreviewClock, token);
+                        await authority.RequireSameAsync(current, token);
+                        var problemSeed = await FactoryActivityStore.InitializeProblemsAsync(current.Manifest, current.Credential, http, token);
+                        var seeds = new FactoryPromotionSeeds(1, identity.FactoryId, request.OperationId, request.RolloutFingerprint, decisionSeed, publicationSeed, problemSeed);
+                        FactoryPromotion.RequireSeeds(seeds, intent.Review, current.Manifest, dependencies.PreviewClock.GetUtcNow());
+                        await authority.RequireSameAsync(current, token);
+                        return Results.Json(seeds, OutputJson);
+                    }
+                    if (request.OperationId != capability.Plan.Selection.OperationId || request.RolloutFingerprint != capability.Plan.Fingerprint)
+                        throw Denied("ExactReviewedPublicationRolloutRequired");
+                    FactoryPublisherObservation observed;
+                    if (contextHost)
+                    {
+                        phase = "current-council-readiness";
+                        var live = FactoryLive.ReadConfirmed(current.Records.Where(p => p.Key.StartsWith(FactoryLive.Prefix, StringComparison.Ordinal))
+                            .ToDictionary(p => p.Key, p => p.Value.Value), dependencies.PreviewClock.GetUtcNow());
+                        var implementation = await PostAsync<FactoryDecisionCapability>(live.Endpoint, "/activation-capability",
+                            new FactoryLiveRequest(request.OperationId, live.Plan.Fingerprint), current, token, live.Plan.Selection.AudienceClientId);
+                        if (implementation.Protocol != 1 || implementation.FactoryId != identity.FactoryId
+                            || implementation.RolloutFingerprint != live.Plan.Fingerprint || implementation.Workflow != FactoryPromotion.Workflow
+                            || implementation.Policy != FactoryPreviewExecution.Policy)
+                            throw Denied("FinalReviewedPinnedLiveWorkerImplementationRequired");
+                        _ = await new FactoryLiveAuthority(settings, dependencies, credential, http).CheckAsync(
+                            new(request.OperationId, live.Plan.Fingerprint), true, token);
+                        phase = "authenticated-publisher-readiness";
+                        observed = await PostAsync<FactoryPublisherObservation>(capability.PublisherEndpoint, "/capability", request, current, token);
+                        if (observed.FactoryId != identity.FactoryId || observed.CapabilityFingerprint != capability.Plan.Fingerprint
+                            || observed.AuthorityRevision != current.Revision || observed.GitHub.State != GitHubAuthorityState.Verified
+                            || observed.GitHub.AuthPrincipalId != capability.Plan.GitHubAuthority.AuthPrincipalId
+                            || observed.GitHub.KeyVersionUri != capability.Plan.GitHubAuthority.DestinationSecretUri)
+                            throw Denied("OriginalAuthenticatedPublisherReadinessRequired");
+                    }
+                    else
+                    {
+                        phase = "github-access";
+                        var access = await new FactoryGitHubVerifier(http, current.Credential, dependencies.PreviewClock)
+                            .AcquireProposalAccessAsync(capability.Plan.GitHubAuthority, token);
+                        phase = "proposal-mutation-review";
+                        var review = await access.ReviewAsync(capability.Plan.Automation, token);
+                        observed = new(1, identity.FactoryId, capability.Plan.Fingerprint, current.Revision, access.Proof, review)
+                            { RecoveryProtocol = FactoryPublicationRecovery.Protocol };
+                    }
+                    await authority.RequireSameAsync(current, token);
+                    if (contextHost && context.Request.Path == "/activation-readiness")
+                    {
+                        var live = FactoryLive.ReadConfirmed(current.Records.Where(p => p.Key.StartsWith(FactoryLive.Prefix, StringComparison.Ordinal))
+                            .ToDictionary(p => p.Key, p => p.Value.Value), dependencies.PreviewClock.GetUtcNow());
+                        var first = false;
+                        if (current.Records.ContainsKey(FactoryPromotion.RootKey))
+                        {
+                            var promotion = JsonSerializer.Deserialize<FactoryPromotionApproval>(current.Records[FactoryPromotion.RootKey].Value,
+                                FactorySourceValidation.RecordJson) ?? throw new JsonException();
+                            FactoryPromotion.RequireReview(promotion, current.Records.ToDictionary(p => p.Key, p => p.Value.Value),
+                                current.Records.Keys.ToDictionary(k => k, current.Identity), capability.Plan, dependencies.PreviewClock.GetUtcNow());
+                            if (promotion.Phase == FactoryPromotionPhase.Rejected) throw Denied("OriginalFinalPromotionRejectedNoReplay");
+                            if (current.Records.ContainsKey(FactoryPromotion.CompletionKey(promotion.OperationId)))
+                                _ = FactoryPromotion.RequireApproved(current.Records.ToDictionary(p => p.Key, p => p.Value.Value),
+                                    current.Records.Keys.ToDictionary(k => k, current.Identity), capability.Plan, dependencies.PreviewClock.GetUtcNow());
+                            var seeds = JsonSerializer.Deserialize<FactoryPromotionSeeds>(current.Records[promotion.NativeIndices!.Key].Value,
+                                FactorySourceValidation.RecordJson) ?? throw new JsonException();
+                            await new FactoryActivityStore(current.Manifest, promotion, false, seeds.Decisions.Identity,
+                                current.Credential, http, dependencies.PreviewClock).RequireSettledAsync(null, token);
+                            var publications = new FactoryActivityStore(current.Manifest, promotion, true, seeds.Publications.Identity,
+                                current.Credential, http, dependencies.PreviewClock);
+                            await publications.RequireSettledAsync(null, token);
+                            var index = await publications.ReadAsync(token);
+                            var gateway = new AzureCosmosDocumentGateway(current.Credential, http);
+                            foreach (var entry in index.Document.Entries)
+                            {
+                                var journal = await gateway.ReadCheckpointAsync("https://" + FactoryPreviewValidation.Prefix(identity.FactoryId)
+                                    + "-cosmos.documents.azure.com", identity.ProductKey, FactoryPublication.Container, identity.ProductKey, entry.Id, token)
+                                    ?? throw Denied("IndexedPublicationUnconfirmed");
+                                var original = FactoryActivityStore.Identity(current.Manifest, true, entry.Id, journal);
+                                if (original.NativeResourceId != entry.NativeResourceId) throw Denied("IndexedPublicationIncarnationUnconfirmed");
+                                var state = FactoryPublication.ReadDocument(journal.Json, dependencies.PreviewClock.GetUtcNow()).State;
+                                if (state is FactoryPublicationState.Dispatched or FactoryPublicationState.Unknown)
+                                    throw Denied("OriginalIssuedPublicationUnconfirmedCurrentReadinessBlocked");
+                                first |= state == FactoryPublicationState.Confirmed;
+                            }
+                        }
+                        return Results.Json(new FactoryPromotionObservation(1, identity.FactoryId, capability.Plan.Activation.AuthorityRevision,
+                            live.Plan.Fingerprint, capability.Plan.Fingerprint, true, first), OutputJson);
+                    }
+                    return Results.Json(observed, OutputJson);
+                }
+                var publication = await context.Request.ReadFromJsonAsync<FactoryPublicationRequest>(FactorySourceValidation.RecordJson, token) ?? throw new JsonException();
+                phase = "final-promotion";
+                FactoryPromotion.Validate(publication);
+                var promotionApproval = FactoryPromotion.RequireApproved(current.Records.ToDictionary(p => p.Key, p => p.Value.Value),
+                    current.Records.Keys.ToDictionary(k => k, current.Identity), capability.Plan, dependencies.PreviewClock.GetUtcNow());
+                if (capability.Coordinator.NativeProviderProof is null)
+                    throw Denied("OriginalAuthenticatedPublisherProviderProofRequired");
+                if (contextHost)
+                {
+                    phase = "native-decision-qualification";
+                    var admission = await RuntimeWorkflow.QualifyPublicationAsync(settings, dependencies, current, publication, credential, http, token);
+                    await authority.RequireSameAsync(current, token);
+                    return Results.Json(admission, OutputJson);
+                }
+                phase = "authenticated-decision-admission";
+                var approved = await PostAsync<FactoryPublicationAdmission>(capability.ContextEndpoint, "/publication-context", publication, current, token);
+                ValidateAdmission(approved);
+                phase = "original-native-publication";
+                var result = await new FactoryGitHubProposalPublisher(current.Credential, http, dependencies.PreviewClock).CreateAsync(
+                    approved.Intent, capability.Plan.GitHubAuthority, token, async cancellation =>
+                    {
+                        await authority.RequireSameAsync(current, cancellation);
+                        var latest = await PostAsync<FactoryPublicationAdmission>(capability.ContextEndpoint, "/publication-context", publication, current, cancellation);
+                        ValidateAdmission(latest);
+                        if (FactoryModelsValidation.Hash(latest) != FactoryModelsValidation.Hash(approved))
+                            throw Denied("OriginalQualifiedPublicationDecisionChanged");
+                    }, new FactoryActivityStore(current.Manifest, promotionApproval, true,
+                        (JsonSerializer.Deserialize<FactoryPromotionSeeds>(current.Records[promotionApproval.NativeIndices!.Key].Value,
+                            FactorySourceValidation.RecordJson) ?? throw new JsonException()).Publications.Identity,
+                        current.Credential, http, dependencies.PreviewClock), publication.Retry);
+                return Results.Json(result, OutputJson, statusCode: result.State == FactoryPublicationState.Confirmed ? 200 : 409);
+
+                void ValidateAdmission(FactoryPublicationAdmission admission)
+                {
+                    FactoryPublication.Validate(admission.Intent);
+                    if (admission.AuthorityRevision != current.Revision || admission.Intent.FactoryId != identity.FactoryId
+                        || admission.Intent.RepositoryId != identity.RepositoryId || admission.Intent.Product != identity.ProductKey
+                        || admission.Intent.InvocationId != publication.InvocationId || admission.Promotion != current.Identity(FactoryPromotion.RootKey)
+                        || admission.Publisher != current.Identity(FactoryPublisher.RootKey)
+                        || FactoryModelsValidation.Hash(admission.Intent.AutomationReview) != FactoryModelsValidation.Hash(capability.Plan.Automation)
+                        || !new[] { admission.Promotion, admission.Publisher, admission.Evaluation, admission.Run }
+                            .All(r => admission.Intent.References.Contains(r)))
+                        throw Denied("AuthenticatedCurrentNativeDecisionAdmissionRequired");
+                }
+            }
+            catch (PreviewCapabilityException e) { return Failure(e.State, e.Message, 403); }
+            catch (OperationCanceledException) { return Failure(FactoryCharterState.Unknown, "OriginalPublicationOrReadinessUnconfirmedNoAutomaticReplay", 409); }
+            catch (Exception e) when (e is JsonException or InvalidOperationException or ArgumentException or KeyNotFoundException
+                or FormatException or HttpRequestException or IOException or Azure.RequestFailedException or AuthenticationFailedException
+                or BadHttpRequestException or CosmosCheckpointException or ModelCapabilityException or SourceAcquisitionException
+                or IntentException or CharterAdoptionEvidenceException or SupplementalSourceException)
+            { return Failure(FactoryCharterState.Unknown, "PublicationCapabilityOrOriginalDecisionUnconfirmedNoFallback:" + phase, 409); }
+
+            async Task<T> PostAsync<T>(string endpoint, string route, object request, PublisherAuthoritySnapshot snapshot, CancellationToken cancellation,
+                string? audience = null, bool knownOutcome = false)
+            {
+                using var message = new HttpRequestMessage(HttpMethod.Post, FactoryGovernance.NormalizeEndpoint(endpoint) + route)
+                { Content = JsonContent.Create(request, options: FactorySourceValidation.RecordJson) };
+                message.Headers.Authorization = new AuthenticationHeaderValue("Bearer", (await snapshot.Credential.GetTokenAsync(
+                    new TokenRequestContext(["api://" + (audience ?? snapshot.Capability.Plan.Selection.AudienceClientId) + "/.default"]), cancellation)).Token);
+                using var response = await http.SendAsync(message, HttpCompletionOption.ResponseHeadersRead, cancellation);
+                if (response.StatusCode != HttpStatusCode.OK && !(knownOutcome && response.StatusCode == HttpStatusCode.Conflict))
+                    throw Denied("AuthenticatedNativePublicationDependencyUnavailable");
+                using var body = await EvidencePayload.ReadAsync(response, cancellation, FactoryPublicationWire.MaximumResponseBytes);
+                return body.RootElement.Deserialize<T>(FactorySourceValidation.RecordJson) ?? throw new JsonException();
+            }
+        }
+        static PreviewCapabilityException Denied(string reason) => new(FactoryCharterState.Blocked, reason);
+        static IResult Failure(FactoryCharterState state, string reason, int status) =>
+            Results.Json(new { State = state, Reason = reason, IsActivated = false, PublicationPermitted = false }, OutputJson, statusCode: status);
+    }
+    private static readonly JsonSerializerOptions OutputJson = new(FactoryGitHubJson.Options) { IgnoreReadOnlyProperties = false };
+}

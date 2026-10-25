@@ -109,7 +109,8 @@ public static class RuntimeSettingsComposer
                 : "low")
         {
             IntegrationSettings = RuntimeIntegrationConfiguration.Keys
-                .Where(key => Read(key).Length > 0)
+                .Where(key => Read(key).Length > 0
+                    || key == RuntimeIntegrationSettings.FactoryProfilePin && env.ContainsKey(key))
                 .ToDictionary(key => key, key => (string?)Read(key), StringComparer.Ordinal),
         };
     }

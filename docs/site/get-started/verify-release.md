@@ -9,9 +9,18 @@ Each published release carries the global-tool package, self-contained CLI archi
 metadata, SBOMs, native package metadata, and provenance.
 
 Every tool package and archive contains a version-matched runtime host under `runtime/`
-and five self-contained ARM templates under `assets/infra/`. Keep the installation tree intact.
+and self-contained ARM templates under `assets/infra/`. Keep the installation tree intact.
 NuGet signatures cover the whole package; archive hashes and provenance cover both executables
 and the templates. Individual ARM JSON files do not have executable code signatures.
+
+The supervised-preview bundle includes `onboard-preview-workloads.json` and
+the five protected `serve-preview`, `serve-source-context`,
+`serve-preview-models`, `serve-preview-telemetry` and
+`serve-preview-supplemental` front doors. The local installation smoke checks
+their required-settings failures without credentials, provider access or a
+repository checkout. This verifies packaging, **not provisioning or council
+readiness**; see the [deployment contract](../concept/feature-council.md#reviewed-deployment-contract)
+for the still-required operator preparation and metadata permissions.
 
 ## Assets to expect
 

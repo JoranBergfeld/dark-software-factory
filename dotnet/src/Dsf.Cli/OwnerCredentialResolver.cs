@@ -3,7 +3,9 @@ namespace Dsf.Cli;
 internal sealed record OwnerGitHubIdentity(
     string AppId,
     string InstallationId,
-    string? InstallationSelection = null);
+    string? InstallationSelection = null,
+    string? KeyVaultUri = null,
+    string? AppConfigEndpoint = null);
 
 internal interface IOwnerCredentialReader
 {

@@ -27,7 +27,8 @@ internal static class TestDependencies
         ITracer? tracer = null,
         ILearningComposer? learningComposer = null,
         Func<RuntimeSettings, ISweepControlStore>? sweepControlStoreFactory = null,
-        Func<RuntimeSettings, ISweepLease>? sweepLeaseFactory = null) =>
+        Func<RuntimeSettings, ISweepLease>? sweepLeaseFactory = null,
+        IConfigurationSettingsGateway? configurationSettingsGateway = null) =>
         new(
             ownerRuntimeIndexReader ?? new RecordingOwnerRuntimeIndexReader(),
             sourceAgentRosterReader ?? new RosterReader([]),
@@ -42,12 +43,55 @@ internal static class TestDependencies
                 sourceIntegration ?? new ScriptedSourceIntegration())),
             learningComposer ?? new ScriptedLearningComposer(new RecordingOutcomeSource(), new RecordingLearningStore()),
             sweepControlStoreFactory,
-            sweepLeaseFactory ?? (_ => new ScriptedSweepLease()));
+            sweepLeaseFactory ?? (_ => new ScriptedSweepLease()))
+        { ConfigurationSettingsGateway = configurationSettingsGateway ?? PersistedRuntimeConfiguration.Greenfield() };
 
     private static IReadOnlyDictionary<string, ISourceIntegration> SourceIntegrationsFor(
         ISourceIntegration sourceIntegration)
     {
         return SourceAgentKinds.Known.ToDictionary(kind => kind, _ => sourceIntegration, StringComparer.Ordinal);
+    }
+
+    internal sealed class PersistedRuntimeConfiguration : IConfigurationSettingsGateway
+    {
+        public Dictionary<string, string> Values { get; } = [];
+        public List<string> Reads { get; } = [];
+        public List<string> Writes { get; } = [];
+        public Exception? ReadFailure { get; set; }
+
+        public static PersistedRuntimeConfiguration Greenfield()
+        {
+            var result = new PersistedRuntimeConfiguration();
+            foreach (var (key, value) in new Dictionary<string, string>
+            {
+                ["product.github_repo"] = "\"acme/acme\"",
+                ["product.label_taxonomy"] = "{\"routing\":[\"feature-council\"]}",
+                ["product.foundryiq_scope"] = "\"\"",
+                ["product.sentry_projects"] = "[]",
+                ["product.grafana_dashboards"] = "[]",
+                ["product.azure_monitor_scope"] = "\"\"",
+                ["threshold.acme"] = "0.75",
+            }) result.Values.Add(key, value);
+            return result;
+        }
+
+        public async IAsyncEnumerable<(string Key, string Value)> ListAsync(
+            string endpoint, string label, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Reads.Add(endpoint);
+            if (ReadFailure is not null) throw ReadFailure;
+            if (label != ProductConfigurationKeys.NoLabel) throw new InvalidOperationException("Only unlabelled authority is supported.");
+            foreach (var item in Values) yield return (item.Key, item.Value);
+            await Task.CompletedTask;
+        }
+
+        public Task SetAsync(string endpoint, string key, string value, string? label, CancellationToken cancellationToken)
+        {
+            Writes.Add(key);
+            Values[key] = value;
+            return Task.CompletedTask;
+        }
     }
 }
 
@@ -208,6 +252,44 @@ internal sealed class RecordingRunStore : IRunStore
 
     /// <summary>Seeds a persisted document directly, without going through <see cref="SaveAsync"/>.</summary>
     public void Seed(ConveyorRun run) => documents[run.Id] = run;
+}
+
+internal sealed class SerializedAdmissionRunStore(string payload) : IRunStore
+{
+    public string Payload { get; private set; } = payload;
+    public int Writes { get; private set; }
+
+    public Task SaveAsync(ConveyorRun run, string station, CancellationToken cancellationToken)
+    {
+        Writes++;
+        Payload = System.Text.Json.JsonSerializer.Serialize(run);
+        return Task.CompletedTask;
+    }
+
+    public Task<ConveyorRun?> LoadAsync(string runId, CancellationToken cancellationToken)
+    {
+        var run = System.Text.Json.JsonSerializer.Deserialize<ConveyorRun>(Payload, new System.Text.Json.JsonSerializerOptions
+        { PreferredObjectCreationHandling = System.Text.Json.Serialization.JsonObjectCreationHandling.Populate });
+        return Task.FromResult(run?.Id == runId ? run : null);
+    }
+}
+
+internal sealed class ObservedAdmissionControls : ISweepControlStore
+{
+    private int reads;
+    public TaskCompletionSource RepeatedReads { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public Task<SweepControlState> ReadAsync(CancellationToken cancellationToken)
+    {
+        if (Interlocked.Increment(ref reads) >= 3) RepeatedReads.TrySetResult();
+        return Task.FromResult(SweepControlState.Unset);
+    }
+
+    public Task SetPausedAsync(bool paused, CancellationToken cancellationToken) =>
+        throw new InvalidOperationException("Admission test never writes sweep controls.");
+
+    public Task SetIntervalSecondsAsync(int seconds, CancellationToken cancellationToken) =>
+        throw new InvalidOperationException("Admission test never writes sweep controls.");
 }
 
 /// <summary>A run store whose backing store cannot be reached.</summary>
