@@ -34,8 +34,9 @@ public interface IEvidenceClusterer
 /// items whose summaries overlap enough are judged to describe the same
 /// underlying problem and land in the same cluster even when they come from
 /// different kinds; anything below the threshold gets its own singleton
-/// cluster. Deterministic and reproducible from the evidence alone -- no model
-/// call -- so S3's clustering step stays auditable independent of the model
+/// cluster. Evidence linking existing clusters merges them, so membership does
+/// not depend on gather order. Deterministic and reproducible from the evidence
+/// alone -- no model call -- so S3's clustering step stays auditable independent of the model
 /// client it separately consults for prose synthesis.
 /// </summary>
 public sealed class LexicalSimilarityEvidenceClusterer(double similarityThreshold = 0.34) : IEvidenceClusterer
@@ -53,10 +54,17 @@ public sealed class LexicalSimilarityEvidenceClusterer(double similarityThreshol
             var tokens = Tokenize(item.Summary);
             tokensByItem[item] = tokens;
 
-            var match = clusters.FirstOrDefault(
-                cluster => cluster.Any(existing => Similarity(tokens, tokensByItem[existing]) >= similarityThreshold));
-            if (match is not null)
+            var matches = clusters.Where(
+                cluster => cluster.Any(existing => Similarity(tokens, tokensByItem[existing]) >= similarityThreshold))
+                .ToArray();
+            if (matches.Length > 0)
             {
+                var match = matches[0];
+                foreach (var other in matches.Skip(1))
+                {
+                    match.AddRange(other);
+                    clusters.Remove(other);
+                }
                 match.Add(item);
             }
             else
