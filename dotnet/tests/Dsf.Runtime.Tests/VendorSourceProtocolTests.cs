@@ -348,11 +348,22 @@ public sealed class VendorSourceProtocolTests
         using var stderr = new StringWriter();
 
         var exit = await Dsf.AgentHost.AgentHostApplication.InvokeAsync(
-            explicitVerb ? ["serve-agent", .. options] : options, env, stdout, stderr, dependencies, CancellationToken.None);
+            explicitVerb ? ["serve-agent", .. options] : options,
+            new SourceRuntimeLauncher(env, stdout, stderr, dependencies), stderr, CancellationToken.None);
 
         Assert.Equal(0, exit);
         Assert.Equal(string.Empty, stderr.ToString());
         Assert.Equal("https://example.com/research", Assert.Single(runner.Evidence).Reference);
+    }
+
+    private sealed class SourceRuntimeLauncher(
+        IReadOnlyDictionary<string, string?> env,
+        TextWriter stdout,
+        TextWriter stderr,
+        RuntimeDependencies dependencies) : IRuntimeHostLauncher
+    {
+        public Task<int> LaunchAsync(IReadOnlyList<string> arguments, CancellationToken cancellationToken) =>
+            RuntimeCliApplication.InvokeAsync(arguments.ToArray(), env, stdout, stderr, dependencies, cancellationToken);
     }
 
     private sealed class SourceHostRunner : IWebHostRunner

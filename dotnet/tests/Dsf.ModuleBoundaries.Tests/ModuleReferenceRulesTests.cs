@@ -23,7 +23,7 @@ public sealed class ModuleReferenceRulesTests
         ["Dsf.Cli"] = ["Dsf.Core"],
         ["Dsf.Runtime"] = ["Dsf.Core", "Dsf.FeatureCouncil"],
         ["Dsf.ControlCenter"] = ["Dsf.Core"],
-        ["Dsf.AgentHost"] = ["Dsf.Core", "Dsf.FeatureCouncil", "Dsf.Runtime"],
+        ["Dsf.AgentHost"] = ["Dsf.Core", "Dsf.FeatureCouncil"],
         ["Dsf.Testing"] = ["Dsf.Core"],
     };
 
@@ -55,11 +55,13 @@ public sealed class ModuleReferenceRulesTests
             .ToList()!;
     }
 
-    [Fact]
-    public void Cli_runtime_dependency_is_build_only()
+    [Theory]
+    [InlineData("Dsf.Cli")]
+    [InlineData("Dsf.AgentHost")]
+    public void Front_door_runtime_dependency_is_build_only(string projectName)
     {
         var project = XDocument.Load(Path.Combine(
-            FindSolutionRoot().FullName, "src", "Dsf.Cli", "Dsf.Cli.csproj"));
+            FindSolutionRoot().FullName, "src", projectName, $"{projectName}.csproj"));
         var runtime = Assert.Single(project.Descendants("ProjectReference"),
             reference => reference.Attribute("Include")!.Value.Contains("Dsf.Runtime", StringComparison.Ordinal));
         Assert.Equal("false", runtime.Attribute("ReferenceOutputAssembly")?.Value);

@@ -1,20 +1,28 @@
-using Dsf.Runtime;
+using Dsf.Core.Runtime;
 
 namespace Dsf.AgentHost;
 
 public static class AgentHostApplication
 {
     public static Task<int> InvokeAsync(string[] args, CancellationToken cancellationToken) =>
-        RuntimeCliApplication.InvokeAsync(ServeArguments(args), cancellationToken);
+        InvokeAsync(args, new ProcessRuntimeHostLauncher(), Console.Error, cancellationToken);
 
-    public static Task<int> InvokeAsync(
+    public static async Task<int> InvokeAsync(
         string[] args,
-        IReadOnlyDictionary<string, string?> env,
-        TextWriter stdout,
+        IRuntimeHostLauncher runtimeHostLauncher,
         TextWriter stderr,
-        RuntimeDependencies dependencies,
-        CancellationToken cancellationToken) =>
-        RuntimeCliApplication.InvokeAsync(ServeArguments(args), env, stdout, stderr, dependencies, cancellationToken);
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await runtimeHostLauncher.LaunchAsync(ServeArguments(args), cancellationToken);
+        }
+        catch (RuntimeVerbException exception)
+        {
+            await stderr.WriteLineAsync($"[dsf] error: {exception.Message}");
+            return 1;
+        }
+    }
 
     private static string[] ServeArguments(string[] args) =>
         args is ["serve-agent", ..] ? args : ["serve-agent", .. args];

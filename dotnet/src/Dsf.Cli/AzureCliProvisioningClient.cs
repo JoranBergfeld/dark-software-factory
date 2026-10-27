@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text.Json;
+using Dsf.Core.Runtime;
 
 namespace Dsf.Cli;
 
@@ -15,46 +16,6 @@ internal interface IAzureCliRunner
     Task<AzureCliInvocationResult> RunAsync(
         IReadOnlyList<string> arguments,
         CancellationToken cancellationToken);
-}
-
-/// <summary>
-/// Thin seam around <see cref="Process"/> so tests can verify cancellation-driven
-/// process-tree termination without starting a real OS process.
-/// </summary>
-internal interface IManagedProcess : IDisposable
-{
-    void Start();
-
-    Task<string> ReadStandardOutputAsync(CancellationToken cancellationToken);
-
-    Task<string> ReadStandardErrorAsync(CancellationToken cancellationToken);
-
-    Task WaitForExitAsync(CancellationToken cancellationToken);
-
-    int ExitCode { get; }
-
-    /// <summary>Kills the process (and, when <paramref name="entireProcessTree"/>, every child it spawned).</summary>
-    void Kill(bool entireProcessTree);
-}
-
-/// <summary>Wraps a real <see cref="Process"/>.</summary>
-internal sealed class RealManagedProcess(Process process) : IManagedProcess
-{
-    public void Start() => process.Start();
-
-    public Task<string> ReadStandardOutputAsync(CancellationToken cancellationToken) =>
-        process.StandardOutput.ReadToEndAsync(cancellationToken);
-
-    public Task<string> ReadStandardErrorAsync(CancellationToken cancellationToken) =>
-        process.StandardError.ReadToEndAsync(cancellationToken);
-
-    public Task WaitForExitAsync(CancellationToken cancellationToken) => process.WaitForExitAsync(cancellationToken);
-
-    public int ExitCode => process.ExitCode;
-
-    public void Kill(bool entireProcessTree) => process.Kill(entireProcessTree);
-
-    public void Dispose() => process.Dispose();
 }
 
 /// <summary>Shells out to the real <c>az</c> CLI on PATH.</summary>

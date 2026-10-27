@@ -28,6 +28,12 @@ The global tool and every release archive include a matching runtime host under 
 `poll-outcomes` to that host. No separate build/install or environment override is needed.
 Source invocation also builds and resolves the matching host automatically.
 
+The standalone `Dsf.AgentHost` executable uses the same process boundary: it
+forwards `--kind <kind>` (or `serve-agent --kind <kind>`) to its bundled runtime,
+without importing the Runtime module. Publishing `Dsf.AgentHost.csproj` includes
+the matching `runtime/` directory; deploy that complete output, not the executable
+alone. Its agent serves `/healthz`, `/.well-known/agent-card.json`, and `/gather`.
+
 `DSF_RUNTIME_HOST=/absolute/path/to/dsf-runtime` remains an advanced override for a
 custom executable. Unset it to use the bundled version. Missing/corrupt bundle errors
 require reinstalling the tool or re-extracting the complete archive, not cloning this repository.
