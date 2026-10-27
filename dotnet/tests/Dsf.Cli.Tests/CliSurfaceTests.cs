@@ -313,6 +313,54 @@ public sealed class CliSurfaceTests
         Assert.Contains("AZURE_APPCONFIG_ENDPOINT", result.Stderr);
     }
 
+    [Theory]
+    [InlineData("pause")]
+    [InlineData("resume")]
+    [InlineData("interval", "90")]
+    [InlineData("status")]
+    public async Task Runtime_sweep_controls_reach_the_runtime_settings_gate(params string[] controlArguments)
+    {
+        var env = new Dictionary<string, string?> { ["DSF_PRODUCT"] = "acme" };
+
+        var result = await DsfProcess.RunAsync(env, ["sweep", .. controlArguments]);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Equal(string.Empty, result.Stdout);
+        Assert.Contains("AZURE_APPCONFIG_ENDPOINT", result.Stderr);
+        Assert.DoesNotContain("Unrecognized", result.Stderr);
+    }
+
+    [Fact]
+    public async Task Runtime_sweep_interval_forwards_seconds_and_product_without_reinterpreting_them()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var executable = Path.Combine(Directory.GetCurrentDirectory(), $"sweep host {Guid.NewGuid():N}.sh");
+        try
+        {
+            await File.WriteAllTextAsync(executable, "#!/bin/sh\nprintf '<%s>\\n' \"$@\"\nexit 37\n");
+            File.SetUnixFileMode(executable,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            var env = new Dictionary<string, string?>
+            {
+                [DsfProcess.RuntimeHostEnvironmentVariable] = executable,
+            };
+
+            var result = await DsfProcess.RunAsync(env, "sweep", "interval", "90", "--product", "acme");
+
+            Assert.Equal(37, result.ExitCode);
+            Assert.Equal("<sweep>\n<interval>\n<90>\n<--product>\n<acme>\n", result.Stdout);
+            Assert.Equal(string.Empty, result.Stderr);
+        }
+        finally
+        {
+            File.Delete(executable);
+        }
+    }
+
     [Fact]
     public async Task Runtime_serve_orchestrator_host_and_port_are_forwarded_to_the_runtime_host()
     {

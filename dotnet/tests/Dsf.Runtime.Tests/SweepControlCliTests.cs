@@ -119,6 +119,35 @@ public sealed class SweepControlCliTests
         Assert.Contains($"{PeriodicSweepService.DefaultIntervalSeconds}s (default)", stdout);
     }
 
+    [Theory]
+    [InlineData(false, "90s (default)")]
+    [InlineData(true, "42s")]
+    public async Task Status_uses_the_same_environment_fallback_as_the_loop(
+        bool hasStoredInterval, string expectedInterval)
+    {
+        var gateway = new SweepConfigurationGateway();
+        if (hasStoredInterval)
+        {
+            gateway.Values[ProductConfigurationKeys.SweepIntervalSeconds] = "42";
+        }
+
+        var dependencies = TestDependencies.Build(
+            sweepControlStoreFactory: settings => new AzureAppConfigurationSweepControlStore(gateway, settings));
+        var env = new Dictionary<string, string?>(FullEnvironment)
+        {
+            [PeriodicSweepService.IntervalEnvVar] = "90",
+        };
+        var stdout = new StringWriter();
+        var stderr = new StringWriter();
+
+        var exitCode = await RuntimeCliApplication.InvokeAsync(
+            ["sweep", "status"], env, stdout, stderr, dependencies, CancellationToken.None);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal("", stderr.ToString());
+        Assert.Contains($"interval={expectedInterval}.", stdout.ToString());
+    }
+
     [Fact]
     public async Task Pause_reports_an_unreachable_store_and_exits_non_zero()
     {

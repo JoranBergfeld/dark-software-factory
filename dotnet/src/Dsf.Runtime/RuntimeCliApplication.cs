@@ -222,7 +222,7 @@ public static class RuntimeCliApplication
                 var state = await store.ReadAsync(token);
                 var interval = state.IntervalSeconds > 0
                     ? $"{state.IntervalSeconds}s"
-                    : $"{PeriodicSweepService.DefaultIntervalSeconds}s (default)";
+                    : $"{PeriodicSweepService.ResolveInterval(null, env).TotalSeconds}s (default)";
                 return $"[dsf] sweep for product '{settings.Product}': "
                     + $"{(state.Paused ? "paused" : "running")}, interval={interval}.";
             },

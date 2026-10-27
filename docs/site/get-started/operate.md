@@ -55,6 +55,12 @@ dsf sweep interval 300 --product <product>
 dsf sweep status --product <product>
 ```
 
+The packaged CLI forwards these controls to the bundled runtime's App Configuration
+data-plane client. The running loop rereads controls at least once per second while
+idle; pausing does not cancel a sweep already in progress.
+Until an interval is stored, `status` reports the runtime's `DSF_SWEEP_INTERVAL`
+fallback (300 seconds when unset). A stored interval overrides that fallback.
+
 Source agents have internal ingress. Run a manual acceptance sweep from inside
 the same Container Apps environment (for example, an orchestrator console);
 a laptop cannot reach internal A2A endpoints just by resolving the owner index.
