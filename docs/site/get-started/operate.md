@@ -85,6 +85,176 @@ authorized network path to its Cosmos, App Configuration, Key Vault, and model
 endpoints. The deployment adds `runs` and `learning` containers partitioned by
 `/product`, without changing the partition keys of existing containers.
 
+#### Joint staging checklist (#183)
+
+This is a deferred operator procedure, **not evidence that #183 is complete**.
+Run it together only after all branch tickets are implemented and the staging
+product, vendor/model spend, and real GitHub filing have been explicitly approved.
+Offline `EndToEndAcceptanceGateTests` cover wiring with scripted boundaries;
+they do not replace any step below.
+
+1. **Prepare an isolated staging product.** Follow
+   [Enable Decide sources and judgment](provision-a-factory.md#enable-decide-sources-and-judgment)
+   using the agreed immutable branch image. Start with sources disabled.
+   Prepare, but do not yet apply, `decide.json` with `webiq` enabled and a
+   meaningful `webIqQuery`. Use creation maturity `medium` and operation maturity `low`;
+   keep all five lenses enabled and configure the three distinct supported
+   juror families/deployments. Operation maturity `low` prevents automatic
+   Coding Agent assignment; separately check staging repository workflows will
+   not start unwanted downstream work on `creation:ready`.
+   Seed `webiq-api-key` in the **product** vault through the approved secret
+   process; do not put it in commands or evidence. Verify model access, the
+   GitHub App installation/private key, tracing, and private connectivity.
+   The provisioning template confirms live filing for the deployed loop:
+   enabling sources before pausing can therefore file immediately.
+
+2. **Record the deployment and open its console.** On the authorized operator
+   workstation, replace these values with the manifest's effective names:
+
+   ```bash
+   export PRODUCT='<staging-product>'
+   export RESOURCE_GROUP="rg-dsf-$PRODUCT"
+   export NAME_PREFIX='<effective-name-prefix>'
+   export ORCHESTRATOR="$NAME_PREFIX-orchestrator"
+   export REPOSITORY='<owner/staging-repository>'
+   mkdir -p evidence/ticket-183
+   git rev-parse HEAD > evidence/ticket-183/branch-sha.txt
+   az containerapp show --resource-group "$RESOURCE_GROUP" --name "$ORCHESTRATOR" \
+     --query '{revision:properties.latestReadyRevisionName,containers:properties.template.containers[].{name:name,image:image,command:command,args:args},scale:properties.template.scale}' \
+     --output json > evidence/ticket-183/deployment.json
+   az containerapp exec --resource-group "$RESOURCE_GROUP" --name "$ORCHESTRATOR" \
+     --container orchestrator --command /bin/sh
+   ```
+
+   Confirm the ready revision uses the agreed image digest, `dotnet
+   dsf-runtime.dll serve-orchestrator --loop`, and `minReplicas: 1`. Retain the
+   image-to-commit mapping; a workstation SHA alone does not identify a deployed
+   image. The console inherits the deployed managed identity and runtime
+   settings. Inside it, use the image's existing runtime executable (the
+   packaged `dsf` tool need not be installed):
+
+   ```bash
+   cd /app
+   dotnet dsf-runtime.dll sweep status
+   dotnet dsf-runtime.dll sweep pause
+   dotnet dsf-runtime.dll sweep status
+   ```
+
+   Save initial pause/cadence values and the console transcript in the approved
+   evidence store. Confirm any in-flight sweep has finished before proceeding;
+   pause affects only the loop, not manual sweeps. Do not start another
+   `serve-orchestrator --loop` in the console.
+
+   Exit the console before applying the prepared source configuration from the
+   workstation, using the same saved manifest/config root and owner settings:
+
+   ```bash
+   dsf new --product "$PRODUCT" --creation-maturity medium \
+     --operation-maturity low --decide-config decide.json --no-charter
+   ```
+
+   After rollout, repeat the deployment capture and `az containerapp exec`
+   command above. Run `cd /app` and `dotnet dsf-runtime.dll sweep status` again;
+   require paused state before the preview. The saved immutable runtime image
+   and App Configuration pause must survive this update.
+
+3. **Preview through the real services while paused.**
+
+   ```bash
+   dotnet dsf-runtime.dll sweep --dry-run
+   ```
+
+   This is the deployed-runtime equivalent of `dsf sweep --product "$PRODUCT"
+   --dry-run`, not a remote invocation from a laptop. It still calls WebIQ and
+   models, acquires the Cosmos lease, and persists run/learning data; it does not
+   file issues or post external trace events. Retain the printed run ID and
+   audit. Require real WebIQ evidence, S3 clusters with complete references,
+   all five S5 lenses, and three valid model-diverse juror responses. Empty,
+   killed, escalated, or errored output is not filing readiness. Fix access or
+   configuration errors before continuing; never substitute fixtures or force
+   a verdict.
+
+4. **Run the manual live gate once, still paused.**
+
+   ```bash
+   DSF_CONFIRM_LIVE_FILING=true dotnet dsf-runtime.dll sweep
+   ```
+
+   This executes the same sweep path as `dsf sweep --product "$PRODUCT"`.
+   Retain its complete transcript separately from the preview, including
+   `[dsf] run <id>`, `dry_run=false`, S1–S7 checkpoints, `verdict=Proceed`, and
+   the filed issue URL. A zero exit code alone is insufficient: lease contention
+   is a successful skip, and nonfiling outcomes can also exit successfully.
+   Do not approve/resume an escalation manually to make this gate pass.
+
+5. **Observe a separate autonomous attempt.** In another workstation terminal,
+   start a timestamped console-log capture before resuming:
+
+   ```bash
+   az containerapp logs show --resource-group "$RESOURCE_GROUP" --name "$ORCHESTRATOR" \
+     --container orchestrator --type console --tail 300 --follow \
+     | tee evidence/ticket-183/autonomous-console.log
+   ```
+
+   In the existing container console:
+
+   ```bash
+   dotnet dsf-runtime.dll sweep interval 300
+   dotnet dsf-runtime.dll sweep resume
+   dotnet dsf-runtime.dll sweep status
+   ```
+
+   Wait at least the effective interval plus service-call time, without issuing
+   a manual sweep. Retain the loop's run ID, terminal summary, revision, and UTC
+   observation window. Both manual and autonomous runs record
+   `trigger:scheduled`; that audit field alone cannot distinguish them.
+   Require an actual completed autonomous conveyor attempt, not `/healthz`,
+   `status` reporting running, or repeated authorization/firewall errors.
+   Deduplication may prevent a second issue; the manual run supplies filing
+   proof. During active work, retain the product's `sweep-lease` document from
+   Cosmos Data Explorer; an overlapping attempt must skip, never file twice.
+   If testing contention, use a second `sweep --dry-run` console only while
+   ownership is observed and retain its explicit lease-skip output. Never
+   delete the lease to manufacture a successful attempt.
+
+6. **Export the persisted proof.** In authorized Cosmos Data Explorer, open the
+   product database's `runs` container, partition `/product = <staging-product>`.
+   For each captured preview, manual, and autonomous run ID, query and save the
+   complete JSON result to the approved restricted evidence store:
+
+   ```sql
+   SELECT * FROM c WHERE c.product = '<staging-product>' AND c.id = '<run-id>'
+   ```
+
+   Inspect `evidence`, `proposals[].evidenceReferences`, `clusterEvidence`,
+   `councilReview` (evidence, rounds, recommendation, models, jury verdicts,
+   outcome), `audit`, `checkpoints`, `filedIssues`, and `dryRun`. References must
+   resolve to real WebIQ records; the same reviewed evidence must reach S7.
+   A single enabled kind is sufficient: require the real cross-source-capable
+   clusterer, not fabricated evidence from a second kind. On the workstation,
+   substitute the URL printed by the manual sweep:
+
+   ```bash
+   gh issue view '<manual-run-issue-url>' --repo "$REPOSITORY" \
+     --json url,title,body,labels,author,createdAt \
+     > evidence/ticket-183/manual-issue.json
+   ```
+
+   Verify the App filed it with `creation:ready`, traceable evidence, and the
+   matching intent; retain model deployment/family configuration and available
+   provider request IDs. SDK/protocol-shaped fixtures are not genuine vendor
+   recordings. Keep credentials and tokens out of exports; retain sensitive
+   evidence under restricted access, not in git.
+
+7. **Stop further work and reconcile.** Pause again, allow active work to drain,
+   verify `status`, and stop log capture with Ctrl+C. Leave staging paused unless
+   continued running is explicitly agreed; record the final controls and saved
+   initial cadence for restoration. Preserve run documents, leases/learning
+   indexes, and issue links. Record unmet criteria rather than weakening
+   maturity, jury diversity, grounding, or network policy. #183 remains open
+   until the real manual filing and separate autonomous proof are reviewed
+   together.
+
 ### Sweep lease recovery
 
 Manual and periodic sweeps share one product-wide Cosmos document,
