@@ -38,6 +38,9 @@ public sealed record CouncilReview
         foreach (var proposal in run.Proposals)
         {
             var review = proposal.CouncilReview;
+            var evidence = proposal.ClusterEvidence.Count > 0 ? proposal.ClusterEvidence
+                : run.Evidence.Where(item => proposal.SourceKinds.Contains(item.SourceKind)
+                    && proposal.EvidenceReferences.Contains(item.Reference)).ToArray();
             if (proposal.Verdict != ProposalVerdict.Proceed || review is null
                 || review.Profile != run.Profile
                 || run.Profile == ConveyorProfile.OnboardingPreview && review.EvaluationRevision != OnboardingEvaluation.Revision(run)
@@ -57,6 +60,11 @@ public sealed record CouncilReview
                 if (!review.Evidence.SequenceEqual(proposal.ClusterEvidence))
                     throw new EvaluationException("SavedReviewEvidenceChanged");
                 OnboardingEvaluation.ValidateReview(run, review, requireComplete: true);
+            }
+
+            if (!review.Evidence.ToHashSet().SetEquals(evidence))
+            {
+                throw new InvalidOperationException($"proposal '{proposal.Id}' evidence does not match its S5 review");
             }
 
             var recommendation = LensSynthesizer.Synthesize(review.Rounds[^1].Verdicts, review.Threshold);

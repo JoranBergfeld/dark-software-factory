@@ -1108,6 +1108,33 @@ public static partial class CliApplication
                 Flag("--dry-run", parseResult.GetValue(dryRun)),
                 Value("--product", parseResult.GetValue(product))),
             cancellationToken));
+        command.Subcommands.Add(BuildSweepControlCommand("pause", "pause the in-process sweep loop (runtime)"));
+        command.Subcommands.Add(BuildSweepControlCommand("resume", "resume the in-process sweep loop (runtime)"));
+        command.Subcommands.Add(BuildSweepControlCommand(
+            "interval", "change the in-process sweep loop's cadence (runtime)",
+            new Argument<int>("seconds") { Description = "seconds between sweeps" }));
+        command.Subcommands.Add(BuildSweepControlCommand(
+            "status", "report the in-process sweep loop's paused/interval state (runtime)"));
+        return command;
+    }
+
+    private static Command BuildSweepControlCommand(string name, string description, Argument<int>? seconds = null)
+    {
+        var product = StringOption("--product", "resolve runtime env for this product");
+        var command = new Command(name, description);
+        command.Options.Add(product);
+        if (seconds is not null)
+        {
+            command.Arguments.Add(seconds);
+        }
+
+        command.SetAction((parseResult, cancellationToken) => RuntimeShell(
+            RuntimeArguments(
+                "sweep",
+                [name],
+                seconds is null ? [] : [parseResult.GetValue(seconds).ToString(CultureInfo.InvariantCulture)],
+                Value("--product", parseResult.GetValue(product))),
+            cancellationToken));
         return command;
     }
 

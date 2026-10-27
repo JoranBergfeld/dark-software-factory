@@ -6,6 +6,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="Dsf.Cli.Tests" />
     <PackageReference Include="YamlDotNet" />
   </ItemGroup>
 

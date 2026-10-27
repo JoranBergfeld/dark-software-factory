@@ -1,0 +1,28 @@
+<Project>
+  <!-- Build dependency only: front doors launch the matching runtime out of process. -->
+  <Target Name="BuildDsfRuntimeBundle" AfterTargets="Build">
+    <MSBuild Projects="$(MSBuildThisFileDirectory)../src/Dsf.Runtime/Dsf.Runtime.csproj"
+             Targets="Publish"
+             BuildInParallel="false"
+             Properties="Configuration=$(Configuration);NoBuild=true;BuildProjectReferences=false;PublishDir=$([System.IO.Path]::GetFullPath('$(TargetDir)runtime/'));UseAppHost=$(SelfContained);PublishSingleFile=$(PublishSingleFile);SelfContained=$(SelfContained);Version=$(Version)"
+             RemoveProperties="PackAsTool;PackageId;ToolCommandName" />
+    <WriteLinesToFile File="$(TargetDir)dsf-bundle.version" Lines="$(Version)"
+                      Overwrite="true" WriteOnlyWhenDifferent="true" />
+  </Target>
+
+  <Target Name="PublishDsfRuntimeBundle" AfterTargets="Publish">
+    <ItemGroup>
+      <DsfRuntimeFile Include="$(TargetDir)runtime/**/*" />
+    </ItemGroup>
+    <Error Condition="'@(DsfRuntimeFile)' == ''"
+           Text="The DSF runtime bundle is missing. Rebuild the host before publishing." />
+    <ReadLinesFromFile File="$(TargetDir)dsf-bundle.version">
+      <Output TaskParameter="Lines" ItemName="DsfBuiltVersion" />
+    </ReadLinesFromFile>
+    <Error Condition="'@(DsfBuiltVersion)' != '$(Version)' Or '$(PackageVersion)' != '$(Version)'"
+           Text="The DSF bundle version does not match the requested version. Rebuild with -p:Version=$(Version) and use the same version when packing/publishing." />
+    <Copy SourceFiles="@(DsfRuntimeFile)"
+          DestinationFiles="@(DsfRuntimeFile->'$(PublishDir)runtime/%(RecursiveDir)%(Filename)%(Extension)')" />
+    <Copy SourceFiles="$(TargetDir)dsf-bundle.version" DestinationFolder="$(PublishDir)" />
+  </Target>
+</Project>

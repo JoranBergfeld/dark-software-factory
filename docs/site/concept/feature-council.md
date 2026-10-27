@@ -159,13 +159,17 @@ production as Azure Container Apps scoped to a single product (ADR 0004). It is
 the most built-out phase of the loop: the full conveyor, the grounding gate, and
 the filing path all run today.
 
-S3 uses cross-source-capable lexical similarity clustering. S5 records typed lens
+S3 uses cross-source-capable lexical similarity clustering. Evidence connecting
+existing clusters merges them into one proposal regardless of gather order,
+retaining every contributing source kind and evidence reference. S5 records typed lens
 positions, deterministic synthesis, juror results, and an explicit
 `Proceed` / `Escalate` / `Kill` / `Error` verdict. S6/S7 consume that verdict;
 an escalated run retains its review package and cannot auto-file. Production
 has no offline model fallback.
 Persisted votes and recommendation fields must be explicit: an incomplete
 review becomes an audited error, never an implicit go vote.
+Routing and filing also require the review's source-qualified evidence and
+summaries to match the proposal's grounded cluster, including on checkpoint resume.
 
 S3 resolves each cluster against persisted problem profiles using the same
 lexical clustering policy. The resulting opaque problem ID, within the run's

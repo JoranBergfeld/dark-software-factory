@@ -9,6 +9,31 @@ public sealed class S3EvidenceAcceptanceTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public async Task Evidence_linking_two_sources_to_one_problem_previews_one_issue_regardless_of_gather_order(bool bridgeFirst)
+    {
+        var checkout = new EvidenceItem("azuremonitor", "monitor-1", "checkout timeout spike");
+        var payment = new EvidenceItem("foundryiq", "foundry-1", "payment failure spike");
+        var bridge = new EvidenceItem("webiq", "web-1", "checkout payment timeout failure spike");
+        EvidenceItem[] items = bridgeFirst ? [bridge, checkout, payment] : [checkout, payment, bridge];
+        var run = new ConveyorRun { ProductHints = ["acme"], SourceKinds = items.Select(item => item.SourceKind).ToArray(), DryRun = true };
+        var services = ConveyorDoubles.Services(gatherers: items.Select(item =>
+            (IEvidenceGatherer)new CountingEvidenceGatherer(item.SourceKind, [item])).ToArray());
+
+        await ConveyorLine.RunAsync(run, services, CancellationToken.None);
+
+        Assert.Equal(RunStatus.Previewed, run.Status);
+        var proposal = Assert.Single(run.Proposals);
+        Assert.Equal(["azuremonitor", "foundryiq", "webiq"], proposal.SourceKinds);
+        Assert.Equal(["foundry-1", "monitor-1", "web-1"], proposal.EvidenceReferences.Order(StringComparer.Ordinal));
+        Assert.Equal(3, proposal.ClusterEvidence.Count);
+        var preview = Assert.Single(run.PreviewedIssues);
+        Assert.Contains("creation:ready", preview.Labels);
+        Assert.All(proposal.SourceKinds, kind => Assert.Contains($"source:{kind}", preview.Labels));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public async Task Single_and_cross_source_clusters_keep_every_reference_and_preview_one_creation_ready_issue(bool crossSource)
     {
         var items = new[]

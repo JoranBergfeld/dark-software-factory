@@ -9,6 +9,38 @@ namespace Dsf.Runtime.Tests;
 public sealed class CouncilReviewPersistenceTests
 {
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Resuming_a_review_for_different_evidence_cannot_route_or_file(bool alreadyRouted)
+    {
+        var gateway = new DocumentGateway();
+        var store = Store(gateway);
+        var run = ProposalRun();
+        var services = Services(store, new Completion(), Jury(), "high");
+        await new S5Council().RunAsync(run, services, CancellationToken.None);
+        run.Checkpoints.Add(S5Council.StationName);
+        if (alreadyRouted)
+        {
+            await new S6Routing().RunAsync(run, services, CancellationToken.None);
+            run.Checkpoints.Add(S6Routing.StationName);
+        }
+        await store.SaveAsync(run, alreadyRouted ? S6Routing.StationName : S5Council.StationName, CancellationToken.None);
+        var document = JsonNode.Parse(gateway.Documents[run.Id])!;
+        document["proposals"]![0]!["councilReview"]!["evidence"]![0]!["summary"] = "unrelated reviewed evidence";
+        gateway.Documents[run.Id] = document.ToJsonString();
+        var restored = Assert.IsType<ConveyorRun>(await store.LoadAsync(run.Id, CancellationToken.None));
+
+        await ConveyorLine.RunAsync(restored, services, CancellationToken.None);
+
+        Assert.Equal(RunStatus.Error, restored.Status);
+        Assert.Contains("evidence", restored.FailureReason, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(restored.PreviewedIssues);
+        Assert.Empty(restored.FiledIssues);
+        var saved = Assert.IsType<ConveyorRun>(await store.LoadAsync(run.Id, CancellationToken.None));
+        Assert.Equal(RunStatus.Error, saved.Status);
+    }
+
+    [Theory]
     [InlineData(false, false)]
     [InlineData(true, false)]
     [InlineData(false, true)]
