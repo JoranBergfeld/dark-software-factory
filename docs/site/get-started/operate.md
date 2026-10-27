@@ -62,8 +62,25 @@ dsf sweep status --product <product>
 ```
 
 The packaged CLI forwards these controls to the bundled runtime's App Configuration
-data-plane client. The running loop rereads controls at least once per second while
-idle; pausing does not cancel a sweep already in progress.
+data-plane client. Run all writes (`pause`, `resume`, and `interval`) from an
+authorized operator workstation, authenticated as an operator with **App
+Configuration Data Owner** on the product store. The client uses
+`DefaultAzureCredential`; ensure it selects that operator identity (for example,
+the approved `az login`), not another configured credential. The deployed runtime
+identity has only **App Configuration Data Reader**; do not broaden its permissions
+or run these writes in its console.
+
+Keep `DSF_OWNER_APPCONFIG_ENDPOINT` set to the bootstrap owner endpoint and use
+`--product` to discover the product's runtime settings from the owner index.
+The operator needs read access to that index; explicit runtime environment values,
+including `AZURE_APPCONFIG_ENDPOINT`, override indexed values, so remove stale
+exports from other products. The workstation must have authorized connectivity
+to both App Configuration stores. For private endpoints, use the approved private
+network path and DNS (for example, an authorized VPN-connected workstation);
+do not bypass firewalls or enable public access to run controls.
+
+The running loop rereads controls at least once per second while idle; pausing
+does not cancel a sweep already in progress.
 Until an interval is stored, `status` reports the runtime's `DSF_SWEEP_INTERVAL`
 fallback (300 seconds when unset). A stored interval overrides that fallback.
 
@@ -108,8 +125,11 @@ they do not replace any step below.
    The provisioning template confirms live filing for the deployed loop:
    enabling sources before pausing can therefore file immediately.
 
-2. **Record the deployment and open its console.** On the authorized operator
-   workstation, replace these values with the manifest's effective names:
+2. **Record the deployment, pause, then open its console.** On the authorized
+   operator workstation, verify the identity, roles, owner-index discovery, and
+   network access described above. Keep the bootstrap owner settings exported
+   in every workstation terminal used below. Replace these values with the
+   manifest's effective names:
 
    ```bash
    export PRODUCT='<staging-product>'
@@ -122,41 +142,48 @@ they do not replace any step below.
    az containerapp show --resource-group "$RESOURCE_GROUP" --name "$ORCHESTRATOR" \
      --query '{revision:properties.latestReadyRevisionName,containers:properties.template.containers[].{name:name,image:image,command:command,args:args},scale:properties.template.scale}' \
      --output json > evidence/ticket-183/deployment.json
-   az containerapp exec --resource-group "$RESOURCE_GROUP" --name "$ORCHESTRATOR" \
-     --container orchestrator --command /bin/sh
+   dsf sweep status --product "$PRODUCT"
+   dsf sweep pause --product "$PRODUCT"
+   dsf sweep status --product "$PRODUCT"
    ```
 
    Confirm the ready revision uses the agreed image digest, `dotnet
    dsf-runtime.dll serve-orchestrator --loop`, and `minReplicas: 1`. Retain the
    image-to-commit mapping; a workstation SHA alone does not identify a deployed
-   image. The console inherits the deployed managed identity and runtime
-   settings. Inside it, use the image's existing runtime executable (the
-   packaged `dsf` tool need not be installed):
-
-   ```bash
-   cd /app
-   dotnet dsf-runtime.dll sweep status
-   dotnet dsf-runtime.dll sweep pause
-   dotnet dsf-runtime.dll sweep status
-   ```
-
-   Save initial pause/cadence values and the console transcript in the approved
-   evidence store. Confirm any in-flight sweep has finished before proceeding;
+   image. Save initial pause/cadence values and the workstation transcript in the
+   approved evidence store. Confirm any in-flight sweep has finished before proceeding;
    pause affects only the loop, not manual sweeps. Do not start another
    `serve-orchestrator --loop` in the console.
 
-   Exit the console before applying the prepared source configuration from the
-   workstation, using the same saved manifest/config root and owner settings:
+   Apply the prepared source configuration from the workstation, using the same
+   saved manifest/config root and owner settings:
 
    ```bash
    dsf new --product "$PRODUCT" --creation-maturity medium \
      --operation-maturity low --decide-config decide.json --no-charter
    ```
 
-   After rollout, repeat the deployment capture and `az containerapp exec`
-   command above. Run `cd /app` and `dotnet dsf-runtime.dll sweep status` again;
-   require paused state before the preview. The saved immutable runtime image
-   and App Configuration pause must survive this update.
+   After rollout, repeat the deployment capture and workstation
+   `dsf sweep status --product "$PRODUCT"`; require paused state before the
+   preview. The saved immutable runtime image and App Configuration pause must
+   survive this update. Then open the container console:
+
+   ```bash
+   az containerapp exec --resource-group "$RESOURCE_GROUP" --name "$ORCHESTRATOR" \
+     --container orchestrator --command /bin/sh
+   ```
+
+   The console inherits the deployed read-only App Configuration identity and
+   runtime settings. Use it for manual sweeps and runtime evidence with private
+   source connectivity, not control writes. Inside it, use the image's existing
+   runtime executable (the packaged `dsf` tool need not be installed):
+
+   ```bash
+   cd /app
+   dotnet dsf-runtime.dll sweep status
+   ```
+
+   Retain the console transcript in the approved evidence store.
 
 3. **Preview through the real services while paused.**
 
@@ -196,12 +223,13 @@ they do not replace any step below.
      | tee evidence/ticket-183/autonomous-console.log
    ```
 
-   In the existing container console:
+   In a separate authorized operator workstation terminal (not the container
+   console), with the same `$PRODUCT` and owner settings:
 
    ```bash
-   dotnet dsf-runtime.dll sweep interval 300
-   dotnet dsf-runtime.dll sweep resume
-   dotnet dsf-runtime.dll sweep status
+   dsf sweep interval 300 --product "$PRODUCT"
+   dsf sweep resume --product "$PRODUCT"
+   dsf sweep status --product "$PRODUCT"
    ```
 
    Wait at least the effective interval plus service-call time, without issuing
@@ -246,11 +274,22 @@ they do not replace any step below.
    recordings. Keep credentials and tokens out of exports; retain sensitive
    evidence under restricted access, not in git.
 
-7. **Stop further work and reconcile.** Pause again, allow active work to drain,
-   verify `status`, and stop log capture with Ctrl+C. Leave staging paused unless
+7. **Stop further work and reconcile.** From the authorized operator workstation,
+   using the same operator Data Owner identity, `$PRODUCT`, and owner settings:
+
+   ```bash
+   dsf sweep pause --product "$PRODUCT"
+   dsf sweep status --product "$PRODUCT"
+   ```
+
+   Confirm paused state, allow active work to drain using container logs/runtime
+   evidence, and stop log capture with Ctrl+C. Leave staging paused unless
    continued running is explicitly agreed; record the final controls and saved
-   initial cadence for restoration. Preserve run documents, leases/learning
-   indexes, and issue links. Record unmet criteria rather than weakening
+   initial cadence for restoration. Any later cadence restoration or resume
+   must also use workstation `dsf sweep interval <seconds> --product "$PRODUCT"`
+   or `dsf sweep resume --product "$PRODUCT"`, never the container identity.
+   Preserve run documents, leases/learning indexes, and issue links.
+   Record unmet criteria rather than weakening
    maturity, jury diversity, grounding, or network policy. #183 remains open
    until the real manual filing and separate autonomous proof are reviewed
    together.
