@@ -418,7 +418,7 @@ internal sealed class GitHubAppBootstrapClient(
             "No selected-repositories GitHub App installation appeared; install the App and rerun dsf bootstrap.");
     }
 
-    private static string CreateAppJwt(OwnerGitHubCredentials credentials)
+    internal static string CreateAppJwt(OwnerGitHubCredentials credentials)
     {
         using var rsa = RSA.Create();
         rsa.ImportFromPem(credentials.PrivateKey);

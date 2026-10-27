@@ -20,6 +20,20 @@ prepare the machinery; the third starts the work that produces the application.
 
 ## Prerequisites
 
+For an **existing application**, start with
+[`dsf onboard decide review`](review-repository-attachment.md), a read-only repository
+assessment using effective `gh` authentication and the prepared owner control plane.
+It does not run the greenfield commands below or complete onboarding.
+After the reviewed boundary, reservation and inactive foundation, use
+[scoped application telemetry proof](prove-application-telemetry.md) for the
+mandatory deployed-source check; provisioning alone is not evidence readiness.
+Acquire repository coverage separately with
+[resumable source inventory](acquire-source-inventory.md); acquisition is not analysis.
+Then [infer a grounded private charter draft](infer-product-charter.md) for owner
+review; inference does not publish, adopt or activate.
+Then [publish and adopt the reviewed charter](publish-adopt-charter.md) using
+explicit operator approvals. Charter adoption still leaves the factory inactive.
+
 - A GitHub API token that can create repositories under the selected owner:
 
   ```bash

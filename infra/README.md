@@ -10,12 +10,13 @@ endpoint is exposed; DSF pulls from authenticated sources.
 ## Installed provisioning assets
 
 CLI builds compile `owner-keyvault.bicep`, `owner-secrets.bicep`, `main.bicep`,
-`sre-agent.bicep`, and `copy-owner-secret.bicep` to ARM JSON. Compilation includes
+`sre-agent.bicep`, `copy-owner-secret.bicep`, `onboard-foundation.bicep`,
+`product-github-private-key.bicep`, and `onboard-github-auth.bicep` to ARM JSON. Compilation includes
 `modules/cosmos.bicep`, the five `modules/sre-*.bicep` modules, and
 `product-github-private-key.bicep` as nested templates. There are no separate script or
 configuration-file dependencies in this deployment closure.
 
-`dotnet/eng/CliBundle.targets` ships only these five compiled entrypoints under
+`dotnet/eng/CliBundle.targets` ships only these eight compiled entrypoints under
 `assets/infra/` in source outputs, NuGet tools, and all release archives. No extraction
 cache is used. Parameter values, credentials, bootstrap recovery files, generated secret
 parameter files, and instance state are not packaged. App Configuration settings and
@@ -46,6 +47,50 @@ is separate from `dsf bootstrap`/`dsf new` and is not part of their packaged ass
 `main.bicep` outputs Cosmos, App Configuration, Key Vault, App Insights, and Azure OpenAI
 endpoints. `dsf new` records those endpoints in the product instance manifest and wires the
 Container App environment. Secrets remain in Key Vault.
+
+## Inactive onboarding foundation
+
+`onboard-foundation.bicep` is a dedicated, flat factory-only composition used by
+`dsf onboard decide provision`, after separately receipted resource-group and
+product App Configuration creation and inactive manifest publication. It keeps
+the existing Cosmos partition/TTL conventions without inheriting greenfield
+roles, models, worker containers, maturity settings or delivery automation.
+The original greenfield templates and commands are unchanged.
+
+| Parameter | Source |
+| --- | --- |
+| `namePrefix` | `df-` plus the first 14 hexadecimal characters of the reserved Factory ID |
+| `location` | Exact reviewed factory location |
+| `appConfigName` | Receipted `dsfo-<full-factory-id>` product store, not the owner store |
+| `tenantId` | Admitted Azure tenant |
+| `productKey` | Admitted product key; isolated runtime database name |
+
+Vault/Cosmos/App Configuration private endpoints and DNS are factory-only.
+Container Apps gets an internal hosting environment and a named, dedicated
+platform-managed resource group; no workers are deployed. Telemetry connectivity,
+effective access, grants, models, source readiness and activation remain pending.
+There are no secret outputs. Use the CLI protocol rather than deploying this
+template directly, and do not delete retained onboarding resources/claims as
+greenfield cleanup. See the
+[operator guide](../docs/site/get-started/provision-inactive-foundation.md).
+
+## Dedicated GitHub authentication
+
+`dsf onboard decide github` uses the standalone `product-github-private-key.json`
+with an ARM secure parameter reference to the **full approved source vault ID and
+existing secret version**, including cross-subscription sources in the same
+tenant. It never sends a PEM value through CLI arguments/files or outputs.
+The legacy `copy-owner-secret.bicep` path remains unchanged for greenfield.
+
+`onboard-github-auth.bicep` deploys the actual digest-pinned DSF runtime with
+`serve-github-auth` and only the proven GitHub-authentication managed identity.
+The CLI separately records/grants exact secret-reader and product-config-reader
+roles; code/council/source workloads receive no signing key. Native Container
+Apps Entra authentication uses an existing API audience and exact operator/code
+object IDs, HTTPS, no anonymous exclusions and no token store. The environment
+remains internal; missing existing consent/network/image prerequisites block.
+No owner broker, new API registration, repository mutation or activation is added.
+See [approval, provenance and recovery](../docs/site/get-started/verify-factory-github-authority.md).
 
 ## Runtime identity and roles
 

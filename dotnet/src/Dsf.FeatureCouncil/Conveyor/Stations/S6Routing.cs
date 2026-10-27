@@ -23,10 +23,17 @@ public sealed class S6Routing : IStation
         }
         foreach (var proposal in run.Proposals.Where(p => p.Verdict == ProposalVerdict.Proceed))
         {
-            proposal.Labels.Add(ReadyForAgentLabel);
-            foreach (var kind in proposal.SourceKinds)
+            if (run.Profile == ConveyorProfile.OnboardingPreview)
             {
-                proposal.Labels.Add($"source:{kind}");
+                if (proposal.Labels.Any(label => label != OnboardingPublication.ProposalLabel))
+                    throw new EvaluationException("ForbiddenOnboardingPublicationLabel");
+                if (proposal.Labels.Count == 0) proposal.Labels.Add(OnboardingPublication.ProposalLabel);
+            }
+            else
+            {
+                proposal.Labels.Add(ReadyForAgentLabel);
+                foreach (var kind in proposal.SourceKinds)
+                    proposal.Labels.Add($"source:{kind}");
             }
 
             run.Record(StationName, $"routed proposal '{proposal.Id}' -> [{string.Join(", ", proposal.Labels)}].");

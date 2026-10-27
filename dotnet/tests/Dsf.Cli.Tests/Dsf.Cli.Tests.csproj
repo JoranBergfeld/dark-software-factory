@@ -11,9 +11,12 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Dsf.Cli\Dsf.Cli.csproj" />
-    <!-- Not consumed as a library: the front door launches the runtime host as a
-         process, so the surface tests need that executable built alongside them. -->
-    <ProjectReference Include="..\..\src\Dsf.Runtime\Dsf.Runtime.csproj" ReferenceOutputAssembly="false" />
+    <!-- Source workflow tests traverse the real CLI and host with external transports only. -->
+    <ProjectReference Include="..\..\src\Dsf.Runtime\Dsf.Runtime.csproj" />
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <Compile Include="..\Dsf.Runtime.Tests\SourceInventoryTransport.cs" Link="SourceInventoryTransport.cs" />
+    <Compile Include="..\Dsf.Runtime.Tests\IntentModelTransport.cs" Link="IntentModelTransport.cs" />
+    <None Include="..\Dsf.Runtime.Tests\Fixtures\factory-github-authority.json" Link="Fixtures\factory-github-authority.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

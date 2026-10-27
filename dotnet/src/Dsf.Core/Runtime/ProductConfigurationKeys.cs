@@ -5,11 +5,57 @@ namespace Dsf.Core.Runtime;
 /// <summary>Canonical App Configuration key, label, and value conventions for product-scoped factory settings.</summary>
 public static class ProductConfigurationKeys
 {
+    public static string GitHubAuthorityBinding(Guid operationId, string binding) =>
+        $"dsf/factory/github-bindings/{operationId:D}/{binding}";
     public const string NoLabel = "\0";
     public const string AnyLabel = "*";
 
     public const string OwnerIndexGitHubRepository = "GITHUB_REPOSITORY";
     public const string OwnerIndexAppConfigEndpoint = "AZURE_APPCONFIG_ENDPOINT";
+    public const string OwnerBootstrapStatusFilter = "dsf/owner/bootstrap/*";
+    public const string OwnerOnboardingPrefix = "dsf/onboarding/";
+    public const string OwnerOnboardingFilter = OwnerOnboardingPrefix + "*";
+    public static string FoundationOperation(Guid operationId, int index) =>
+        $"dsf/foundation/{operationId:D}/operations/{index:D4}";
+    public const string FactoryManifest = "dsf/factory/manifest";
+    public const string FactoryProfile = "dsf/factory/profile";
+    public const string FactoryGitHubAuthority = "dsf/factory/github-authority";
+    public const string FactoryTelemetry = "dsf/factory/telemetry";
+    public const string FactoryModels = "dsf/factory/models";
+    public const string FactorySource = "dsf/factory/source";
+    public const string FactorySupplemental = "dsf/factory/supplemental";
+    public const string FactoryPreview = "dsf/factory/preview";
+    public static string PreviewBinding(Guid operation, string name) => $"dsf/factory/preview-bindings/{operation:D}/{name}";
+    public static string PreviewOperation(Guid operation, int index) => $"dsf/factory/preview-operations/{operation:D}/{index:D4}";
+    public const string CharterAdopted = "dsf/factory/charter/adopted";
+    public const string CharterAdoptionOperation = "dsf/factory/charter/adoption-operation";
+    public const string CharterAdoptionsPrefix = "dsf/factory/charter/adoptions/";
+    public static string CharterAdoptionPayload(Guid revision, int index) =>
+        $"{CharterAdoptionsPrefix}{revision:N}/payload/{index:D4}";
+    public static string CharterAdoptionReceipt(Guid revision, string kind) =>
+        $"{CharterAdoptionsPrefix}{revision:N}/{kind}";
+    public static string SupplementalOperation(Guid operation, int index) => $"dsf/factory/supplemental-operations/{operation:D}/{index:D4}";
+    public static string SupplementalProof(Guid operation, Guid check, string kind) => $"dsf/factory/supplemental-proofs/{operation:D}/{check:D}/{kind}";
+    public static string SourceOperation(Guid operationId, int index) => $"dsf/factory/source-operations/{operationId:D}/{index:D4}";
+    public static string ModelRoute(Guid operationId, int index) => $"dsf/factory/model-routes/{operationId:D}/{index:D4}";
+    public static string ModelBinding(Guid operationId, string name) => $"dsf/factory/model-bindings/{operationId:D}/{name}";
+    public static string ModelGrant(Guid operationId, int index) => $"dsf/factory/model-grants/{operationId:D}/{index:D4}";
+    public static string ModelOperation(Guid operationId, int index) => $"dsf/factory/model-operations/{operationId:D}/{index:D4}";
+    public static string ModelProof(Guid operationId, Guid checkId) => $"dsf/factory/model-proofs/{operationId:D}/{checkId:D}";
+    public static string TelemetryOperation(Guid operationId, int index) =>
+        $"dsf/factory/telemetry-operations/{operationId:D}/{index:D4}";
+    public static string TelemetryProof(Guid operationId, Guid checkId) =>
+        $"dsf/factory/telemetry-proofs/{operationId:D}/{checkId:D}";
+    public static string GitHubAuthorityOperation(Guid operationId, int index) =>
+        $"dsf/factory/github-operations/{operationId:D}/{index:D4}";
+    public static string FactoryPlanChunk(int index) => $"dsf/factory/reviewed-plan/{index:D4}";
+
+    public static string OwnerProductClaim(string productKey) => OwnerOnboardingPrefix + "products/" + productKey;
+    public static string OwnerRepositoryClaim(long repositoryId) => OwnerOnboardingPrefix + "repositories/" + repositoryId.ToString(System.Globalization.CultureInfo.InvariantCulture);
+    public static string OwnerResourceClaim(string canonicalResourceId) => OwnerOnboardingPrefix + "resources/"
+        + Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(canonicalResourceId)));
+    public static string OwnerReservationPlanChunk(Guid factoryId, int index) =>
+        OwnerOnboardingPrefix + "plans/" + factoryId.ToString("D") + "/" + index.ToString("D4", System.Globalization.CultureInfo.InvariantCulture);
 
     public static string OwnerBootstrapStatus(string appName) =>
         $"dsf/owner/bootstrap/{(appName ?? string.Empty).Trim().ToLowerInvariant()}/status";

@@ -14,6 +14,31 @@ public interface IWebHostRunner
     Task RunAsync(WebApplication app, CancellationToken cancellationToken);
 }
 
+internal interface IOnboardingDecisionRunner
+{
+    Task<ConveyorRun> RunAsync(
+        RuntimeSettings settings, RuntimeDependencies dependencies, Dsf.Core.Onboarding.FactoryManifest manifest,
+        Dsf.Core.Onboarding.FactoryDecisionRequest request, CancellationToken cancellationToken);
+
+    Task<Dsf.Core.Onboarding.PreviewHttpObservation> ObserveAsync(
+        RuntimeSettings settings, RuntimeDependencies dependencies, Dsf.Core.Onboarding.FactoryManifest manifest,
+        Dsf.Core.Onboarding.FactoryDecisionRequest request, string bearer, CancellationToken cancellationToken);
+}
+
+internal sealed class OnboardingDecisionRunner : IOnboardingDecisionRunner
+{
+    public Task<ConveyorRun> RunAsync(
+        RuntimeSettings settings, RuntimeDependencies dependencies, Dsf.Core.Onboarding.FactoryManifest manifest,
+        Dsf.Core.Onboarding.FactoryDecisionRequest request, CancellationToken cancellationToken) =>
+        new FactoryDecisionClient(settings, dependencies, manifest).RunAsync(request, cancellationToken);
+
+    public async Task<Dsf.Core.Onboarding.PreviewHttpObservation> ObserveAsync(
+        RuntimeSettings settings, RuntimeDependencies dependencies, Dsf.Core.Onboarding.FactoryManifest manifest,
+        Dsf.Core.Onboarding.FactoryDecisionRequest request, string bearer, CancellationToken cancellationToken) =>
+        (await new FactoryDecisionClient(settings, dependencies, manifest)
+            .ObserveAsync(request, true, cancellationToken, bearer)).Observation;
+}
+
 /// <summary>Runs the host for real: serves until cancelled.</summary>
 internal sealed class WebApplicationHostRunner : IWebHostRunner
 {
@@ -40,6 +65,24 @@ public sealed record RuntimeDependencies(
     Func<RuntimeSettings, ISweepControlStore>? SweepControlStoreFactory = null,
     Func<RuntimeSettings, ISweepLease>? SweepLeaseFactory = null)
 {
+    internal IConfigurationSettingsGateway ConfigurationSettingsGateway { get; init; } = new AzureConfigurationSettingsGateway();
+    internal HttpClient? GitHubAuthorityHttp { get; init; }
+    internal Azure.Core.TokenCredential? GitHubAuthorityCredential { get; init; }
+    internal TimeProvider GitHubAuthorityClock { get; init; } = TimeProvider.System;
+    internal HttpClient? TelemetryHttp { get; init; }
+    internal Azure.Core.TokenCredential? TelemetryCredential { get; init; }
+    internal TimeProvider TelemetryClock { get; init; } = TimeProvider.System;
+    internal HttpClient? ModelHttp { get; init; }
+    internal Azure.Core.TokenCredential? ModelCredential { get; init; }
+    internal TimeProvider ModelClock { get; init; } = TimeProvider.System;
+    internal HttpClient? SourceHttp { get; init; }
+    internal Azure.Core.TokenCredential? SourceCredential { get; init; }
+    internal TimeProvider SourceClock { get; init; } = TimeProvider.System;
+    internal HttpClient? PreviewHttp { get; init; }
+    internal Azure.Core.TokenCredential? PreviewCredential { get; init; }
+    internal TimeProvider PreviewClock { get; init; } = TimeProvider.System;
+    internal IOnboardingDecisionRunner OnboardingDecisionRunner { get; init; } = new OnboardingDecisionRunner();
+
     /// <summary>Production dependencies resolved from the real process environment.</summary>
     public static RuntimeDependencies Production() => Production(CurrentEnvironment());
 
@@ -72,7 +115,7 @@ public sealed record RuntimeDependencies(
     public ISweepControlStore SweepControlStoreFor(RuntimeSettings settings)
     {
         ArgumentNullException.ThrowIfNull(settings);
-        return (SweepControlStoreFactory ?? (s => new AzureAppConfigurationSweepControlStore(s)))(settings);
+        return (SweepControlStoreFactory ?? (s => new AzureAppConfigurationSweepControlStore(ConfigurationSettingsGateway, s)))(settings);
     }
 
     /// <summary>Resolves the product-wide lease shared by manual and periodic sweeps.</summary>

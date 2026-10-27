@@ -25,7 +25,9 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="Azure.Data.AppConfiguration" />
     <PackageReference Include="System.CommandLine" />
+    <PackageReference Include="YamlDotNet" />
   </ItemGroup>
 
   <ItemGroup>

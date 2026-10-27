@@ -48,6 +48,36 @@ public sealed class SweepControlCliTests
         Assert.Contains("status", names);
     }
 
+    [Theory]
+    [InlineData("resume")]
+    [InlineData("interval")]
+    [InlineData("pause")]
+    public async Task Legacy_sweep_controls_cannot_mutate_inactive_onboarding_governance(string action)
+    {
+        var configuration = RuntimeAdmissionTests.Onboarding();
+        configuration.Values[ProductConfigurationKeys.SweepPaused] = "true";
+        configuration.Values[ProductConfigurationKeys.SweepIntervalSeconds] = "90";
+        var before = System.Text.Json.JsonSerializer.Serialize(configuration.Values);
+        var env = new Dictionary<string, string?>(FullEnvironment)
+        {
+            ["AZURE_APPCONFIG_ENDPOINT"] = "https://dsfo-11111111111111111111111111111111.azconfig.io",
+            [RuntimeIntegrationSettings.FactoryProfilePin] = "invalid",
+        };
+        var dependencies = TestDependencies.Build(configurationSettingsGateway: configuration,
+            sweepControlStoreFactory: settings => new AzureAppConfigurationSweepControlStore(configuration, settings));
+        var stdout = new StringWriter();
+        var stderr = new StringWriter();
+        string[] args = action == "interval" ? ["sweep", action, "1"] : ["sweep", action];
+
+        var exit = await RuntimeCliApplication.InvokeAsync(args, env, stdout, stderr, dependencies, CancellationToken.None);
+
+        Assert.Equal(1, exit);
+        Assert.Equal("", stdout.ToString());
+        Assert.Contains("admission denied", stderr.ToString());
+        Assert.Empty(configuration.Writes);
+        Assert.Equal(before, System.Text.Json.JsonSerializer.Serialize(configuration.Values));
+    }
+
     [Fact]
     public async Task Pause_sets_the_paused_flag_the_loop_reads_on_its_next_tick()
     {

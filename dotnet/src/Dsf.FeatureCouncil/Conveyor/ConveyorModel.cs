@@ -1,8 +1,12 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Serialization;
+using Dsf.Core.Onboarding;
 
 namespace Dsf.FeatureCouncil.Conveyor;
+
+/// <summary>Greenfield remains the default; onboarding is dry-run evaluation only, never activation authority.</summary>
+public enum ConveyorProfile { Greenfield, OnboardingPreview }
 
 /// <summary>
 /// Lifecycle of a conveyor run, mirroring the Python <c>RunStatus</c> terminal
@@ -58,6 +62,14 @@ public sealed class Proposal(string id, string title, IReadOnlyList<string> sour
 
     public string Title { get; } = title;
 
+    public string? Body { get; set; }
+
+    public SynthesizedProposal? Synthesis { get; set; }
+
+    public GroundingEvaluation? Grounding { get; set; }
+
+    public IssuePreview? IntendedPublication { get; set; }
+
     /// <summary>
     /// Every source kind that contributed evidence to this proposal, lower-case
     /// and de-duplicated. A single-kind cluster carries exactly one entry here,
@@ -94,7 +106,7 @@ public sealed class Proposal(string id, string title, IReadOnlyList<string> sour
     /// </summary>
     public bool Accepted => Verdict == ProposalVerdict.Proceed;
 
-    public List<string> Labels { get; } = [];
+    [JsonInclude] public List<string> Labels { get; private set; } = [];
 }
 
 /// <summary>
@@ -113,10 +125,15 @@ public enum ProposalVerdict
 }
 
 /// <summary>
-/// An issue a dry run would have filed: the title, labels and filing intent key
-/// the real filing station would have used, reported without creating anything.
+/// A read-only publication shape. Onboarding includes synthesized content and an
+/// unassigned proposal-only review body for every complete jury disposition.
 /// </summary>
-public sealed record IssuePreview(string Title, string IntentKey, IReadOnlyList<string> Labels);
+public sealed record IssuePreview(string Title, string IntentKey, IReadOnlyList<string> Labels)
+{
+    public string? Body { get; init; }
+    public IReadOnlyList<string> Assignees { get; init; } = [];
+    public ProposalVerdict Disposition { get; init; }
+}
 
 /// <summary>
 /// The unit of work the conveyor drives from station to station: what was asked
@@ -125,6 +142,14 @@ public sealed record IssuePreview(string Title, string IntentKey, IReadOnlyList<
 /// </summary>
 public sealed class ConveyorRun
 {
+    public ConveyorProfile Profile { get; init; }
+
+    /// <summary>Required, revision-bound reasoning inputs for onboarding; not a readiness or admission proof.</summary>
+    public CouncilEvaluationContext? EvaluationContext { get; init; }
+
+    /// <summary>Hash of the exact evaluation context, pinned before the first station.</summary>
+    public string? EvaluationRevision { get; set; }
+
     public string Id { get; init; } = Guid.NewGuid().ToString("n");
 
     public TriggerKind Trigger { get; init; } = TriggerKind.Signal;
@@ -147,24 +172,28 @@ public sealed class ConveyorRun
     /// <summary>Debounce/dedup fingerprint of the run's scope, set by triage.</summary>
     public string Fingerprint { get; set; } = string.Empty;
 
-    public List<EvidenceItem> Evidence { get; } = [];
+    [JsonInclude] public List<EvidenceItem> Evidence { get; private set; } = [];
 
-    public List<Proposal> Proposals { get; } = [];
+    [JsonInclude] public List<Proposal> Proposals { get; private set; } = [];
 
-    public List<AuditRecord> Audit { get; } = [];
+    [JsonInclude] public List<SynthesisEvaluation> SynthesisEvaluations { get; private set; } = [];
+
+    [JsonInclude] public List<EvaluationModelObservation> ModelObservations { get; private set; } = [];
+
+    [JsonInclude] public List<AuditRecord> Audit { get; private set; } = [];
 
     /// <summary>Names of the stations that completed, in completion order.</summary>
-    public List<string> Checkpoints { get; } = [];
+    [JsonInclude] public List<string> Checkpoints { get; private set; } = [];
 
     /// <summary>Issue URLs the filing station created (empty on a dry run).</summary>
-    public List<string> FiledIssues { get; } = [];
+    [JsonInclude] public List<string> FiledIssues { get; private set; } = [];
 
     /// <summary>
     /// What a dry run would have filed: one entry per accepted, routed proposal
     /// the filing station deliberately did not file. Empty on a run that files
     /// for real -- there, <see cref="FiledIssues"/> is the record.
     /// </summary>
-    public List<IssuePreview> PreviewedIssues { get; } = [];
+    [JsonInclude] public List<IssuePreview> PreviewedIssues { get; private set; } = [];
 
     /// <summary>
     /// Why the run ended in <see cref="RunStatus.Error"/>: the station that failed

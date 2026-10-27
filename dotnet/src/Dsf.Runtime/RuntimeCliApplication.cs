@@ -59,12 +59,223 @@ public static class RuntimeCliApplication
         RuntimeDependencies dependencies)
     {
         var root = new RootCommand(
-            "Dark Software Factory — runtime host (run/sweep/serve-orchestrator/serve-agent/poll-outcomes)");
+            "Dark Software Factory — runtime host (run/sweep/serve-orchestrator/serve-agent/poll-outcomes/serve-github-auth/serve-telemetry/serve-models)");
         root.Subcommands.Add(BuildRunCommand(env, stdout, stderr, dependencies));
         root.Subcommands.Add(BuildSweepCommand(env, stdout, stderr, dependencies));
         root.Subcommands.Add(BuildServeOrchestratorCommand(env, stdout, stderr, dependencies));
         root.Subcommands.Add(BuildServeAgentCommand(env, stdout, stderr, dependencies));
         root.Subcommands.Add(BuildPollOutcomesCommand(env, stdout, stderr, dependencies));
+        var github = new Command("serve-github-auth", "serve the isolated, inactive factory GitHub authentication module");
+        github.SetAction(async (_, token) =>
+        {
+            try
+            {
+                var settings = GitHubApp.FactoryGitHubHostSettings.Read(env);
+                await using var host = RuntimeVerbs.BuildGitHubAuthenticationHost(settings, dependencies);
+                await dependencies.WebHostRunner.RunAsync(host, token);
+                return Success;
+            }
+            catch (RuntimeVerbException exception)
+            {
+                await stderr.WriteLineAsync(exception.Message);
+                return Failure;
+            }
+        });
+        root.Subcommands.Add(github);
+        var telemetry = new Command("serve-telemetry", "serve isolated inactive Azure Monitor telemetry proof");
+        telemetry.SetAction(async (_, token) =>
+        {
+            try
+            {
+                var settings = FactoryHostSettings.Read(env, "Azure Monitor source");
+                await using var host = RuntimeVerbs.BuildTelemetryHost(settings, dependencies);
+                await dependencies.WebHostRunner.RunAsync(host, token);
+                return Success;
+            }
+            catch (RuntimeVerbException exception)
+            {
+                await stderr.WriteLineAsync(exception.Message);
+                return Failure;
+            }
+        });
+        root.Subcommands.Add(telemetry);
+        var models = new Command("serve-models", "serve isolated inactive model capability workloads");
+        models.SetAction(async (_, token) =>
+        {
+            try
+            {
+                var settings = FactoryHostSettings.Read(env, "Factory models");
+                await using var host = RuntimeVerbs.BuildModelsHost(settings, dependencies);
+                await dependencies.WebHostRunner.RunAsync(host, token);
+                return Success;
+            }
+            catch (RuntimeVerbException exception)
+            {
+                await stderr.WriteLineAsync(exception.Message);
+                return Failure;
+            }
+        });
+        root.Subcommands.Add(models);
+        var source = new Command("serve-source", "serve isolated inactive pinned source acquisition");
+        source.SetAction(async (_, token) =>
+        {
+            try
+            {
+                var settings = FactoryHostSettings.Read(env, "Factory source");
+                await using var host = RuntimeVerbs.BuildSourceHost(settings, dependencies);
+                await dependencies.WebHostRunner.RunAsync(host, token);
+                return Success;
+            }
+            catch (RuntimeVerbException exception)
+            {
+                await stderr.WriteLineAsync(exception.Message);
+                return Failure;
+            }
+        });
+        root.Subcommands.Add(source);
+        var previewModels = new Command("serve-preview-models", "serve protected council-only model evaluation; never publish or activate");
+        previewModels.SetAction(async (_, token) =>
+        {
+            try
+            {
+                var settings = FactoryHostSettings.Read(env, "Preview models");
+                await using var host = RuntimeVerbs.BuildPreviewModelsHost(settings, dependencies);
+                await dependencies.WebHostRunner.RunAsync(host, token);
+                return Success;
+            }
+            catch (RuntimeVerbException exception)
+            {
+                await stderr.WriteLineAsync(exception.Message);
+                return Failure;
+            }
+        });
+        root.Subcommands.Add(previewModels);
+        var previewTelemetry = new Command("serve-preview-telemetry", "serve protected council-only application telemetry evidence; never publish or activate");
+        previewTelemetry.SetAction(async (_, token) =>
+        {
+            try
+            {
+                var settings = FactoryHostSettings.Read(env, "Preview telemetry");
+                await using var host = RuntimeVerbs.BuildPreviewTelemetryHost(settings, dependencies);
+                await dependencies.WebHostRunner.RunAsync(host, token);
+                return Success;
+            }
+            catch (RuntimeVerbException exception)
+            {
+                await stderr.WriteLineAsync(exception.Message);
+                return Failure;
+            }
+        });
+        root.Subcommands.Add(previewTelemetry);
+        var live = new Command("serve-decide", "serve reviewed native Decide execution; rollout exercises never publish or activate");
+        live.SetAction(async (_, token) =>
+        {
+            try
+            {
+                var settings = FactoryHostSettings.Read(env, "Factory Decide");
+                await using var host = RuntimeVerbs.BuildLiveHost(settings, dependencies);
+                await dependencies.WebHostRunner.RunAsync(host, token);
+                return Success;
+            }
+            catch (RuntimeVerbException exception)
+            {
+                await stderr.WriteLineAsync(exception.Message);
+                return Failure;
+            }
+        });
+        root.Subcommands.Add(live);
+        foreach (var context in new[] { false, true })
+        {
+            var publisher = new Command(context ? Dsf.Core.Onboarding.FactoryPublisher.ContextVerb : Dsf.Core.Onboarding.FactoryPublisher.Verb,
+                "serve isolated native publication authority; explicit final promotion and qualified current decision required");
+            publisher.SetAction(async (_, token) =>
+            {
+                try
+                {
+                    var settings = FactoryHostSettings.Read(env, "Factory publication");
+                    await using var host = RuntimeVerbs.BuildPublisherHost(settings, dependencies, context);
+                    await dependencies.WebHostRunner.RunAsync(host, token);
+                    return Success;
+                }
+                catch (RuntimeVerbException exception)
+                {
+                    await stderr.WriteLineAsync(exception.Message);
+                    return Failure;
+                }
+            });
+            root.Subcommands.Add(publisher);
+        }
+        foreach (var kind in new[] { Dsf.Core.Onboarding.PreviewHostKind.Council, Dsf.Core.Onboarding.PreviewHostKind.SourceContext })
+        {
+            var preview = new Command(kind == Dsf.Core.Onboarding.PreviewHostKind.Council ? "serve-preview" : "serve-source-context",
+                "serve protected nonpublishing council source-context consumption");
+            preview.SetAction(async (_, token) =>
+            {
+                try
+                {
+                    var settings = FactoryHostSettings.Read(env, "Supervised preview");
+                    await using var host = RuntimeVerbs.BuildPreviewHost(settings, dependencies, kind);
+                    await dependencies.WebHostRunner.RunAsync(host, token);
+                    return Success;
+                }
+                catch (RuntimeVerbException exception)
+                {
+                    await stderr.WriteLineAsync(exception.Message);
+                    return Failure;
+                }
+            });
+            root.Subcommands.Add(preview);
+        }
+        var supplemental = new Command("serve-supplemental", "serve isolated optional evidence proof; no governance or private source-store access");
+        supplemental.SetAction(async (_, token) =>
+        {
+            try
+            {
+                var settings = FactoryHostSettings.Read(env, "Supplemental source");
+                var raw = env.GetValueOrDefault("DSF_SUPPLEMENTAL_CONFIG");
+                if (string.IsNullOrWhiteSpace(raw) || System.Text.Encoding.UTF8.GetByteCount(raw) > 8192)
+                    throw new RuntimeVerbException("Supplemental source requires bounded DSF_SUPPLEMENTAL_CONFIG; no environment API key fallback.");
+                var configuration = System.Text.Json.JsonSerializer.Deserialize<Dsf.Core.Onboarding.SupplementalHostConfiguration>(
+                    raw, Dsf.Core.Onboarding.FactoryGitHubJson.Options) ?? throw new System.Text.Json.JsonException();
+                await using var host = RuntimeVerbs.BuildSupplementalHost(settings, configuration, dependencies);
+                await dependencies.WebHostRunner.RunAsync(host, token);
+                return Success;
+            }
+            catch (Exception e) when (e is RuntimeVerbException or System.Text.Json.JsonException)
+            {
+                await stderr.WriteLineAsync("Supplemental source blocked: complete DSF_SUPPLEMENTAL_CONFIG, DSF_PRODUCT, AZURE_APPCONFIG_ENDPOINT, "
+                    + "DSF_FACTORY_PROFILE_PIN and explicit AZURE_CLIENT_ID required; details withheld.");
+                return Failure;
+            }
+        });
+        root.Subcommands.Add(supplemental);
+        var previewSupplemental = new Command("serve-preview-supplemental", "serve council-only selected supplemental evidence; no governance data access");
+        previewSupplemental.SetAction(async (_, token) =>
+        {
+            try
+            {
+                var settings = FactoryHostSettings.Read(env, "Preview supplemental source");
+                var source = env.GetValueOrDefault("DSF_SUPPLEMENTAL_CONFIG");
+                var coordinator = env.GetValueOrDefault("DSF_PREVIEW_COORDINATOR");
+                if (string.IsNullOrWhiteSpace(source) || System.Text.Encoding.UTF8.GetByteCount(source) > 8192
+                    || string.IsNullOrWhiteSpace(coordinator) || System.Text.Encoding.UTF8.GetByteCount(coordinator) > 2048)
+                    throw new RuntimeVerbException("Bounded DSF_SUPPLEMENTAL_CONFIG and DSF_PREVIEW_COORDINATOR required.");
+                var configuration = System.Text.Json.JsonSerializer.Deserialize<Dsf.Core.Onboarding.SupplementalHostConfiguration>(source,
+                    Dsf.Core.Onboarding.FactorySourceValidation.RecordJson) ?? throw new System.Text.Json.JsonException();
+                var callback = System.Text.Json.JsonSerializer.Deserialize<Dsf.Core.Onboarding.PreviewSupplementalCoordinator>(coordinator,
+                    Dsf.Core.Onboarding.FactorySourceValidation.RecordJson) ?? throw new System.Text.Json.JsonException();
+                await using var host = RuntimeVerbs.BuildPreviewSupplementalHost(settings, configuration, callback, dependencies);
+                await dependencies.WebHostRunner.RunAsync(host, token);
+                return Success;
+            }
+            catch (Exception e) when (e is RuntimeVerbException or System.Text.Json.JsonException)
+            {
+                await stderr.WriteLineAsync("Preview supplemental source requires DSF_SUPPLEMENTAL_CONFIG, DSF_PREVIEW_COORDINATOR, DSF_PRODUCT, "
+                    + "AZURE_APPCONFIG_ENDPOINT, DSF_FACTORY_PROFILE_PIN and explicit AZURE_CLIENT_ID; details withheld.");
+                return Failure;
+            }
+        });
+        root.Subcommands.Add(previewSupplemental);
         return root;
     }
 
@@ -258,7 +469,7 @@ public static class RuntimeCliApplication
                     : null,
                 token,
                 env),
-            cancellationToken));
+            cancellationToken, factoryClient: true));
         return command;
     }
 
@@ -375,7 +586,7 @@ public static class RuntimeCliApplication
         Func<RuntimeSettings, CancellationToken, Task<ConveyorRun?>> operation,
         CancellationToken cancellationToken)
     {
-        var settings = await ComposeSettings(env, stderr, productOption, dependencies, cancellationToken);
+        var settings = await ComposeSettings(env, stderr, productOption, dependencies, cancellationToken, factoryClient: true);
         if (settings is null)
         {
             return Failure;
@@ -424,9 +635,10 @@ public static class RuntimeCliApplication
         string? productOption,
         RuntimeDependencies dependencies,
         Func<RuntimeSettings, CancellationToken, Task> operation,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool factoryClient = false)
     {
-        var settings = await ComposeSettings(env, stderr, productOption, dependencies, cancellationToken);
+        var settings = await ComposeSettings(env, stderr, productOption, dependencies, cancellationToken, factoryClient);
         if (settings is null)
         {
             return Failure;
@@ -469,7 +681,13 @@ public static class RuntimeCliApplication
         string message;
         try
         {
+            await RuntimeWorkflow.EnsureWorkAdmittedAsync(settings, dependencies, cancellationToken, env);
             message = await operation(settings, dependencies.SweepControlStoreFor(settings), cancellationToken);
+        }
+        catch (RuntimeVerbException exception)
+        {
+            stderr.WriteLine($"[dsf] error: {exception.Message}");
+            return Failure;
         }
         catch (RuntimeConfigurationException exception)
         {
@@ -491,10 +709,13 @@ public static class RuntimeCliApplication
         TextWriter stderr,
         string? productOption,
         RuntimeDependencies dependencies,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool factoryClient = false)
     {
         try
         {
+            if (factoryClient && await RuntimeWorkflow.ComposeFactoryClientAsync(env, productOption, dependencies, cancellationToken) is { } client)
+                return client;
             return await RuntimeSettingsComposer.ComposeAsync(
                 env, productOption, dependencies.OwnerRuntimeIndexReader, cancellationToken);
         }

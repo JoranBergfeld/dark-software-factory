@@ -11,6 +11,8 @@ using Dsf.FeatureCouncil.Conveyor;
 namespace Dsf.Runtime;
 
 internal sealed record FoundryIqResult(string Id, string? Title, string? Content);
+internal sealed record FoundryIqSourceActivity(string Name, string? Type);
+internal sealed record FoundryIqRetrieval(IReadOnlyList<FoundryIqResult> Results, IReadOnlyList<FoundryIqSourceActivity> SourceActivities);
 
 internal interface IFoundryIqKnowledgeGateway
 {
@@ -36,6 +38,13 @@ internal sealed class FoundryIqKnowledgeGateway(TokenCredential? credential = nu
     public async Task<IReadOnlyList<FoundryIqResult>> QueryAsync(
         string searchEndpoint, string knowledgeBase, string query, CancellationToken cancellationToken)
     {
+        try { return (await RetrieveAsync(searchEndpoint, knowledgeBase, query, cancellationToken)).Results; }
+        catch (Dsf.Core.Onboarding.SupplementalSourceException e) { throw new InvalidOperationException(e.Message, e); }
+    }
+
+    internal async Task<FoundryIqRetrieval> RetrieveAsync(
+        string searchEndpoint, string knowledgeBase, string query, CancellationToken cancellationToken)
+    {
         var token = await credential.GetTokenAsync(new TokenRequestContext(Scopes), cancellationToken);
         var uri = new Uri(new Uri(searchEndpoint.TrimEnd('/') + "/"),
             $"knowledgebases('{Uri.EscapeDataString(knowledgeBase.Replace("'", "''", StringComparison.Ordinal))}')"
@@ -48,17 +57,23 @@ internal sealed class FoundryIqKnowledgeGateway(TokenCredential? credential = nu
         };
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token.Token);
 
-        using var response = await httpClient.SendAsync(request, cancellationToken);
+        using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         if (response.StatusCode != HttpStatusCode.OK)
         {
-            throw new InvalidOperationException(
-                $"FoundryIQ knowledge base '{knowledgeBase}' answered HTTP {(int)response.StatusCode}; "
-                + "partial or failed retrieval cannot be used as evidence.");
+            throw new Dsf.Core.Onboarding.SupplementalSourceException(response.StatusCode switch
+            {
+                HttpStatusCode.Forbidden or HttpStatusCode.Unauthorized => Dsf.Core.Onboarding.SupplementalReason.PermissionDenied,
+                HttpStatusCode.NotFound => Dsf.Core.Onboarding.SupplementalReason.MissingKnowledgeBase,
+                HttpStatusCode.PartialContent => Dsf.Core.Onboarding.SupplementalReason.Incomplete,
+                _ => Dsf.Core.Onboarding.SupplementalReason.NetworkUnavailable,
+            });
         }
 
         try
         {
-            var parsed = await response.Content.ReadFromJsonAsync<RetrievalResponse>(SerializerOptions, cancellationToken);
+            using var body = await Dsf.Core.Onboarding.EvidencePayload.ReadAsync(response, cancellationToken);
+            Dsf.Core.Onboarding.EvidencePayload.RequireComplete(body.RootElement);
+            var parsed = body.RootElement.Deserialize<RetrievalResponse>(SerializerOptions);
             if (parsed?.Response is null || parsed.Activity is null || parsed.References is null
                 || Present(parsed.Error))
             {
@@ -123,7 +138,8 @@ internal sealed class FoundryIqKnowledgeGateway(TokenCredential? credential = nu
             }
 
             // Retrieve has a bounded extractive response, not a nextLink/continuation API.
-            return results;
+            return new(results, parsed.Activity.Where(a => !string.IsNullOrEmpty(a.KnowledgeSourceName))
+                .Select(a => new FoundryIqSourceActivity(a.KnowledgeSourceName!, a.Type)).ToArray());
         }
         catch (JsonException exception)
         {
