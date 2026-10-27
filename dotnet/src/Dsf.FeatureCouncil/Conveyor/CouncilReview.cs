@@ -32,6 +32,9 @@ public sealed record CouncilReview
         foreach (var proposal in run.Proposals)
         {
             var review = proposal.CouncilReview;
+            var evidence = proposal.ClusterEvidence.Count > 0 ? proposal.ClusterEvidence
+                : run.Evidence.Where(item => proposal.SourceKinds.Contains(item.SourceKind)
+                    && proposal.EvidenceReferences.Contains(item.Reference)).ToArray();
             if (proposal.Verdict != ProposalVerdict.Proceed || review is null
                 || review.Outcome != ProposalVerdict.Proceed || review.Evidence.Count == 0
                 || review.RoundsRequested is < 1 or > 2 || review.Rounds.Count != review.RoundsRequested
@@ -42,6 +45,11 @@ public sealed record CouncilReview
             {
                 throw new InvalidOperationException(
                     $"proposal '{proposal.Id}' has no complete typed S5 Proceed review; legacy acceptance is not filing authority");
+            }
+
+            if (!review.Evidence.ToHashSet().SetEquals(evidence))
+            {
+                throw new InvalidOperationException($"proposal '{proposal.Id}' evidence does not match its S5 review");
             }
 
             var recommendation = LensSynthesizer.Synthesize(review.Rounds[^1].Verdicts, review.Threshold);
