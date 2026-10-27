@@ -167,6 +167,8 @@ an escalated run retains its review package and cannot auto-file. Production
 has no offline model fallback.
 Persisted votes and recommendation fields must be explicit: an incomplete
 review becomes an audited error, never an implicit go vote.
+Routing and filing also require the review's source-qualified evidence and
+summaries to match the proposal's grounded cluster, including on checkpoint resume.
 
 S3 resolves each cluster against persisted problem profiles using the same
 lexical clustering policy. The resulting opaque problem ID, within the run's
