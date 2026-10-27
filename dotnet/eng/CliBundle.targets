@@ -22,34 +22,11 @@
     <Exec Command="$(BicepCommand) build &quot;$(DsfInfrastructureRoot)%(DsfTemplate.Identity).bicep&quot; --outfile &quot;$(DsfAssetOutput)%(DsfTemplate.Identity).json&quot;" />
   </Target>
 
-  <!-- A build dependency, never an assembly reference. Publish resolves the runtime's
-       complete dependency closure without sharing its output directory with the CLI. -->
-  <Target Name="BuildDsfRuntimeBundle" AfterTargets="Build">
-    <MSBuild Projects="$(MSBuildThisFileDirectory)../src/Dsf.Runtime/Dsf.Runtime.csproj"
-             Targets="Publish"
-             BuildInParallel="false"
-             Properties="Configuration=$(Configuration);NoBuild=true;BuildProjectReferences=false;PublishDir=$([System.IO.Path]::GetFullPath('$(TargetDir)runtime/'));UseAppHost=$(SelfContained);PublishSingleFile=$(PublishSingleFile);SelfContained=$(SelfContained);Version=$(Version)"
-             RemoveProperties="PackAsTool;PackageId;ToolCommandName" />
-    <WriteLinesToFile File="$(TargetDir)dsf-bundle.version" Lines="$(Version)"
-                      Overwrite="true" WriteOnlyWhenDifferent="true" />
-  </Target>
+  <Import Project="RuntimeBundle.targets" />
 
-  <Target Name="PublishDsfRuntimeBundle" AfterTargets="Publish">
-    <ItemGroup>
-      <DsfRuntimeFile Include="$(TargetDir)runtime/**/*" />
-    </ItemGroup>
-    <Error Condition="'@(DsfRuntimeFile)' == ''"
-           Text="The DSF runtime bundle is missing. Rebuild the CLI before publishing." />
-    <ReadLinesFromFile File="$(TargetDir)dsf-bundle.version">
-      <Output TaskParameter="Lines" ItemName="DsfBuiltVersion" />
-    </ReadLinesFromFile>
-    <Error Condition="'@(DsfBuiltVersion)' != '$(Version)' Or '$(PackageVersion)' != '$(Version)'"
-           Text="The DSF bundle version does not match the requested version. Rebuild with -p:Version=$(Version) and use the same version when packing/publishing." />
+  <Target Name="ValidateDsfProvisioningBundle" BeforeTargets="PublishDsfRuntimeBundle">
     <Error Condition="!Exists('$(TargetDir)assets/infra/%(DsfTemplate.Identity).json')"
            Text="The DSF provisioning asset %(DsfTemplate.Identity).json is missing. Rebuild the CLI before publishing." />
-    <Copy SourceFiles="@(DsfRuntimeFile)"
-          DestinationFiles="@(DsfRuntimeFile->'$(PublishDir)runtime/%(RecursiveDir)%(Filename)%(Extension)')" />
-    <Copy SourceFiles="$(TargetDir)dsf-bundle.version" DestinationFolder="$(PublishDir)" />
   </Target>
 
 </Project>

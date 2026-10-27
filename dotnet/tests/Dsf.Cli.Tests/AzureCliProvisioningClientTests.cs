@@ -1,4 +1,5 @@
 using Dsf.Cli;
+using Dsf.Core.Runtime;
 using Xunit;
 
 namespace Dsf.Cli.Tests;

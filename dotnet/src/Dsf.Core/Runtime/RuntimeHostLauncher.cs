@@ -2,17 +2,15 @@ using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text.Json;
-using Dsf.Core.Runtime;
 
-namespace Dsf.Cli;
+namespace Dsf.Core.Runtime;
 
 /// <summary>
-/// Launches the runtime host for a runtime verb. The factory CLI is the operator's
-/// front door for the runtime verbs, but the runtime itself (the conveyor, the
-/// source agent hosts) lives in its own executable the CLI must not reference, so
-/// the front door runs <c>dsf-runtime</c> and returns its exit code.
+/// Launches the runtime host for a runtime verb. Front doors (the factory CLI and
+/// source-agent executable) must not import the runtime application module, so
+/// they run <c>dsf-runtime</c> and return its exit code.
 /// </summary>
-internal interface IRuntimeHostLauncher
+public interface IRuntimeHostLauncher
 {
     Task<int> LaunchAsync(IReadOnlyList<string> arguments, CancellationToken cancellationToken);
 }
@@ -21,7 +19,7 @@ internal interface IRuntimeHostLauncher
 /// Runs the bundled native or framework-dependent runtime out of process, inheriting
 /// stdio and environment. <c>DSF_RUNTIME_HOST</c> overrides the bundle with an executable.
 /// </summary>
-internal sealed class ProcessRuntimeHostLauncher : IRuntimeHostLauncher
+public sealed class ProcessRuntimeHostLauncher : IRuntimeHostLauncher
 {
     /// <summary>Overrides where the runtime host executable is looked up.</summary>
     public const string ExecutableEnvironmentVariable = "DSF_RUNTIME_HOST";

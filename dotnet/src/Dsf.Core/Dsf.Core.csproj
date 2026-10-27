@@ -5,4 +5,8 @@
     <RootNamespace>Dsf.Core</RootNamespace>
   </PropertyGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Dsf.Cli.Tests" />
+  </ItemGroup>
+
 </Project>
